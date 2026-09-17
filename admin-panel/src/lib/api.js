@@ -1,4 +1,4 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || 'https://invexaretail.onrender.com';
+export const API_BASE = import.meta.env.VITE_API_BASE || 'https://invexaretail-h1ps.onrender.com';
 export const WEB_APP_URL = import.meta.env.VITE_WEB_APP_URL || 'https://control.invexaretail.com';
 
 export async function controlRequest(path, { token, method = 'GET', body } = {}) {

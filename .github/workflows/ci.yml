@@ -135,7 +135,7 @@ jobs:
 
       - name: Build Control Plane assets
         env:
-          VITE_API_BASE: https://invexaretail.onrender.com
+          VITE_API_BASE: https://invexaretail-h1ps.onrender.com
         run: npm run build
 
       - name: Confirm login ships in dist and worker
