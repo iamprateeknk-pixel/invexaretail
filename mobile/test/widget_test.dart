@@ -86,7 +86,12 @@ void main() {
 
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: StockScreen(controller: controller))));
     expect(find.text('Rice 5kg'), findsOneWidget);
-    expect(find.textContaining('Lot LOT-01'), findsOneWidget);
+    expect(find.textContaining('1 lot'), findsOneWidget);
+    expect(find.textContaining('Book'), findsNothing);
+
+    await tester.tap(find.text('Rice 5kg'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('LOT-01'), findsOneWidget);
     expect(find.textContaining('Book'), findsNothing);
   });
 
