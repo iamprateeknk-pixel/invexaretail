@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -257,6 +258,20 @@ class InvexaApi {
       'requestId': requestId,
       'lines': lines,
     });
+  }
+
+  Future<List<Map<String, dynamic>>> transferEvidence(String transferId) async {
+    final payload = await _send('GET', '/api/v1/transfers/$transferId/evidence');
+    return asList(payload['evidence']).map(asMap).toList();
+  }
+
+  Future<Uint8List> transferEvidencePhoto(String transferId, String evidenceId) async {
+    final uri = _uri('/api/v1/transfers/$transferId/evidence/$evidenceId');
+    final response = await httpClient.get(uri, headers: _headers(auth: true)..remove('Content-Type')).timeout(timeout);
+    if (response.statusCode != 200) {
+      throw ApiException('Photo was not found.', statusCode: response.statusCode);
+    }
+    return response.bodyBytes;
   }
 
   Future<void> savePickSlip({
