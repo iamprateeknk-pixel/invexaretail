@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: invexaretail-api
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd api && npm install && npm run build
+    startCommand: cd api && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: ALLOWED_ORIGINS
+        value: https://invexaretail.com,https://www.invexaretail.com
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SEED_PASSWORD
+        value: ChangeMe123!

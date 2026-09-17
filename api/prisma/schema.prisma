@@ -1,0 +1,2017 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum Role {
+  ADMIN
+  ADMIN_USER
+  BRANCH_MANAGER
+  STORE_USER
+  WAREHOUSE_PICKER
+  AUDITOR
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  LOCKED
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  DELETE
+  APPROVE
+  EXPORT
+  ARCHIVE
+  REVERSE
+}
+
+enum StockMovementType {
+  OPENING_STOCK
+  PURCHASE_RECEIPT
+  SALES_DEDUCTION
+  SALES_RETURN
+  TRANSFER_OUT
+  TRANSFER_IN
+  COUNT_VARIANCE
+  ADJUSTMENT
+  WASTE
+  DAMAGE
+  EXPIRY_WRITE_OFF
+}
+
+enum ExpiryAlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+  RESOLVED_BY_TRANSFER
+  RESOLVED_BY_WRITE_OFF
+}
+
+enum TransferStatus {
+  DRAFT
+  PENDING_PICK
+  REQUESTED
+  PICKING
+  PARTIAL
+  PICKED
+  READY_FOR_ADMIN
+  CONFIRMED
+  DISPATCHED
+  IN_TRANSIT
+  RECEIVED
+  PARTIAL_RECEIVED
+  CLOSED
+  REJECTED
+  CANCELLED
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  SUBMITTED
+  CANCELLED
+}
+
+// Blueprint Module H (Returns, Damage, Quarantine & Exception Management) /
+// section 18 "Exception Inbox": the cross-module case type for every
+// unresolved operational problem - damage, short/excess receipt, wrong
+// item, expired stock, missing stock (count variance) and QC failure.
+enum ExceptionType {
+  DAMAGE
+  SHORT_RECEIPT
+  EXCESS_RECEIPT
+  WRONG_ITEM
+  EXPIRED
+  MISSING_STOCK
+  QC_FAIL
+  TRANSFER_DISCREPANCY
+  COUNT_VARIANCE
+  QUARANTINE
+}
+
+enum ExceptionStatus {
+  OPEN
+  IN_PROGRESS
+  PENDING_APPROVAL
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum ExceptionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Disposition options per blueprint section 14 (QC/quarantine) and section
+// 14 (returns/exceptions): how a case is finally closed.
+enum ExceptionDisposition {
+  RESTOCK
+  VENDOR_RETURN
+  MARKDOWN
+  DESTROY
+  REWORK
+  WRITE_OFF
+  ACCEPT
+  RECOUNT
+  ESCALATE
+  NONE
+}
+
+// Single row (id fixed to "default"), not a multi-tenant table: this is the
+// one organization's profile, matching the app's single-tenant design (see
+// DEFAULT_COMPANY_ID in src/index.ts). No relations to other tables - other
+// models are not scoped by company.
+model CompanyProfile {
+  id          String   @id @default("default")
+  name        String
+  email       String?
+  phone       String?
+  industry    String?
+  industryKey String?
+  address     String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+
+  @@index([tenantId])
+
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  name               String
+  email              String   @unique
+  passwordHash       String
+  role               Role
+  status             UserStatus @default(ACTIVE)
+  assignedLocations  String   @db.Text
+  assignedBranches   String?  @db.Text
+  // SaaS company that owns this login. Distinct from Item.company (brand).
+  companyId          String   @default("default-company")
+  tenantId           String   @default("tenant-invexa")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  lastLoginAt        DateTime?
+  passwordChangedAt  DateTime?
+  otpSecret          String?
+  mfaEnabled         Boolean  @default(false)
+  suspendedReason    String?
+
+  stockCounts        StockCount[]
+  transferRequests   Transfer[]
+  assignmentsGiven   CountAssignment[] @relation("CountAssignmentAssignedBy")
+  assignmentsOwned   CountAssignment[] @relation("CountAssignmentAssignedTo")
+  importBatches      ImportBatch[]
+  inventoryMovements InventoryMovement[]
+  workAssignments    WorkAssignment[] @relation("WorkAssignmentAssignedTo")
+  workAssignmentsCreated WorkAssignment[] @relation("WorkAssignmentCreatedBy")
+  userSessions       UserSession[]
+  userPermissions    UserPermission[]
+  userRoles          UserRole[]
+  loginHistory       LoginHistory[]
+  workComments       WorkComment[]
+  importTemplates    ImportTemplate[]
+  exceptionCasesOwned    ExceptionCase[] @relation("ExceptionCaseOwner")
+  exceptionCasesReported ExceptionCase[] @relation("ExceptionCaseReportedBy")
+  putawayTasks           PutawayTask[]
+  pickWavesAssigned      PickWave[] @relation("PickWaveAssignedTo")
+  pickWavesCreated       PickWave[] @relation("PickWaveCreatedBy")
+  orders                 Order[]
+  toleranceRules         ToleranceRule[]
+  approvalRules          ApprovalRule[]
+  approvalRequestsMade   ApprovalRequest[] @relation("ApprovalRequestRequestedBy")
+  approvalRequestsDecided ApprovalRequest[] @relation("ApprovalRequestDecidedBy")
+  evidenceRules          EvidenceRule[]
+  qcChecklistTemplates   QcChecklistTemplate[]
+  qcInspections          QcInspection[]
+  intelligenceDismissals IntelligenceDismissal[]
+
+  @@index([companyId])
+  @@index([tenantId])
+}
+
+model Branch {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  name            String
+  type            String   @default("WAREHOUSE")
+  status          String   @default("ACTIVE")
+  companyId       String   @default("default-company")
+  tenantId        String   @default("tenant-invexa")
+  address         String?  @db.Text
+  phone           String?
+  email           String?
+  managerId       String?
+  workingHours    String?
+  locations       Location[]
+  workAssignments WorkAssignment[]
+  exceptionCases  ExceptionCase[]
+  toleranceRules  ToleranceRule[]
+  approvalRules   ApprovalRule[]
+  evidenceRules   EvidenceRule[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([code, status])
+  @@index([companyId])
+  @@index([tenantId])
+}
+
+model Location {
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  type                  String
+  locationType          String?  @default("STANDARD")
+  branchId              String?
+  branch                Branch?  @relation(fields: [branchId], references: [id])
+  parentId              String?
+  status                String   @default("ACTIVE")
+  companyId             String   @default("default-company")
+  tenantId              String   @default("tenant-invexa")
+  description           String?  @db.Text
+  latitude              Float?
+  longitude             Float?
+  deliverySlaHours      Float?
+  shippingCostPerKm     Float?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  stock                 StockLedger[]
+  stockBalance          StockBalance[]
+  counts                StockCount[]
+  transfers             Transfer[] @relation("TransferLocation")
+  countAssignments      CountAssignment[]
+  openingSnapshots      OpeningStockSnapshot[]
+  inventoryMovements    InventoryMovement[]
+  syncCheckpoints       SyncCheckpoint[]
+  workAssignments       WorkAssignment[]
+  expiryAlerts          ExpiryAlert[]
+  stockMovements        StockMovement[]
+  replenishmentSuggestions ReplenishmentSuggestion[]
+  exceptionCases        ExceptionCase[]
+  bins                  Bin[]
+  putawayTasks          PutawayTask[]
+  pickWaves             PickWave[]
+  orders                Order[]
+  qcInspections         QcInspection[]
+  intelligenceDismissals IntelligenceDismissal[]
+  binStocks             BinStock[]
+  serialNumbers         SerialNumber[]
+  binMovements          BinMovement[]
+
+  @@index([code, branchId, status])
+  @@index([companyId])
+  @@index([tenantId])
+}
+
+// Blueprint Module B / section 6 (Location/WMS): warehouse -> zone -> aisle
+// -> rack -> shelf -> bin. Deliberately structural for this pass - a bin is
+// where received stock is physically placed, not a separate StockLedger
+// location (that finer-grained ledger is the blueprint's later Warehouse OS
+// phase). Putaway confirmation below records which bin holds what, giving
+// guided putaway and pick-path data without re-keying the existing ledger.
+model Bin {
+  id            String   @id @default(cuid())
+  locationId    String
+  location      Location @relation(fields: [locationId], references: [id])
+  code          String
+  zone          String?
+  aisle         String?
+  rack          String?
+  shelf         String?
+  capacity      Float?
+  storageClass  String?
+  status        String   @default("ACTIVE")
+  // Blueprint P4 "Internal replenishment": pick-face vs reserve storage.
+  // A pick-face bin is where pickers actually pick from; reserve bins back
+  // it up. min/max drive when a reserve-to-pick-face task is suggested.
+  isPickFace    Boolean  @default(false)
+  pickFaceMin   Float?
+  pickFaceMax   Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  putawaySuggested PutawayTask[] @relation("PutawaySuggestedBin")
+  putawayConfirmed PutawayTask[] @relation("PutawayConfirmedBin")
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([locationId, code])
+  @@index([locationId, status])
+}
+
+// Blueprint Module B / section 8.3 (Putaway): system suggests a bin for
+// received stock; a picker scans/confirms the actual bin. Wrong-bin scans
+// are out of scope for this pass (no mobile scan client yet) - this models
+// the task and its suggested-vs-confirmed bin so that flow can be added
+// without another schema change.
+model PutawayTask {
+  id              String    @id @default(cuid())
+  itemId          String
+  item            Item      @relation(fields: [itemId], references: [id])
+  lotId           String?
+  lot             Lot?      @relation(fields: [lotId], references: [id])
+  locationId      String
+  location        Location  @relation(fields: [locationId], references: [id])
+  quantity        Float
+  suggestedBinId  String?
+  suggestedBin    Bin?      @relation("PutawaySuggestedBin", fields: [suggestedBinId], references: [id])
+  confirmedBinId  String?
+  confirmedBin    Bin?      @relation("PutawayConfirmedBin", fields: [confirmedBinId], references: [id])
+  status          String    @default("PENDING")
+  sourceDocument  String?
+  sourceLineId    String?
+  assignedToId    String?
+  assignedTo      User?     @relation(fields: [assignedToId], references: [id])
+  confirmedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status])
+  @@index([status])
+}
+
+// Blueprint Module C / section 9.2 (Transfer & Warehouse OS - pick waves):
+// "Pick wave can combine multiple store transfers while keeping destination
+// segregation." Transfers themselves are unchanged (still picked and
+// received one at a time through the existing per-transfer flow); a wave
+// is a planning/sequencing layer that groups several source-location
+// transfers so a picker walks the warehouse once, in bin order, instead of
+// re-walking it per transfer. transferIds is a loose id list (not a
+// relation table) since Transfer already has its own lifecycle and audit
+// trail - the wave only needs to remember which ones it grouped.
+model PickWave {
+  id           String    @id @default(cuid())
+  locationId   String
+  location     Location  @relation(fields: [locationId], references: [id])
+  status       String    @default("OPEN")
+  transferIds  Json
+  assignedToId String?
+  assignedTo   User?     @relation("PickWaveAssignedTo", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User      @relation("PickWaveCreatedBy", fields: [createdById], references: [id])
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status])
+}
+
+// Blueprint Module G / section 13.3 (OMS & Allocation) - starter scope for
+// P7. "Available-to-Promise... should prevent the same unit being promised
+// by website, marketplace and store simultaneously": an Order reserves
+// stock through the exact same lib/reservation.ts mechanism a transfer
+// request does, against the same StockLedger.reserved counter, so the two
+// channels genuinely compete for the same pool instead of each tracking
+// its own. Routing rules, split fulfilment, backorder and marketplace
+// connectors are deliberately out of scope here - fulfillmentLocationId is
+// chosen by the caller, not routed automatically.
+model Order {
+  id                    String    @id @default(cuid())
+  channel               String
+  externalReference     String?
+  status                String    @default("PENDING")
+  fulfillmentLocationId String
+  fulfillmentLocation   Location  @relation(fields: [fulfillmentLocationId], references: [id])
+  customerName          String?
+  notes                 String?   @db.Text
+  createdById           String
+  createdBy             User      @relation(fields: [createdById], references: [id])
+  reservedAt            DateTime?
+  reservationExpiresAt  DateTime?
+  fulfilledAt           DateTime?
+  cancelledAt           DateTime?
+  expiredAt             DateTime?
+  // Blueprint P5 "Promise engine": deterministic estimate set at
+  // reservation time (lib/promise-engine.ts) - pick/pack lead + per-channel
+  // safety buffer for dispatch, plus the fulfillment location's delivery
+  // SLA for delivery when known.
+  estimatedDispatchAt   DateTime?
+  estimatedDeliveryAt   DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  lines OrderLine[]
+  packSessions PackSession[]
+  shipments    Shipment[]
+  returnRequests ReturnRequest[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([status, createdAt])
+  @@index([channel, status])
+  @@index([fulfillmentLocationId, status])
+  @@index([status, reservationExpiresAt])
+}
+
+// Blueprint P5 "Packing station: scan order/tote -> verify items ->
+// cartonize -> weight/dimensions -> seal -> print pack slip/label." A pack
+// session is additive tracking on top of the existing reservation/fulfil
+// flow - it never changes Order.status itself, so it cannot desync the
+// stock-truth invariant those already enforce.
+model PackSession {
+  id           String       @id @default(cuid())
+  orderId      String
+  order        Order        @relation(fields: [orderId], references: [id])
+  status       String       @default("IN_PROGRESS")
+  cartonCount  Int?
+  weightKg     Float?
+  lengthCm     Float?
+  widthCm      Float?
+  heightCm     Float?
+  packedById   String
+  sealedAt     DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  companyId    String       @default("default-company")
+  tenantId     String       @default("tenant-invexa")
+
+  lines PackedLine[]
+
+  @@index([orderId, status])
+  @@index([companyId])
+}
+
+model PackedLine {
+  id            String      @id @default(cuid())
+  packSessionId String
+  packSession   PackSession @relation(fields: [packSessionId], references: [id])
+  itemId        String
+  lotId         String?
+  quantity      Float
+  scannedById   String
+  scannedAt     DateTime    @default(now())
+
+  @@index([packSessionId])
+}
+
+// Blueprint "Returns/RMA: a formal customer-return/RMA/inspection flow" -
+// state machine in lib/returns-rma.ts. Additive on top of Order/OrderLine,
+// same as PackSession/Shipment: never changes Order.status or the ledger
+// directly. A RECEIVED return with a RESTOCK-disposition line is the only
+// thing that posts stock back onto the ledger, and only then.
+model ReturnRequest {
+  id            String   @id @default(cuid())
+  orderId       String
+  order         Order    @relation(fields: [orderId], references: [id])
+  status        String   @default("REQUESTED")
+  reason        String?
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  companyId     String   @default("default-company")
+  tenantId      String   @default("tenant-invexa")
+
+  lines ReturnLine[]
+
+  @@index([orderId, status])
+  @@index([companyId])
+}
+
+model ReturnLine {
+  id              String        @id @default(cuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id])
+  orderLineId     String
+  orderLine       OrderLine     @relation(fields: [orderLineId], references: [id])
+  itemId          String
+  item            Item          @relation(fields: [itemId], references: [id])
+  quantity        Float
+  disposition     String?
+  createdAt       DateTime      @default(now())
+
+  @@index([returnRequestId])
+  @@index([orderLineId])
+}
+
+// Blueprint P5/P6 "Carrier adapter": one shipment per booked AWB, behind
+// whichever CarrierAdapter (lib/carrier-adapter.ts) booked it. Additive -
+// never changes Order.status; shipping state lives here so a future
+// "Shipped"/"Delivered" order view reads it without touching the
+// reservation/fulfilment invariants.
+model Shipment {
+  id              String    @id @default(cuid())
+  orderId         String
+  order           Order     @relation(fields: [orderId], references: [id])
+  packSessionId   String?
+  carrierProvider String
+  awbNumber       String
+  serviceCode     String
+  status          String    @default("BOOKED")
+  labelUrl        String?
+  manifestId      String?
+  weightKg        Float?
+  createdById     String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  companyId       String    @default("default-company")
+  tenantId        String    @default("tenant-invexa")
+
+  @@unique([awbNumber])
+  @@index([orderId])
+  @@index([companyId])
+}
+
+model OrderLine {
+  id           String   @id @default(cuid())
+  orderId      String
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  lotId        String?
+  lot          Lot?     @relation(fields: [lotId], references: [id])
+  requestedQty Float
+  fulfilledQty Float    @default(0)
+  fulfillmentLocationId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+  returnLines ReturnLine[]
+
+  @@index([orderId])
+}
+
+// Blueprint Module D / section 10.2 (Count & Audit 2.0): "Tolerance can
+// vary by category, value, UOM and branch" and "High-value or repeated-
+// variance items automatically require recount by another user." A rule
+// only ever produces a *recommendation* attached to a pending count for
+// the human reviewer to see - never an automatic status change - matching
+// the Exception Inbox / putaway pattern of "recommend, let a human accept
+// or dismiss" already used elsewhere in this app. `category`/`branchId`
+// null means "applies to every category/branch"; the most specific
+// matching active rule wins.
+model ToleranceRule {
+  id               String   @id @default(cuid())
+  label            String
+  category         String?
+  branchId         String?
+  branch           Branch?  @relation(fields: [branchId], references: [id])
+  valueThreshold   Float?
+  percentThreshold Float?
+  active           Boolean  @default(true)
+  createdById      String
+  createdBy        User     @relation(fields: [createdById], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([active, category])
+  @@index([branchId, active])
+}
+
+// Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
+// manager approval" and "manual stock adjustment -> dual control for
+// high-value category." Unlike ToleranceRule (a recommendation the
+// reviewer can still override), an ApprovalRule genuinely *gates* the
+// action - the triggering endpoint blocks until a user meeting
+// requiredApproverRole decides. triggerType is a free string
+// ("TRANSFER_CONFIRM" and "STOCK_ADJUSTMENT" are wired up) rather than an
+// enum, so a later trigger type does not need another migration.
+// category/branchId null means "applies to everything" - same
+// most-specific-wins matching shape as ToleranceRule.
+model ApprovalRule {
+  id                   String   @id @default(cuid())
+  label                String
+  triggerType          String
+  category             String?
+  branchId             String?
+  branch               Branch?  @relation(fields: [branchId], references: [id])
+  valueThreshold       Float
+  requiredApproverRole String
+  active               Boolean  @default(true)
+  createdById          String
+  createdBy            User     @relation(fields: [createdById], references: [id])
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  approvalRequests ApprovalRequest[]
+
+  @@index([triggerType, active])
+  @@index([branchId, active])
+}
+
+// Blueprint section 16.2, third named workflow example: "damaged receipt >
+// threshold -> photo mandatory." Unlike ToleranceRule (recommend) and
+// ApprovalRule (gate on a human decision), this gates on a fact that must
+// already exist: at least one evidence photo already uploaded for the
+// transfer before the receipt can be posted.
+model EvidenceRule {
+  id                String   @id @default(cuid())
+  label             String
+  triggerType       String
+  category          String?
+  branchId          String?
+  branch            Branch?  @relation(fields: [branchId], references: [id])
+  quantityThreshold Float?
+  valueThreshold    Float?
+  active            Boolean  @default(true)
+  createdById       String
+  createdBy         User     @relation(fields: [createdById], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([triggerType, active])
+  @@index([branchId, active])
+}
+
+// One gate instance: the triggering action is blocked from `PENDING` until
+// a sufficiently-privileged user decides. entityType/entityId identify the
+// blocked record (e.g. "Transfer"/<transferId>) generically so future
+// trigger types do not need their own request table.
+model ApprovalRequest {
+  id             String    @id @default(cuid())
+  ruleId         String
+  rule           ApprovalRule @relation(fields: [ruleId], references: [id])
+  triggerType    String
+  entityType     String
+  entityId       String
+  valueAtStake   Float
+  status         String    @default("PENDING")
+  requestedById  String
+  requestedBy    User      @relation("ApprovalRequestRequestedBy", fields: [requestedById], references: [id])
+  decidedById    String?
+  decidedBy      User?     @relation("ApprovalRequestDecidedBy", fields: [decidedById], references: [id])
+  decidedAt      DateTime?
+  decisionNotes  String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([entityType, entityId, status])
+  @@index([status, triggerType])
+}
+
+model Item {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  category    String?
+  subcategory String?
+  company     String?
+  // SaaS tenant. Item.company above is the brand/manufacturer name.
+  companyId   String   @default("default-company")
+  tenantId    String   @default("tenant-invexa")
+  unit        String?
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lots                    Lot[]
+  stock                   StockLedger[]
+  stockBalance            StockBalance[]
+  counts                  StockCount[]
+  transferLines           TransferLine[]
+  countAssignments        CountAssignment[]
+  tags                    ItemTag[]
+  customFieldValues       CustomFieldValue[]
+  purchaseOrderLines      PurchaseOrderLine[]
+  reorderRules            ReorderRule[]
+  openingSnapshots        OpeningStockSnapshot[]
+  inventoryMovements      InventoryMovement[]
+  stockMovements          StockMovement[]
+  expiryAlerts            ExpiryAlert[]
+  replenishmentSuggestions ReplenishmentSuggestion[]
+  exceptionCases          ExceptionCase[]
+  putawayTasks            PutawayTask[]
+  orderLines              OrderLine[]
+  qcInspections           QcInspection[]
+  intelligenceDismissals  IntelligenceDismissal[]
+  binStocks               BinStock[]
+  serialNumbers           SerialNumber[]
+  binMovements            BinMovement[]
+  priceLists              PriceList[]
+  returnLines             ReturnLine[]
+
+  @@index([companyId])
+  @@index([tenantId])
+}
+
+model Lot {
+  id         String   @id @default(cuid())
+  lotNo      String
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id])
+  expiryDate DateTime?
+  // AVAILABLE | EXPIRED | BLOCKED | QUARANTINE (blueprint section 17): a
+  // lot in any state other than AVAILABLE is excluded from normal FEFO/FIFO
+  // allocation and can only be drawn from via an authorized manual override.
+  status     String   @default("AVAILABLE")
+  attributes Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  stock                   StockLedger[]
+  stockBalance            StockBalance[]
+  counts                  StockCount[]
+  transfers               TransferLine[]
+  openingSnapshots        OpeningStockSnapshot[]
+  inventoryMovements      InventoryMovement[]
+  stockMovements          StockMovement[]
+  expiryAlerts            ExpiryAlert[]
+  exceptionCases          ExceptionCase[]
+  putawayTasks            PutawayTask[]
+  orderLines              OrderLine[]
+  qcInspections           QcInspection[]
+  serialNumbers           SerialNumber[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([itemId, lotNo])
+}
+
+model StockLedger {
+  id             String   @id @default(cuid())
+  itemId         String
+  item           Item     @relation(fields: [itemId], references: [id])
+  lotId          String
+  lot            Lot      @relation(fields: [lotId], references: [id])
+  locationId     String
+  location       Location @relation(fields: [locationId], references: [id])
+  onHand         Float    @default(0)
+  reserved       Float    @default(0)
+  inTransit      Float    @default(0)
+  // Blueprint section 7.2 inventory state model: physical stock that is on
+  // hand but not sellable. Quarantine = received/counted but blocked
+  // pending a QC/exception disposition (Exception Inbox); Damaged = the
+  // portion of quarantine already confirmed unsellable and awaiting
+  // write-off/vendor-return. Neither bucket is part of `onHand` availability
+  // math done elsewhere - they are tracked here so quarantined stock is
+  // visible instead of silently vanishing from the ledger.
+  quarantine     Float    @default(0)
+  damaged        Float    @default(0)
+  version        Int      @default(0)
+  lastUpdatedAt  DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([itemId, lotId, locationId])
+}
+
+model StockCount {
+  id              String   @id @default(cuid())
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  lotId           String
+  lot             Lot      @relation(fields: [lotId], references: [id])
+  locationId      String
+  location        Location @relation(fields: [locationId], references: [id])
+  physicalQty     Float
+  bookQty         Float    @default(0)
+  mode            String   @default("manual")
+  submittedById   String
+  submittedBy     User     @relation(fields: [submittedById], references: [id])
+  countDate       DateTime @default(now())
+  approvedById    String?
+  approvedAt      DateTime?
+  reviewStatus    String   @default("PENDING_REVIEW")
+  reviewReason    String?  @db.Text
+  parentCountId   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+
+  @@index([tenantId])
+
+}
+
+/// Admin assigns an item to a Store User to count at a location. Blind by
+/// construction: the assignment never carries a book quantity. Fulfilled by
+/// linking to the StockCount the Store User eventually submits against it.
+model CountAssignment {
+  id             String   @id @default(cuid())
+  locationId     String
+  location       Location @relation(fields: [locationId], references: [id])
+  itemId         String
+  item           Item     @relation(fields: [itemId], references: [id])
+  assignedToId   String
+  assignedTo     User     @relation("CountAssignmentAssignedTo", fields: [assignedToId], references: [id])
+  assignedById   String
+  assignedBy     User     @relation("CountAssignmentAssignedBy", fields: [assignedById], references: [id])
+  countDate      DateTime @default(now())
+  dueDate        DateTime?
+  priority       String   @default("NORMAL")
+  instructions   String?  @db.Text
+  status         AssignmentStatus @default(ASSIGNED)
+  countId        String?  @unique
+  parentCountId  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([assignedToId, status])
+}
+
+model Transfer {
+  id                    String        @id @default(cuid())
+  sourceLocationId      String
+  sourceLocation        Location      @relation("TransferLocation", fields: [sourceLocationId], references: [id])
+  destinationLocationId  String
+  status                TransferStatus @default(REQUESTED)
+  requestedById         String
+  requestedBy           User          @relation(fields: [requestedById], references: [id])
+  notes                 String?       @db.Text
+  cartonCount           Int?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  lines                 TransferLine[]
+  cartons               TransferCarton[]
+  tenantId    String   @default("tenant-invexa")
+
+  @@index([tenantId])
+
+}
+
+model TransferLine {
+  id            String   @id @default(cuid())
+  transferId    String
+  transfer      Transfer @relation(fields: [transferId], references: [id])
+  itemId        String
+  item          Item     @relation(fields: [itemId], references: [id])
+  lotId         String
+  lot           Lot      @relation(fields: [lotId], references: [id])
+  requestedQty  Float
+  pickedQty     Float    @default(0)
+  receivedQty   Float    @default(0)
+  damagedQty    Float    @default(0)
+  shortageQty    Float    @default(0)
+  // Blueprint Module H: received quantity beyond what was requested. Never
+  // auto-absorbed into receivedQty - held in StockLedger.quarantine behind
+  // an explicit EXCESS_RECEIPT Exception Inbox accept/reject decision.
+  excessQty      Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+
+  @@index([tenantId])
+
+}
+
+model TransferReceipt {
+  id           String   @id
+  requestId    String   @unique
+  transferId   String
+  receivedById String
+  status       String
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  lines        TransferReceiptLine[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([transferId, createdAt])
+}
+
+model TransferReceiptLine {
+  id             String          @id
+  receiptId      String
+  receipt        TransferReceipt @relation(fields: [receiptId], references: [id])
+  transferLineId String
+  itemId         String
+  lotId          String
+  receivedQty    Float           @default(0)
+  damagedQty     Float           @default(0)
+  shortageQty    Float           @default(0)
+  excessQty      Float           @default(0)
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([transferLineId])
+  @@index([receiptId])
+}
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  actorId         String
+  actorRole       String
+  action          String
+  entityType      String
+  entityId        String
+  metadata        Json?
+  branchId        String?
+  correlationId   String?
+  oldValues       Json?
+  newValues       Json?
+  reason          String?  @db.Text
+  sourceContext   String?  @db.Text
+  createdAt       DateTime @default(now())
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@index([correlationId])
+  @@index([createdAt])
+}
+
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("emerald")
+  createdAt DateTime @default(now())
+  items     ItemTag[]
+}
+
+model ItemTag {
+  itemId String
+  item   Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tagId  String
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, tagId])
+  @@index([tagId])
+}
+
+model CustomFieldDefinition {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  type      String   @default("text")
+  options   Json?
+  required  Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  values    CustomFieldValue[]
+}
+
+model CustomFieldValue {
+  id        String   @id @default(cuid())
+  itemId    String
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  fieldId   String
+  field     CustomFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@unique([itemId, fieldId])
+  @@index([fieldId])
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  purchaseOrders PurchaseOrder[]
+  tenantId    String   @default("tenant-invexa")
+
+  @@index([tenantId])
+
+}
+
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  number      String   @unique
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  locationId  String
+  createdById String
+  status      String   @default("DRAFT")
+  expectedAt  DateTime?
+  notes       String?  @db.Text
+  totalAmount Float    @default(0)
+  // Blueprint P7 "Landed cost": extra charges allocated across the PO's
+  // lines on receipt (lib/landed-cost.ts), so each received lot's cost
+  // attributes carry the true landed cost, not just the PO unit price.
+  freightCost   Float?  @default(0)
+  customsCost   Float?  @default(0)
+  insuranceCost Float?  @default(0)
+  handlingCost  Float?  @default(0)
+  landedCostMethod String? @default("VALUE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lines       PurchaseOrderLine[]
+  supplierInvoices SupplierInvoice[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status])
+  @@index([supplierId])
+}
+
+model PurchaseOrderLine {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  quantity        Int
+  receivedQty     Int      @default(0)
+  unitCost        Float    @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+}
+
+// Blueprint P7 "3-way match: PO vs GRN vs supplier invoice; tolerance and
+// exception workflow." A submitted invoice is matched (lib/three-way-match.ts)
+// against the PO's lines and their already-tracked receivedQty (the GRN
+// side of the match); the result is stored so AP can see exactly which
+// lines cleared and which are exceptions, without recomputing it.
+model SupplierInvoice {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  invoiceNumber   String
+  invoiceDate     DateTime?
+  totalAmount     Float    @default(0)
+  status          String   @default("PENDING")
+  matchResult     Json?
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId        String   @default("tenant-invexa")
+
+  lines SupplierInvoiceLine[]
+
+  @@index([purchaseOrderId])
+  @@index([tenantId])
+}
+
+model SupplierInvoiceLine {
+  id                String          @id @default(cuid())
+  supplierInvoiceId String
+  supplierInvoice   SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
+  itemId            String
+  invoicedQty       Float
+  unitCost          Float
+
+  @@index([supplierInvoiceId])
+}
+
+// Blueprint P9 "Retail pricing: MRP, retail, wholesale, institutional, web,
+// marketplace, branch, customer group, promotional price" +
+// "Guardrails: block/warn below landed cost, below minimum margin, above
+// MRP, invalid effective date" (lib/price-guardrails.ts). branchId null
+// means company-wide; the most branch-specific, currently-effective entry
+// wins when resolving a price.
+model PriceList {
+  id            String    @id @default(cuid())
+  itemId        String
+  item          Item      @relation(fields: [itemId], references: [id])
+  priceType     String
+  branchId      String?
+  customerGroup String?
+  price         Float
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  status        String    @default("ACTIVE")
+  createdById   String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  companyId     String    @default("default-company")
+  tenantId      String    @default("tenant-invexa")
+
+  @@index([itemId, priceType, branchId])
+  @@index([companyId])
+}
+
+
+model ReorderRule {
+  id         String   @id @default(cuid())
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  locationId String
+  minQty     Int      @default(0)
+  targetQty  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([itemId, locationId])
+  @@index([locationId])
+}
+
+model SavedReport {
+  id         String   @id @default(cuid())
+  ownerId    String
+  name       String
+  reportType String
+  locationId String?
+  config     Json?
+  isShared   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([ownerId, updatedAt])
+  @@index([isShared, updatedAt])
+}
+
+// Blueprint "Folders/tags/views: saved smart folders/views" - a saved
+// filter (lib/saved-view-filter.ts's SavedViewFilterConfig, stored as
+// JSON) that can be re-run against the current item list at any time,
+// unlike a static folder that only holds items assigned to it manually.
+model SavedView {
+  id         String   @id @default(cuid())
+  ownerId    String
+  name       String
+  entityType String   @default("ITEM")
+  filter     Json
+  isShared   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  companyId  String   @default("default-company")
+  tenantId   String   @default("tenant-invexa")
+
+  @@index([ownerId, updatedAt])
+  @@index([isShared, updatedAt])
+  @@index([companyId])
+}
+
+model AssetCheckout {
+  id           String    @id @default(cuid())
+  itemId       String
+  locationId   String
+  assigneeName String
+  quantity     Int       @default(1)
+  status       String    @default("CHECKED_OUT")
+  dueAt        DateTime?
+  conditionOut String?   @db.Text
+  conditionIn  String?   @db.Text
+  checkedOutAt DateTime  @default(now())
+  returnedAt   DateTime?
+  createdById  String
+  updatedAt    DateTime  @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status])
+  @@index([itemId, status])
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  number      String    @unique
+  name        String
+  locationId  String
+  status      String    @default("DRAFT")
+  dueAt       DateTime?
+  notes       String?   @db.Text
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lines       JobLine[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status])
+}
+
+model JobLine {
+  id          String   @id @default(cuid())
+  jobId       String
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  itemId      String
+  plannedQty  Int
+  issuedQty   Int      @default(0)
+  usedQty     Int      @default(0)
+  returnedQty Int      @default(0)
+  damagedQty  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([jobId])
+  @@index([itemId])
+}
+
+model ContextComment {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  authorId   String
+  authorName String
+  body       String   @db.Text
+  mentions   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+}
+
+model UserNotification {
+  id        String    @id @default(cuid())
+  userId    String?
+  role      String?
+  title     String
+  body      String    @db.Text
+  type      String    @default("info")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([role, readAt, createdAt])
+}
+
+model WebhookSubscription {
+  id              String   @id @default(cuid())
+  name            String
+  endpointUrl     String   @db.Text
+  events          Json
+  secretHash      String
+  secretEncrypted String?  @db.Text
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([status, createdAt])
+}
+
+model WebhookDeliveryLog {
+  id             String    @id @default(cuid())
+  subscriptionId String
+  eventType      String
+  entityId       String?
+  status         String    @default("PENDING")
+  attemptCount   Int       @default(0)
+  responseCode   Int?
+  lastError      String?   @db.Text
+  createdAt      DateTime  @default(now())
+  deliveredAt    DateTime?
+  // Blueprint P6 "Sync journal" (payload hash, next retry) + "dead-letter
+  // queue, replay safely" (stored body so a replay resends byte-identical).
+  payloadHash    String?
+  nextRetryAt    DateTime?
+  body           String?   @db.Text
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([subscriptionId, createdAt])
+  @@index([status, createdAt])
+  @@index([status, nextRetryAt])
+}
+
+model ImportBatch {
+  id                   String   @id
+  type                 String
+  fileName             String
+  sourceFormat         String
+  importedById         String
+  importedBy           User     @relation(fields: [importedById], references: [id])
+  importedAt           DateTime @default(now())
+  totalRows            Int
+  validRows            Int
+  invalidRows          Int
+  duplicateRows        Int      @default(0)
+  metadata             Json?
+  // Batches created by the existing single-step import flows (persistence.ts)
+  // post their stock movements in the same transaction as this row, so they
+  // are already POSTED by the time this record exists. New Import Center
+  // flows (blueprint 12.1) can create a batch as DRAFT and progress it
+  // through the lifecycle explicitly before posting.
+  status               String   @default("POSTED")
+  branchId             String?
+  fileHash             String?
+  sourceDateFrom       DateTime?
+  sourceDateTo         DateTime?
+  openingSnapshots     OpeningStockSnapshot[]
+  inventoryMovements   InventoryMovement[]
+  rows                 ImportRow[]
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([type, importedAt])
+  @@index([importedById, importedAt])
+  @@index([status])
+  @@index([branchId, fileHash])
+}
+
+model InventoryMovement {
+  id              String   @id
+  dedupeKey       String   @unique
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  lotId           String?
+  lot             Lot?     @relation(fields: [lotId], references: [id])
+  locationId      String
+  location        Location @relation(fields: [locationId], references: [id])
+  movementType    String
+  qtyDelta        Float
+  transactionAt   DateTime
+  importedAt      DateTime @default(now())
+  sourceType      String
+  sourceReference String
+  importBatchId   String?
+  importBatch     ImportBatch? @relation(fields: [importBatchId], references: [id])
+  createdById     String
+  createdBy       User     @relation(fields: [createdById], references: [id])
+  metadata        Json?
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, transactionAt])
+  @@index([itemId, locationId, transactionAt])
+  @@index([sourceType, sourceReference])
+}
+
+model SyncCheckpoint {
+  id                String   @id @default(cuid())
+  locationId        String
+  location          Location @relation(fields: [locationId], references: [id])
+  sourceType        String
+  syncedThroughAt   DateTime
+  lastImportBatchId String?
+  updatedAt         DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([locationId, sourceType])
+}
+
+model OpeningStockSnapshot {
+  id            String   @id
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId], references: [id])
+  itemId        String
+  item          Item     @relation(fields: [itemId], references: [id])
+  lotId         String
+  lot           Lot      @relation(fields: [lotId], references: [id])
+  locationId    String
+  location      Location @relation(fields: [locationId], references: [id])
+  qty           Float
+  snapshotAt    DateTime
+  createdAt     DateTime @default(now())
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([importBatchId, itemId, lotId, locationId])
+  @@index([itemId, locationId, snapshotAt])
+}
+
+// ============================================================================
+// PHASE 1: STOCK ACCOUNTING ENGINE & CORE FEATURES
+// ============================================================================
+
+model StockMovement {
+  id                String   @id @default(cuid())
+  itemId            String
+  item              Item     @relation(fields: [itemId], references: [id])
+  lotId             String?
+  lot               Lot?     @relation(fields: [lotId], references: [id])
+  locationId        String
+  location          Location @relation(fields: [locationId], references: [id])
+  binId             String?
+  movementType      StockMovementType
+  qtyDelta          Float
+  beforeBalance     Float
+  afterBalance      Float
+  sourceDocument    String?
+  sourceLineId      String?
+  actor             String?
+  timestamp         DateTime
+  correlationId     String?
+  reason            String?  @db.Text
+  metadata          Json?
+  posted            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([itemId, locationId, timestamp])
+  @@index([correlationId])
+  @@index([sourceDocument, sourceLineId])
+  @@index([timestamp])
+}
+
+model StockBalance {
+  id              String   @id @default(cuid())
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  lotId           String?
+  lot             Lot?     @relation(fields: [lotId], references: [id])
+  locationId      String
+  location        Location @relation(fields: [locationId], references: [id])
+  onHand          Float    @default(0)
+  reserved        Float    @default(0)
+  inTransit       Float    @default(0)
+  available       Float    @default(0)
+  version         Int      @default(0)
+  lastPostedAt    DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([itemId, lotId, locationId])
+  @@index([locationId, available])
+}
+
+// RBAC: Permission & Role Configuration
+model Permission {
+  id              String   @id @default(cuid())
+  module          String
+  action          PermissionAction
+  description     String?
+  createdAt       DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@unique([module, action])
+}
+
+model RoleTemplate {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  description     String?  @db.Text
+  isSystemRole    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+  roleUsers       UserRole[]
+}
+
+model RolePermission {
+  id            String   @id @default(cuid())
+  roleId        String
+  role          RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId  String
+  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRole {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId        String
+  role          RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  scopeId       String?
+  scopeType     String?
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, roleId, scopeId])
+}
+
+model UserPermission {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissionId  String
+  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  allowed       Boolean  @default(true)
+  denied        Boolean  @default(false)
+  scopeId       String?
+  scopeType     String?
+  reason        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, permissionId, scopeId])
+}
+
+// User Sessions & Login History
+model UserSession {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token           String   @unique
+  deviceInfo      String?
+  ipAddress       String?
+  userAgent       String?  @db.Text
+  createdAt       DateTime @default(now())
+  lastActivityAt  DateTime @updatedAt
+  revokedAt       DateTime?
+
+  @@index([userId, revokedAt])
+}
+
+model LoginHistory {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device          String?
+  ipAddress       String?
+  userAgent       String?  @db.Text
+  status          String   @default("SUCCESS")
+  failureReason   String?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
+// Universal Work/Assignment Engine
+model WorkAssignment {
+  id              String   @id @default(cuid())
+  type            String
+  reference       String?
+  title           String
+  description     String?  @db.Text
+  branchId        String?
+  branch          Branch?  @relation(fields: [branchId], references: [id])
+  locationId      String?
+  location        Location? @relation(fields: [locationId], references: [id])
+  assignedToId    String
+  assignedTo      User     @relation("WorkAssignmentAssignedTo", fields: [assignedToId], references: [id])
+  createdById     String
+  createdBy       User     @relation("WorkAssignmentCreatedBy", fields: [createdById], references: [id])
+  status          String   @default("ASSIGNED")
+  priority        String   @default("NORMAL")
+  dueAt           DateTime?
+  slaMinutes      Int?
+  instructions    String?  @db.Text
+  checklist       Json?
+  progress        Int      @default(0)
+  startedAt       DateTime?
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  closedAt        DateTime?
+  items           Json?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workComments    WorkComment[]
+  workAttachments WorkAttachment[]
+
+  @@index([assignedToId, status])
+  @@index([type, status])
+  @@index([dueAt, status])
+}
+
+model WorkComment {
+  id              String   @id @default(cuid())
+  workAssignmentId String
+  workAssignment  WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
+  authorId        String
+  author          User     @relation(fields: [authorId], references: [id])
+  body            String   @db.Text
+  mentions        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([workAssignmentId, createdAt])
+}
+
+model WorkAttachment {
+  id              String   @id @default(cuid())
+  workAssignmentId String
+  workAssignment  WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
+  fileName        String
+  fileUrl         String   @db.Text
+  fileType        String
+  fileSize        Int
+  uploadedAt      DateTime @default(now())
+
+  @@index([workAssignmentId])
+}
+
+// Exception Inbox (blueprint Module H + section 18): one cross-module inbox
+// for unresolved operational problems - damage, short/excess receipt,
+// wrong item, expired stock, missing stock and QC failures. Each case has
+// an owner, priority, SLA (dueAt), evidence/discussion (via ContextComment
+// keyed by entityType "exception"), and a defined closure disposition.
+model ExceptionCase {
+  id              String   @id @default(cuid())
+  type            ExceptionType
+  status          ExceptionStatus @default(OPEN)
+  priority        ExceptionPriority @default(MEDIUM)
+  title           String
+  description     String?  @db.Text
+  itemId          String?
+  item            Item?    @relation(fields: [itemId], references: [id])
+  lotId           String?
+  lot             Lot?     @relation(fields: [lotId], references: [id])
+  locationId      String?
+  location        Location? @relation(fields: [locationId], references: [id])
+  branchId        String?
+  branch          Branch?  @relation(fields: [branchId], references: [id])
+  quantity        Float?
+  valueAtRisk     Float?
+  sourceDocument  String?
+  sourceLineId    String?
+  ownerId         String?
+  owner           User?    @relation("ExceptionCaseOwner", fields: [ownerId], references: [id])
+  reportedById    String
+  reportedBy      User     @relation("ExceptionCaseReportedBy", fields: [reportedById], references: [id])
+  dueAt           DateTime?
+  disposition     ExceptionDisposition?
+  resolutionNotes String?  @db.Text
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([status, priority, dueAt])
+  @@index([type, status])
+  @@index([ownerId, status])
+  @@index([locationId, status])
+  @@index([sourceDocument, sourceLineId])
+
+  qcInspections QcInspection[]
+}
+
+// Blueprint §8.2 (Quality Control): "seal/packaging/weight/moisture/
+// expiry-window checks" as a formal checklist, replacing a free-text
+// ExceptionCase description with a structured, itemized result. A template
+// is scoped by category (nullable = applies to every category, same
+// most-specific-wins convention as ToleranceRule/EvidenceRule) and lists
+// the checks it requires; `checks` is a JSON array of {key, label} so the
+// checklist itself is configurable per category without a schema change.
+model QcChecklistTemplate {
+  id          String   @id @default(cuid())
+  label       String
+  category    String?
+  checks      Json
+  active      Boolean  @default(true)
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  inspections QcInspection[]
+
+  @@index([active, category])
+}
+
+// One filled-in checklist against a specific item/lot/location, usually at
+// receiving or putaway. `results` is a JSON map of check key -> 'PASS' |
+// 'FAIL' | 'NA'; `overallResult` is FAIL if any check failed, computed by
+// the same pure function the checklist form itself uses (qc-inspection.ts)
+// so the UI and the server never disagree. A FAIL opens a QC_FAIL
+// ExceptionCase automatically - the inspection becomes that case's
+// structured evidence instead of a reporter's free-text description.
+model QcInspection {
+  id              String    @id @default(cuid())
+  templateId      String
+  template        QcChecklistTemplate @relation(fields: [templateId], references: [id])
+  itemId          String?
+  item            Item?     @relation(fields: [itemId], references: [id])
+  lotId           String?
+  lot             Lot?      @relation(fields: [lotId], references: [id])
+  locationId      String?
+  location        Location? @relation(fields: [locationId], references: [id])
+  sourceDocument  String?
+  sourceLineId    String?
+  results         Json
+  overallResult   String
+  notes           String?   @db.Text
+  inspectedById   String
+  inspectedBy     User      @relation(fields: [inspectedById], references: [id])
+  exceptionCaseId String?
+  exceptionCase   ExceptionCase? @relation(fields: [exceptionCaseId], references: [id])
+  createdAt       DateTime  @default(now())
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([sourceDocument, sourceLineId])
+  @@index([overallResult, createdAt])
+}
+
+// Blueprint §17.1 (Intelligence Action Center): "Transfer 24 PCS", "Create
+// PO" and count-variance anomalies already have one-click accept actions
+// (POST /replenishment-actions/transfer, the purchase-order draft flow);
+// this model gives the other half of "accept/edit/dismiss with an audit
+// trail" - a dismissal, which the accept actions above already get for
+// free from their own real records (a created Transfer/PurchaseOrder *is*
+// the audit trail for an accepted recommendation). FK-free for the same
+// restricted-MySQL reason as the other rule/result tables in this app.
+// Time-bounded rather than permanent: a dismissed item resurfaces after 24h
+// if it is genuinely still under target, matching normal reorder cadence,
+// rather than a stale dismissal silently hiding a recommendation forever.
+model IntelligenceDismissal {
+  id            String   @id @default(cuid())
+  locationId    String
+  location      Location @relation(fields: [locationId], references: [id])
+  itemId        String
+  item          Item     @relation(fields: [itemId], references: [id])
+  type          String
+  countId       String?
+  reason        String?
+  dismissedById String
+  dismissedBy   User     @relation(fields: [dismissedById], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@index([locationId, itemId, type, createdAt])
+}
+
+// Expiry Management
+model ExpiryAlert {
+  id              String   @id @default(cuid())
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  lotId           String
+  lot             Lot      @relation(fields: [lotId], references: [id])
+  locationId      String
+  location        Location @relation(fields: [locationId], references: [id])
+  quantity        Float
+  value           Float?
+  expiryDate      DateTime
+  daysUntilExpiry Int
+  status          ExpiryAlertStatus @default(ACTIVE)
+  recommendedAction String?
+  metadata        Json?
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([status, locationId, expiryDate])
+  @@index([itemId, expiryDate])
+}
+
+// Replenishment Engine
+model ReplenishmentSuggestion {
+  id              String   @id @default(cuid())
+  itemId          String
+  item            Item     @relation(fields: [itemId], references: [id])
+  locationId      String
+  location        Location @relation(fields: [locationId], references: [id])
+  suggestType     String
+  currentStock    Float
+  minRequired     Float
+  targetStock     Float
+  suggestedQty    Float
+  sourceLocation  String?
+  salesVelocity   Float?
+  daysOfCover     Float?
+  priority        String
+  status          String   @default("PENDING_REVIEW")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([locationId, status, priority])
+}
+
+// Enhanced Import with Row Details
+model ImportRow {
+  id              String   @id @default(cuid())
+  importBatchId   String
+  importBatch     ImportBatch @relation(fields: [importBatchId], references: [id])
+  rowNumber       Int
+  rawData         Json
+  status          String   @default("DRAFT")
+  errors          Json?
+  warnings        Json?
+  mappedData      Json?
+  sourceKey       String?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@unique([importBatchId, rowNumber])
+  @@index([importBatchId, status])
+}
+
+// Saved column-mapping templates (blueprint 12.2), e.g. "Logic ERP Sales" /
+// "Logic ERP Purchase", so a recurring source file format doesn't need
+// manual column mapping on every import.
+model ImportTemplate {
+  id              String   @id @default(cuid())
+  name            String
+  importType      String
+  columnMapping   Json
+  createdById     String
+  createdBy       User     @relation(fields: [createdById], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([name, importType])
+  @@index([importType])
+}
+
+// Transfer with Carton/Packaging Details
+model TransferCarton {
+  id              String   @id @default(cuid())
+  transferId      String
+  transfer        Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  cartonNumber    String
+  qrCode          String?
+  contents        Json?
+  quantity        Float
+  weight          Float?
+  status          String   @default("PACKED")
+  photoUrl        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenantId    String   @default("tenant-invexa")
+  @@index([tenantId])
+
+
+  @@index([transferId, status])
+  @@unique([transferId, cartonNumber])
+}
+
+// Feature Configuration
+model FeatureFlag {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  enabled         Boolean  @default(false)
+  betaMode        Boolean  @default(false)
+  readOnly        Boolean  @default(false)
+  scope           String   @default("global")
+  scopeId         String?
+  config          Json?
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([scope, scopeId, enabled])
+}
+
+model WorkflowConfiguration {
+  id              String   @id @default(cuid())
+  type            String
+  scopeId         String?
+  requiresApproval Boolean  @default(false)
+  varianceThreshold Float?
+  negativeStockRule String @default("BLOCK")
+  fefoEnforced    Boolean  @default(true)
+  expiryBlocking  Boolean  @default(false)
+  photoRequired   Boolean  @default(false)
+  config          Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([type, scopeId])
+}
+
+// Durable SaaS control-plane snapshot. Hostinger has no reliable worker, so
+// Studio publishes and company locks are stored as one JSON document and
+// self-healed by runtime-schema if this migration has not been applied.
+model ControlPlaneState {
+  id        String   @id
+  payload   Json
+  updatedAt DateTime @updatedAt
+}
+
+// Blueprint P8: bin-granularity stock. Location ATP remains on StockLedger
+// (item+lot+location); this table answers "Bin A currently holds N units".
+model BinStock {
+  id          String   @id @default(cuid())
+  itemId      String
+  item        Item     @relation(fields: [itemId], references: [id])
+  lotId       String   @default("")
+  locationId  String
+  location    Location @relation(fields: [locationId], references: [id])
+  binId       String
+  onHand      Float    @default(0)
+  reserved    Float    @default(0)
+  version     Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([itemId, lotId, locationId, binId])
+  @@index([locationId, binId])
+}
+
+// Blueprint P4 "WMS 3.0: Bin moves": an explicit bin-to-bin transfer ledger,
+// separate from BinStock's current-balance projection, so every scanned
+// source -> destination move has an auditable record (who, when, how much).
+model BinMovement {
+  id          String   @id @default(cuid())
+  itemId      String
+  item        Item     @relation(fields: [itemId], references: [id])
+  lotId       String   @default("")
+  locationId  String
+  location    Location @relation(fields: [locationId], references: [id])
+  fromBinId   String
+  toBinId     String
+  quantity    Float
+  reference   String?
+  actorId     String?
+  createdAt   DateTime @default(now())
+
+  @@index([locationId, createdAt])
+  @@index([itemId])
+}
+
+// Blueprint P7 / P11: Amazon/Flipkart/website connectors that POST /orders.
+model MarketplaceConnector {
+  id             String    @id @default(cuid())
+  name           String
+  platform       String
+  channel        String
+  webhookSecret  String
+  status         String    @default("ACTIVE")
+  tenantId       String    @default("default-company")
+  createdAt      DateTime  @default(now())
+  lastIngestedAt DateTime?
+
+  @@index([tenantId, status])
+  @@index([platform, status])
+}
+
+// Blueprint P3 "Traceability 3.0": a true unit-serial model. Serial state
+// must reconcile with the stock ledger, never create stock the ledger does
+// not own - every status change also posts a SerialMovement row so a
+// serial's full history (recall trace) can be reconstructed independent of
+// current location.
+model SerialNumber {
+  id                String    @id @default(cuid())
+  itemId            String
+  item              Item      @relation(fields: [itemId], references: [id])
+  lotId             String?
+  lot               Lot?      @relation(fields: [lotId], references: [id])
+  serial            String
+  // IN_STOCK | RESERVED | SOLD | RETURNED | DAMAGED | LOST
+  status            String    @default("IN_STOCK")
+  currentLocationId String?
+  currentLocation   Location? @relation(fields: [currentLocationId], references: [id])
+  currentBinId      String?
+  receivedAt        DateTime  @default(now())
+  soldAt            DateTime?
+  returnState       String?
+  warrantyEnd       DateTime?
+  metadata          Json?
+  companyId         String    @default("default-company")
+  tenantId          String    @default("tenant-invexa")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  movements         SerialMovement[]
+
+  @@unique([itemId, serial])
+  @@index([currentLocationId, status])
+  @@index([companyId])
+}
+
+model SerialMovement {
+  id             String       @id @default(cuid())
+  serialNumberId String
+  serialNumber   SerialNumber @relation(fields: [serialNumberId], references: [id])
+  // RECEIVE | TRANSFER | PICK | PACK | SALE | RETURN | ADJUSTMENT
+  movementType   String
+  fromLocationId String?
+  toLocationId   String?
+  fromStatus     String?
+  toStatus       String
+  // Ties this movement to the stock ledger/order/transfer transaction that
+  // caused it, e.g. a StockMovement id or Order id - not an FK so a serial
+  // movement never blocks on the source row's lifecycle.
+  reference      String?
+  actorId        String?
+  createdAt      DateTime     @default(now())
+
+  @@index([serialNumberId, createdAt])
+}
+

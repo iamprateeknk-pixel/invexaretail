@@ -1,0 +1,84 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build outputs
+dist/
+!api/dist/
+!api/dist/**
+build/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Development
+.next/
+.nuxt/
+.cache/
+.docusaurus/
+
+# Docker
+docker-compose.override.yml
+
+# Uploaded files
+uploads/
+backups/
+
+# Database
+*.sqlite
+*.sqlite3
+
+# OS
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Miscellaneous
+.cache
+.parcel-cache
+.turbo
+.env.*.local
+.eslintcache
+*.tgz
+
+# Mobile app (when created)
+retail-inventory-mobile/node_modules/
+retail-inventory-mobile/dist/
+retail-inventory-mobile/.expo/
+
+# Security - never commit credentials
+.ssh/
+*.pem
+*.key
+client-secret.json
+dist.zip

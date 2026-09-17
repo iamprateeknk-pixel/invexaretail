@@ -1,0 +1,20 @@
+{
+  "name": "InvexaRetail",
+  "install": "cd api && npm install && cd ../web && npm install",
+  "terminals": [
+    {
+      "name": "api",
+      "description": "Retail Inventory API (Express + Prisma). Leave DATABASE_URL unset so the API uses in-memory seed data (no MySQL required). Listens on http://localhost:4000. Seeds demo accounts (admin@retail.local / ChangeMe123!).",
+      "command": "cd api && NODE_ENV=development PORT=4000 ALLOWED_ORIGINS=http://localhost:5173,http://localhost:4000 JWT_SECRET=dev-secret-change-in-production SEED_PASSWORD=ChangeMe123! STRIPE_SECRET_KEY=sk_test_invexa_local STRIPE_WEBHOOK_SECRET=whsec_invexa_local ENABLE_DEV_OTP=true node dist/index.js"
+    },
+    {
+      "name": "web",
+      "description": "React + Vite web portal. Points VITE_API_BASE at the local API. Serves http://localhost:5173.",
+      "command": "cd web && VITE_API_BASE=http://localhost:4000 npm run dev -- --host 0.0.0.0"
+    }
+  ],
+  "ports": [
+    { "name": "api", "port": 4000 },
+    { "name": "web", "port": 5173 }
+  ]
+}

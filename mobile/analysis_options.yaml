@@ -1,0 +1,15 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    avoid_print: true
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_const_literals_to_create_immutables: true
+
+analyzer:
+  exclude: [build/**]
+  errors:
+    missing_required_param: error
+    missing_return: error
+    todo: ignore

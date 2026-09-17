@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API build tests and startup smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install API dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+        env:
+          DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/invexa_ci
+
+      - name: Build API exactly as production does
+        run: npm run build
+
+      - name: Test dependency-free startup diagnostics
+        run: node --test startup.test.cjs
+
+      - name: Run API tests
+        run: npm test
+
+      - name: Start API and verify health endpoint
+        env:
+          SEED_PASSWORD: InvexaCiOnly123
+          PORT: 4100
+        run: |
+          npm start > /tmp/invexa-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-api.log' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent --show-error http://127.0.0.1:4100/health \
+              && curl --fail --silent --show-error http://127.0.0.1:4100/ready \
+              && curl --fail --silent --show-error http://127.0.0.1:4100/meta; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Verify Hostinger startup file
+        env:
+          SEED_PASSWORD: InvexaCiOnly123
+          PORT: 4101
+        run: |
+          node app.js > /tmp/invexa-hostinger.log 2>&1 &
+          api_pid=$!
+          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-hostinger.log' EXIT
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent --show-error http://127.0.0.1:4101/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+
+  web:
+    name: Web lint and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Test web utilities
+        run: npm test
+
+      - name: Lint web
+        run: npm run lint
+
+      - name: Build web
+        run: npm run build
+
+  admin-panel:
+    name: Admin panel Control Plane build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: admin-panel
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install admin-panel dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Test Control Plane login entry
+        run: npm test
+
+      - name: Build Control Plane assets
+        env:
+          VITE_API_BASE: https://invexaretail.onrender.com
+        run: npm run build
+
+      - name: Confirm login ships in dist and worker
+        run: |
+          ! grep -R "Admin panel is ready" dist src
+          grep -R "control-email" dist
+          grep -R "x-invexa-panel" src/worker.js
+
+  mobile:
+    name: Mobile static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Analyze mobile app
+        working-directory: mobile
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test mobile app
+        working-directory: mobile
+        run: flutter test
