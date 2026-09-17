@@ -834,14 +834,22 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       createdAt: saved.createdAt,
       parentCountId: assignment?.parentCountId,
     });
+    // persistCount must land before anything references it as committed;
+    // the audit write and the (optional) assignment-close write are each
+    // independent of the other, so they run concurrently instead of as two
+    // more sequential round trips stacked on top of persistCount - this was
+    // the difference between 3 and 2 serial DB writes per submitted count.
     await persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId });
-    await persistAudit(recordAudit({
-      actorId: req.user!.id,
-      actorRole: req.user!.role,
-      action: 'STOCK_COUNT_SUBMITTED',
-      entityType: 'StockCount',
-      entityId: saved.id,
-    }));
+
+    const followUps: Promise<unknown>[] = [
+      persistAudit(recordAudit({
+        actorId: req.user!.id,
+        actorRole: req.user!.role,
+        action: 'STOCK_COUNT_SUBMITTED',
+        entityType: 'StockCount',
+        entityId: saved.id,
+      })),
+    ];
 
     if (assignment) {
       const requiredLotIds = item.lots
@@ -859,9 +867,11 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       countedLotIds.add(saved.lotId);
       if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
         markAssignmentSubmitted(assignment.id, saved.id);
-        await persistAssignmentSubmitted(assignment.id, saved.id);
+        followUps.push(persistAssignmentSubmitted(assignment.id, saved.id));
       }
     }
+
+    await Promise.all(followUps);
 
     // Store User stays blind to book quantity and variance even in the submission response.
     const responseCount = context.role === 'STORE_USER'

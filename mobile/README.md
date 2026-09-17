@@ -30,7 +30,7 @@ flutter test
 flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
 ```
 
-If `INVEXA_API_BASE` is empty, the app uses `https://invexaretail.onrender.com`,
+If `INVEXA_API_BASE` is empty, the app uses `https://invexaretail-h1ps.onrender.com`,
 matching web `VITE_API_BASE`.
 
 Live API checks (optional):

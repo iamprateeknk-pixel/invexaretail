@@ -19,6 +19,7 @@ class _CountScreenState extends State<CountScreen> {
   String? _itemId;
   String? _lotNo;
   String? _locationId;
+  String? _selectedBatchKey;
   final _qty = TextEditingController();
 
   @override
@@ -33,18 +34,43 @@ class _CountScreenState extends State<CountScreen> {
     super.dispose();
   }
 
+  // Every item assigned to this user in one admin action shares the same
+  // location, assigner, and countDate - grouping on that lets each batch
+  // show up as its own separate stock count to work through, instead of
+  // dumping every item ever assigned into one flat list.
+  Map<String, List<CountAssignment>> get _batches {
+    final byBatch = <String, List<CountAssignment>>{};
+    for (final row in widget.controller.assignments) {
+      byBatch.putIfAbsent(row.batchKey, () => []).add(row);
+    }
+    return byBatch;
+  }
+
+  List<CountAssignment> get _selectedBatchRows => _batches[_selectedBatchKey] ?? const [];
+
   // Once items are actually assigned to this user, the count list is
   // locked to exactly those items - no role, including an ad-hoc-capable
   // one, should be able to see beyond an assignment that was explicitly
   // handed to them. Ad-hoc (whole-catalog) counting only applies when
-  // nothing has been assigned.
+  // nothing has been assigned. When assignments exist, the list is further
+  // scoped to whichever single batch the user picked, not every batch.
   List<CatalogItem> get _countableItems {
     final controller = widget.controller;
-    final assignedIds = controller.assignments.map((row) => row.itemId).toSet();
-    if (assignedIds.isEmpty) {
+    if (controller.assignments.isEmpty) {
       return controller.allowAdHocCount ? controller.items : const [];
     }
+    final assignedIds = _selectedBatchRows.map((row) => row.itemId).toSet();
     return controller.items.where((item) => assignedIds.contains(item.id)).toList();
+  }
+
+  void _selectBatch(String batchKey, List<CountAssignment> rows) {
+    setState(() {
+      _selectedBatchKey = batchKey;
+      _locationId = rows.first.locationId;
+      _itemId = null;
+      _lotNo = null;
+      _qty.clear();
+    });
   }
 
   Future<void> _submit() async {
@@ -71,11 +97,20 @@ class _CountScreenState extends State<CountScreen> {
     if (code == null || !mounted) return;
     final normalized = code.trim().toLowerCase();
     CatalogItem? match;
+    LotRecord? matchedLot;
     for (final item in items) {
       if (item.code.trim().toLowerCase() == normalized) {
         match = item;
         break;
       }
+      for (final lot in item.lots) {
+        if (lot.lotNo.trim().toLowerCase() == normalized) {
+          match = item;
+          matchedLot = lot;
+          break;
+        }
+      }
+      if (match != null) break;
     }
     if (match == null) {
       widget.controller.setError('No assigned item matches barcode "$code".');
@@ -83,18 +118,21 @@ class _CountScreenState extends State<CountScreen> {
     }
     setState(() {
       _itemId = match!.id;
-      _lotNo = match.lots.isEmpty ? null : match.lots.first.lotNo;
+      _lotNo = matchedLot?.lotNo ?? (match.lots.isEmpty ? null : match.lots.first.lotNo);
     });
   }
 
   // Physical counting by repeated scan: every successful scan of the
-  // selected item's own barcode adds one unit, instead of typing a
-  // number. A scan of a different item's barcode is rejected rather than
-  // silently counted against the wrong item.
+  // selected item's own barcode (or one of its lot codes) adds one unit,
+  // instead of typing a number. A scan of a different item's barcode is
+  // rejected rather than silently counted against the wrong item.
   Future<void> _scanToIncrement(CatalogItem item) async {
     final code = await showBarcodeScanner(context, title: 'Scan ${item.name} to add +1');
     if (code == null || !mounted) return;
-    if (code.trim().toLowerCase() != item.code.trim().toLowerCase()) {
+    final normalized = code.trim().toLowerCase();
+    final matchesItem = normalized == item.code.trim().toLowerCase();
+    final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
+    if (!matchesItem && !matchesLot) {
       widget.controller.setError('Scanned barcode does not match ${item.name}.');
       return;
     }
@@ -105,6 +143,15 @@ class _CountScreenState extends State<CountScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final batches = _batches;
+    final hasAssignments = controller.assignments.isNotEmpty;
+    if (hasAssignments && !batches.containsKey(_selectedBatchKey)) {
+      final sortedKeys = batches.keys.toList()
+        ..sort((a, b) => (batches[a]!.first.countDate ?? '').compareTo(batches[b]!.first.countDate ?? ''));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _selectBatch(sortedKeys.first, batches[sortedKeys.first]!);
+      });
+    }
     final items = _countableItems;
     CatalogItem? selectedItem;
     for (final item in items) {
@@ -126,7 +173,7 @@ class _CountScreenState extends State<CountScreen> {
             style: TextStyle(color: invexaMuted),
           ),
           const SizedBox(height: 16),
-          if (!controller.allowAdHocCount && controller.assignments.isEmpty)
+          if (!controller.allowAdHocCount && !hasAssignments)
             const Card(
               child: Padding(
                 padding: EdgeInsets.all(16),
@@ -134,18 +181,30 @@ class _CountScreenState extends State<CountScreen> {
               ),
             )
           else ...[
-            DropdownButtonFormField<String>(
-              key: const ValueKey('count-location'),
-              initialValue: controller.locations.any((location) => location.id == _locationId)
-                  ? _locationId
-                  : (controller.locations.isEmpty ? null : controller.locations.first.id),
-              decoration: const InputDecoration(labelText: 'Location'),
-              items: [
-                for (final location in controller.locations)
-                  DropdownMenuItem(value: location.id, child: Text(location.name)),
-              ],
-              onChanged: (value) => setState(() => _locationId = value),
-            ),
+            if (hasAssignments) ...[
+              Text('Pending counts (${batches.length})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              for (final entry in batches.entries)
+                _BatchCard(
+                  rows: entry.value,
+                  locationName: lookupLocationName(controller.locations, entry.value.first.locationId),
+                  selected: entry.key == _selectedBatchKey,
+                  onTap: () => _selectBatch(entry.key, entry.value),
+                ),
+              const SizedBox(height: 20),
+            ] else
+              DropdownButtonFormField<String>(
+                key: const ValueKey('count-location'),
+                initialValue: controller.locations.any((location) => location.id == _locationId)
+                    ? _locationId
+                    : (controller.locations.isEmpty ? null : controller.locations.first.id),
+                decoration: const InputDecoration(labelText: 'Location'),
+                items: [
+                  for (final location in controller.locations)
+                    DropdownMenuItem(value: location.id, child: Text(location.name)),
+                ],
+                onChanged: (value) => setState(() => _locationId = value),
+              ),
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -239,6 +298,42 @@ class _CountScreenState extends State<CountScreen> {
               );
             }),
         ],
+      ),
+    );
+  }
+}
+
+class _BatchCard extends StatelessWidget {
+  const _BatchCard({
+    required this.rows,
+    required this.locationName,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final List<CountAssignment> rows;
+  final String locationName;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dueDate = rows.first.dueDate;
+    final priority = rows.first.priority;
+    return Card(
+      color: selected ? invexaEmerald.withValues(alpha: 0.12) : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: selected ? invexaEmerald : invexaBorder, width: selected ? 2 : 1),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        title: Text('$locationName · ${rows.length} item${rows.length == 1 ? '' : 's'}'),
+        subtitle: Text([
+          if (priority != null && priority != 'NORMAL') priority,
+          if (dueDate != null) 'Due ${dueDate.split('T').first}',
+        ].join(' · ')),
+        trailing: selected ? const Icon(Icons.check_circle, color: invexaEmerald) : const Icon(Icons.chevron_right, color: invexaMuted),
       ),
     );
   }

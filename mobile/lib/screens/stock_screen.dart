@@ -16,7 +16,7 @@ class _ItemStockSummary {
   int get totalPhysical => rows.fold(0, (sum, row) => sum + (row.physicalQuantity ?? 0));
   int? get totalBook {
     if (rows.any((row) => row.bookQuantity == null)) return null;
-    return rows.fold(0, (sum, row) => sum + (row.bookQuantity ?? 0));
+    return rows.fold<int>(0, (sum, row) => sum + (row.bookQuantity ?? 0));
   }
 }
 

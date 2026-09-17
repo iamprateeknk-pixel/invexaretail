@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { CycleCountPlanner } from '../../counts/CycleCountPlanner';
+import { ItemSearchSelect } from '../../ItemSearchSelect';
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -17,11 +19,26 @@ export function CountsPage() {
     setModalOpen, setBulkCountForm, locationId, storeUsers, cycleCountPlan, currentLocationName,
     cycleCountStoreUserId, setCycleCountStoreUserId, cycleCountClasses, setCycleCountClasses,
     submitCycleCountAssign, submitLoading, role, countForm, setCountForm, submitBlindCount,
-    authToken, loading, setSelectedCountTask,
+    authToken, loading, setSelectedCountTask, assignments, items,
     toleranceRules, toleranceRuleForm, setToleranceRuleForm, createToleranceRule, toggleToleranceRule,
     approvalRequests, approvalRules, approvalRuleForm, setApprovalRuleForm, decideApprovalRequest, createApprovalRule, toggleApprovalRule,
     evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule,
   } = useWorkspace();
+  // A store user may only submit a blind count against an item that was
+  // actually assigned to them at this location - a free-text item field let
+  // them type any item ID, so the field is locked to their assigned items.
+  const assignedItemIds = useMemo(
+    () => new Set(
+      (assignments ?? [])
+        .filter((assignment) => assignment.locationId === locationId && assignment.status === 'ASSIGNED')
+        .map((assignment) => assignment.itemId),
+    ),
+    [assignments, locationId],
+  );
+  const assignedItems = useMemo(
+    () => (items ?? []).filter((item) => assignedItemIds.has(item.id)),
+    [items, assignedItemIds],
+  );
   const queue = activeSection === 'approvals' && countStatusFilter === 'all'
     ? countTaskRows.filter((task) => String(task.status).toLowerCase().includes('pending'))
     : countTaskRows;
@@ -53,7 +70,15 @@ export function CountsPage() {
         <Card>
           <CardHeader><CardTitle className="text-base">Blind count entry</CardTitle><p className="text-xs text-muted-foreground">System quantity stays hidden until submission.</p></CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
-            <div className="grid gap-2"><Label>Item</Label><Input value={countForm.itemId} onChange={(event) => setCountForm({ ...countForm, itemId: event.target.value })} /></div>
+            <div className="grid gap-2">
+              <Label>Item</Label>
+              <ItemSearchSelect
+                items={assignedItems}
+                value={countForm.itemId}
+                onChange={(itemId) => setCountForm({ ...countForm, itemId })}
+                placeholder={assignedItems.length ? 'Select assigned item…' : 'No items assigned to you here'}
+              />
+            </div>
             <div className="grid gap-2"><Label>Lot number</Label><Input value={countForm.lotNo} onChange={(event) => setCountForm({ ...countForm, lotNo: event.target.value })} /></div>
             <div className="grid gap-2"><Label>Physical quantity</Label><Input type="number" value={countForm.physicalQuantity} onChange={(event) => setCountForm({ ...countForm, physicalQuantity: Number(event.target.value) })} /></div>
             <Button onClick={submitBlindCount} disabled={!authToken || loading}>Submit count</Button>

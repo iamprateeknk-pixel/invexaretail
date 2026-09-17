@@ -1,4 +1,4 @@
-const productionApiBase = 'https://invexaretail.onrender.com';
+const productionApiBase = 'https://invexaretail-h1ps.onrender.com';
 const workspaceOrigin = 'https://invexaretail.com/';
 
 String stripTrailingSlash(String value) {
@@ -10,7 +10,7 @@ String stripTrailingSlash(String value) {
 }
 
 /// Empty or whitespace dart-defines fall back to production, matching web
-/// `VITE_API_BASE || 'https://invexaretail.onrender.com'`.
+/// `VITE_API_BASE || 'https://invexaretail-h1ps.onrender.com'`.
 String resolveApiBase({String fromDefine = ''}) {
   final defined = stripTrailingSlash(fromDefine);
   if (defined.isNotEmpty) return defined;

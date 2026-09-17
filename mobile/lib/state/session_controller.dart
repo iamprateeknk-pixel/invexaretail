@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
@@ -312,15 +314,20 @@ class SessionController extends ChangeNotifier {
     busy = true;
     notifyListeners();
     try {
-      await api.submitCount(
+      final created = await api.submitCount(
         itemId: itemId,
         locationId: locationId,
         physicalQuantity: physicalQuantity,
         lotNo: lotNo,
       );
       notice = 'Count submitted for review.';
-      counts = await api.counts();
-      dashboard = await api.dashboard();
+      // Update local state from the response instead of re-fetching the
+      // whole counts list and dashboard on every submit - that was costing
+      // two extra sequential round trips per save. The submitted item's
+      // assignment (if any) is closed server-side, so drop it locally too.
+      counts = [created, ...counts];
+      assignments = assignments.where((row) => !(row.itemId == itemId && row.locationId == locationId)).toList();
+      unawaited(_refreshDashboardQuietly());
       return true;
     } on ApiException catch (err) {
       if (err.isOffline) {
@@ -338,6 +345,19 @@ class SessionController extends ChangeNotifier {
     } finally {
       busy = false;
       notifyListeners();
+    }
+  }
+
+  // Runs after the busy submit completes so the UI unblocks immediately;
+  // dashboard KPIs (pending counts, accuracy, etc.) catch up shortly after
+  // instead of holding up every single save.
+  Future<void> _refreshDashboardQuietly() async {
+    try {
+      dashboard = await api.dashboard();
+      notifyListeners();
+    } catch (_) {
+      // Best-effort - a stale dashboard is fine, the next screen visit or
+      // pull-to-refresh will pick up the latest numbers.
     }
   }
 

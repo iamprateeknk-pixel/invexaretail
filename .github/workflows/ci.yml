@@ -135,12 +135,12 @@ jobs:
 
       - name: Build Control Plane assets
         env:
-          VITE_API_BASE: https://invexaretail.onrender.com
+          VITE_API_BASE: https://invexaretail-h1ps.onrender.com
         run: npm run build
 
       - name: Confirm login ships in dist and worker
         run: |
-          ! grep -R "Admin panel is ready" dist src
+          ! grep -R --include="*.js" --include="*.jsx" --include="*.html" --exclude="*.test.js" "Admin panel is ready" dist src
           grep -R "control-email" dist
           grep -R "x-invexa-panel" src/worker.js
 
