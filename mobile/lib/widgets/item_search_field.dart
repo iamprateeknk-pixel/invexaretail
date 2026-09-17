@@ -78,7 +78,10 @@ class _ItemSearchScreenState extends State<_ItemSearchScreen> {
     final needle = _query.text.trim().toLowerCase();
     if (needle.isEmpty) return widget.items;
     return widget.items
-        .where((item) => item.name.toLowerCase().contains(needle) || item.code.toLowerCase().contains(needle))
+        .where((item) =>
+            item.name.toLowerCase().contains(needle) ||
+            item.code.toLowerCase().contains(needle) ||
+            item.lots.any((lot) => lot.lotNo.toLowerCase().contains(needle)))
         .toList();
   }
 
@@ -91,7 +94,7 @@ class _ItemSearchScreenState extends State<_ItemSearchScreen> {
           controller: _query,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'Search by name or code…',
+            hintText: 'Search by name, code, or lot…',
             border: InputBorder.none,
           ),
           onChanged: (_) => setState(() {}),

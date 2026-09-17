@@ -378,6 +378,8 @@ class CountAssignment {
     this.priority,
     this.dueDate,
     this.status,
+    this.countDate,
+    this.assignedById,
   });
 
   final String id;
@@ -388,6 +390,15 @@ class CountAssignment {
   final String? priority;
   final String? dueDate;
   final String? status;
+  final String? countDate;
+  final String? assignedById;
+
+  /// Every item assigned to a store user in one admin action shares the
+  /// same location, assigner, and countDate timestamp - grouping on that
+  /// tuple reconstructs "one assignment batch" so each batch can be shown
+  /// to the user as its own separate stock count instead of one merged
+  /// list of every item ever assigned to them.
+  String get batchKey => '$locationId|${assignedById ?? ''}|${countDate ?? ''}';
 
   factory CountAssignment.fromJson(Map<String, dynamic> json) {
     return CountAssignment(
@@ -399,6 +410,8 @@ class CountAssignment {
       priority: json['priority'] == null ? null : asString(json['priority']),
       dueDate: json['dueDate'] == null ? null : asString(json['dueDate']),
       status: json['status'] == null ? null : asString(json['status']),
+      countDate: json['countDate'] == null ? null : asString(json['countDate']),
+      assignedById: json['assignedById'] == null ? null : asString(json['assignedById']),
     );
   }
 }
