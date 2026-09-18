@@ -515,6 +515,9 @@ router.post('/items', async (req, res) => {
     if (!isOperationalAdmin(req.user.role)) {
         return res.status(403).json({ message: 'Only admins can create items.' });
     }
+    if (typeof req.body.code !== 'string' || !req.body.code.trim() || typeof req.body.name !== 'string' || !req.body.name.trim()) {
+        return res.status(400).json({ message: 'Item Code and Item Name are required.' });
+    }
     let operationalMeta;
     try {
         operationalMeta = (0, inventory_js_1.parseItemOperationalMeta)(req.body);

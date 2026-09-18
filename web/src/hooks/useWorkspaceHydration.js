@@ -1,4 +1,5 @@
-import { apiRequest } from '../lib/api-client';
+import { API_BASE, apiRequest } from '../lib/api-client';
+import { LIVE_STATUS, createLiveClient, invalidationsForTopics } from '../lib/live-events';
 import { mapPickerTasks } from '../lib/workspace-queues';
 import {
   DEFAULT_WORKSPACE_PROFILE,
@@ -7,7 +8,7 @@ import {
   normalizeTransfers,
 } from '../lib/workspace';
 import { isCountManager } from '../lib/count-review';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function useWorkspaceHydration({
   activeSection,
@@ -144,8 +145,91 @@ export function useWorkspaceHydration({
     })).catch((error) => setModuleWarning(error instanceof Error ? error.message : 'Unable to load operations module.'));
   }, [activeSection, authToken, setModuleWarning, setNotifications]);
 
+  // Blueprint v4 §11: the authenticated live stream is the primary sync
+  // mechanism. Each event names what changed; only those slices are
+  // refetched (never the full hydrate, which also resets form defaults).
+  const [liveStatus, setLiveStatus] = useState(LIVE_STATUS.connecting);
+  const latest = useRef({});
+  latest.current = { authToken, items, locations, locationId, role };
+  const pendingSlices = useRef(new Set());
+  const flushTimer = useRef(null);
+
+  async function refreshSlices(slices) {
+    const { authToken: token, locationId: currentLocation, role: currentRole } = latest.current;
+    if (!token) return;
+    if (slices.has('full')) {
+      await loadAppDataRef.current?.(token, currentRole);
+      return;
+    }
+    const headers = { Authorization: `Bearer ${token}` };
+    let currentItems = latest.current.items;
+    const currentLocations = latest.current.locations;
+    if (slices.has('items')) {
+      const response = await apiRequest('/api/v1/items', { headers });
+      currentItems = response.items ?? currentItems;
+      setItems(currentItems);
+    }
+    const jobs = [];
+    if (slices.has('counts')) {
+      jobs.push(apiRequest('/api/v1/counts', { headers }).then((r) => setCounts(normalizeCounts(r.counts, currentItems, currentLocations))));
+    }
+    if (slices.has('assignments') && (currentRole === 'STORE_USER' || isCountManager(currentRole))) {
+      const path = currentRole === 'STORE_USER' ? '/api/v1/count-assignments/mine' : '/api/v1/count-assignments';
+      jobs.push(apiRequest(path, { headers }).then((r) => setAssignments(r.assignments ?? [])));
+    }
+    if (slices.has('stock') && currentLocation) {
+      jobs.push(apiRequest(`/api/v1/stock/${currentLocation}`, { headers }).then((r) => setStockRows(normalizeStockRows(r.items ?? [], currentItems))));
+    }
+    if (slices.has('transfers')) {
+      jobs.push(apiRequest('/api/v1/transfers/list', { headers }).then((r) => setTransfers(normalizeTransfers(r.transfers, currentItems, currentLocations))));
+    }
+    if (slices.has('dashboard')) {
+      jobs.push(apiRequest('/api/v1/dashboard', { headers }).then((r) => setDashboard(r.dashboard)));
+    }
+    if (slices.has('pickerTasks') && ['ADMIN', 'WAREHOUSE_PICKER'].includes(currentRole)) {
+      jobs.push(apiRequest('/api/v1/picker-tasks', { headers }).then((r) => setPickerTasks(mapPickerTasks(r.tasks ?? [], currentItems))));
+    }
+    await Promise.allSettled(jobs);
+  }
+
   useEffect(() => {
-    if (!session || !authToken) return;
+    if (!session || !authToken) return undefined;
+    const client = createLiveClient({
+      url: `${API_BASE}/api/v1/events`,
+      getToken: () => latest.current.authToken,
+      onStatus: setLiveStatus,
+      onEvents: (topics) => {
+        invalidationsForTopics(topics).forEach((slice) => pendingSlices.current.add(slice));
+        // Coalesce bursts (a bulk import emits several topics at once).
+        clearTimeout(flushTimer.current);
+        flushTimer.current = setTimeout(() => {
+          const slices = pendingSlices.current;
+          pendingSlices.current = new Set();
+          refreshSlices(slices).catch(() => {});
+        }, 250);
+      },
+    });
+    const goOnline = () => client.reconnectNow();
+    const goOffline = () => client.markOffline();
+    const onVisible = () => { if (document.visibilityState === 'visible') client.reconnectNow(); };
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    document.addEventListener('visibilitychange', onVisible);
+    client.start();
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+      document.removeEventListener('visibilitychange', onVisible);
+      clearTimeout(flushTimer.current);
+      client.stop();
+    };
+    // refreshSlices reads everything through refs, so it never goes stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken, session]);
+
+  useEffect(() => {
+    // Polling is only the fallback while the live stream is down.
+    if (!session || !authToken || liveStatus === LIVE_STATUS.live) return;
 
     const pollInterval = setInterval(() => {
       const headers = { Authorization: `Bearer ${authToken}` };
@@ -163,15 +247,13 @@ export function useWorkspaceHydration({
           if (role === 'STORE_USER' || isCountManager(role)) {
             setAssignments(assignmentsResponse.assignments ?? []);
           }
-          if (stockResponse.items?.length) {
-            setStockRows(normalizeStockRows(stockResponse.items, items));
-          }
+          setStockRows(normalizeStockRows(stockResponse.items ?? [], items));
         })
         .catch(() => {});
     }, 12000);
 
     return () => clearInterval(pollInterval);
-  }, [authToken, items, locationId, locations, role, session, setAssignments, setCounts, setStockRows]);
+  }, [authToken, items, liveStatus, locationId, locations, role, session, setAssignments, setCounts, setStockRows]);
 
   async function markNotificationRead(notice) {
     if (!notice.persisted || notice.readAt) return;
@@ -183,5 +265,5 @@ export function useWorkspaceHydration({
     }
   }
 
-  return { markNotificationRead };
+  return { markNotificationRead, liveStatus };
 }

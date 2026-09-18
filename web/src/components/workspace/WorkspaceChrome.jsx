@@ -100,6 +100,7 @@ export function WorkspaceChrome({ children }) {
     loading,
     apiError,
     moduleWarning,
+    liveStatus,
   } = useWorkspace();
   const hiddenModules = new Set(workspaceProfile.pack?.hide ?? []);
   const workspaceName = workspaceProfile.name || 'Invexa Retail';
@@ -256,6 +257,9 @@ export function WorkspaceChrome({ children }) {
                 </SelectContent>
               </Select>
               {loading && <Badge variant="outline">Syncing…</Badge>}
+              {liveStatus === 'live' && <Badge variant="success" title="Changes from other users and devices appear automatically">Live</Badge>}
+              {liveStatus === 'offline' && <Badge variant="warning" title="No network - showing the last synced data">Offline</Badge>}
+              {(liveStatus === 'reconnecting' || liveStatus === 'stale') && <Badge variant="warning" title="Live updates paused - refreshing periodically until reconnected">{liveStatus === 'stale' ? 'Sync stale' : 'Reconnecting…'}</Badge>}
               {apiError && <Badge variant="destructive" title={apiError}>Stock sync failed</Badge>}
               {!apiError && moduleWarning && <Badge variant="warning" title={moduleWarning}>Module limited</Badge>}
             </div>

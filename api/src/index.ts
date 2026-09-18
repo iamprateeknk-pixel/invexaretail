@@ -11,6 +11,7 @@ import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
+import eventsRouter, { publishMutationEvents } from './routes/events.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
 import { buildPlatformMeta } from './lib/platform.js';
@@ -230,6 +231,11 @@ app.use('/sync/v1', syncRouter);
 app.use('/api/v1/auth', enterpriseAuthRouter);
 app.use('/api/v1/admin', enterpriseManagementRouter);
 app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
+
+// Blueprint v4 §11: live event stream + payload-free mutation events. The
+// publisher must sit before every router that owns a mutating route.
+app.use('/api/v1', eventsRouter);
+app.use('/api/v1', publishMutationEvents);
 
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', coreRouter);
