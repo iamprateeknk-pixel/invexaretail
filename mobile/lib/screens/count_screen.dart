@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
+import '../services/stock_candidates.dart';
 import '../state/session_controller.dart';
 import '../widgets/barcode_scan_sheet.dart';
 import '../widgets/item_search_field.dart';
@@ -60,10 +61,28 @@ class _CountScreenState extends State<CountScreen> {
       return controller.allowAdHocCount ? controller.items : const [];
     }
     final assignedIds = _selectedBatchRows.map((row) => row.itemId).toSet();
-    return controller.items.where((item) => assignedIds.contains(item.id)).toList();
+    final assigned = controller.items.where((item) => assignedIds.contains(item.id)).toList();
+    return _limitToStock(assigned);
+  }
+
+  // Store users are never offered a zero-stock item or lot (blueprint v4 §7),
+  // so scan, search and the lot picker only see what is on the shelf. The
+  // stock list belongs to the selected location, so only apply it when that
+  // is the location being counted.
+  List<CatalogItem> _limitToStock(List<CatalogItem> candidates) {
+    final controller = widget.controller;
+    final locationId = _locationId;
+    if (!controller.isStoreUser || locationId == null || controller.selectedLocationId != locationId) {
+      return candidates;
+    }
+    return stockedCandidates(candidates, controller.stock, locationId);
   }
 
   void _selectBatch(String batchKey, List<CountAssignment> rows) {
+    // Load the stock for the batch's branch so zero-stock lots stay hidden.
+    if (widget.controller.selectedLocationId != rows.first.locationId) {
+      widget.controller.selectLocation(rows.first.locationId);
+    }
     setState(() {
       _selectedBatchKey = batchKey;
       _locationId = rows.first.locationId;
