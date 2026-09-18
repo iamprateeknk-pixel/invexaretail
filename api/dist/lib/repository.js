@@ -121,6 +121,12 @@ function createItemRecord(input) {
         subcategory: input.subcategory,
         company: input.company,
         unit: input.unit,
+        countMethod: input.countMethod,
+        pickMethod: input.pickMethod,
+        allocationStrategy: input.allocationStrategy,
+        lotRequired: input.lotRequired,
+        expiryRequired: input.expiryRequired,
+        decimalQuantity: input.decimalQuantity,
         lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
     };
     exports.items.push(item);

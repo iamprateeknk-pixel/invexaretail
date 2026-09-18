@@ -23,6 +23,9 @@ import { controlPlane } from '../lib/saas/control-plane.js';
 import {
   canAccessLocation,
   sanitizeStockForRole,
+  hidesZeroStockForRole,
+  parseItemOperationalMeta,
+  type ItemOperationalMeta,
   validateBlindCountSubmission,
   validateTransferRequest,
   validateTransferStatusChange,
@@ -630,6 +633,12 @@ router.post('/items', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins can create items.' });
   }
+  let operationalMeta: ItemOperationalMeta;
+  try {
+    operationalMeta = parseItemOperationalMeta(req.body);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+  }
   try {
     const item = createInventoryItem({
       code: req.body.code,
@@ -638,8 +647,9 @@ router.post('/items', async (req: Request, res: Response) => {
       subcategory: req.body.subcategory,
       company: req.body.company,
       unit: req.body.unit,
+      ...operationalMeta,
     });
-    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit });
+    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta });
     registerItemCompany(saved.id, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistItem(saved, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({
@@ -666,6 +676,12 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   if (listItems().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
+  let operationalMeta: ItemOperationalMeta;
+  try {
+    operationalMeta = parseItemOperationalMeta(req.body);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+  }
   Object.assign(item, {
     code: nextCode,
     name: nextName,
@@ -673,6 +689,7 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
     subcategory: req.body.subcategory === undefined ? item.subcategory : String(req.body.subcategory || '').trim() || undefined,
     company: req.body.company === undefined ? item.company : String(req.body.company || '').trim() || undefined,
     unit: req.body.unit === undefined ? item.unit : String(req.body.unit || '').trim() || undefined,
+    ...operationalMeta,
   });
   await persistItem(item);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: item.id, metadata: { code: item.code, name: item.name } }));
@@ -731,7 +748,11 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
         availableQuantity: row.onHand,
       }));
 
-  return res.json({ locationId, items: rows.map((row) => sanitizeStockForRole(context.role, row)) });
+  const visibleRows = hidesZeroStockForRole(context.role)
+    ? rows.filter((row) => row.availableQuantity > 0)
+    : rows;
+
+  return res.json({ locationId, items: visibleRows.map((row) => sanitizeStockForRole(context.role, row)) });
 });
 
 // ============================================

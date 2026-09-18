@@ -33,6 +33,12 @@ export type ItemRecord = {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+    pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+    allocationStrategy?: 'FIFO' | 'FEFO';
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
     lots: LotRecord[];
 };
 export type LotRecord = {
@@ -158,6 +164,12 @@ export declare function createItemRecord(input: {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: ItemRecord['countMethod'];
+    pickMethod?: ItemRecord['pickMethod'];
+    allocationStrategy?: ItemRecord['allocationStrategy'];
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
 }): ItemRecord;
 export declare function upsertItemRecord(input: {
     code: string;

@@ -108,6 +108,12 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     subcategory: item.subcategory ?? undefined,
     company: item.company ?? undefined,
     unit: item.unit ?? undefined,
+    countMethod: item.countMethod ?? 'LOT_SCAN',
+    pickMethod: item.pickMethod ?? 'LOT_SCAN',
+    allocationStrategy: item.allocationStrategy ?? 'FEFO',
+    lotRequired: item.lotRequired ?? true,
+    expiryRequired: item.expiryRequired ?? false,
+    decimalQuantity: item.decimalQuantity ?? false,
     lots: item.lots.map((lot) => ({
       id: lot.id,
       itemId: lot.itemId,
@@ -259,10 +265,18 @@ export async function loadTransferPickSlips(transferId: string): Promise<AuditEv
 export async function persistItem(item: ItemRecord, companyId = 'default-company'): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
+  const operationalFields = {
+    countMethod: item.countMethod,
+    pickMethod: item.pickMethod,
+    allocationStrategy: item.allocationStrategy,
+    lotRequired: item.lotRequired,
+    expiryRequired: item.expiryRequired,
+    decimalQuantity: item.decimalQuantity,
+  };
   await prisma.item.upsert({
     where: { id: item.id },
-    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit } as any,
-    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit } as any,
+    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields } as any,
+    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields } as any,
   });
   for (const lot of item.lots) {
     await prisma.lot.upsert({

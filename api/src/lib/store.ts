@@ -7,6 +7,12 @@ export type InventoryItemInput = {
   subcategory?: string;
   company?: string;
   unit?: string;
+  countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+  pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+  allocationStrategy?: 'FIFO' | 'FEFO';
+  lotRequired?: boolean;
+  expiryRequired?: boolean;
+  decimalQuantity?: boolean;
 };
 
 export type InventoryLot = {
@@ -25,6 +31,12 @@ export type InventoryItem = {
   subcategory?: string;
   company?: string;
   unit?: string;
+  countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+  pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+  allocationStrategy?: 'FIFO' | 'FEFO';
+  lotRequired?: boolean;
+  expiryRequired?: boolean;
+  decimalQuantity?: boolean;
   lots: InventoryLot[];
 };
 
@@ -93,6 +105,12 @@ export function createInventoryItem(input: InventoryItemInput): InventoryItem {
     subcategory: input.subcategory,
     company: input.company,
     unit: input.unit,
+    countMethod: input.countMethod,
+    pickMethod: input.pickMethod,
+    allocationStrategy: input.allocationStrategy,
+    lotRequired: input.lotRequired,
+    expiryRequired: input.expiryRequired,
+    decimalQuantity: input.decimalQuantity,
     lots: [
       {
         id: lotId,

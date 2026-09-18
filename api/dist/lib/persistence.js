@@ -113,6 +113,12 @@ async function hydrateRepositoryFromDatabase() {
         subcategory: item.subcategory ?? undefined,
         company: item.company ?? undefined,
         unit: item.unit ?? undefined,
+        countMethod: item.countMethod ?? 'LOT_SCAN',
+        pickMethod: item.pickMethod ?? 'LOT_SCAN',
+        allocationStrategy: item.allocationStrategy ?? 'FEFO',
+        lotRequired: item.lotRequired ?? true,
+        expiryRequired: item.expiryRequired ?? false,
+        decimalQuantity: item.decimalQuantity ?? false,
         lots: item.lots.map((lot) => ({
             id: lot.id,
             itemId: lot.itemId,
@@ -258,10 +264,18 @@ async function persistItem(item, companyId = 'default-company') {
     if (!exports.databaseEnabled)
         return;
     requireDatabase();
+    const operationalFields = {
+        countMethod: item.countMethod,
+        pickMethod: item.pickMethod,
+        allocationStrategy: item.allocationStrategy,
+        lotRequired: item.lotRequired,
+        expiryRequired: item.expiryRequired,
+        decimalQuantity: item.decimalQuantity,
+    };
     await db_js_1.prisma.item.upsert({
         where: { id: item.id },
-        update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit },
-        create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, unit: item.unit },
+        update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields },
+        create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields },
     });
     for (const lot of item.lots) {
         await db_js_1.prisma.lot.upsert({

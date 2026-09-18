@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.computeVariance = computeVariance;
 exports.canAccessLocation = canAccessLocation;
+exports.hidesZeroStockForRole = hidesZeroStockForRole;
+exports.parseItemOperationalMeta = parseItemOperationalMeta;
 exports.sanitizeStockForRole = sanitizeStockForRole;
 exports.validateBlindCountSubmission = validateBlindCountSubmission;
 exports.validateTransferRequest = validateTransferRequest;
@@ -22,6 +24,44 @@ function canAccessLocation(context, locationId) {
         return true;
     }
     return context.assignedLocationIds.includes(locationId);
+}
+// Blueprint v4 §1/§7 non-negotiable rule: operational roles (the ones doing
+// physical count/pick/scan work) must never be offered a zero-stock item or
+// lot as something to act on. Admin/management roles keep full visibility
+// for maintenance and reconciliation.
+function hidesZeroStockForRole(role) {
+    return role === 'STORE_USER' || role === 'WAREHOUSE_PICKER';
+}
+// Blueprint v4 §6 "Operations" field group. Only keys actually present in
+// the request body are returned, so a partial PUT never clobbers a field
+// the caller didn't mean to touch (Object.assign-style partial update).
+function parseItemOperationalMeta(body) {
+    const meta = {};
+    if (body.countMethod !== undefined) {
+        if (body.countMethod !== 'LOT_SCAN' && body.countMethod !== 'ITEM_WEIGHT') {
+            throw new Error('countMethod must be LOT_SCAN or ITEM_WEIGHT.');
+        }
+        meta.countMethod = body.countMethod;
+    }
+    if (body.pickMethod !== undefined) {
+        if (body.pickMethod !== 'LOT_SCAN' && body.pickMethod !== 'ITEM_QTY_FIFO') {
+            throw new Error('pickMethod must be LOT_SCAN or ITEM_QTY_FIFO.');
+        }
+        meta.pickMethod = body.pickMethod;
+    }
+    if (body.allocationStrategy !== undefined) {
+        if (body.allocationStrategy !== 'FIFO' && body.allocationStrategy !== 'FEFO') {
+            throw new Error('allocationStrategy must be FIFO or FEFO.');
+        }
+        meta.allocationStrategy = body.allocationStrategy;
+    }
+    if (body.lotRequired !== undefined)
+        meta.lotRequired = Boolean(body.lotRequired);
+    if (body.expiryRequired !== undefined)
+        meta.expiryRequired = Boolean(body.expiryRequired);
+    if (body.decimalQuantity !== undefined)
+        meta.decimalQuantity = Boolean(body.decimalQuantity);
+    return meta;
 }
 function sanitizeStockForRole(role, snapshot) {
     if (role === 'STORE_USER') {

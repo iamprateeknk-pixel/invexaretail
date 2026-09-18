@@ -16,6 +16,13 @@ export type ItemRecord = {
   subcategory?: string;
   company?: string;
   unit?: string;
+  // Blueprint v4 §6 operational metadata - see schema.prisma Item for field docs.
+  countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+  pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+  allocationStrategy?: 'FIFO' | 'FEFO';
+  lotRequired?: boolean;
+  expiryRequired?: boolean;
+  decimalQuantity?: boolean;
   lots: LotRecord[];
 };
 
@@ -200,7 +207,7 @@ export function listItems(): ItemRecord[] {
   }));
 }
 
-export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string }): ItemRecord {
+export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean }): ItemRecord {
   const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
   const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -212,6 +219,12 @@ export function createItemRecord(input: { code: string; name: string; category?:
     subcategory: input.subcategory,
     company: input.company,
     unit: input.unit,
+    countMethod: input.countMethod,
+    pickMethod: input.pickMethod,
+    allocationStrategy: input.allocationStrategy,
+    lotRequired: input.lotRequired,
+    expiryRequired: input.expiryRequired,
+    decimalQuantity: input.decimalQuantity,
     lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
   };
 

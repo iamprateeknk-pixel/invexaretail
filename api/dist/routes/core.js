@@ -515,6 +515,13 @@ router.post('/items', async (req, res) => {
     if (!isOperationalAdmin(req.user.role)) {
         return res.status(403).json({ message: 'Only admins can create items.' });
     }
+    let operationalMeta;
+    try {
+        operationalMeta = (0, inventory_js_1.parseItemOperationalMeta)(req.body);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+    }
     try {
         const item = (0, store_js_1.createInventoryItem)({
             code: req.body.code,
@@ -523,8 +530,9 @@ router.post('/items', async (req, res) => {
             subcategory: req.body.subcategory,
             company: req.body.company,
             unit: req.body.unit,
+            ...operationalMeta,
         });
-        const saved = (0, repository_js_1.createItemRecord)({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit });
+        const saved = (0, repository_js_1.createItemRecord)({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta });
         (0, tenant_scope_js_1.registerItemCompany)(saved.id, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistItem)(saved, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
@@ -554,6 +562,13 @@ router.put('/items/:itemId', async (req, res) => {
     if ((0, repository_js_1.listItems)().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
         return res.status(409).json({ message: 'Another item already uses this Item Code.' });
     }
+    let operationalMeta;
+    try {
+        operationalMeta = (0, inventory_js_1.parseItemOperationalMeta)(req.body);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+    }
     Object.assign(item, {
         code: nextCode,
         name: nextName,
@@ -561,6 +576,7 @@ router.put('/items/:itemId', async (req, res) => {
         subcategory: req.body.subcategory === undefined ? item.subcategory : String(req.body.subcategory || '').trim() || undefined,
         company: req.body.company === undefined ? item.company : String(req.body.company || '').trim() || undefined,
         unit: req.body.unit === undefined ? item.unit : String(req.body.unit || '').trim() || undefined,
+        ...operationalMeta,
     });
     await (0, persistence_js_1.persistItem)(item);
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: item.id, metadata: { code: item.code, name: item.name } }));
@@ -617,7 +633,10 @@ router.get('/stock/:locationId', async (req, res) => {
             reservedQuantity: 0,
             availableQuantity: row.onHand,
         }));
-    return res.json({ locationId, items: rows.map((row) => (0, inventory_js_1.sanitizeStockForRole)(context.role, row)) });
+    const visibleRows = (0, inventory_js_1.hidesZeroStockForRole)(context.role)
+        ? rows.filter((row) => row.availableQuantity > 0)
+        : rows;
+    return res.json({ locationId, items: visibleRows.map((row) => (0, inventory_js_1.sanitizeStockForRole)(context.role, row)) });
 });
 // ============================================
 // COUNTS

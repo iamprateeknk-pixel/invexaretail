@@ -673,6 +673,22 @@ model Item {
   tenantId    String   @default("tenant-invexa")
   unit        String?
   description String?  @db.Text
+  // Blueprint v4 §6 "Operations" field group. countMethod: LOT_SCAN (scan a
+  // lot barcode, count in whole units) | ITEM_WEIGHT (enter a decimal
+  // quantity, server allocates FIFO/FEFO across lots - see
+  // lib/warehouse-workflow.ts allocateFefo/allocateLots). pickMethod
+  // mirrors the same choice for picking. allocationStrategy is which of
+  // FIFO/FEFO the allocator applies when this item is counted/picked by
+  // weight instead of lot scan. decimalQuantity flags a loose/KG-style item
+  // whose quantities are entered as a decimal rather than a scan-counted
+  // whole number. Defaults preserve today's de facto behavior (scan-and-
+  // increment, whole units) for every existing item.
+  countMethod       String  @default("LOT_SCAN")
+  pickMethod        String  @default("LOT_SCAN")
+  allocationStrategy String @default("FEFO")
+  lotRequired       Boolean @default(true)
+  expiryRequired    Boolean @default(false)
+  decimalQuantity   Boolean @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

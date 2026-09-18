@@ -45,6 +45,16 @@ export type TransferInput = {
 export type TransferStatus = 'SUBMITTED' | 'DRAFT' | 'PENDING_PICK' | 'REQUESTED' | 'PICKING' | 'PARTIAL' | 'PICKED' | 'READY_FOR_ADMIN' | 'CONFIRMED' | 'IN_TRANSIT' | 'DISPATCHED' | 'PARTIALLY_RECEIVED' | 'PARTIAL_RECEIVED' | 'RECEIVED' | 'CLOSED' | 'REJECTED' | 'CANCELLED';
 export declare function computeVariance(bookQuantity: number, physicalQuantity: number): number;
 export declare function canAccessLocation(context: AccessContext, locationId: string): boolean;
+export declare function hidesZeroStockForRole(role: Role): boolean;
+export type ItemOperationalMeta = {
+    countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+    pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+    allocationStrategy?: 'FIFO' | 'FEFO';
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
+};
+export declare function parseItemOperationalMeta(body: Record<string, unknown>): ItemOperationalMeta;
 export declare function sanitizeStockForRole(role: Role, snapshot: StockSnapshot): Record<string, number | string>;
 export declare function validateBlindCountSubmission(role: Role, input: BlindCountInput): BlindCountInput;
 export declare function validateTransferRequest(role: Role, input: TransferInput): TransferInput;
