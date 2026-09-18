@@ -689,6 +689,25 @@ model Item {
   lotRequired       Boolean @default(true)
   expiryRequired    Boolean @default(false)
   decimalQuantity   Boolean @default(false)
+  // Blueprint v4 §6 canonical Item Master. status ACTIVE | INACTIVE |
+  // ARCHIVED: anything but ACTIVE is hidden from operational users and
+  // blocked from new transactions, but history stays explainable. Permanent
+  // delete is only allowed with no history (see lib/item-master.ts).
+  status            String    @default("ACTIVE")
+  archiveReason     String?
+  archivedAt        DateTime?
+  archivedById      String?
+  barcode           String?
+  hsn               String?
+  gstRate           Float?
+  mrp               Float?
+  leadTimeDays      Int?
+  shelfLifeDays     Int?
+  // ERP aliases / alternate names and codes used to resolve import rows.
+  aliases           Json?
+  version           Int       @default(1)
+  createdById       String?
+  updatedById       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -720,6 +739,8 @@ model Item {
 
   @@index([companyId])
   @@index([tenantId])
+  @@index([status])
+  @@index([barcode])
 }
 
 model Lot {
@@ -804,11 +825,23 @@ model StockCount {
   reviewStatus    String   @default("PENDING_REVIEW")
   reviewReason    String?  @db.Text
   parentCountId   String?
+  // Blueprint v4 §14: sales/purchase files imported after a count can carry
+  // movements dated before it, changing what the book quantity should have
+  // been. Instead of silently rewriting history the count is flagged;
+  // a still-pending count has its book quantity recomputed (bookQtyOriginal
+  // keeps what was first recorded).
+  reconciliationRequired Boolean   @default(false)
+  reconciliationNote     String?   @db.Text
+  reconciliationAt       DateTime?
+  bookQtyOriginal        Float?
+  lateDelta              Float     @default(0)
+  lateMovementKeys       Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
 
   @@index([tenantId])
+  @@index([reconciliationRequired])
 
 }
 

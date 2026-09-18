@@ -84,8 +84,8 @@ export declare function retryBackorderAllocation(orderId: string, ttlMinutes?: n
     updatedAt: Date;
     status: string;
     notes: string | null;
-    tenantId: string;
     createdById: string;
+    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -166,8 +166,8 @@ export declare function createOrderWithReservation(input: {
     updatedAt: Date;
     status: string;
     notes: string | null;
-    tenantId: string;
     createdById: string;
+    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -220,8 +220,8 @@ export declare function fulfillOrder(orderId: string, actorId: string): Promise<
     updatedAt: Date;
     status: string;
     notes: string | null;
-    tenantId: string;
     createdById: string;
+    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -269,8 +269,8 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
     updatedAt: Date;
     status: string;
     notes: string | null;
-    tenantId: string;
     createdById: string;
+    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;

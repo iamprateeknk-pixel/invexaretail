@@ -12,7 +12,7 @@ import { Download, ScanLine } from 'lucide-react';
 export function InventoryPage() {
   const {
         searchedStockRows, items, workspaceProfile, canViewSystemStock, savedViews, applySavedView,
-    saveCurrentView, setModalOpen, openScanner, role, setSelectedItem, inventoryPage, inventoryPageSize,
+    saveCurrentView, setModalOpen, openScanner, role, setSelectedItem, setMasterDialog, inventoryPage, inventoryPageSize,
     setInventoryPage, setInventoryPageSize, deleteSavedView, runtimeConfig,
   } = useWorkspace();
   const runtimePage = runtimeConfig?.page;
@@ -74,6 +74,7 @@ export function InventoryPage() {
           )}
           {canDailyImport && <Button variant="outline" onClick={() => setModalOpen('dailyImport')}>Daily sales / purchase</Button>}
           {canOpeningStock && <Button variant="outline" onClick={() => setModalOpen('import')}>Opening stock</Button>}
+          {canOpeningStock && <Button variant="outline" onClick={() => setMasterDialog({ mode: 'archived' })}>Archived items</Button>}
           {canScan && <Button onClick={openScanner}><ScanLine className="size-4" />Scan item</Button>}
         </div>
       </CardHeader>

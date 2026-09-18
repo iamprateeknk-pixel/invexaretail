@@ -278,7 +278,7 @@ export function useWorkspaceApp() {
     showToast,
   });
 
-  const { markNotificationRead, liveStatus, campaignRevision } = useWorkspaceHydration({
+  const { markNotificationRead, liveStatus, campaignRevision, liveRevision } = useWorkspaceHydration({
     activeSection: core.activeSection,
     authToken,
     items: core.items,
@@ -387,6 +387,7 @@ export function useWorkspaceApp() {
     markNotificationRead,
     liveStatus,
     campaignRevision,
+    liveRevision,
     mobileNavOpen: core.mobileNavOpen,
     modalOpen: core.modalOpen,
     moduleWarning: core.moduleWarning,

@@ -114,6 +114,20 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     lotRequired: item.lotRequired ?? true,
     expiryRequired: item.expiryRequired ?? false,
     decimalQuantity: item.decimalQuantity ?? false,
+    status: (item.status ?? 'ACTIVE') as 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    archiveReason: item.archiveReason ?? undefined,
+    archivedAt: item.archivedAt?.toISOString(),
+    archivedById: item.archivedById ?? undefined,
+    barcode: item.barcode ?? undefined,
+    hsn: item.hsn ?? undefined,
+    gstRate: item.gstRate ?? undefined,
+    mrp: item.mrp ?? undefined,
+    leadTimeDays: item.leadTimeDays ?? undefined,
+    shelfLifeDays: item.shelfLifeDays ?? undefined,
+    aliases: Array.isArray(item.aliases) ? (item.aliases as string[]) : undefined,
+    version: item.version ?? 1,
+    createdById: item.createdById ?? undefined,
+    updatedById: item.updatedById ?? undefined,
     lots: item.lots.map((lot) => ({
       id: lot.id,
       itemId: lot.itemId,
@@ -145,6 +159,12 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     reviewedAt: count.approvedAt?.toISOString(),
     reviewReason: count.reviewReason ?? undefined,
     parentCountId: count.parentCountId ?? undefined,
+    reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
+    reconciliationNote: (count as { reconciliationNote?: string | null }).reconciliationNote ?? undefined,
+    reconciliationAt: (count as { reconciliationAt?: Date | null }).reconciliationAt?.toISOString(),
+    bookQtyOriginal: (count as { bookQtyOriginal?: number | null }).bookQtyOriginal ?? undefined,
+    lateDelta: (count as { lateDelta?: number }).lateDelta ?? 0,
+    lateMovementKeys: Array.isArray((count as { lateMovementKeys?: unknown }).lateMovementKeys) ? (count as { lateMovementKeys: string[] }).lateMovementKeys : undefined,
   })));
 
   stockLedger.splice(0, stockLedger.length, ...dbStockLedger.map((row) => ({
@@ -274,10 +294,28 @@ export async function persistItem(item: ItemRecord, companyId = 'default-company
     expiryRequired: item.expiryRequired,
     decimalQuantity: item.decimalQuantity,
   };
+  // The full item state is written every time, so a cleared optional field
+  // must become NULL (an undefined key would leave the old value in place).
+  const masterFields = {
+    status: item.status ?? 'ACTIVE',
+    archiveReason: item.archiveReason ?? null,
+    archivedAt: item.archivedAt ? new Date(item.archivedAt) : null,
+    archivedById: item.archivedById ?? null,
+    barcode: item.barcode ?? null,
+    hsn: item.hsn ?? null,
+    gstRate: item.gstRate ?? null,
+    mrp: item.mrp ?? null,
+    leadTimeDays: item.leadTimeDays ?? null,
+    shelfLifeDays: item.shelfLifeDays ?? null,
+    aliases: (item.aliases?.length ? item.aliases : Prisma.JsonNull) as Prisma.InputJsonValue,
+    version: item.version ?? 1,
+    createdById: item.createdById ?? null,
+    updatedById: item.updatedById ?? null,
+  };
   await prisma.item.upsert({
     where: { id: item.id },
-    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields } as any,
-    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields } as any,
+    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields, ...masterFields } as any,
+    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields, ...masterFields } as any,
   });
   for (const lot of item.lots) {
     await prisma.lot.upsert({
@@ -561,7 +599,14 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
         `);
       }
     }
-    for (const checkpoint of input.checkpoints) await tx.syncCheckpoint.upsert({ where: { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } }, update: { syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId } });
+    for (const checkpoint of input.checkpoints) {
+      const key = { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } };
+      const next = new Date(checkpoint.syncedThroughAt);
+      const existing = await tx.syncCheckpoint.findUnique({ where: key });
+      // Only ever move forward: a backfill of an older day must not regress the branch.
+      if (existing && existing.syncedThroughAt >= next) continue;
+      await tx.syncCheckpoint.upsert({ where: key, update: { syncedThroughAt: next, lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: next, lastImportBatchId: input.batchId } });
+    }
   }, { maxWait: 10_000, timeout: 120_000 });
   return { committedRows };
 }
@@ -615,6 +660,24 @@ export async function listStockFromDatabase(locationId: string): Promise<Persist
  * resulting variance to the stock ledger, in the same transaction, so the
  * count status and the on-hand quantity can never disagree.
  */
+/** Writes the reconciliation state (and a recomputed book quantity) of a count. */
+export async function persistCountReconciliation(count: CountRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.stockCount.update({
+    where: { id: count.id },
+    data: {
+      bookQty: count.bookQty,
+      reconciliationRequired: count.reconciliationRequired ?? false,
+      reconciliationNote: count.reconciliationNote ?? null,
+      reconciliationAt: count.reconciliationAt ? new Date(count.reconciliationAt) : null,
+      bookQtyOriginal: count.bookQtyOriginal ?? null,
+      lateDelta: count.lateDelta ?? 0,
+      lateMovementKeys: (count.lateMovementKeys ?? []) as unknown as Prisma.InputJsonValue,
+    } as never,
+  });
+}
+
 export async function persistCountReview(count: CountRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();

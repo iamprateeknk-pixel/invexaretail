@@ -118,7 +118,7 @@ class _CountScreenState extends State<CountScreen> {
     CatalogItem? match;
     LotRecord? matchedLot;
     for (final item in items) {
-      if (item.code.trim().toLowerCase() == normalized) {
+      if (item.code.trim().toLowerCase() == normalized || (item.barcode ?? '').trim().toLowerCase() == normalized) {
         match = item;
         break;
       }
@@ -149,7 +149,7 @@ class _CountScreenState extends State<CountScreen> {
     final code = await showBarcodeScanner(context, title: 'Scan ${item.name} to add +1');
     if (code == null || !mounted) return;
     final normalized = code.trim().toLowerCase();
-    final matchesItem = normalized == item.code.trim().toLowerCase();
+    final matchesItem = normalized == item.code.trim().toLowerCase() || normalized == (item.barcode ?? '').trim().toLowerCase();
     final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
     if (!matchesItem && !matchesLot) {
       widget.controller.setError('Scanned barcode does not match ${item.name}.');

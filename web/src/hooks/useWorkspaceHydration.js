@@ -151,6 +151,8 @@ export function useWorkspaceHydration({
   const [liveStatus, setLiveStatus] = useState(LIVE_STATUS.connecting);
   // Bumped on campaign.changed so the campaign panel (which owns its own data) refetches.
   const [campaignRevision, setCampaignRevision] = useState(0);
+  // Bumped on every batch of live events so panels that own their data (import control center) refetch.
+  const [liveRevision, setLiveRevision] = useState(0);
   const latest = useRef({});
   latest.current = { authToken, items, locations, locationId, role };
   const pendingSlices = useRef(new Set());
@@ -208,6 +210,7 @@ export function useWorkspaceHydration({
         flushTimer.current = setTimeout(() => {
           const slices = pendingSlices.current;
           pendingSlices.current = new Set();
+          setLiveRevision((value) => value + 1);
           refreshSlices(slices).catch(() => {});
         }, 250);
       },
@@ -268,5 +271,5 @@ export function useWorkspaceHydration({
     }
   }
 
-  return { markNotificationRead, liveStatus, campaignRevision };
+  return { markNotificationRead, liveStatus, campaignRevision, liveRevision };
 }

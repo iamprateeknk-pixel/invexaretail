@@ -217,6 +217,7 @@ class CatalogItem {
     required this.code,
     required this.name,
     this.unit,
+    this.barcode,
     this.lots = const [],
   });
 
@@ -224,6 +225,7 @@ class CatalogItem {
   final String code;
   final String name;
   final String? unit;
+  final String? barcode;
   final List<LotRecord> lots;
 
   factory CatalogItem.fromJson(Map<String, dynamic> json) {
@@ -232,6 +234,7 @@ class CatalogItem {
       code: asString(json['code'], asString(json['sku'])),
       name: asString(json['name'], asString(json['id'])),
       unit: json['unit'] == null ? null : asString(json['unit']),
+      barcode: json['barcode'] == null ? null : asString(json['barcode']),
       lots: asList(json['lots']).map((row) => LotRecord.fromJson(asMap(row))).toList(),
     );
   }

@@ -76,6 +76,8 @@ import {
   listCountAssignments,
   listCountAssignmentsFor,
   listCounts,
+  counts as countsStore,
+  updateItemRecord,
   listItems,
   listDailyMovements,
   listLocations,
@@ -116,6 +118,9 @@ import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { generateThermalTransferLabel, getReprintAudit, recordReprint } from '../lib/thermal-pdf.js';
 import { listAuditEvents, recordAudit } from '../lib/audit.js';
 import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
+import { applyLateMovementsQuietly } from '../lib/late-movement-service.js';
+import { publishEvent } from '../lib/event-bus.js';
+import { findIdentityConflict, isOperationalItem, resolveItemByIdentity, parseItemMasterFields, parseStatusFilter, seesInactiveItems, visibleItems } from '../lib/item-master.js';
 import {
   databaseEnabled,
   listStockFromDatabase,
@@ -130,6 +135,7 @@ import {
   persistItem,
   persistOpeningStockImport,
   persistDailyMovementImport,
+  persistCountReconciliation,
   persistLocationCreate,
   persistLocationDelete,
   persistLocationUpdate,
@@ -199,6 +205,19 @@ function xmlEscape(value: unknown): string {
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? '');
+}
+
+// Blueprint v4 §6: an inactive or archived item stays in history but cannot
+// take part in any new transaction.
+function inactiveItemMessage(itemIds: string[]): string | null {
+  const catalog = listItems();
+  for (const id of itemIds) {
+    const item = catalog.find((entry) => entry.id === id);
+    if (item && !isOperationalItem(item)) {
+      return `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be used in new transactions.`;
+    }
+  }
+  return null;
 }
 
 router.get('/permissions/catalog', async (req: Request, res: Response) => {
@@ -628,7 +647,15 @@ router.delete('/users/:userId', async (req: Request, res: Response) => {
 
 router.get('/items', (req: Request, res: Response) => {
   const companyId = req.companyId ?? req.user?.companyId ?? DEFAULT_COMPANY_ID;
-  return res.json({ items: itemsForCompany(companyId, listItems()) });
+  let filter;
+  try {
+    filter = parseStatusFilter(req.query.status);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid status filter.' });
+  }
+  // Operational users only ever see ACTIVE items; admins can ask for
+  // ARCHIVED / all to maintain the master (blueprint v4 §6).
+  return res.json({ items: visibleItems(req.user!.role, itemsForCompany(companyId, listItems()), filter) });
 });
 
 router.post('/items', async (req: Request, res: Response) => {
@@ -639,11 +666,15 @@ router.post('/items', async (req: Request, res: Response) => {
     return res.status(400).json({ message: 'Item Code and Item Name are required.' });
   }
   let operationalMeta: ItemOperationalMeta;
+  let masterFields: ReturnType<typeof parseItemMasterFields>;
   try {
     operationalMeta = parseItemOperationalMeta(req.body);
+    masterFields = parseItemMasterFields(req.body);
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
+  const claimConflict = findIdentityConflict(listItems(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+  if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
     const item = createInventoryItem({
       code: req.body.code,
@@ -654,7 +685,7 @@ router.post('/items', async (req: Request, res: Response) => {
       unit: req.body.unit,
       ...operationalMeta,
     });
-    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta });
+    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta, ...masterFields, createdById: req.user!.id });
     registerItemCompany(saved.id, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistItem(saved, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({
@@ -682,12 +713,20 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
   let operationalMeta: ItemOperationalMeta;
+  let masterFields: ReturnType<typeof parseItemMasterFields>;
   try {
     operationalMeta = parseItemOperationalMeta(req.body);
+    masterFields = parseItemMasterFields(req.body);
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item operational fields.' });
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  Object.assign(item, {
+  const claimConflict = findIdentityConflict(listItems(), item.id, {
+    code: nextCode !== item.code ? nextCode : undefined,
+    barcode: masterFields.barcode,
+    aliases: masterFields.aliases,
+  });
+  if (claimConflict) return res.status(409).json({ message: claimConflict });
+  const patch = {
     code: nextCode,
     name: nextName,
     category: req.body.category === undefined ? item.category : String(req.body.category || '').trim() || undefined,
@@ -695,10 +734,16 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
     company: req.body.company === undefined ? item.company : String(req.body.company || '').trim() || undefined,
     unit: req.body.unit === undefined ? item.unit : String(req.body.unit || '').trim() || undefined,
     ...operationalMeta,
-  });
-  await persistItem(item);
-  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: item.id, metadata: { code: item.code, name: item.name } }));
-  return res.json({ item });
+    ...masterFields,
+    version: (item.version ?? 1) + 1,
+    updatedById: req.user!.id,
+  };
+  // Write to the stored record (item is only a copy) so the change is
+  // visible to every later request, not just this response.
+  const updated = updateItemRecord(item.id, patch)!;
+  await persistItem(updated);
+  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: updated.id, metadata: { code: updated.code, name: updated.name } }));
+  return res.json({ item: updated });
 });
 
 router.put('/items/:itemId/lots/:lotId', async (req: Request, res: Response) => {
@@ -753,9 +798,11 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
         availableQuantity: row.onHand,
       }));
 
-  const visibleRows = hidesZeroStockForRole(context.role)
+  const activeItemIds = new Set(listItems().filter(isOperationalItem).map((item) => item.id));
+  const visibleRows = (hidesZeroStockForRole(context.role)
     ? rows.filter((row) => row.availableQuantity > 0)
-    : rows;
+    : rows
+  ).filter((row) => seesInactiveItems(context.role) || activeItemIds.has(row.itemId));
 
   return res.json({ locationId, items: visibleRows.map((row) => sanitizeStockForRole(context.role, row)) });
 });
@@ -803,6 +850,30 @@ router.get('/counts', async (req: Request, res: Response) => {
   return res.json({ counts });
 });
 
+// Blueprint v4 §14: a reviewer acknowledges a late-movement flag once they have
+// looked at it (and adjusted stock if needed). The recomputed figures stay on
+// the count for the audit trail.
+router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, res: Response) => {
+  if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
+  const count = listCounts().find((candidate) => candidate.id === firstParam(req.params.countId));
+  if (!count) return res.status(404).json({ message: 'Stock count was not found.' });
+  if (!canAccessLocation(accessContext(req.user!), count.locationId)) return res.status(403).json({ message: 'This user cannot review counts at that location.' });
+  if (!count.reconciliationRequired) return res.status(409).json({ message: 'This count has no open reconciliation flag.' });
+  let note: string;
+  try {
+    note = parseCountReviewReason(req.body?.note);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'A resolution note is required.' });
+  }
+  const stored = countsStore.find((candidate) => candidate.id === count.id)!;
+  stored.reconciliationRequired = false;
+  stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user!.id}: ${note}`.trim();
+  await persistCountReconciliation(stored);
+  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'COUNT_RECONCILIATION_RESOLVED', entityType: 'StockCount', entityId: count.id, metadata: { note, lateDelta: stored.lateDelta } }));
+  publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
+  return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
+});
+
 router.post('/stock-counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const input = req.body as BlindCountInput;
@@ -816,6 +887,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
     if (!item) return res.status(400).json({ message: 'Item was not found.' });
+    if (!isOperationalItem(item)) return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
 
     const lot = validated.lotNo
       ? item.lots.find((candidate) => candidate.lotNo.toLowerCase() === validated.lotNo!.toLowerCase())
@@ -1031,6 +1103,8 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
   if (unknownItemId) {
     return res.status(400).json({ message: `Item "${unknownItemId}" was not found.` });
   }
+  const inactiveAssignItem = inactiveItemMessage(itemIds);
+  if (inactiveAssignItem) return res.status(400).json({ message: inactiveAssignItem });
 
   let parsedDueDate: string | undefined;
   let parsedPriority;
@@ -1282,6 +1356,8 @@ router.post('/transfers', async (req: Request, res: Response) => {
 
     const cartonCount = parseCartonCount(input.cartonCount);
     const validated = validateTransferRequest(context.role, { ...input, cartonCount });
+    const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
+    if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
     const workflow = getActiveWorkflow();
     if (workflow.expiryBlocking) {
       const expired = validated.lines.filter((line) => {
@@ -1806,7 +1882,9 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Import history access denied.' });
   }
   try {
-    return res.json({ batches: await listImportBatches(Number(req.query.limit ?? 100)) });
+    const batches = await listImportBatches(Number(req.query.limit ?? 100));
+    // Blueprint v4 §10.1: a batch is reversible while it is POSTED and is not itself a reversal.
+    return res.json({ batches: batches.map((batch) => ({ ...batch, reversible: batch.status === 'POSTED' && !String(batch.type).includes('REVERS') })) });
   } catch (error) {
     return res.status(503).json({ message: error instanceof Error ? error.message : 'Import history is unavailable.' });
   }
@@ -2150,10 +2228,18 @@ function configuredPurchaseWarehouse() {
 }
 
 function dailyItem(row: DailyStockRow) {
-  const code = row.itemCode ? listItems().find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
+  const catalog = listItems();
+  const code = row.itemCode ? catalog.find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
   if (code) return code;
-  const matched = listItems().filter((item) => normalName(item.name) === normalName(row.itemName));
-  return matched.length === 1 ? matched[0] : undefined;
+  // ERP alias / barcode mapping (blueprint v4 §10); a row with a code never falls back to its name.
+  if (row.itemCode) return resolveItemByIdentity(catalog, { code: row.itemCode }).item;
+  const matched = catalog.filter((item) => normalName(item.name) === normalName(row.itemName));
+  if (matched.length === 1) return matched[0];
+  return matched.length === 0 ? resolveItemByIdentity(catalog, { name: row.itemName }).item : undefined;
+}
+
+function inactiveImportMessage(item: { code: string; status?: string }): string {
+  return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 
 function planDailyImport(preview: DailyImportPreview, importedBy: string) {
@@ -2162,6 +2248,7 @@ function planDailyImport(preview: DailyImportPreview, importedBy: string) {
   for (const row of preview.validRows) {
     const item = dailyItem(row);
     if (!item) { errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Unknown or ambiguous Item Name: ${row.itemName}` }); continue; }
+    if (!isOperationalItem(item)) { errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) }); continue; }
     const location = preview.importType === 'PURCHASE' ? warehouse : matchImportLocation(row.locationName, listLocations());
     if (!location) { errors.push({ rowNumber: row.rowNumber, message: `Unknown ${preview.importType === 'PURCHASE' ? 'H.O. Basni warehouse' : 'sales branch'}: ${row.locationName}` }); continue; }
     if (preview.importType === 'PURCHASE' && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
@@ -2262,6 +2349,8 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       metadata: batch.metadata ?? undefined,
     });
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
+    // Movements dated before an existing count make that count's book quantity stale.
+    await applyLateMovementsQuietly(movements, req.user!.id);
     await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
@@ -2454,6 +2543,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
     for (const entry of plan.prepared) if (entry.newLot) ensureLotRecord(entry.newLot.itemId, entry.newLot.lotNo, entry.newLot.expiryDate, entry.newLot.attributes, entry.newLot.id);
     for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);
+    await applyLateMovementsQuietly(movements, req.user!.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `${importType}_IMPORT_COMMITTED`, entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, rows: persisted.committedRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, purchaseWarehouse: warehouse?.name } }));
     return res.status(201).json({ message: `${importType === 'PURCHASE' ? 'Purchase received into H.O. Basni' : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`, batchId, committedRows: persisted.committedRows });
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit import.' }); }
@@ -2474,9 +2564,9 @@ router.get('/sync-status', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 function exactItemMatch(itemCode?: string, itemName?: string) {
-  if (itemCode) return listItems().find((item) => item.code.trim().toLowerCase() === itemCode.trim().toLowerCase());
-  const candidates = listItems().filter((item) => item.name.trim().toLowerCase() === itemName?.trim().toLowerCase());
-  return candidates.length === 1 ? candidates[0] : undefined;
+  // Code, barcode or ERP alias when a code is given (never falling back to
+  // the name); otherwise a unique name or alias.
+  return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
 function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean) {
@@ -2501,6 +2591,10 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
     const item = exactItemMatch(row.itemCode, row.itemName);
     if (!item) {
       errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
+      continue;
+    }
+    if (!isOperationalItem(item)) {
+      errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) });
       continue;
     }
     const lots = item.lots.map((lot) => ({
@@ -2789,6 +2883,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
       if (!code && !name) continue;
       const item = exactItemMatch(code || undefined, name || undefined);
       if (!item) { errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` }); continue; }
+      if (!isOperationalItem(item)) { errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) }); continue; }
       if (seen.has(item.id)) continue; seen.add(item.id);
       const availableStock = ledger.filter((row) => row.itemId === item.id).reduce((sum, row) => sum + row.onHand, 0);
       if (availableStock <= 0) { errors.push({ rowNumber: index + 1, message: `${item.code} excluded because available stock is zero.` }); continue; }
@@ -2822,7 +2917,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
   const ledger = listStockLedgerForLocation(locationId); const deduped = [...new Set(itemIds)]; const excluded = []; const eligible = [];
   for (const itemId of deduped) {
     const available = ledger.filter((row) => row.itemId === itemId).reduce((sum, row) => sum + row.onHand, 0);
-    if (available <= 0) excluded.push(itemId); else eligible.push(itemId);
+    if (available <= 0 || inactiveItemMessage([itemId])) excluded.push(itemId); else eligible.push(itemId);
   }
   const assignments = eligible.map((itemId) => createCountAssignment({ id: `assign-${Math.random().toString(36).slice(2, 10)}`, locationId, itemId, assignedToId: storeUserId, assignedById: req.user!.id, countDate: countDate ? new Date(countDate).toISOString() : new Date().toISOString(), dueDate: parsedDueDate, priority: parsedPriority, instructions }));
   await Promise.all(assignments.map(persistCountAssignment));

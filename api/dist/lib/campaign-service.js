@@ -24,6 +24,7 @@ const event_bus_js_1 = require("./event-bus.js");
 const persistence_js_1 = require("./persistence.js");
 const repository_js_1 = require("./repository.js");
 const enterprise_repository_js_1 = require("./enterprise-repository.js");
+const item_master_js_1 = require("./item-master.js");
 const tenant_scope_js_1 = require("./saas/tenant-scope.js");
 const stock_take_campaign_js_1 = require("./stock-take-campaign.js");
 class CampaignError extends Error {
@@ -82,7 +83,7 @@ function requireCampaign(id, companyId) {
 /** Current positive-stock items at the branch (zero stock is never eligible). */
 function eligibleAt(locationId) {
     const ledger = (0, repository_js_1.listStockLedgerForLocation)(locationId);
-    const aggregated = (0, abc_cycle_count_js_1.aggregateLocationStock)((0, repository_js_1.listItems)(), ledger);
+    const aggregated = (0, abc_cycle_count_js_1.aggregateLocationStock)((0, repository_js_1.listItems)().filter(item_master_js_1.isOperationalItem), ledger);
     const abc = new Map([...(0, abc_cycle_count_js_1.classifyAbcItems)(aggregated).entries()].map(([itemId, value]) => [itemId, value.abcClass]));
     const positiveLots = new Set(ledger.filter((row) => row.onHand > 0).map((row) => row.lotId));
     const nearestExpiry = new Map();

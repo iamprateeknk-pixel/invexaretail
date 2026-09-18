@@ -96,6 +96,31 @@ export async function ensureFoundationSchema(): Promise<void> {
   await ensureColumn('Item', 'lotRequired', 'BOOLEAN NOT NULL DEFAULT true');
   await ensureColumn('Item', 'expiryRequired', 'BOOLEAN NOT NULL DEFAULT false');
   await ensureColumn('Item', 'decimalQuantity', 'BOOLEAN NOT NULL DEFAULT false');
+  // Blueprint v4 §6 canonical Item Master fields.
+  await ensureColumn('Item', 'status', "VARCHAR(191) NOT NULL DEFAULT 'ACTIVE'");
+  await ensureColumn('Item', 'archiveReason', 'VARCHAR(191) NULL');
+  await ensureColumn('Item', 'archivedAt', 'DATETIME(3) NULL');
+  await ensureColumn('Item', 'archivedById', 'VARCHAR(191) NULL');
+  await ensureColumn('Item', 'barcode', 'VARCHAR(191) NULL');
+  await ensureColumn('Item', 'hsn', 'VARCHAR(191) NULL');
+  await ensureColumn('Item', 'gstRate', 'DOUBLE NULL');
+  await ensureColumn('Item', 'mrp', 'DOUBLE NULL');
+  await ensureColumn('Item', 'leadTimeDays', 'INTEGER NULL');
+  await ensureColumn('Item', 'shelfLifeDays', 'INTEGER NULL');
+  await ensureColumn('Item', 'aliases', 'JSON NULL');
+  await ensureColumn('Item', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  await ensureColumn('Item', 'createdById', 'VARCHAR(191) NULL');
+  await ensureColumn('Item', 'updatedById', 'VARCHAR(191) NULL');
+  // Blueprint v4 §14 late-arriving movement reconciliation on counts.
+  await ensureColumn('StockCount', 'reconciliationRequired', 'BOOLEAN NOT NULL DEFAULT false');
+  await ensureColumn('StockCount', 'reconciliationNote', 'TEXT NULL');
+  await ensureColumn('StockCount', 'reconciliationAt', 'DATETIME(3) NULL');
+  await ensureColumn('StockCount', 'bookQtyOriginal', 'DOUBLE NULL');
+  await ensureColumn('StockCount', 'lateDelta', 'DOUBLE NOT NULL DEFAULT 0');
+  await ensureColumn('StockCount', 'lateMovementKeys', 'JSON NULL');
+  await ensureIndex('StockCount', 'StockCount_reconciliationRequired_idx', '`reconciliationRequired`');
+  await ensureIndex('Item', 'Item_status_idx', '`status`');
+  await ensureIndex('Item', 'Item_barcode_idx', '`barcode`');
   // Blueprint v4 §12 stock-take campaigns: assignments created by a
   // campaign's daily allocation carry its id (countAssignment.findMany()
   // selects every scalar during hydration, too).

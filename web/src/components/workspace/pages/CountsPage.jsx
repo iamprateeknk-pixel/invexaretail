@@ -110,6 +110,9 @@ export function CountsPage() {
                   <TableCell><Badge variant={task.priority === 'Urgent' ? 'destructive' : 'outline'}>{task.priority}</Badge></TableCell>
                   <TableCell>
                     <Badge variant={task.overdue ? 'destructive' : statusBadgeVariant(task.status)}>{task.overdue ? `${task.status} · Overdue` : task.status}</Badge>
+                    {task.reconciliationRequired && (
+                      <Badge variant="warning" className="ml-1.5" title={task.reconciliationNote}><AlertTriangle className="size-3" />Late movement</Badge>
+                    )}
                     {task.toleranceRecommendation?.recommendRecount && (
                       <Badge variant="warning" className="ml-1.5" title={task.toleranceRecommendation.reason}><AlertTriangle className="size-3" />Recount</Badge>
                     )}

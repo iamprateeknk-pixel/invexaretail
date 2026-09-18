@@ -223,6 +223,10 @@ router.post('/purchase-orders', async (req, res) => {
     if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
         return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
     }
+    const lineItems = await db_js_1.prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });
+    const inactive = lineItems.find((row) => row.status && row.status !== 'ACTIVE');
+    if (inactive)
+        return res.status(400).json({ message: `Item ${inactive.code} is ${String(inactive.status).toLowerCase()} and cannot be ordered.` });
     const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
     const purchaseOrder = await db_js_1.prisma.purchaseOrder.create({
         data: {

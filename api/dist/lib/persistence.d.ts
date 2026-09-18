@@ -73,6 +73,8 @@ export declare function listStockFromDatabase(locationId: string): Promise<Persi
  * resulting variance to the stock ledger, in the same transaction, so the
  * count status and the on-hand quantity can never disagree.
  */
+/** Writes the reconciliation state (and a recomputed book quantity) of a count. */
+export declare function persistCountReconciliation(count: CountRecord): Promise<void>;
 export declare function persistCountReview(count: CountRecord): Promise<void>;
 export declare function persistCountAssignment(assignment: CountAssignmentRecord): Promise<void>;
 export declare function persistCountAssignmentUpdate(assignment: CountAssignmentRecord): Promise<void>;

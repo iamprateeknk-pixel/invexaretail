@@ -31,6 +31,8 @@ export function useWorkspaceCatalog({
   const [serialItem, setSerialItem] = useState(null);
   const [forecastItem, setForecastItem] = useState(null);
   const [pricingItem, setPricingItem] = useState(null);
+  // { mode: 'edit', item } or { mode: 'archived' } - see ItemMasterPanel.
+  const [masterDialog, setMasterDialog] = useState(null);
   const [reorderDraft, setReorderDraft] = useState({ minQty: 0, targetQty: 0 });
   const [savedViews, setSavedViews] = useState(() => {
     try { return JSON.parse(localStorage.getItem('invexa_saved_views') || '[]'); } catch { return []; }
@@ -204,6 +206,8 @@ export function useWorkspaceCatalog({
     setForecastItem,
     pricingItem,
     setPricingItem,
+    masterDialog,
+    setMasterDialog,
     reorderDraft,
     setReorderDraft,
     savedViews,

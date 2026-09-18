@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
-import { Camera, Hash, IndianRupee, Printer, TrendingUp } from 'lucide-react';
+import { Camera, Hash, IndianRupee, Pencil, Printer, TrendingUp } from 'lucide-react';
 
 export function ItemDetailsDialog() {
   const {
@@ -15,7 +15,7 @@ export function ItemDetailsDialog() {
     locations, modalOpen, postItemComment, printItemLabel,
     reorderDraft, role, saveItemCustomField, saveReorderRule,
     selectedItem, setCommentDraft, setItemFieldDrafts, setModalOpen,
-    setPhotoItem, setReorderDraft, setSerialItem, setForecastItem, setPricingItem, submitLoading, tags, toggleItemTag,
+    setPhotoItem, setReorderDraft, setSerialItem, setForecastItem, setPricingItem, setMasterDialog, submitLoading, tags, toggleItemTag,
   } = useWorkspace();
   return (
     <Dialog open={modalOpen === 'itemDetails'} onOpenChange={(open) => !open && setModalOpen(null)}>
@@ -31,6 +31,7 @@ export function ItemDetailsDialog() {
                   <p className="text-xs text-muted-foreground">SKU: {items.find((item) => item.id === selectedItem.itemId)?.code ?? selectedItem.itemId}</p>
                 </div>
                 <div className="flex gap-2">
+                  {['ADMIN', 'ADMIN_USER'].includes(role) && <Button type="button" size="sm" variant="outline" onClick={() => { const item = items.find((entry) => entry.id === selectedItem.itemId); if (item) setMasterDialog({ mode: 'edit', item }); }}><Pencil className="size-4" />Edit master</Button>}
                   <Button type="button" size="sm" variant="outline" onClick={() => { const item = items.find((entry) => entry.id === selectedItem.itemId); if (item) setPhotoItem(item); }}><Camera className="size-4" />Photos</Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => { const item = items.find((entry) => entry.id === selectedItem.itemId); if (item) setSerialItem(item); }}><Hash className="size-4" />Serials</Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => { const item = items.find((entry) => entry.id === selectedItem.itemId); if (item) setForecastItem(item); }}><TrendingUp className="size-4" />Forecast</Button>

@@ -39,6 +39,20 @@ export type ItemRecord = {
     lotRequired?: boolean;
     expiryRequired?: boolean;
     decimalQuantity?: boolean;
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+    archiveReason?: string;
+    archivedAt?: string;
+    archivedById?: string;
+    barcode?: string;
+    hsn?: string;
+    gstRate?: number;
+    mrp?: number;
+    leadTimeDays?: number;
+    shelfLifeDays?: number;
+    aliases?: string[];
+    version?: number;
+    createdById?: string;
+    updatedById?: string;
     lots: LotRecord[];
 };
 export type LotRecord = {
@@ -66,6 +80,12 @@ export type CountRecord = {
     reviewReason?: string;
     parentCountId?: string;
     varianceMovementId?: string;
+    reconciliationRequired?: boolean;
+    reconciliationNote?: string;
+    reconciliationAt?: string;
+    bookQtyOriginal?: number;
+    lateDelta?: number;
+    lateMovementKeys?: string[];
 };
 export type StockLedgerRecord = {
     itemId: string;
@@ -158,6 +178,11 @@ export declare function adjustStockLedger(itemId: string, lotId: string, locatio
 export declare function adjustQuarantineLedger(itemId: string, lotId: string, locationId: string, delta: number): StockLedgerRecord;
 export declare function listLocations(): LocationRecord[];
 export declare function listItems(): ItemRecord[];
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+export declare function updateItemRecord(id: string, patch: Partial<Omit<ItemRecord, 'id' | 'lots'>>): ItemRecord | undefined;
 export declare function createItemRecord(input: {
     code: string;
     name: string;
@@ -171,6 +196,14 @@ export declare function createItemRecord(input: {
     lotRequired?: boolean;
     expiryRequired?: boolean;
     decimalQuantity?: boolean;
+    barcode?: string;
+    hsn?: string;
+    gstRate?: number;
+    mrp?: number;
+    leadTimeDays?: number;
+    shelfLifeDays?: number;
+    aliases?: string[];
+    createdById?: string;
 }): ItemRecord;
 export declare function upsertItemRecord(input: {
     code: string;

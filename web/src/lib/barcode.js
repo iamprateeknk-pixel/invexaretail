@@ -23,7 +23,7 @@ export function matchScannedInventory(items, rawCode) {
   if (!code) return { code: '', matches: [] };
   const matches = (items ?? []).flatMap((item) => {
     const matchedLot = item.lots?.find((lot) => String(lot.lotNo).toUpperCase() === code) ?? null;
-    const itemMatch = [item.id, item.code].some((value) => String(value ?? '').toUpperCase() === code);
+    const itemMatch = [item.id, item.code, item.barcode].some((value) => String(value ?? '').toUpperCase() === code);
     return itemMatch || matchedLot ? [{ item, matchedLot }] : [];
   });
   return { code, matches };

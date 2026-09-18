@@ -12,6 +12,7 @@ exports.adjustStockLedger = adjustStockLedger;
 exports.adjustQuarantineLedger = adjustQuarantineLedger;
 exports.listLocations = listLocations;
 exports.listItems = listItems;
+exports.updateItemRecord = updateItemRecord;
 exports.createItemRecord = createItemRecord;
 exports.upsertItemRecord = upsertItemRecord;
 exports.ensureLotRecord = ensureLotRecord;
@@ -110,6 +111,17 @@ function listItems() {
         lots: [...item.lots],
     }));
 }
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+function updateItemRecord(id, patch) {
+    const stored = exports.items.find((candidate) => candidate.id === id);
+    if (!stored)
+        return undefined;
+    Object.assign(stored, patch);
+    return { ...stored, lots: [...stored.lots] };
+}
 function createItemRecord(input) {
     const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
     const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
@@ -127,6 +139,17 @@ function createItemRecord(input) {
         lotRequired: input.lotRequired,
         expiryRequired: input.expiryRequired,
         decimalQuantity: input.decimalQuantity,
+        status: 'ACTIVE',
+        barcode: input.barcode,
+        hsn: input.hsn,
+        gstRate: input.gstRate,
+        mrp: input.mrp,
+        leadTimeDays: input.leadTimeDays,
+        shelfLifeDays: input.shelfLifeDays,
+        aliases: input.aliases,
+        version: 1,
+        createdById: input.createdById,
+        updatedById: input.createdById,
         lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
     };
     exports.items.push(item);
@@ -177,10 +200,18 @@ function updateLotExpiry(lotId, expiryDate) {
 }
 function recordDailyMovement(input) { exports.dailyMovements.push(input); return { ...input }; }
 function listDailyMovements() { return exports.dailyMovements.map((entry) => ({ ...entry })); }
-function upsertSyncCheckpoint(input) { const current = exports.syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType); if (current)
-    Object.assign(current, input);
-else
-    exports.syncCheckpoints.push(input); return { ...input }; }
+// A checkpoint only ever moves forward: backfilling an older day's file must
+// not make the branch look less synced than it already was.
+function upsertSyncCheckpoint(input) {
+    const current = exports.syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType);
+    if (!current) {
+        exports.syncCheckpoints.push({ ...input });
+        return { ...input };
+    }
+    if (input.syncedThroughAt > current.syncedThroughAt)
+        Object.assign(current, input);
+    return { ...current };
+}
 function listSyncCheckpoints() { return exports.syncCheckpoints.map((entry) => ({ ...entry })); }
 function createCountRecord(input) {
     const record = { status: 'PENDING_REVIEW', ...input };

@@ -16,6 +16,7 @@ import {
   type CountAssignmentRecord,
 } from './repository.js';
 import { findUserById as findEnterpriseUserById } from './enterprise-repository.js';
+import { isOperationalItem } from './item-master.js';
 import { companyOwnsLocation } from './saas/tenant-scope.js';
 import {
   DEFAULT_CAMPAIGN_TIMEZONE,
@@ -105,7 +106,7 @@ type Eligible = {
 /** Current positive-stock items at the branch (zero stock is never eligible). */
 function eligibleAt(locationId: string): Eligible {
   const ledger = listStockLedgerForLocation(locationId);
-  const aggregated = aggregateLocationStock(listItems(), ledger);
+  const aggregated = aggregateLocationStock(listItems().filter(isOperationalItem), ledger);
   const abc = new Map([...classifyAbcItems(aggregated).entries()].map(([itemId, value]) => [itemId, value.abcClass]));
   const positiveLots = new Set(ledger.filter((row) => row.onHand > 0).map((row) => row.lotId));
   const nearestExpiry = new Map<string, string>();

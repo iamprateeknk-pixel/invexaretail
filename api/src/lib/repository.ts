@@ -23,6 +23,21 @@ export type ItemRecord = {
   lotRequired?: boolean;
   expiryRequired?: boolean;
   decimalQuantity?: boolean;
+  // Blueprint v4 §6 canonical Item Master - see lib/item-master.ts.
+  status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  archiveReason?: string;
+  archivedAt?: string;
+  archivedById?: string;
+  barcode?: string;
+  hsn?: string;
+  gstRate?: number;
+  mrp?: number;
+  leadTimeDays?: number;
+  shelfLifeDays?: number;
+  aliases?: string[];
+  version?: number;
+  createdById?: string;
+  updatedById?: string;
   lots: LotRecord[];
 };
 
@@ -52,6 +67,13 @@ export type CountRecord = {
   reviewReason?: string;
   parentCountId?: string;
   varianceMovementId?: string;
+  // Blueprint v4 §14 - see lib/late-movements.ts.
+  reconciliationRequired?: boolean;
+  reconciliationNote?: string;
+  reconciliationAt?: string;
+  bookQtyOriginal?: number;
+  lateDelta?: number;
+  lateMovementKeys?: string[];
 };
 
 export type StockLedgerRecord = {
@@ -208,7 +230,18 @@ export function listItems(): ItemRecord[] {
   }));
 }
 
-export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean }): ItemRecord {
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+export function updateItemRecord(id: string, patch: Partial<Omit<ItemRecord, 'id' | 'lots'>>): ItemRecord | undefined {
+  const stored = items.find((candidate) => candidate.id === id);
+  if (!stored) return undefined;
+  Object.assign(stored, patch);
+  return { ...stored, lots: [...stored.lots] };
+}
+
+export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean; barcode?: string; hsn?: string; gstRate?: number; mrp?: number; leadTimeDays?: number; shelfLifeDays?: number; aliases?: string[]; createdById?: string }): ItemRecord {
   const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
   const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -226,6 +259,17 @@ export function createItemRecord(input: { code: string; name: string; category?:
     lotRequired: input.lotRequired,
     expiryRequired: input.expiryRequired,
     decimalQuantity: input.decimalQuantity,
+    status: 'ACTIVE',
+    barcode: input.barcode,
+    hsn: input.hsn,
+    gstRate: input.gstRate,
+    mrp: input.mrp,
+    leadTimeDays: input.leadTimeDays,
+    shelfLifeDays: input.shelfLifeDays,
+    aliases: input.aliases,
+    version: 1,
+    createdById: input.createdById,
+    updatedById: input.createdById,
     lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
   };
 
@@ -278,7 +322,14 @@ export function updateLotExpiry(lotId: string, expiryDate: string | null): LotRe
 
 export function recordDailyMovement(input: DailyMovementRecord): DailyMovementRecord { dailyMovements.push(input); return { ...input }; }
 export function listDailyMovements(): DailyMovementRecord[] { return dailyMovements.map((entry) => ({ ...entry })); }
-export function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord { const current = syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType); if (current) Object.assign(current, input); else syncCheckpoints.push(input); return { ...input }; }
+// A checkpoint only ever moves forward: backfilling an older day's file must
+// not make the branch look less synced than it already was.
+export function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord {
+  const current = syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType);
+  if (!current) { syncCheckpoints.push({ ...input }); return { ...input }; }
+  if (input.syncedThroughAt > current.syncedThroughAt) Object.assign(current, input);
+  return { ...current };
+}
 export function listSyncCheckpoints(): SyncCheckpointRecord[] { return syncCheckpoints.map((entry) => ({ ...entry })); }
 
 export function createCountRecord(input: CountRecord): CountRecord {

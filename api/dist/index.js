@@ -52,6 +52,8 @@ const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procu
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
 const campaigns_js_1 = __importDefault(require("./routes/campaigns.js"));
+const item_master_js_1 = __importDefault(require("./routes/item-master.js"));
+const import_control_center_js_1 = __importDefault(require("./routes/import-control-center.js"));
 const control_plane_js_1 = require("./routes/control-plane.js");
 const cors_origins_js_1 = require("./lib/cors-origins.js");
 const platform_js_1 = require("./lib/platform.js");
@@ -260,6 +262,8 @@ app.use('/api/v1/analytics', enterprise_analytics_js_1.default);
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', events_js_1.default);
 app.use('/api/v1', campaigns_js_1.default);
+app.use('/api/v1', item_master_js_1.default);
+app.use('/api/v1', import_control_center_js_1.default);
 app.use('/api/v1', events_js_1.publishMutationEvents);
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', core_js_1.default);

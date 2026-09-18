@@ -13,6 +13,8 @@ import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
 import campaignsRouter from './routes/campaigns.js';
+import itemMasterRouter from './routes/item-master.js';
+import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
 import { buildPlatformMeta } from './lib/platform.js';
@@ -237,6 +239,8 @@ app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', eventsRouter);
 app.use('/api/v1', campaignsRouter);
+app.use('/api/v1', itemMasterRouter);
+app.use('/api/v1', importControlCenterRouter);
 app.use('/api/v1', publishMutationEvents);
 
 // Mounted last so the prefixed routers above keep priority over its paths.

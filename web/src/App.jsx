@@ -4,6 +4,7 @@ import ItemPhotoGallery from './components/ItemPhotoGallery';
 import ItemSerialPanel from './components/ItemSerialPanel';
 import ItemForecastPanel from './components/ItemForecastPanel';
 import ItemPricingPanel from './components/ItemPricingPanel';
+import ItemMasterPanel from './components/ItemMasterPanel';
 import { LoginCard } from './components/auth/LoginCard';
 import { ControlPlaneApp } from './control-plane/ControlPlaneApp';
 import { isControlPlaneRoute } from './control-plane/control-route';
@@ -58,6 +59,9 @@ function AppShell() {
     setForecastItem,
     pricingItem,
     setPricingItem,
+    masterDialog,
+    setMasterDialog,
+    setItems,
     locationId,
   } = useWorkspace();
 
@@ -131,6 +135,17 @@ function AppShell() {
           token={authToken}
           canManage={['ADMIN', 'ADMIN_USER'].includes(role)}
           onClose={() => setPricingItem(null)}
+        />
+      )}
+      {masterDialog && (
+        <ItemMasterPanel
+          key={masterDialog.item?.id ?? masterDialog.mode}
+          mode={masterDialog.mode}
+          item={masterDialog.item}
+          token={authToken}
+          role={role}
+          onItemsChanged={setItems}
+          onClose={() => setMasterDialog(null)}
         />
       )}
       <WorkspaceChrome>
