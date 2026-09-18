@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
+import '../services/live_events.dart';
 import '../services/local_store.dart';
 import '../services/sync_resolution.dart';
 
@@ -35,6 +36,10 @@ class SessionController extends ChangeNotifier {
   List<QueuedAction> queuedActions = [];
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  LiveStatus liveStatus = LiveStatus.connecting;
+  LiveEventClient? _live;
+  Timer? _liveDebounce;
+  final Set<String> _pendingSlices = {};
 
   bool get isSignedIn => user != null && (api.token ?? '').isNotEmpty;
   bool get isStoreUser => user?.role == 'STORE_USER';
@@ -62,6 +67,7 @@ class SessionController extends ChangeNotifier {
         user = session.user;
         queuedCounts = await store.loadQueuedCounts(companyId);
         await refreshAll();
+        startLive();
       } else {
         queuedCounts = [];
       }
@@ -70,6 +76,7 @@ class SessionController extends ChangeNotifier {
         final refreshed = await api.refreshAccessToken();
         if (refreshed) {
           await refreshAll();
+          startLive();
         } else {
           error = err.message;
         }
@@ -106,6 +113,7 @@ class SessionController extends ChangeNotifier {
       await persistTokens(result.token, result.refreshToken);
       queuedCounts = await store.loadQueuedCounts(companyId);
       await refreshAll();
+      startLive();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -152,6 +160,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await refreshAll();
+      startLive();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -177,6 +186,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> logout({bool notify = true}) async {
+    stopLive();
     try {
       await api.logout();
     } catch (_) {}
@@ -193,6 +203,81 @@ class SessionController extends ChangeNotifier {
     api.clearToken();
     await store.clearSession();
     if (notify) notifyListeners();
+  }
+
+  // ---- Live sync (blueprint v4 §11) --------------------------------------
+
+  void startLive() {
+    if (!isSignedIn) return;
+    _live ??= LiveEventClient(
+      url: '${api.baseUrl}/api/v1/events',
+      tokenProvider: () => api.token,
+      onEvents: _onLiveTopics,
+      onUnauthorized: api.refreshAccessToken,
+      onStatus: (status) {
+        liveStatus = status;
+        notifyListeners();
+      },
+    );
+    _live!.start();
+  }
+
+  /// Foreground only: the stream is released in the background and resumed
+  /// with its cursor, so the server replays whatever was missed meanwhile.
+  void pauseLive() => _live?.stop();
+
+  void resumeLive() {
+    if (!isSignedIn) return;
+    startLive();
+    unawaited(flushQueue());
+  }
+
+  void stopLive() {
+    _live?.stop();
+    _live = null;
+    _liveDebounce?.cancel();
+    _pendingSlices.clear();
+    liveStatus = LiveStatus.connecting;
+  }
+
+  void reportNetworkOffline() => _live?.markOffline();
+
+  void _onLiveTopics(List<String> topics) {
+    _pendingSlices.addAll(invalidationsForTopics(topics));
+    _liveDebounce?.cancel();
+    _liveDebounce = Timer(const Duration(milliseconds: 300), () {
+      final slices = {..._pendingSlices};
+      _pendingSlices.clear();
+      unawaited(_refreshSlices(slices));
+    });
+  }
+
+  // Refetches only what the events invalidated. It never touches busy/error/
+  // notice, so a background update can't clobber a form the user is on.
+  Future<void> _refreshSlices(Set<String> slices) async {
+    if (!isSignedIn || slices.isEmpty) return;
+    try {
+      if (slices.contains('full')) {
+        await refreshAll();
+        return;
+      }
+      final locationId = selectedLocationId;
+      final jobs = <Future<void>>[
+        if (slices.contains('items')) api.items().then((value) => items = value),
+        if (slices.contains('counts')) api.counts().then((value) => counts = value),
+        if (slices.contains('assignments') && user?.role == 'STORE_USER')
+          api.myAssignments().then((value) => assignments = value),
+        if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
+        if (slices.contains('putaway') && locationId != null)
+          api.putawayTasks(locationId).then((value) => putawayTasks = value),
+        if (slices.contains('transfers')) api.transfers().then((value) => transfers = value),
+        if (slices.contains('dashboard')) api.dashboard().then((value) => dashboard = value),
+      ];
+      await Future.wait(jobs);
+      notifyListeners();
+    } on ApiException {
+      // A stale slice is acceptable; the next event or app resume retries.
+    }
   }
 
   Future<void> selectLocation(String locationId) async {

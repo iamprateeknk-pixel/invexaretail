@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/role_home.dart';
 import '../config/theme.dart';
+import '../services/live_events.dart';
 import '../state/session_controller.dart';
 import 'count_screen.dart';
 import 'dashboard_screen.dart';
@@ -42,6 +43,7 @@ class _HomeShellState extends State<HomeShell> {
       appBar: AppBar(
         title: Text(home.destinations[safeIndex].id == 'home' ? home.title : home.destinations[safeIndex].label),
         actions: [
+          _LiveStatusIcon(status: controller.liveStatus),
           IconButton(
             tooltip: 'Full workspace',
             onPressed: () {
@@ -97,5 +99,29 @@ class _HomeShellState extends State<HomeShell> {
       default:
         return DashboardScreen(controller: controller);
     }
+  }
+}
+
+class _LiveStatusIcon extends StatelessWidget {
+  const _LiveStatusIcon({required this.status});
+
+  final LiveStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (IconData icon, Color color, String label) = switch (status) {
+      LiveStatus.live => (Icons.bolt, invexaEmerald, 'Live - changes appear automatically'),
+      LiveStatus.connecting || LiveStatus.reconnecting => (Icons.sync, Colors.amber.shade800, 'Reconnecting to live updates'),
+      LiveStatus.stale => (Icons.sync_problem, Colors.amber.shade800, 'Live updates went quiet - reconnecting'),
+      LiveStatus.offline => (Icons.cloud_off, invexaMuted, 'Offline - showing the last synced data'),
+      LiveStatus.unauthorized => (Icons.lock_outline, invexaRose, 'Session expired - sign in again'),
+    };
+    return Tooltip(
+      message: label,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Icon(icon, size: 20, color: color),
+      ),
+    );
   }
 }
