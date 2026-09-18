@@ -37,11 +37,13 @@ function timestamp(value?: string | null): number {
 
 function compareLots(a: LotAllocationInput, b: LotAllocationInput, strategy: LotAllocationStrategy): number {
   if (strategy === 'FEFO') {
-    const byExpiry = timestamp(a.expiryDate) - timestamp(b.expiryDate);
-    if (byExpiry !== 0) return byExpiry;
+    const aExpiry = timestamp(a.expiryDate);
+    const bExpiry = timestamp(b.expiryDate);
+    if (aExpiry !== bExpiry) return aExpiry < bExpiry ? -1 : 1;
   }
-  const byReceived = timestamp(a.receivedAt) - timestamp(b.receivedAt);
-  if (byReceived !== 0) return byReceived;
+  const aReceived = timestamp(a.receivedAt);
+  const bReceived = timestamp(b.receivedAt);
+  if (aReceived !== bReceived) return aReceived < bReceived ? -1 : 1;
   const bySequence = (a.sequence ?? Number.MAX_SAFE_INTEGER) - (b.sequence ?? Number.MAX_SAFE_INTEGER);
   if (bySequence !== 0) return bySequence;
   return a.lotId.localeCompare(b.lotId);
