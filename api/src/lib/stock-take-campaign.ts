@@ -57,8 +57,9 @@ export function buildDailyCampaignAssignments(input: {
     .filter((item) => !completed.has(item.itemId) && !alreadyOpen.has(item.itemId))
     .sort((a, b) => {
       // Never-counted items first, then oldest-counted items.
-      const byAge = countedAt(a.lastCountedAt) - countedAt(b.lastCountedAt);
-      if (byAge !== 0) return byAge;
+      const aAge = countedAt(a.lastCountedAt);
+      const bAge = countedAt(b.lastCountedAt);
+      if (aAge !== bAge) return aAge < bAge ? -1 : 1;
 
       const byPriority = (b.priorityScore ?? 0) - (a.priorityScore ?? 0);
       if (byPriority !== 0) return byPriority;
