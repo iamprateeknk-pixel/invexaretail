@@ -177,6 +177,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     status: row.status,
     countId: row.countId ?? undefined,
     parentCountId: row.parentCountId ?? undefined,
+    campaignId: (row as { campaignId?: string | null }).campaignId ?? undefined,
     createdAt: row.createdAt.toISOString(),
   })));
 
@@ -682,7 +683,8 @@ export async function persistCountAssignment(assignment: CountAssignmentRecord):
       instructions: assignment.instructions,
       status: assignment.status,
       parentCountId: assignment.parentCountId ?? null,
-    },
+      campaignId: assignment.campaignId ?? null,
+    } as any,
   });
 }
 

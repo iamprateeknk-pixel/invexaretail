@@ -12,6 +12,7 @@ import coreRouter from './routes/core.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
+import campaignsRouter from './routes/campaigns.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
 import { buildPlatformMeta } from './lib/platform.js';
@@ -235,6 +236,7 @@ app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
 // Blueprint v4 §11: live event stream + payload-free mutation events. The
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', eventsRouter);
+app.use('/api/v1', campaignsRouter);
 app.use('/api/v1', publishMutationEvents);
 
 // Mounted last so the prefixed routers above keep priority over its paths.
@@ -386,6 +388,12 @@ const hydrateRepository = async () => {
   } catch (error) {
     console.warn('Audit history could not be hydrated; continuing without historical audit entries.', error instanceof Error ? error.message : error);
   }
+  try {
+    const { hydrateCampaignsFromDatabase } = await import('./lib/campaign-persistence.js');
+    await hydrateCampaignsFromDatabase();
+  } catch (error) {
+    console.warn('Stock-take campaigns could not be hydrated; continuing without them.', error instanceof Error ? error.message : error);
+  }
   console.log('✅ Inventory repository hydrated from database');
 };
 
@@ -397,6 +405,8 @@ const startServer = () => {
     await authHydration;
     await hydrateRepository();
     repositoryHydrationState = 'ready';
+    const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
+    startCampaignScheduler();
   })();
   startupHydration.catch((error) => {
     repositoryHydrationState = 'failed';

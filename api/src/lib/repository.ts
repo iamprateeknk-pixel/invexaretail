@@ -86,6 +86,7 @@ export type CountAssignmentRecord = {
   status: 'ASSIGNED' | 'SUBMITTED' | 'CANCELLED';
   countId?: string;
   parentCountId?: string;
+  campaignId?: string;
   createdAt: string;
 };
 
@@ -399,6 +400,7 @@ export function createRecountAssignment(count: CountRecord, reviewedBy: string):
     priority: previous?.priority ?? 'HIGH',
     instructions: count.reviewReason ? `Recount: ${count.reviewReason}` : previous?.instructions,
     parentCountId: count.id,
+    campaignId: previous?.campaignId,
   });
   return { assignment, cancelled: previous ? { ...previous } : undefined };
 }

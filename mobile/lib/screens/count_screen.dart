@@ -320,6 +320,7 @@ class _BatchCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dueDate = rows.first.dueDate;
     final priority = rows.first.priority;
+    final instructions = rows.first.instructions;
     return Card(
       color: selected ? invexaEmerald.withValues(alpha: 0.12) : null,
       shape: RoundedRectangleBorder(
@@ -330,6 +331,7 @@ class _BatchCard extends StatelessWidget {
         onTap: onTap,
         title: Text('$locationName · ${rows.length} item${rows.length == 1 ? '' : 's'}'),
         subtitle: Text([
+          if (instructions != null && instructions.trim().isNotEmpty) instructions.trim(),
           if (priority != null && priority != 'NORMAL') priority,
           if (dueDate != null) 'Due ${dueDate.split('T').first}',
         ].join(' · ')),

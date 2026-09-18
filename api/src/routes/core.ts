@@ -63,6 +63,7 @@ import {
   createCountRecord,
   createItemRecord,
   createRecountAssignment,
+  findAssignmentForCount,
   createTransferRecord,
   adjustStockLedger,
   adjustQuarantineLedger,
@@ -114,6 +115,7 @@ import { reserveStockForTransfer, releaseReservedStock, InsufficientStockError, 
 import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { generateThermalTransferLabel, getReprintAudit, recordReprint } from '../lib/thermal-pdf.js';
 import { listAuditEvents, recordAudit } from '../lib/audit.js';
+import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
 import {
   databaseEnabled,
   listStockFromDatabase,
@@ -892,6 +894,8 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
         markAssignmentSubmitted(assignment.id, saved.id);
         followUps.push(persistAssignmentSubmitted(assignment.id, saved.id));
+        // A campaign task just moved to SUBMITTED: keep coverage in step.
+        followUps.push(reconcileCampaignQuietly(assignment.campaignId));
       }
     }
 
@@ -944,6 +948,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason });
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
     const variance = updated.physicalQuantity - updated.bookQty;
+    const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
     let recountAssignment;
     if (status === 'RECOUNT') {
       const recount = createRecountAssignment(updated, req.user!.id);
@@ -976,6 +981,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       },
     });
     if (status === 'APPROVED') maybeEmitStockLow(updated.itemId, updated.locationId, updated.bookQty);
+    await reconcileCampaignQuietly(reviewedCampaignId);
     return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Stock count was not found.';

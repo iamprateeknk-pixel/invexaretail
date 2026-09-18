@@ -149,6 +149,8 @@ export function useWorkspaceHydration({
   // mechanism. Each event names what changed; only those slices are
   // refetched (never the full hydrate, which also resets form defaults).
   const [liveStatus, setLiveStatus] = useState(LIVE_STATUS.connecting);
+  // Bumped on campaign.changed so the campaign panel (which owns its own data) refetches.
+  const [campaignRevision, setCampaignRevision] = useState(0);
   const latest = useRef({});
   latest.current = { authToken, items, locations, locationId, role };
   const pendingSlices = useRef(new Set());
@@ -169,6 +171,7 @@ export function useWorkspaceHydration({
       currentItems = response.items ?? currentItems;
       setItems(currentItems);
     }
+    if (slices.has('campaigns')) setCampaignRevision((value) => value + 1);
     const jobs = [];
     if (slices.has('counts')) {
       jobs.push(apiRequest('/api/v1/counts', { headers }).then((r) => setCounts(normalizeCounts(r.counts, currentItems, currentLocations))));
@@ -265,5 +268,5 @@ export function useWorkspaceHydration({
     }
   }
 
-  return { markNotificationRead, liveStatus };
+  return { markNotificationRead, liveStatus, campaignRevision };
 }

@@ -95,6 +95,7 @@ export type CountAssignmentRecord = {
     status: 'ASSIGNED' | 'SUBMITTED' | 'CANCELLED';
     countId?: string;
     parentCountId?: string;
+    campaignId?: string;
     createdAt: string;
 };
 export type TransferRecord = {

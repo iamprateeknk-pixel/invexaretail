@@ -51,6 +51,7 @@ const core_js_1 = __importDefault(require("./routes/core.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
+const campaigns_js_1 = __importDefault(require("./routes/campaigns.js"));
 const control_plane_js_1 = require("./routes/control-plane.js");
 const cors_origins_js_1 = require("./lib/cors-origins.js");
 const platform_js_1 = require("./lib/platform.js");
@@ -258,6 +259,7 @@ app.use('/api/v1/analytics', enterprise_analytics_js_1.default);
 // Blueprint v4 §11: live event stream + payload-free mutation events. The
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', events_js_1.default);
+app.use('/api/v1', campaigns_js_1.default);
 app.use('/api/v1', events_js_1.publishMutationEvents);
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', core_js_1.default);
@@ -414,6 +416,13 @@ const hydrateRepository = async () => {
     catch (error) {
         console.warn('Audit history could not be hydrated; continuing without historical audit entries.', error instanceof Error ? error.message : error);
     }
+    try {
+        const { hydrateCampaignsFromDatabase } = await import('./lib/campaign-persistence.js');
+        await hydrateCampaignsFromDatabase();
+    }
+    catch (error) {
+        console.warn('Stock-take campaigns could not be hydrated; continuing without them.', error instanceof Error ? error.message : error);
+    }
     console.log('✅ Inventory repository hydrated from database');
 };
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind
@@ -424,6 +433,8 @@ const startServer = () => {
         await authHydration;
         await hydrateRepository();
         repositoryHydrationState = 'ready';
+        const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
+        startCampaignScheduler();
     })();
     startupHydration.catch((error) => {
         repositoryHydrationState = 'failed';

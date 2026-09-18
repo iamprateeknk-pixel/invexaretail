@@ -380,6 +380,7 @@ class CountAssignment {
     this.status,
     this.countDate,
     this.assignedById,
+    this.instructions,
   });
 
   final String id;
@@ -392,6 +393,7 @@ class CountAssignment {
   final String? status;
   final String? countDate;
   final String? assignedById;
+  final String? instructions;
 
   /// Every item assigned to a store user in one admin action shares the
   /// same location, assigner, and countDate timestamp - grouping on that
@@ -412,6 +414,7 @@ class CountAssignment {
       status: json['status'] == null ? null : asString(json['status']),
       countDate: json['countDate'] == null ? null : asString(json['countDate']),
       assignedById: json['assignedById'] == null ? null : asString(json['assignedById']),
+      instructions: json['instructions'] == null ? null : asString(json['instructions']),
     );
   }
 }

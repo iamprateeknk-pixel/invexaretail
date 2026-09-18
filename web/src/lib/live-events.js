@@ -51,7 +51,7 @@ export function invalidationsForTopics(topics) {
       case '*':
         // Continuity lost: refetch every data slice, but not the full
         // hydrate (that also resets in-progress form defaults).
-        ['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'pickerTasks'].forEach((slice) => out.add(slice));
+        ['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'pickerTasks', 'campaigns'].forEach((slice) => out.add(slice));
         break;
       case 'permission.changed':
       case 'config.changed':
@@ -59,8 +59,10 @@ export function invalidationsForTopics(topics) {
         break;
       case 'count.changed':
       case 'assignment.changed':
-      case 'campaign.changed':
         out.add('counts'); out.add('assignments'); out.add('dashboard');
+        break;
+      case 'campaign.changed':
+        out.add('campaigns'); out.add('counts'); out.add('assignments'); out.add('dashboard');
         break;
       case 'stock.changed':
       case 'receipt.changed':

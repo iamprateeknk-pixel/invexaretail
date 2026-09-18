@@ -288,6 +288,7 @@ function createRecountAssignment(count, reviewedBy) {
         priority: previous?.priority ?? 'HIGH',
         instructions: count.reviewReason ? `Recount: ${count.reviewReason}` : previous?.instructions,
         parentCountId: count.id,
+        campaignId: previous?.campaignId,
     });
     return { assignment, cancelled: previous ? { ...previous } : undefined };
 }

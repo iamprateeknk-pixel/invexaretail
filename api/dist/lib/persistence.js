@@ -177,6 +177,7 @@ async function hydrateRepositoryFromDatabase() {
         status: row.status,
         countId: row.countId ?? undefined,
         parentCountId: row.parentCountId ?? undefined,
+        campaignId: row.campaignId ?? undefined,
         createdAt: row.createdAt.toISOString(),
     })));
     repository_js_1.transfers.splice(0, repository_js_1.transfers.length, ...dbTransfers.map((transfer) => ({
@@ -666,6 +667,7 @@ async function persistCountAssignment(assignment) {
             instructions: assignment.instructions,
             status: assignment.status,
             parentCountId: assignment.parentCountId ?? null,
+            campaignId: assignment.campaignId ?? null,
         },
     });
 }

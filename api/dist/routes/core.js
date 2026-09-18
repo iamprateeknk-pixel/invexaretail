@@ -74,6 +74,7 @@ const reservation_js_1 = require("../lib/reservation.js");
 const picker_js_1 = require("../lib/picker.js");
 const thermal_pdf_js_1 = require("../lib/thermal-pdf.js");
 const audit_js_1 = require("../lib/audit.js");
+const campaign_service_js_1 = require("../lib/campaign-service.js");
 const persistence_js_1 = require("../lib/persistence.js");
 const stock_import_js_1 = require("../lib/stock-import.js");
 const warehouse_workflow_js_1 = require("../lib/warehouse-workflow.js");
@@ -760,6 +761,8 @@ router.post('/stock-counts', async (req, res) => {
             if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
                 (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved.id);
                 followUps.push((0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved.id));
+                // A campaign task just moved to SUBMITTED: keep coverage in step.
+                followUps.push((0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId));
             }
         }
         await Promise.all(followUps);
@@ -811,6 +814,7 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         await (0, persistence_js_1.persistCountReview)({ ...current, status, reviewedBy: req.user.id, reviewedAt, reviewReason });
         const updated = (0, repository_js_1.updateCountReview)(countId, status, req.user.id, reviewReason);
         const variance = updated.physicalQuantity - updated.bookQty;
+        const reviewedCampaignId = (0, repository_js_1.findAssignmentForCount)(countId)?.campaignId;
         let recountAssignment;
         if (status === 'RECOUNT') {
             const recount = (0, repository_js_1.createRecountAssignment)(updated, req.user.id);
@@ -845,6 +849,7 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         });
         if (status === 'APPROVED')
             (0, webhook_dispatcher_js_1.maybeEmitStockLow)(updated.itemId, updated.locationId, updated.bookQty);
+        await (0, campaign_service_js_1.reconcileCampaignQuietly)(reviewedCampaignId);
         return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
     }
     catch (error) {

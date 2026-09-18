@@ -74,6 +74,62 @@ async function ensureFoundationSchema() {
     await ensureIndex('Location', 'Location_tenantId_idx', '`tenantId`');
     await ensureColumn('Item', 'tenantId', "VARCHAR(191) NOT NULL DEFAULT 'tenant-invexa'");
     await ensureIndex('Item', 'Item_tenantId_idx', '`tenantId`');
+    // Blueprint v4 §6 Item Master operational fields. Same hydration hazard as
+    // Item.description above: findMany() selects every scalar, so a database
+    // that has not run the migration must still get these columns.
+    await ensureColumn('Item', 'countMethod', "VARCHAR(191) NOT NULL DEFAULT 'LOT_SCAN'");
+    await ensureColumn('Item', 'pickMethod', "VARCHAR(191) NOT NULL DEFAULT 'LOT_SCAN'");
+    await ensureColumn('Item', 'allocationStrategy', "VARCHAR(191) NOT NULL DEFAULT 'FEFO'");
+    await ensureColumn('Item', 'lotRequired', 'BOOLEAN NOT NULL DEFAULT true');
+    await ensureColumn('Item', 'expiryRequired', 'BOOLEAN NOT NULL DEFAULT false');
+    await ensureColumn('Item', 'decimalQuantity', 'BOOLEAN NOT NULL DEFAULT false');
+    // Blueprint v4 §12 stock-take campaigns: assignments created by a
+    // campaign's daily allocation carry its id (countAssignment.findMany()
+    // selects every scalar during hydration, too).
+    await ensureColumn('CountAssignment', 'campaignId', 'VARCHAR(191) NULL');
+    await ensureIndex('CountAssignment', 'CountAssignment_campaignId_idx', '`campaignId`');
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS \`StockTakeCampaign\` (
+    \`id\` VARCHAR(191) NOT NULL,
+    \`companyId\` VARCHAR(191) NOT NULL DEFAULT 'default-company',
+    \`tenantId\` VARCHAR(191) NOT NULL DEFAULT 'tenant-invexa',
+    \`name\` VARCHAR(191) NOT NULL,
+    \`locationId\` VARCHAR(191) NOT NULL,
+    \`status\` VARCHAR(191) NOT NULL DEFAULT 'DRAFT',
+    \`dailyItemsPerUser\` INTEGER NOT NULL,
+    \`userIds\` JSON NOT NULL,
+    \`priorityOrder\` JSON NOT NULL,
+    \`includeNewStock\` BOOLEAN NOT NULL DEFAULT true,
+    \`timezone\` VARCHAR(191) NOT NULL DEFAULT 'Asia/Kolkata',
+    \`startDate\` VARCHAR(191) NOT NULL,
+    \`endDate\` VARCHAR(191) NULL,
+    \`lastRunDate\` VARCHAR(191) NULL,
+    \`pausedFrom\` VARCHAR(191) NULL,
+    \`createdById\` VARCHAR(191) NOT NULL,
+    \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    \`updatedAt\` DATETIME(3) NOT NULL,
+    \`activatedAt\` DATETIME(3) NULL,
+    \`completedAt\` DATETIME(3) NULL,
+    \`cancelledAt\` DATETIME(3) NULL,
+    PRIMARY KEY (\`id\`),
+    INDEX \`StockTakeCampaign_companyId_locationId_status_idx\` (\`companyId\`, \`locationId\`, \`status\`),
+    INDEX \`StockTakeCampaign_tenantId_idx\` (\`tenantId\`)
+  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS \`StockTakeCampaignItem\` (
+    \`campaignId\` VARCHAR(191) NOT NULL,
+    \`itemId\` VARCHAR(191) NOT NULL,
+    \`status\` VARCHAR(191) NOT NULL DEFAULT 'PENDING',
+    \`excludedReason\` VARCHAR(191) NULL,
+    \`assignedToId\` VARCHAR(191) NULL,
+    \`assignmentId\` VARCHAR(191) NULL,
+    \`countId\` VARCHAR(191) NULL,
+    \`assignedDate\` DATETIME(3) NULL,
+    \`lastCountedAt\` DATETIME(3) NULL,
+    \`recounts\` INTEGER NOT NULL DEFAULT 0,
+    \`addedAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    \`updatedAt\` DATETIME(3) NOT NULL,
+    PRIMARY KEY (\`campaignId\`, \`itemId\`),
+    INDEX \`StockTakeCampaignItem_campaignId_status_idx\` (\`campaignId\`, \`status\`)
+  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await ensureColumn('Lot', 'status', "VARCHAR(191) NOT NULL DEFAULT 'AVAILABLE'");
     await ensureColumn('CompanyProfile', 'industryKey', 'VARCHAR(191) NULL');
     // P5 receiving persists cumulative discrepancies per transfer lot. Prisma

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { CycleCountPlanner } from '../../counts/CycleCountPlanner';
 import { ItemSearchSelect } from '../../ItemSearchSelect';
+import { StockTakeCampaigns } from '../../counts/StockTakeCampaigns';
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -19,7 +20,7 @@ export function CountsPage() {
     setModalOpen, setBulkCountForm, locationId, storeUsers, cycleCountPlan, currentLocationName,
     cycleCountStoreUserId, setCycleCountStoreUserId, cycleCountClasses, setCycleCountClasses,
     submitCycleCountAssign, submitLoading, role, countForm, setCountForm, submitBlindCount,
-    authToken, loading, setSelectedCountTask, assignments, items,
+    authToken, loading, setSelectedCountTask, assignments, items, locations, campaignRevision,
     toleranceRules, toleranceRuleForm, setToleranceRuleForm, createToleranceRule, toggleToleranceRule,
     approvalRequests, approvalRules, approvalRuleForm, setApprovalRuleForm, decideApprovalRequest, createApprovalRule, toggleApprovalRule,
     evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule,
@@ -63,6 +64,16 @@ export function CountsPage() {
           submitLoading={submitLoading}
           onAssign={submitCycleCountAssign}
           formatDateTime={formatDateTime}
+        />
+      )}
+
+      {canManageCounts && activeSection === 'counts' && (
+        <StockTakeCampaigns
+          token={authToken}
+          locations={locations}
+          storeUsers={storeUsers}
+          locationId={locationId}
+          refreshKey={campaignRevision}
         />
       )}
 

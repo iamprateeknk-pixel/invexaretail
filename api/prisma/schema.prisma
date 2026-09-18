@@ -832,11 +832,14 @@ model CountAssignment {
   status         AssignmentStatus @default(ASSIGNED)
   countId        String?  @unique
   parentCountId  String?
+  // Set when a stock-take campaign's daily allocation created this task
+  // (blueprint v4 §12); recounts inherit it so the campaign tracks coverage.
+  campaignId     String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
-
+  @@index([campaignId])
 
   @@index([assignedToId, status])
 }
@@ -2031,3 +2034,52 @@ model SerialMovement {
   @@index([serialNumberId, createdAt])
 }
 
+
+// Blueprint v4 §12 / Appendix A: monthly stock-take campaign. FK-free like
+// the other rule/result tables (restricted-MySQL hosting); joined in code.
+model StockTakeCampaign {
+  id                String    @id @default(cuid())
+  companyId         String    @default("default-company")
+  tenantId          String    @default("tenant-invexa")
+  name              String
+  locationId        String
+  // DRAFT | ACTIVE | COUNTING | IN_REVIEW | COMPLETED | PAUSED | CANCELLED
+  status            String    @default("DRAFT")
+  dailyItemsPerUser Int
+  userIds           Json
+  priorityOrder     Json
+  includeNewStock   Boolean   @default(true)
+  timezone          String    @default("Asia/Kolkata")
+  startDate         String
+  endDate           String?
+  lastRunDate       String?
+  pausedFrom        String?
+  createdById       String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  activatedAt       DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+
+  @@index([companyId, locationId, status])
+  @@index([tenantId])
+}
+
+model StockTakeCampaignItem {
+  campaignId     String
+  itemId         String
+  // PENDING | ASSIGNED | SUBMITTED | APPROVED | RECOUNT | DISPOSITIONED | EXCLUDED
+  status         String    @default("PENDING")
+  excludedReason String?
+  assignedToId   String?
+  assignmentId   String?
+  countId        String?
+  assignedDate   DateTime?
+  lastCountedAt  DateTime?
+  recounts       Int       @default(0)
+  addedAt        DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@id([campaignId, itemId])
+  @@index([campaignId, status])
+}
