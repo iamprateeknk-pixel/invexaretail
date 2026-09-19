@@ -12,7 +12,8 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, ListChecks, TriangleAlert } from 'lucide-react';
+import { OpsMetricCard, OpsPageHeader, OpsSyncStatus, OpsWorkflowStepper } from '../../ops/OpsKit';
 
 export function CountsPage() {
   const {
@@ -43,13 +44,53 @@ export function CountsPage() {
   const queue = activeSection === 'approvals' && countStatusFilter === 'all'
     ? countTaskRows.filter((task) => String(task.status).toLowerCase().includes('pending'))
     : countTaskRows;
+  const countMetrics = useMemo(() => {
+    const rows = countTaskRows ?? [];
+    const pending = rows.filter((task) => String(task.status).toLowerCase().includes('pending')).length;
+    const approved = rows.filter((task) => String(task.status).toLowerCase().includes('approved')).length;
+    const overdue = rows.filter((task) => task.overdue).length;
+    const averageProgress = rows.length
+      ? Math.round(rows.reduce((sum, task) => sum + (Number(task.progress) || 0), 0) / rows.length)
+      : 0;
+    return { total: rows.length, pending, approved, overdue, averageProgress };
+  }, [countTaskRows]);
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {activeSection === 'counts' && (
+        <>
+          <OpsPageHeader
+            eyebrow="Inventory control"
+            title="Stock Taking Command Center"
+            description={"Run branch counts, monitor workload, review exceptions and keep physical stock aligned with ERP movements at " + currentLocationName + "."}
+            status={<OpsSyncStatus status={loading ? 'syncing' : 'synced'} label={loading ? 'Refreshing' : 'Live'} />}
+            actions={canManageCounts ? <>
+              <Button variant="outline" onClick={() => setModalOpen('assignCount')}>Assign one</Button>
+              <Button onClick={() => { setBulkCountForm((current) => ({ ...current, locationId, storeUserId: current.storeUserId || storeUsers[0]?.id || '' })); setModalOpen('bulkCount'); }}>Start stock work</Button>
+            </> : null}
+          />
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <OpsMetricCard label="Count tasks" value={countMetrics.total} helper={currentLocationName} icon={ListChecks} tone="blue" />
+            <OpsMetricCard label="Pending review" value={countMetrics.pending} helper="Needs action" icon={Clock3} tone="amber" onClick={() => setCountStatusFilter('pending')} />
+            <OpsMetricCard label="Overdue" value={countMetrics.overdue} helper="Past due time" icon={TriangleAlert} tone={countMetrics.overdue ? 'rose' : 'neutral'} onClick={() => setCountStatusFilter('overdue')} />
+            <OpsMetricCard label="Approved" value={countMetrics.approved} helper="Verified counts" icon={CheckCircle2} tone="emerald" onClick={() => setCountStatusFilter('approved')} />
+            <OpsMetricCard label="Average progress" value={String(countMetrics.averageProgress) + '%'} helper="Across visible tasks" icon={ListChecks} tone="violet" />
+          </div>
+
+          <OpsWorkflowStepper steps={[
+            { label: 'Plan', caption: 'Scope & users', state: countMetrics.total ? 'done' : 'active' },
+            { label: 'Count', caption: 'Physical work', state: countMetrics.total ? 'active' : 'waiting' },
+            { label: 'Review', caption: String(countMetrics.pending) + ' pending', state: countMetrics.pending ? 'active' : (countMetrics.approved ? 'done' : 'waiting') },
+            { label: 'Verify', caption: String(countMetrics.approved) + ' approved', state: countMetrics.total > 0 && countMetrics.approved === countMetrics.total ? 'done' : 'waiting' },
+          ]} />
+        </>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-2 shadow-sm">
         <Tabs value={countStatusFilter} onValueChange={setCountStatusFilter}>
           <TabsList><TabsTrigger value="all">All</TabsTrigger><TabsTrigger value="pending">Pending</TabsTrigger><TabsTrigger value="overdue">Overdue</TabsTrigger><TabsTrigger value="approved">Approved</TabsTrigger></TabsList>
         </Tabs>
-        <div className="flex gap-2">{canManageCounts && <><Button variant="outline" onClick={() => setModalOpen('assignCount')}>Assign one</Button><Button onClick={() => { setBulkCountForm((current) => ({ ...current, locationId, storeUserId: current.storeUserId || storeUsers[0]?.id || '' })); setModalOpen('bulkCount'); }}>Bulk stock take</Button></>}</div>
+        {activeSection === 'approvals' && <div className="px-2 text-xs text-muted-foreground">Approval and evidence governance</div>}
       </div>
 
       {canManageCounts && activeSection === 'counts' && (
