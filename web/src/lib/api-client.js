@@ -52,6 +52,7 @@ export async function apiRequest(path, options = {}, attempt = 0) {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
+      ...(method === 'GET' ? { cache: 'no-store' } : {}),
       headers: {
         'Content-Type': 'application/json',
         ...(options.headers ?? {}),
