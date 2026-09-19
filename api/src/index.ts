@@ -55,7 +55,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Invexa-Signature'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Invexa-Signature', 'If-Last-Event-ID'],
   maxAge: 3600,
 };
 app.use(cors(corsOptions));
