@@ -54,7 +54,7 @@ export function useWorkspaceCounts({
       });
       const refreshed = await apiRequest('/api/v1/counts', { headers: { Authorization: `Bearer ${authToken}` } });
       setCounts(normalizeCounts(refreshed.counts, items, locations));
-      if (role === 'STORE_USER') {
+      if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)) {
         const assignmentsRefreshed = await apiRequest('/api/v1/count-assignments/mine', { headers: { Authorization: `Bearer ${authToken}` } });
         setAssignments(assignmentsRefreshed.assignments ?? []);
       }
@@ -198,8 +198,8 @@ export function useWorkspaceCounts({
       });
       const refreshed = await apiRequest('/api/v1/counts', { headers: { Authorization: `Bearer ${authToken}` } });
       setCounts(normalizeCounts(refreshed.counts, items, locations));
-      if (isCountManager(role) || role === 'STORE_USER') {
-        const assignmentsRefreshed = role === 'STORE_USER'
+      if (isCountManager(role) || ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)) {
+        const assignmentsRefreshed = ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)
           ? await apiRequest('/api/v1/count-assignments/mine', { headers: { Authorization: `Bearer ${authToken}` } })
           : await apiRequest('/api/v1/count-assignments', { headers: { Authorization: `Bearer ${authToken}` } });
         setAssignments(assignmentsRefreshed.assignments ?? []);

@@ -824,12 +824,12 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
 
 router.get('/counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  if (context.role === 'WAREHOUSE_PICKER') return res.json({ counts: [] });
+  const blindCountWorker = ['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role);
   const visible = listCounts().filter((count) =>
     canAccessLocation(context, count.locationId)
-    && (context.role !== 'STORE_USER' || count.submittedBy === req.user!.id),
+    && (!blindCountWorker || count.submittedBy === req.user!.id),
   );
-  if (context.role === 'STORE_USER') {
+  if (blindCountWorker) {
     return res.json({
       counts: visible.map((count) => ({
         id: count.id,
@@ -899,7 +899,7 @@ function countsForRequest(userId: string, requestId: string) {
 
 // A store user stays blind to book quantity and variance in every response.
 function countResponse(role: string, count: { id: string; itemId: string; lotId: string; locationId: string; physicalQuantity: number; bookQty: number }) {
-  return role === 'STORE_USER'
+  return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)
     ? { id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, physicalQuantity: count.physicalQuantity }
     : { ...count, variance: count.physicalQuantity - count.bookQty };
 }
@@ -1017,7 +1017,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
 
     // Store Users may only count what Admin assigned them; Admin can record ad hoc counts freely.
     let assignment;
-    if (context.role === 'STORE_USER') {
+    if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
       assignment = findActiveAssignment(req.user!.id, item.id, validated.locationId);
       if (!assignment) {
         return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
@@ -1229,7 +1229,7 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || storeUser.role !== 'STORE_USER') {
+  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
     return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
@@ -1293,7 +1293,7 @@ router.patch('/count-assignments/:assignmentId', async (req: Request, res: Respo
   if (current.status === 'SUBMITTED' && !isAdmin) return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
   const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
   const assignee = findUserById(assignedToId);
-  if (!assignee || assignee.role !== 'STORE_USER' || !assignee.assignedLocationIds.includes(current.locationId)) {
+  if (!assignee || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
     return res.status(400).json({ message: 'Assignee must be a Store User assigned to this location.' });
   }
   const countDate = req.body.countDate ? new Date(req.body.countDate) : new Date(current.countDate);
@@ -1385,8 +1385,8 @@ router.delete('/count-assignments/:assignmentId', async (req: Request, res: Resp
   return res.json({ success: true, assignmentId, preservedCountId: current.countId ?? null });
 });
 router.get('/count-assignments/mine', (req: Request, res: Response) => {
-  if (req.user!.role !== 'STORE_USER') {
-    return res.status(403).json({ message: 'Only store users have a count task list.' });
+  if (!['STORE_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
+    return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
   }
   const assignments = listCountAssignmentsFor(req.user!.id).map((assignment) => {
     const item = listItems().find((candidate) => candidate.id === assignment.itemId);
@@ -1504,7 +1504,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || storeUser.role !== 'STORE_USER') {
+  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
     return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
@@ -3247,7 +3247,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'This user cannot assign stock takes at the selected location.' });
   }
   const user = findUserById(storeUserId);
-  if (!user || user.role !== 'STORE_USER' || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected Store User is not assigned to this location.' });
+  if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role) || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected Store User is not assigned to this location.' });
   let parsedDueDate: string | undefined;
   let parsedPriority;
   try {

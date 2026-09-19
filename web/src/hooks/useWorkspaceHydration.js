@@ -67,12 +67,12 @@ export function useWorkspaceHydration({
     const [auditResponse, pickerResponse, assignmentsResponse, storeUsersResponse] = await Promise.all([
       ['ADMIN', 'AUDITOR'].includes(currentRole) ? apiRequest('/api/v1/audit', { headers }) : Promise.resolve({ events: [] }),
       ['ADMIN', 'WAREHOUSE_PICKER'].includes(currentRole) ? apiRequest('/api/v1/picker-tasks', { headers }) : Promise.resolve({ tasks: [] }),
-      currentRole === 'STORE_USER'
+      ['STORE_USER', 'WAREHOUSE_PICKER'].includes(currentRole)
         ? apiRequest('/api/v1/count-assignments/mine', { headers })
         : countManager
           ? apiRequest('/api/v1/count-assignments', { headers })
           : Promise.resolve({ assignments: [] }),
-      countManager ? apiRequest('/api/v1/users?role=STORE_USER', { headers }) : Promise.resolve({ users: [] }),
+      countManager ? apiRequest('/api/v1/users', { headers }) : Promise.resolve({ users: [] }),
     ]);
     const selectedLocation = visibleLocations.some((location) => location.id === locationId)
       ? locationId
@@ -86,8 +86,9 @@ export function useWorkspaceHydration({
     setAuditEvents(auditResponse.events ?? []);
     setPickerTasks(mapPickerTasks(pickerResponse.tasks ?? [], itemsResponse.items));
     setAssignments(assignmentsResponse.assignments ?? []);
-    setStoreUsers(storeUsersResponse.users ?? []);
-    const firstStoreUser = (storeUsersResponse.users ?? [])[0];
+    const countWorkers = (storeUsersResponse.users ?? []).filter((user) => ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role));
+    setStoreUsers(countWorkers);
+    const firstStoreUser = countWorkers[0];
     if (firstStoreUser) setCycleCountStoreUserId(firstStoreUser.id);
     const firstItem = itemsResponse.items[0];
     const firstLot = firstItem?.lots?.[0];
@@ -178,8 +179,8 @@ export function useWorkspaceHydration({
     if (slices.has('counts')) {
       jobs.push(apiRequest('/api/v1/counts', { headers }).then((r) => setCounts(normalizeCounts(r.counts, currentItems, currentLocations))));
     }
-    if (slices.has('assignments') && (currentRole === 'STORE_USER' || isCountManager(currentRole))) {
-      const path = currentRole === 'STORE_USER' ? '/api/v1/count-assignments/mine' : '/api/v1/count-assignments';
+    if (slices.has('assignments') && (['STORE_USER', 'WAREHOUSE_PICKER'].includes(currentRole) || isCountManager(currentRole))) {
+      const path = ['STORE_USER', 'WAREHOUSE_PICKER'].includes(currentRole) ? '/api/v1/count-assignments/mine' : '/api/v1/count-assignments';
       jobs.push(apiRequest(path, { headers }).then((r) => setAssignments(r.assignments ?? [])));
     }
     if (slices.has('stock') && currentLocation) {
@@ -241,7 +242,7 @@ export function useWorkspaceHydration({
       const headers = { Authorization: `Bearer ${authToken}` };
       Promise.all([
         apiRequest('/api/v1/counts', { headers }),
-      role === 'STORE_USER'
+      ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)
         ? apiRequest('/api/v1/count-assignments/mine', { headers })
         : isCountManager(role)
           ? apiRequest('/api/v1/count-assignments', { headers })
@@ -250,7 +251,7 @@ export function useWorkspaceHydration({
       ])
         .then(([countsResponse, assignmentsResponse, stockResponse]) => {
           setCounts(normalizeCounts(countsResponse.counts, items, locations));
-          if (role === 'STORE_USER' || isCountManager(role)) {
+          if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(role) || isCountManager(role)) {
             setAssignments(assignmentsResponse.assignments ?? []);
           }
           setStockRows(normalizeStockRows(stockResponse.items ?? [], items));

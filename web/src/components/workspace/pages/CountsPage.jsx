@@ -142,7 +142,7 @@ export function CountsPage() {
         />
       )}
 
-      {role === 'STORE_USER' && activeSection === 'counts' && (
+      {['STORE_USER', 'WAREHOUSE_PICKER'].includes(role) && activeSection === 'counts' && (
         <Card>
           <CardHeader><CardTitle className="text-base">Blind count entry</CardTitle><p className="text-xs text-muted-foreground">System quantity stays hidden until submission.</p></CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">

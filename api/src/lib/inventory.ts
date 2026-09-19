@@ -125,7 +125,7 @@ export function sanitizeStockForRole(
   role: Role,
   snapshot: StockSnapshot,
 ): Record<string, number | string> {
-  if (role === 'STORE_USER') {
+  if (role === 'STORE_USER' || role === 'WAREHOUSE_PICKER') {
     return {
       itemId: snapshot.itemId,
       ...(snapshot.lotId ? { lotId: snapshot.lotId } : {}),
@@ -163,7 +163,7 @@ export function validateBlindCountSubmission(role: Role, input: BlindCountInput)
     throw new Error('Physical quantity must be a non-negative number.');
   }
 
-  if (role === 'STORE_USER') {
+  if (role === 'STORE_USER' || role === 'WAREHOUSE_PICKER') {
     if ('bookQuantity' in input && input.bookQuantity !== undefined) {
       throw new Error('Store users cannot submit book quantity in blind counts.');
     }

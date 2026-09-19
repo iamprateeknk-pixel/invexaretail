@@ -41,6 +41,7 @@ export function DashboardPage() {
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
             <Button type="button" variant="secondary" className="border border-white/10 bg-white text-slate-950 hover:bg-slate-100" onClick={() => navigateTo('inventory')}><PackageOpen className="size-4" />View stock</Button>
             <Button type="button" variant="outline" className="border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigateTo('counts')}><ClipboardCheck className="size-4" />Start count</Button>
+            {pendingCountTasks.length > 0 && <Button type="button" variant="outline" className="border-amber-300/35 bg-amber-300/10 text-amber-50 hover:bg-amber-300/20 hover:text-white" onClick={() => setSelectedCountTask(pendingCountTasks[0])}><Clock3 className="size-4" />Open next task</Button>}
             <Button type="button" variant="outline" className="border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigateTo('transfers')}><Truck className="size-4" />New transfer</Button>
           </div>
         </div>
