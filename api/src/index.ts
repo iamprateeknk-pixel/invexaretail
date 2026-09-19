@@ -40,6 +40,8 @@ const release = process.env.APP_VERSION ?? process.env.GITHUB_SHA?.slice(0, 12) 
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
+let repositoryRefreshedAt = 0;
+let repositoryRefreshInFlight: Promise<void> | null = null;
 
 // Behind the host's reverse proxy every request otherwise looks like it comes
 // from the proxy, which would put all callers in one rate-limit bucket. One
@@ -199,7 +201,15 @@ app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Login only depends on the User table. A legacy inventory table must not
     // lock every administrator out while its additive migration is repaired.
-    await (req.path.startsWith('/auth/') ? authHydration : startupHydration);
+    if (req.path.startsWith('/auth/')) {
+      await authHydration;
+    } else {
+      await startupHydration;
+      // Operational routes serve an in-memory snapshot. Refresh it before
+      // stale GETs so direct MySQL imports appear without an API restart.
+      // Parallel browser requests share one database refresh job.
+      if (req.method === 'GET' && req.path !== '/events') await refreshRepositoryIfStale();
+    }
     next();
   } catch (error) {
     res.status(503).json({ message: 'Inventory is starting. Please retry in a moment.' });
@@ -382,6 +392,7 @@ const hydrateRepository = async () => {
   const { ensureDailySyncSchema } = await import('./lib/runtime-schema.js');
   await ensureDailySyncSchema();
   await hydrateRepositoryFromDatabase();
+  repositoryRefreshedAt = Date.now();
   try {
     const { hydrateControlPlaneFromStore } = await import('./lib/saas/persistence.js');
     const saas = await hydrateControlPlaneFromStore();
@@ -411,6 +422,30 @@ const hydrateRepository = async () => {
     console.warn('Stock-take campaigns could not be hydrated; continuing without them.', error instanceof Error ? error.message : error);
   }
   console.log('✅ Inventory repository hydrated from database');
+};
+
+const refreshRepositoryIfStale = async (): Promise<void> => {
+  const configuredInterval = Number(process.env.DATABASE_REFRESH_INTERVAL_MS ?? 10_000);
+  const refreshIntervalMs = Number.isFinite(configuredInterval) ? Math.max(5_000, configuredInterval) : 10_000;
+  if (Date.now() - repositoryRefreshedAt < refreshIntervalMs) return;
+
+  if (!repositoryRefreshInFlight) {
+    repositoryRefreshInFlight = (async () => {
+      try {
+        const { databaseEnabled, hydrateRepositoryFromDatabase } = await import('./lib/persistence.js');
+        if (databaseEnabled) await hydrateRepositoryFromDatabase();
+      } catch (error) {
+        // A transient database read must not take down an otherwise usable
+        // workspace. Keep serving the last good snapshot and retry later.
+        console.warn('Database snapshot refresh failed; serving the last good snapshot.', error instanceof Error ? error.message : error);
+      } finally {
+        repositoryRefreshedAt = Date.now();
+      }
+    })().finally(() => {
+      repositoryRefreshInFlight = null;
+    });
+  }
+  await repositoryRefreshInFlight;
 };
 
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind

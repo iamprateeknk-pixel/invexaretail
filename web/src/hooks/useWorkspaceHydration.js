@@ -56,6 +56,7 @@ export function useWorkspaceHydration({
       apiRequest('/api/v1/workspace/profile', { headers }).catch(() => DEFAULT_WORKSPACE_PROFILE),
       apiRequest('/api/v1/runtime/config', { headers }).catch(() => null),
     ]);
+    const visibleLocations = locationsResponse.locations ?? [];
     const nextProfile = {
       ...DEFAULT_WORKSPACE_PROFILE,
       ...(workspaceResponse ?? {}),
@@ -235,33 +236,19 @@ export function useWorkspaceHydration({
   }, [authToken, session]);
 
   useEffect(() => {
-    // Polling is only the fallback while the live stream is down.
-    if (!session || !authToken || liveStatus === LIVE_STATUS.live) return;
+    // SSE covers writes made through this API. A slower reconciliation pass
+    // also picks up changes written directly to MySQL by imports or admin
+    // tools, even while the live stream itself is healthy.
+    if (!session || !authToken) return undefined;
 
     const pollInterval = setInterval(() => {
-      const headers = { Authorization: `Bearer ${authToken}` };
-      Promise.all([
-        apiRequest('/api/v1/counts', { headers }),
-      ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)
-        ? apiRequest('/api/v1/count-assignments/mine', { headers })
-        : isCountManager(role)
-          ? apiRequest('/api/v1/count-assignments', { headers })
-          : Promise.resolve({ assignments: [] }),
-        authToken && locationId ? apiRequest(`/api/v1/stock/${locationId}`, { headers }) : Promise.resolve({ items: [] }),
-      ])
-        .then(([countsResponse, assignmentsResponse, stockResponse]) => {
-          setCounts(normalizeCounts(countsResponse.counts, items, locations));
-          if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(role) || isCountManager(role)) {
-            setAssignments(assignmentsResponse.assignments ?? []);
-          }
-          setStockRows(normalizeStockRows(stockResponse.items ?? [], items));
-        })
-        .catch(() => {});
-    }, 12000);
+      refreshSlices(new Set(['items', 'counts', 'assignments', 'stock', 'transfers', 'dashboard'])).catch(() => {});
+    }, liveStatus === LIVE_STATUS.live ? 15000 : 12000);
 
     return () => clearInterval(pollInterval);
-  }, [authToken, items, liveStatus, locationId, locations, role, session, setAssignments, setCounts, setStockRows]);
-
+    // refreshSlices reads the latest token, role, location and entities from refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken, liveStatus, session]);
   async function markNotificationRead(notice) {
     if (!notice.persisted || notice.readAt) return;
     try {
