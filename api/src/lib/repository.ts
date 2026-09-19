@@ -476,6 +476,14 @@ export function updateCountAssignment(id: string, patch: Partial<Pick<CountAssig
   return { ...assignment };
 }
 
+/** Removes an assignment while preserving any StockCount it may have created. */
+export function deleteCountAssignment(id: string): CountAssignmentRecord {
+  const index = countAssignments.findIndex((row) => row.id === id);
+  if (index === -1) throw new Error('Count assignment was not found.');
+  const [removed] = countAssignments.splice(index, 1);
+  return { ...removed };
+}
+
 export function listCountAssignments(): CountAssignmentRecord[] {
   return [...countAssignments];
 }

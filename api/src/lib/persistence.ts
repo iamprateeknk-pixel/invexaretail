@@ -807,6 +807,12 @@ export async function persistCountAssignmentUpdate(assignment: CountAssignmentRe
   });
 }
 
+export async function persistCountAssignmentDelete(assignmentId: string): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.countAssignment.delete({ where: { id: assignmentId } });
+}
+
 export async function persistAssignmentSubmitted(assignmentId: string, countId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();

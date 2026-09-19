@@ -37,7 +37,9 @@ test('count queues mark overdue assigned work and keep pending review', () => {
   const queues = buildCountTaskQueues({
     filteredCounts: [{
       id: 'count-1',
-      item: 'Rice',
+            itemId: 'item-1',
+      submittedBy: 'user-1',
+
       status: 'Pending review',
       locationId: 'loc-1',
       locationName: 'Main Store',
@@ -64,11 +66,26 @@ test('count queues mark overdue assigned work and keep pending review', () => {
   });
   assert.equal(queues.assignedCountTasks[0].overdue, true);
   assert.equal(queues.assignedCountTasks[0].priority, 'Urgent');
-  assert.equal(queues.pendingCountTasks.length, 2);
+  assert.equal(queues.pendingCountTasks.length, 1);
   assert.equal(queues.pendingApprovals[0].id, 'count-1');
 });
 
-test('report rows and CSV keep inventory labels', () => {
+test('approved lot count does not leave a duplicate pending assignment row', () => {
+  const queues = buildCountTaskQueues({
+    filteredCounts: [{ id: 'count-1', itemId: 'item-1', locationId: 'loc-1', submittedBy: 'user-1', status: 'APPROVED', createdAt: '2026-09-14T00:00:00.000Z' }],
+    assignments: [{ id: 'assignment-1', itemId: 'item-1', locationId: 'loc-1', assignedToId: 'user-1', status: 'ASSIGNED', createdAt: '2026-09-13T00:00:00.000Z' }],
+    locationId: 'loc-1',
+    items: [{ id: 'item-1', name: 'Rice 5kg' }],
+    locations: [{ id: 'loc-1', name: 'Main Store' }],
+    storeUsers: [{ id: 'user-1', name: 'Asha' }],
+    clock: Date.parse('2026-09-14T00:00:00.000Z'),
+    countStatusFilter: 'all',
+    searchTerm: '',
+  });
+  assert.equal(queues.assignedCountTasks[0].status, 'In progress');
+  assert.equal(queues.pendingCountTasks.length, 0);
+  assert.equal(queues.countTaskRows.filter((row) => String(row.status).toLowerCase().includes('pending')).length, 0);
+});test('report rows and CSV keep inventory labels', () => {
   const rows = buildReportRows({
     reportType: 'inventory',
     visibleRows: [{ itemId: 'item-1', itemName: 'Rice 5kg', physicalQuantity: 4, bookQuantity: 5, variance: -1 }],

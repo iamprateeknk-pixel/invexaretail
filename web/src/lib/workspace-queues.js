@@ -69,6 +69,13 @@ export function buildCountTaskQueues({
     .map((assignment) => {
       const dueAt = assignment.dueDate ?? assignment.countDate ?? null;
       const overdue = Boolean(dueAt) && new Date(dueAt).getTime() < clock;
+      const relatedCounts = (filteredCounts ?? []).filter((count) =>
+        count.itemId === assignment.itemId
+        && count.locationId === assignment.locationId
+        && count.submittedBy === assignment.assignedToId,
+      );
+      // A submitted count owns its review state; the assignment remains open only as work in progress.
+      const taskStatus = relatedCounts.length ? 'In progress' : 'Assigned';
       return {
         ...assignment,
         assignmentId: assignment.id,
@@ -79,12 +86,13 @@ export function buildCountTaskQueues({
         assignedAt: assignment.createdAt,
         pendingSince: assignment.createdAt,
         dueAt,
-        progress: 0,
+        progress: relatedCounts.length ? Math.min(95, Math.max(10, relatedCounts.filter((count) => ['APPROVED', 'REJECTED', 'RECOUNT'].includes(String(count.status).toUpperCase())).length * 25)) : 0,
         priority: displayCountPriority(assignment.priority, overdue),
         overdue,
-        status: 'Assigned',
+        status: taskStatus,
       };
-    });
+    })
+    ;
   const allCountTaskRows = [...assignedCountTasks, ...submittedCountTasks];
   const needle = String(searchTerm ?? '').trim().toLowerCase();
   const countTaskRows = allCountTaskRows.filter((task) => {

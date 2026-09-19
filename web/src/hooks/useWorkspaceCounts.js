@@ -123,6 +123,43 @@ export function useWorkspaceCounts({
     }
   }
 
+  async function updateCountAssignment(assignmentId, payload) {
+    try {
+      setSubmitLoading(true);
+      await apiRequest(`/api/v1/count-assignments/${encodeURIComponent(assignmentId)}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify(payload),
+      });
+      await loadAppData(authToken, role);
+      showToast('Count task updated.', 'success');
+      addNotification('Count task updated', 'Assignment details were changed by an admin.', 'info');
+      setModalOpen(null);
+      setSelectedCountTask(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to update count task.', 'error');
+    } finally {
+      setSubmitLoading(false);
+    }
+  }
+
+  async function deleteCountAssignment(assignmentId) {
+    try {
+      setSubmitLoading(true);
+      await apiRequest(`/api/v1/count-assignments/${encodeURIComponent(assignmentId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      await loadAppData(authToken, role);
+      showToast('Count task deleted.', 'success');
+      addNotification('Count task deleted', 'The assignment was removed; any submitted count history was preserved.', 'info');
+      setSelectedCountTask(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to delete count task.', 'error');
+    } finally {
+      setSubmitLoading(false);
+    }
+  }
   async function reviewCount(countId, status) {
     if (!countReviewNoteIsValid(reviewReason)) {
       showToast('Enter a review note of at least 5 characters.', 'error');
@@ -215,6 +252,8 @@ export function useWorkspaceCounts({
     pickAssignment,
     submitCycleCountAssign,
     submitAssignCount,
+    updateCountAssignment,
+    deleteCountAssignment,
     reviewCount,
     previewBulkCount,
     assignBulkCount,
