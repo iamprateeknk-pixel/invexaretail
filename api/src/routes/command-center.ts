@@ -1,0 +1,110 @@
+import { Router, type Request, type Response } from 'express';
+import { extractToken, requireAuth } from './enterprise-auth.js';
+import { prisma } from '../lib/db.js';
+import { listAuditEvents } from '../lib/audit.js';
+import { latestEventId, subscriberCount } from '../lib/event-bus.js';
+import { listUsersByCompany } from '../lib/enterprise-repository.js';
+import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { listCountAssignments, listCounts, listItems, listLocations, listSyncCheckpoints, listTransfers } from '../lib/repository.js';
+import { databaseEnabled } from '../lib/persistence.js';
+import { buildCommandCenter } from '../lib/command-center.js';
+import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type AccuracyGroup } from '../lib/report-builders.js';
+
+// Blueprint v4 §29 Command Center and §30 Reports. Read-only.
+const router = Router();
+const guard = [extractToken, requireAuth];
+
+const MANAGEMENT = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'];
+
+function scope(req: Request) {
+  const user = req.user!;
+  const companyId = req.companyId ?? user.companyId ?? DEFAULT_COMPANY_ID;
+  const all = user.role === 'ADMIN' || user.role === 'ADMIN_USER' || user.role === 'AUDITOR' && !(user.locationIds ?? []).length;
+  const allowed = (locationId: string) => companyOwnsLocation(companyId, locationId) && (all || (user.locationIds ?? []).includes(locationId));
+  return { companyId, allowed };
+}
+
+function deny(res: Response) {
+  return res.status(403).json({ message: 'The command center is for admins, branch managers and auditors.' });
+}
+
+// The parts only the database holds; a failure here never takes the dashboard down.
+async function databaseExtras() {
+  if (!databaseEnabled) return undefined;
+  try {
+    const open = ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] as never[];
+    const [openCount, critical, overdue, pending] = await Promise.all([
+      prisma.exceptionCase.count({ where: { status: { in: open } } }),
+      prisma.exceptionCase.count({ where: { status: { in: open }, priority: 'CRITICAL' } }),
+      prisma.exceptionCase.count({ where: { status: { in: open }, dueAt: { lt: new Date() } } }),
+      prisma.approvalRequest.count({ where: { status: 'PENDING' } }),
+    ]);
+    return { exceptions: { open: openCount, critical, overdue }, approvals: { pending } };
+  } catch (error) {
+    console.warn('[command-center] database extras unavailable:', error instanceof Error ? error.message : error);
+    return undefined;
+  }
+}
+
+router.get('/command-center', ...guard, async (req: Request, res: Response) => {
+  if (!MANAGEMENT.includes(req.user!.role)) return deny(res);
+  const { companyId, allowed } = scope(req);
+  const locations = listLocations().filter((location) => allowed(location.id));
+  const locationIds = new Set(locations.map((location) => location.id));
+  const users = new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name]));
+  const center = buildCommandCenter({
+    now: new Date(),
+    locations,
+    counts: listCounts().filter((count) => locationIds.has(count.locationId)),
+    assignments: listCountAssignments().filter((row) => locationIds.has(row.locationId)),
+    transfers: listTransfers().filter((transfer) => locationIds.has(transfer.sourceLocationId) || locationIds.has(transfer.destinationLocationId)),
+    checkpoints: listSyncCheckpoints().filter((row) => locationIds.has(row.locationId)),
+    audit: listAuditEvents(),
+    userNames: users,
+    live: { clients: subscriberCount(), lastEventId: latestEventId() },
+    extras: await databaseExtras(),
+  });
+  return res.json({ commandCenter: center });
+});
+
+router.get('/reports/transfer-cycle', ...guard, (req: Request, res: Response) => {
+  if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
+  const { allowed } = scope(req);
+  const transfers = listTransfers().filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
+  const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+  const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+  return res.json({ report: transferCycleReport(transfers, listAuditEvents(), { from, to }) });
+});
+
+router.get('/reports/count-accuracy', ...guard, (req: Request, res: Response) => {
+  if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
+  const groupBy = (['branch', 'user', 'category'].includes(String(req.query.groupBy)) ? String(req.query.groupBy) : 'branch') as AccuracyGroup;
+  const { companyId, allowed } = scope(req);
+  return res.json({
+    groupBy,
+    rows: countAccuracyReport({
+      counts: listCounts().filter((count) => allowed(count.locationId)),
+      items: listItems(),
+      groupBy,
+      labels: { locations: new Map(listLocations().map((location) => [location.id, location.name])), users: new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name])) },
+      range: { from: typeof req.query.from === 'string' ? req.query.from : undefined, to: typeof req.query.to === 'string' ? req.query.to : undefined },
+    }),
+  });
+});
+
+// Blueprint §30: "Full audit export by actor/action/entity/date."
+router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'The audit export requires Admin or Auditor access.' });
+  const { companyId } = scope(req);
+  const text = (key: string) => (typeof req.query[key] === 'string' && req.query[key] ? String(req.query[key]) : undefined);
+  const events = filterAudit(listAuditEvents(), {
+    actorId: text('actorId'), action: text('action'), entityType: text('entityType'), entityId: text('entityId'), from: text('from'), to: text('to'),
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50_000);
+  const names = new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name]));
+  if (req.query.format === 'json') return res.json({ count: events.length, events });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="audit-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+  return res.send(auditCsv(events, names));
+});
+
+export default router;

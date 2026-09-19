@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Bell,
   BriefcaseBusiness,
+  Activity,
   Boxes,
   ClipboardCheck,
   Clock3,
@@ -113,6 +114,7 @@ export const NAVIGATION = [
   {
     label: 'Control',
     items: [
+      { id: 'command-center', label: 'Command center', icon: Activity, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'] },
       { id: 'approvals', label: 'Approvals', icon: ShieldCheck, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'] },
       { id: 'reports', label: 'Reports', icon: FileBarChart, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'] },
       { id: 'intelligence', label: 'Intelligence', icon: Sparkles, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'], badge: 'New' },
@@ -179,6 +181,7 @@ export const PAGE_META = {
   qc: ['Quality control', 'Publish receiving checklists and review inspections before stock is posted.'],
   assets: ['Check-in / out', 'Assign controlled inventory and track returns, due dates and condition.'],
   jobs: ['Jobs & projects', 'Plan, issue, consume and reconcile inventory against operational work.'],
+  'command-center': ['Command center', 'What needs attention now, which branch is behind, what is moving and what is blocked - live.'],
   approvals: ['Pending approvals', 'Review count variances and other controlled stock decisions.'],
   reports: ['Reports', 'Monitor inventory accuracy, movement, expiry and team activity.'],
   intelligence: ['Inventory intelligence', 'Prioritise reorder actions and investigate count anomalies.'],

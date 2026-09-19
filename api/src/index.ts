@@ -15,6 +15,7 @@ import eventsRouter, { publishMutationEvents } from './routes/events.js';
 import campaignsRouter from './routes/campaigns.js';
 import itemMasterRouter from './routes/item-master.js';
 import transferLogisticsRouter from './routes/transfer-logistics.js';
+import commandCenterRouter from './routes/command-center.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
@@ -244,6 +245,7 @@ app.use('/api/v1', itemMasterRouter);
 app.use('/api/v1', importControlCenterRouter);
 app.use('/api/v1', publishMutationEvents);
 app.use('/api/v1', transferLogisticsRouter);
+app.use('/api/v1', commandCenterRouter);
 
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', coreRouter);
