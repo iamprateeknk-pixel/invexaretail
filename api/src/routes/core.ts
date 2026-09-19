@@ -1,7 +1,8 @@
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
-import { persistTransferReceipt } from '../lib/transfer-receipt.js';
+import { activeCartons, isTransitDelayed } from '../lib/transfer-packing.js';
+import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persistTransferReceipt, rememberReceipt } from '../lib/transfer-receipt.js';
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
 import { type NextFunction, type Request, type Response, Router } from 'express';
@@ -84,6 +85,7 @@ import {
   listStockLedgerForLocation,
   listSyncCheckpoints,
   listTransfers,
+  listTransferCartons,
   listUsers,
   locations,
   markAssignmentSubmitted,
@@ -1489,7 +1491,12 @@ router.get('/transfers/list', (req: Request, res: Response) => {
   const transfers = listTransfers().filter((transfer) =>
     canAccessLocation(context, transfer.sourceLocationId)
     || canAccessLocation(context, transfer.destinationLocationId),
-  );
+  ).map((transfer) => ({
+    ...transfer,
+    // Carton labels and the transit flag (blueprint §17/§18) so a receiver can find a transfer by carton.
+    cartons: activeCartons(listTransferCartons(transfer.id)).map((carton) => ({ packageId: carton.packageId, quantity: carton.quantity, weightKg: carton.weightKg })),
+    delayed: isTransitDelayed({ status: transfer.status, expectedArrivalAt: transfer.dispatch?.expectedArrivalAt }),
+  }));
   return res.json({ transfers });
 });
 
@@ -1668,6 +1675,11 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
   if (!canAccessLocation(context, transfer.sourceLocationId)
     && !canAccessLocation(context, transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Transfer location access denied.' });
+  }
+
+  // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
+  if (nextStatus === 'DISPATCHED' && !transfer.packing && activeCartons(listTransferCartons(transfer.id)).length > 0) {
+    return res.status(409).json({ message: 'Packing was started for this transfer. Complete it before dispatching.' });
   }
 
   try {
@@ -3149,15 +3161,30 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   const transferId = firstParam(req.params.transferId);
   const transfer = listTransfers().find((record) => record.id === transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer not found.' });
-  if (!isReceivableStatus(transfer.status)) {
-    return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
-  }
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
   }
 
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
   if (!requestId || requestId.length > 191) return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
+
+  // A retry (client timeout, offline outbox) of a receipt that already went
+  // through answers with the recorded result - before the status gate, because
+  // that receipt may itself have completed the transfer.
+  const prior = await findReceiptByRequestId(requestId).catch(() => null);
+  if (prior) {
+    if (prior.transferId !== transferId) return res.status(409).json({ message: 'This requestId was already used for a different transfer.' });
+    return res.json({
+      success: true, duplicate: true, transfer,
+      receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
+    });
+  }
+  if (!isReceivableStatus(transfer.status)) {
+    return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
+  }
+  // The same request twice at once must not both post: the second waits for the client's next retry.
+  if (!beginReceiptRequest(requestId)) return res.status(409).json({ message: 'This receipt is already being processed. Retry in a moment.' });
+  try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
   if (Array.isArray(req.body.lines)) {
@@ -3331,6 +3358,10 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
 
     const nextTransfer = listTransfers().find((record) => record.id === transferId);
     if (nextTransfer) void emitTransferUpdated(nextTransfer);
+    rememberReceipt({
+      requestId, transferId, receiptId: persisted?.receiptId, status: status as 'RECEIVED' | 'PARTIAL_RECEIVED', receivedBy: req.user!.id,
+      receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+    });
     return res.json({
       success: true, duplicate: persisted?.duplicate ?? false,
       transfer: nextTransfer,
@@ -3338,6 +3369,9 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+  }
+  } finally {
+    endReceiptRequest(requestId);
   }
 });
 

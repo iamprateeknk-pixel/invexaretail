@@ -40,6 +40,7 @@ exports.planStockUpdate = planStockUpdate;
 const transfer_evidence_js_1 = require("../lib/transfer-evidence.js");
 const item_photos_js_1 = require("../lib/item-photos.js");
 const receipt_validation_js_1 = require("../lib/receipt-validation.js");
+const transfer_packing_js_1 = require("../lib/transfer-packing.js");
 const transfer_receipt_js_1 = require("../lib/transfer-receipt.js");
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
@@ -1326,7 +1327,12 @@ router.post('/cycle-counts/:locationId/assign', async (req, res) => {
 router.get('/transfers/list', (req, res) => {
     const context = accessContext(req.user);
     const transfers = (0, repository_js_1.listTransfers)().filter((transfer) => (0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId)
-        || (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId));
+        || (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId)).map((transfer) => ({
+        ...transfer,
+        // Carton labels and the transit flag (blueprint §17/§18) so a receiver can find a transfer by carton.
+        cartons: (0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(transfer.id)).map((carton) => ({ packageId: carton.packageId, quantity: carton.quantity, weightKg: carton.weightKg })),
+        delayed: (0, transfer_packing_js_1.isTransitDelayed)({ status: transfer.status, expectedArrivalAt: transfer.dispatch?.expectedArrivalAt }),
+    }));
     return res.json({ transfers });
 });
 router.post('/transfers', async (req, res) => {
@@ -1506,6 +1512,10 @@ router.patch('/transfers/:transferId/status', async (req, res) => {
     if (!(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId)
         && !(0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId)) {
         return res.status(403).json({ message: 'Transfer location access denied.' });
+    }
+    // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
+    if (nextStatus === 'DISPATCHED' && !transfer.packing && (0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(transfer.id)).length > 0) {
+        return res.status(409).json({ message: 'Packing was started for this transfer. Complete it before dispatching.' });
     }
     try {
         (0, inventory_js_1.validateTransferStatusChange)(context.role, transfer.status, nextStatus);
@@ -3094,199 +3104,223 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
     const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer not found.' });
-    if (!(0, transfer_lifecycle_js_1.isReceivableStatus)(transfer.status)) {
-        return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
-    }
     if (!(0, inventory_js_1.canAccessLocation)(accessContext(req.user), transfer.destinationLocationId)) {
         return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
     }
     const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
     if (!requestId || requestId.length > 191)
         return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
-    const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
-    let receiptLines;
-    if (Array.isArray(req.body.lines)) {
-        receiptLines = req.body.lines.map((line) => ({
-            lineId: typeof line.lineId === 'string' ? line.lineId : undefined,
-            itemId: String(line.itemId ?? ''),
-            lotId: String(line.lotId ?? ''),
-            receivedQty: Number(line.receivedQty),
-            damagedQty: Number(line.damagedQty ?? 0),
-            shortageQty: Number(line.shortageQty ?? 0),
-            excessQty: Number(line.excessQty ?? 0),
-        }));
-    }
-    else if (transfer.lines.length === 1) {
-        receiptLines = [{
-                itemId: transfer.lines[0].itemId,
-                lotId: transfer.lines[0].lotId,
-                receivedQty: Number(req.body.receivedQty),
-                damagedQty: Number(req.body.damagedQty ?? 0),
-                shortageQty: Number(req.body.shortageQty ?? 0),
-                excessQty: Number(req.body.excessQty ?? 0),
-            }];
-    }
-    else {
-        return res.status(400).json({ message: 'Multi-lot transfers require a separate receipt line for every item and lot.' });
-    }
-    const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
-    if (damagedLines.length > 0) {
-        const destinationLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
-        for (const line of damagedLines) {
-            const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)({
-                transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
-                branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
-            });
-            if (gate.blocked)
-                return res.status(400).json({ message: gate.reason });
-        }
-    }
-    {
-        const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
-        const templates = persistence_js_1.databaseEnabled
-            ? await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
-            : listMemoryQcTemplates().filter((row) => row.active);
-        const inspections = persistence_js_1.databaseEnabled
-            ? await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: transferId } }).catch(() => listMemoryQcInspections())
-            : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
-        const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
-        const itemsById = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
-        const qc = (0, qc_receive_js_1.assertReceiptQcComplete)(receiptLines.map((line) => ({
-            lineId: line.lineId,
-            itemId: line.itemId,
-            itemCategory: itemsById.get(line.itemId)?.category ?? null,
-            receivedQty: line.receivedQty,
-            hasInspection: inspections.some((inspection) => inspection.itemId === line.itemId && (inspection.sourceLineId === line.lineId || !line.lineId))
-                || bodyInspections.some((inspection) => inspection.itemId === line.itemId || (line.lineId && inspection.lineId === line.lineId)),
-        })), templates);
-        if (qc.ok === false)
-            return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
-    }
-    try {
-        const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({
-            requestId, transferId, destinationLocationId: transfer.destinationLocationId,
-            receivedById: req.user.id, notes, lines: receiptLines,
+    // A retry (client timeout, offline outbox) of a receipt that already went
+    // through answers with the recorded result - before the status gate, because
+    // that receipt may itself have completed the transfer.
+    const prior = await (0, transfer_receipt_js_1.findReceiptByRequestId)(requestId).catch(() => null);
+    if (prior) {
+        if (prior.transferId !== transferId)
+            return res.status(409).json({ message: 'This requestId was already used for a different transfer.' });
+        return res.json({
+            success: true, duplicate: true, transfer,
+            receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
         });
-        let status;
-        let summary;
-        if (persisted) {
-            status = persisted.status;
-            summary = persisted;
-            // Mirror committed database state only after the transaction succeeds.
-            (0, repository_js_1.updateTransferStatus)(transfer.id, status);
-            (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, persisted.lines.map((line) => ({
-                itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
-                receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
-            })));
-            if (!persisted.duplicate)
-                for (const line of receiptLines) {
-                    if (line.receivedQty > 0)
-                        (0, repository_js_1.adjustStockLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.receivedQty);
-                    if (line.damagedQty > 0)
-                        (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.damagedQty);
-                    if (Number(line.excessQty ?? 0) > 0)
-                        (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, Number(line.excessQty));
-                }
+    }
+    if (!(0, transfer_lifecycle_js_1.isReceivableStatus)(transfer.status)) {
+        return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
+    }
+    // The same request twice at once must not both post: the second waits for the client's next retry.
+    if (!(0, transfer_receipt_js_1.beginReceiptRequest)(requestId))
+        return res.status(409).json({ message: 'This receipt is already being processed. Retry in a moment.' });
+    try {
+        const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
+        let receiptLines;
+        if (Array.isArray(req.body.lines)) {
+            receiptLines = req.body.lines.map((line) => ({
+                lineId: typeof line.lineId === 'string' ? line.lineId : undefined,
+                itemId: String(line.itemId ?? ''),
+                lotId: String(line.lotId ?? ''),
+                receivedQty: Number(line.receivedQty),
+                damagedQty: Number(line.damagedQty ?? 0),
+                shortageQty: Number(line.shortageQty ?? 0),
+                excessQty: Number(line.excessQty ?? 0),
+            }));
+        }
+        else if (transfer.lines.length === 1) {
+            receiptLines = [{
+                    itemId: transfer.lines[0].itemId,
+                    lotId: transfer.lines[0].lotId,
+                    receivedQty: Number(req.body.receivedQty),
+                    damagedQty: Number(req.body.damagedQty ?? 0),
+                    shortageQty: Number(req.body.shortageQty ?? 0),
+                    excessQty: Number(req.body.excessQty ?? 0),
+                }];
         }
         else {
-            summary = (0, receipt_validation_js_1.validateReceiptLines)(transfer.lines, receiptLines);
-            status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
-            (0, repository_js_1.updateTransferStatus)(transfer.id, status);
-            const nextLines = transfer.lines.map((line) => {
-                const input = receiptLines.find((candidate) => candidate.itemId === line.itemId && candidate.lotId === line.lotId);
-                return {
-                    ...line,
-                    receivedQty: Number(line.receivedQty ?? 0) + Number(input?.receivedQty ?? 0),
-                    damagedQty: Number(line.damagedQty ?? 0) + Number(input?.damagedQty ?? 0),
-                    shortageQty: Number(line.shortageQty ?? 0) + Number(input?.shortageQty ?? 0),
-                    excessQty: Number(line.excessQty ?? 0) + Number(input?.excessQty ?? 0),
-                };
+            return res.status(400).json({ message: 'Multi-lot transfers require a separate receipt line for every item and lot.' });
+        }
+        const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
+        if (damagedLines.length > 0) {
+            const destinationLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
+            for (const line of damagedLines) {
+                const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)({
+                    transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
+                    branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
+                });
+                if (gate.blocked)
+                    return res.status(400).json({ message: gate.reason });
+            }
+        }
+        {
+            const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
+            const templates = persistence_js_1.databaseEnabled
+                ? await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
+                : listMemoryQcTemplates().filter((row) => row.active);
+            const inspections = persistence_js_1.databaseEnabled
+                ? await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: transferId } }).catch(() => listMemoryQcInspections())
+                : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
+            const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
+            const itemsById = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
+            const qc = (0, qc_receive_js_1.assertReceiptQcComplete)(receiptLines.map((line) => ({
+                lineId: line.lineId,
+                itemId: line.itemId,
+                itemCategory: itemsById.get(line.itemId)?.category ?? null,
+                receivedQty: line.receivedQty,
+                hasInspection: inspections.some((inspection) => inspection.itemId === line.itemId && (inspection.sourceLineId === line.lineId || !line.lineId))
+                    || bodyInspections.some((inspection) => inspection.itemId === line.itemId || (line.lineId && inspection.lineId === line.lineId)),
+            })), templates);
+            if (qc.ok === false)
+                return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+        }
+        try {
+            const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({
+                requestId, transferId, destinationLocationId: transfer.destinationLocationId,
+                receivedById: req.user.id, notes, lines: receiptLines,
             });
-            (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, nextLines);
-            for (const input of receiptLines) {
-                if (input.receivedQty > 0)
-                    (0, repository_js_1.adjustStockLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.receivedQty);
-                if (input.damagedQty > 0)
-                    (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.damagedQty);
-                if (Number(input.excessQty ?? 0) > 0)
-                    (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, Number(input.excessQty));
+            let status;
+            let summary;
+            if (persisted) {
+                status = persisted.status;
+                summary = persisted;
+                // Mirror committed database state only after the transaction succeeds.
+                (0, repository_js_1.updateTransferStatus)(transfer.id, status);
+                (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, persisted.lines.map((line) => ({
+                    itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
+                    receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
+                })));
+                if (!persisted.duplicate)
+                    for (const line of receiptLines) {
+                        if (line.receivedQty > 0)
+                            (0, repository_js_1.adjustStockLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.receivedQty);
+                        if (line.damagedQty > 0)
+                            (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.damagedQty);
+                        if (Number(line.excessQty ?? 0) > 0)
+                            (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, Number(line.excessQty));
+                    }
             }
-        }
-        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
-            actorId: req.user.id, actorRole: req.user.role,
-            action: status === 'RECEIVED' ? 'TRANSFER_RECEIVED' : 'TRANSFER_PARTIALLY_RECEIVED',
-            entityType: 'Transfer', entityId: transferId,
-            metadata: { requestId, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, lines: receiptLines, duplicate: persisted?.duplicate ?? false },
-        }));
-        // Blueprint Module H: a damaged or short receiving line is a discrepancy
-        // case, not an invisible balance correction. Open an owned Exception
-        // Inbox case per affected line so QC/quarantine disposition is tracked
-        // to closure. Best-effort only - never fail a successful receipt.
-        if (!persisted?.duplicate) {
-            for (const line of receiptLines) {
-                const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === line.itemId);
-                const itemLabel = item ? `${item.code} - ${item.name}` : line.itemId;
-                // Blueprint Module B / section 8.3: good stock that just landed on
-                // hand still needs to be physically put away into a bin. Open a
-                // putaway task with a suggested bin rather than leaving newly
-                // received stock sitting at the dock indefinitely.
-                if (line.receivedQty > 0) {
-                    void (0, putaway_js_1.createPutawayTask)({
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                    });
-                    void (0, bin_stock_js_1.persistBinStockDelta)({
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        binId: bin_stock_js_1.STAGING_BIN_ID, qtyDelta: line.receivedQty,
-                    });
-                }
-                if (line.damagedQty > 0) {
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'DAMAGE',
-                        title: `Damaged receipt: ${itemLabel}`,
-                        description: `${line.damagedQty} units received damaged against transfer ${transferId}.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
-                }
-                if (line.shortageQty > 0) {
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'SHORT_RECEIPT',
-                        title: `Short receipt: ${itemLabel}`,
-                        description: `${line.shortageQty} units short against transfer ${transferId}.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
-                }
-                if (Number(line.excessQty ?? 0) > 0) {
-                    // Blueprint: "excess receipt... never silently absorb." The
-                    // quantity is already held in quarantine; this case requires an
-                    // explicit accept (posts to onHand) or reject (returned/destroyed)
-                    // decision before it can become sellable.
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'EXCESS_RECEIPT',
-                        title: `Excess receipt: ${itemLabel}`,
-                        description: `${line.excessQty} units received beyond the requested quantity on transfer ${transferId}. Accept or reject.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
+            else {
+                summary = (0, receipt_validation_js_1.validateReceiptLines)(transfer.lines, receiptLines);
+                status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
+                (0, repository_js_1.updateTransferStatus)(transfer.id, status);
+                const nextLines = transfer.lines.map((line) => {
+                    const input = receiptLines.find((candidate) => candidate.itemId === line.itemId && candidate.lotId === line.lotId);
+                    return {
+                        ...line,
+                        receivedQty: Number(line.receivedQty ?? 0) + Number(input?.receivedQty ?? 0),
+                        damagedQty: Number(line.damagedQty ?? 0) + Number(input?.damagedQty ?? 0),
+                        shortageQty: Number(line.shortageQty ?? 0) + Number(input?.shortageQty ?? 0),
+                        excessQty: Number(line.excessQty ?? 0) + Number(input?.excessQty ?? 0),
+                    };
+                });
+                (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, nextLines);
+                for (const input of receiptLines) {
+                    if (input.receivedQty > 0)
+                        (0, repository_js_1.adjustStockLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.receivedQty);
+                    if (input.damagedQty > 0)
+                        (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.damagedQty);
+                    if (Number(input.excessQty ?? 0) > 0)
+                        (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, Number(input.excessQty));
                 }
             }
+            await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+                actorId: req.user.id, actorRole: req.user.role,
+                action: status === 'RECEIVED' ? 'TRANSFER_RECEIVED' : 'TRANSFER_PARTIALLY_RECEIVED',
+                entityType: 'Transfer', entityId: transferId,
+                metadata: { requestId, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, lines: receiptLines, duplicate: persisted?.duplicate ?? false },
+            }));
+            // Blueprint Module H: a damaged or short receiving line is a discrepancy
+            // case, not an invisible balance correction. Open an owned Exception
+            // Inbox case per affected line so QC/quarantine disposition is tracked
+            // to closure. Best-effort only - never fail a successful receipt.
+            if (!persisted?.duplicate) {
+                for (const line of receiptLines) {
+                    const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === line.itemId);
+                    const itemLabel = item ? `${item.code} - ${item.name}` : line.itemId;
+                    // Blueprint Module B / section 8.3: good stock that just landed on
+                    // hand still needs to be physically put away into a bin. Open a
+                    // putaway task with a suggested bin rather than leaving newly
+                    // received stock sitting at the dock indefinitely.
+                    if (line.receivedQty > 0) {
+                        void (0, putaway_js_1.createPutawayTask)({
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                        });
+                        void (0, bin_stock_js_1.persistBinStockDelta)({
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            binId: bin_stock_js_1.STAGING_BIN_ID, qtyDelta: line.receivedQty,
+                        });
+                    }
+                    if (line.damagedQty > 0) {
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'DAMAGE',
+                            title: `Damaged receipt: ${itemLabel}`,
+                            description: `${line.damagedQty} units received damaged against transfer ${transferId}.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                    if (line.shortageQty > 0) {
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'SHORT_RECEIPT',
+                            title: `Short receipt: ${itemLabel}`,
+                            description: `${line.shortageQty} units short against transfer ${transferId}.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                    if (Number(line.excessQty ?? 0) > 0) {
+                        // Blueprint: "excess receipt... never silently absorb." The
+                        // quantity is already held in quarantine; this case requires an
+                        // explicit accept (posts to onHand) or reject (returned/destroyed)
+                        // decision before it can become sellable.
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'EXCESS_RECEIPT',
+                            title: `Excess receipt: ${itemLabel}`,
+                            description: `${line.excessQty} units received beyond the requested quantity on transfer ${transferId}. Accept or reject.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                }
+            }
+            const nextTransfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+            if (nextTransfer)
+                void (0, webhook_dispatcher_js_1.emitTransferUpdated)(nextTransfer);
+            (0, transfer_receipt_js_1.rememberReceipt)({
+                requestId, transferId, receiptId: persisted?.receiptId, status: status, receivedBy: req.user.id,
+                receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+            });
+            return res.json({
+                success: true, duplicate: persisted?.duplicate ?? false,
+                transfer: nextTransfer,
+                receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user.id, ...summary, status, notes },
+            });
         }
-        const nextTransfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
-        if (nextTransfer)
-            void (0, webhook_dispatcher_js_1.emitTransferUpdated)(nextTransfer);
-        return res.json({
-            success: true, duplicate: persisted?.duplicate ?? false,
-            transfer: nextTransfer,
-            receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user.id, ...summary, status, notes },
-        });
+        catch (error) {
+            return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+        }
     }
-    catch (error) {
-        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+    finally {
+        (0, transfer_receipt_js_1.endReceiptRequest)(requestId);
     }
 });
 router.post('/items/:itemId/photos', upload.single('photo'), async (req, res) => {

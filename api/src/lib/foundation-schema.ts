@@ -112,6 +112,7 @@ export async function ensureFoundationSchema(): Promise<void> {
   await ensureColumn('Item', 'createdById', 'VARCHAR(191) NULL');
   await ensureColumn('Item', 'updatedById', 'VARCHAR(191) NULL');
   // Blueprint v4 §14 late-arriving movement reconciliation on counts.
+  await ensureColumn('Transfer', 'logistics', 'JSON NULL');
   await ensureColumn('StockCount', 'reconciliationRequired', 'BOOLEAN NOT NULL DEFAULT false');
   await ensureColumn('StockCount', 'reconciliationNote', 'TEXT NULL');
   await ensureColumn('StockCount', 'reconciliationAt', 'DATETIME(3) NULL');

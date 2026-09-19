@@ -19,6 +19,8 @@ exports.persistCountAssignment = persistCountAssignment;
 exports.persistCountAssignmentUpdate = persistCountAssignmentUpdate;
 exports.persistAssignmentSubmitted = persistAssignmentSubmitted;
 exports.persistTransfer = persistTransfer;
+exports.persistTransferCarton = persistTransferCarton;
+exports.persistTransferLogistics = persistTransferLogistics;
 exports.persistTransferStatus = persistTransferStatus;
 exports.persistConfirmedPickAllocations = persistConfirmedPickAllocations;
 exports.persistEnterpriseUser = persistEnterpriseUser;
@@ -88,6 +90,11 @@ function requireDatabase() {
     if (!exports.databaseEnabled) {
         throw new Error('Database persistence is disabled. Set DATABASE_URL to the Hostinger MySQL database.');
     }
+}
+// Packing/dispatch details live in one JSON column; JSON null means "not set yet".
+function logisticsOf(transfer) {
+    const raw = transfer.logistics;
+    return { ...(raw?.packing ? { packing: raw.packing } : {}), ...(raw?.dispatch ? { dispatch: raw.dispatch } : {}) };
 }
 async function hydrateRepositoryFromDatabase() {
     if (!exports.databaseEnabled)
@@ -212,8 +219,31 @@ async function hydrateRepositoryFromDatabase() {
         cartonCount: transfer.cartonCount ?? undefined,
         notes: transfer.notes ?? undefined,
         lines: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty, receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty ?? 0 })),
+        ...logisticsOf(transfer),
         createdAt: transfer.createdAt.toISOString(),
     })));
+    try {
+        const dbCartons = await db_js_1.prisma.transferCarton.findMany({ orderBy: { createdAt: 'asc' } });
+        repository_js_1.transferCartons.splice(0, repository_js_1.transferCartons.length, ...dbCartons.map((row) => {
+            const contents = (row.contents ?? {});
+            return {
+                id: row.id,
+                transferId: row.transferId,
+                cartonNumber: row.cartonNumber,
+                packageId: row.qrCode ?? row.cartonNumber,
+                lines: contents.lines ?? [],
+                quantity: row.quantity,
+                weightKg: row.weight ?? undefined,
+                status: (row.status === 'VOID' ? 'VOID' : 'SEALED'),
+                packedById: contents.packedById ?? '',
+                sealedAt: contents.sealedAt ?? row.createdAt.toISOString(),
+                requestId: contents.requestId,
+            };
+        }));
+    }
+    catch (error) {
+        console.warn('Transfer cartons could not be hydrated:', error instanceof Error ? error.message : error);
+    }
     // These tables were introduced after the original Hostinger deployment.
     // Keep startup compatible while the migration is pending, then hydrate them
     // normally once present so sync state survives an API restart.
@@ -779,6 +809,30 @@ async function persistTransfer(transfer) {
             cartonCount: transfer.cartonCount ?? null,
             lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
         },
+    });
+}
+async function persistTransferCarton(carton) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    const contents = { lines: carton.lines, packedById: carton.packedById, sealedAt: carton.sealedAt, requestId: carton.requestId ?? null };
+    await db_js_1.prisma.transferCarton.upsert({
+        where: { id: carton.id },
+        update: { status: carton.status, contents: contents },
+        create: {
+            id: carton.id, transferId: carton.transferId, cartonNumber: carton.cartonNumber, qrCode: carton.packageId,
+            contents: contents, quantity: carton.quantity, weight: carton.weightKg ?? null, status: carton.status,
+        },
+    });
+}
+/** Packing completion / dispatch details / carton count for a transfer. */
+async function persistTransferLogistics(transfer) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.transfer.update({
+        where: { id: transfer.id },
+        data: { cartonCount: transfer.cartonCount ?? null, logistics: { packing: transfer.packing ?? null, dispatch: transfer.dispatch ?? null } },
     });
 }
 async function persistTransferStatus(transfer) {

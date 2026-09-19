@@ -138,9 +138,23 @@ export type TransferRecord = {
     cartonCount?: number;
     photos?: string[];
     notes?: string;
+    packing?: {
+        completedAt: string;
+        completedById: string;
+        cartonCount: number;
+    };
+    dispatch?: {
+        dispatchedAt: string;
+        dispatchedById: string;
+        carrier?: string;
+        awb?: string;
+        vehicleNo?: string;
+        expectedArrivalAt?: string;
+    };
     createdAt: string;
 };
 import type { StockMovementRecord } from './stock-ledger.js';
+import type { TransferCartonRecord } from './transfer-packing.js';
 export type CompanyProfileRecord = {
     name: string;
     email?: string;
@@ -156,6 +170,7 @@ export declare const locations: LocationRecord[];
 export declare const items: ItemRecord[];
 export declare const counts: CountRecord[];
 export declare const transfers: TransferRecord[];
+export declare const transferCartons: TransferCartonRecord[];
 export declare const stockLedger: StockLedgerRecord[];
 export declare const countAssignments: CountAssignmentRecord[];
 export declare const stockMovements: StockMovementRecord[];
@@ -256,4 +271,9 @@ export declare function updateTransferReceiptProgress(id: string, lines: Array<{
     shortageQty?: number;
     excessQty?: number;
 }>): TransferRecord;
+export declare function listTransferCartons(transferId?: string): TransferCartonRecord[];
+export declare function addTransferCarton(carton: TransferCartonRecord): TransferCartonRecord;
+export declare function setTransferCartonStatus(id: string, status: TransferCartonRecord['status']): TransferCartonRecord | undefined;
+/** Records packing completion and/or dispatch details on the stored transfer. */
+export declare function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'packing' | 'dispatch' | 'cartonCount'>): TransferRecord;
 export declare function listTransfers(): TransferRecord[];

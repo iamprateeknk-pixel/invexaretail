@@ -124,10 +124,15 @@ export type TransferRecord = {
   cartonCount?: number;
   photos?: string[];
   notes?: string;
+  // Blueprint v4 §16: set once every expected line is covered by sealed cartons.
+  packing?: { completedAt: string; completedById: string; cartonCount: number };
+  // Blueprint v4 §17: set at dispatch.
+  dispatch?: { dispatchedAt: string; dispatchedById: string; carrier?: string; awb?: string; vehicleNo?: string; expectedArrivalAt?: string };
   createdAt: string;
 };
 
 import type { StockMovementRecord } from './stock-ledger.js';
+import type { TransferCartonRecord } from './transfer-packing.js';
 import { seedCounts, seedItems, seedLocations, seedStockLedger, seedTransfers, seedUsers } from './seed.js';
 
 export type CompanyProfileRecord = {
@@ -158,6 +163,7 @@ export const items: ItemRecord[] = [...seedItems];
 export const counts: CountRecord[] = [...seedCounts];
 
 export const transfers: TransferRecord[] = [...seedTransfers];
+export const transferCartons: TransferCartonRecord[] = [];
 
 export const stockLedger: StockLedgerRecord[] = [...seedStockLedger];
 
@@ -500,6 +506,34 @@ export function updateTransferReceiptProgress(
   const transfer = transfers.find((record) => record.id === id);
   if (!transfer) throw new Error('Transfer was not found.');
   transfer.lines = lines.map((line) => ({ ...line }));
+  return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
+}
+
+export function listTransferCartons(transferId?: string): TransferCartonRecord[] {
+  return transferCartons
+    .filter((carton) => !transferId || carton.transferId === transferId)
+    .map((carton) => ({ ...carton, lines: carton.lines.map((line) => ({ ...line })) }));
+}
+
+export function addTransferCarton(carton: TransferCartonRecord): TransferCartonRecord {
+  transferCartons.push({ ...carton, lines: carton.lines.map((line) => ({ ...line })) });
+  return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+
+export function setTransferCartonStatus(id: string, status: TransferCartonRecord['status']): TransferCartonRecord | undefined {
+  const carton = transferCartons.find((row) => row.id === id);
+  if (!carton) return undefined;
+  carton.status = status;
+  return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+
+/** Records packing completion and/or dispatch details on the stored transfer. */
+export function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'packing' | 'dispatch' | 'cartonCount'>): TransferRecord {
+  const transfer = transfers.find((record) => record.id === id);
+  if (!transfer) throw new Error('Transfer was not found.');
+  if (patch.packing !== undefined) transfer.packing = patch.packing;
+  if (patch.dispatch !== undefined) transfer.dispatch = patch.dispatch;
+  if (patch.cartonCount !== undefined) transfer.cartonCount = patch.cartonCount;
   return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }
 

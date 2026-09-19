@@ -892,6 +892,9 @@ model Transfer {
   requestedBy           User          @relation(fields: [requestedById], references: [id])
   notes                 String?       @db.Text
   cartonCount           Int?
+  // Blueprint v4 §16/§17: packing completion and dispatch details
+  // ({ packing: {...}, dispatch: {...} }) - see lib/transfer-packing.ts.
+  logistics             Json?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 

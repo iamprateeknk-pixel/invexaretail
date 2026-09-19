@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.syncCheckpoints = exports.dailyMovements = exports.users = exports.stockMovements = exports.countAssignments = exports.stockLedger = exports.transfers = exports.counts = exports.items = exports.locations = exports.companyProfile = void 0;
+exports.syncCheckpoints = exports.dailyMovements = exports.users = exports.stockMovements = exports.countAssignments = exports.stockLedger = exports.transferCartons = exports.transfers = exports.counts = exports.items = exports.locations = exports.companyProfile = void 0;
 exports.getCompanyProfile = getCompanyProfile;
 exports.setCompanyProfile = setCompanyProfile;
 exports.findUserById = findUserById;
@@ -38,6 +38,10 @@ exports.findActiveAssignment = findActiveAssignment;
 exports.markAssignmentSubmitted = markAssignmentSubmitted;
 exports.updateTransferStatus = updateTransferStatus;
 exports.updateTransferReceiptProgress = updateTransferReceiptProgress;
+exports.listTransferCartons = listTransferCartons;
+exports.addTransferCarton = addTransferCarton;
+exports.setTransferCartonStatus = setTransferCartonStatus;
+exports.setTransferLogistics = setTransferLogistics;
 exports.listTransfers = listTransfers;
 const seed_js_1 = require("./seed.js");
 // Single-tenant: one profile for the whole deployment, not one per company.
@@ -53,6 +57,7 @@ exports.locations = [...seed_js_1.seedLocations];
 exports.items = [...seed_js_1.seedItems];
 exports.counts = [...seed_js_1.seedCounts];
 exports.transfers = [...seed_js_1.seedTransfers];
+exports.transferCartons = [];
 exports.stockLedger = [...seed_js_1.seedStockLedger];
 exports.countAssignments = [];
 exports.stockMovements = [];
@@ -359,6 +364,35 @@ function updateTransferReceiptProgress(id, lines) {
     if (!transfer)
         throw new Error('Transfer was not found.');
     transfer.lines = lines.map((line) => ({ ...line }));
+    return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
+}
+function listTransferCartons(transferId) {
+    return exports.transferCartons
+        .filter((carton) => !transferId || carton.transferId === transferId)
+        .map((carton) => ({ ...carton, lines: carton.lines.map((line) => ({ ...line })) }));
+}
+function addTransferCarton(carton) {
+    exports.transferCartons.push({ ...carton, lines: carton.lines.map((line) => ({ ...line })) });
+    return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+function setTransferCartonStatus(id, status) {
+    const carton = exports.transferCartons.find((row) => row.id === id);
+    if (!carton)
+        return undefined;
+    carton.status = status;
+    return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+/** Records packing completion and/or dispatch details on the stored transfer. */
+function setTransferLogistics(id, patch) {
+    const transfer = exports.transfers.find((record) => record.id === id);
+    if (!transfer)
+        throw new Error('Transfer was not found.');
+    if (patch.packing !== undefined)
+        transfer.packing = patch.packing;
+    if (patch.dispatch !== undefined)
+        transfer.dispatch = patch.dispatch;
+    if (patch.cartonCount !== undefined)
+        transfer.cartonCount = patch.cartonCount;
     return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }
 function listTransfers() {
