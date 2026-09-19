@@ -41,6 +41,7 @@ const transfer_evidence_js_1 = require("../lib/transfer-evidence.js");
 const item_photos_js_1 = require("../lib/item-photos.js");
 const receipt_validation_js_1 = require("../lib/receipt-validation.js");
 const transfer_packing_js_1 = require("../lib/transfer-packing.js");
+const qc_gate_js_1 = require("../lib/qc-gate.js");
 const transfer_receipt_js_1 = require("../lib/transfer-receipt.js");
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
@@ -3187,6 +3188,13 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
             })), templates);
             if (qc.ok === false)
                 return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+            // Blueprint v4 §25: an inspection that failed sends the goods to quarantine
+            // (the QC_FAIL exception case already exists), never to sellable stock.
+            const recorded = [
+                ...inspections,
+                ...bodyInspections.map((entry) => ({ itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null })),
+            ];
+            receiptLines = (0, qc_gate_js_1.quarantineFailedLines)(receiptLines, (line) => (0, qc_gate_js_1.verdictForLine)(recorded, { itemId: line.itemId, lineId: line.lineId })).lines;
         }
         try {
             const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({

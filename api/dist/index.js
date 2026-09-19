@@ -321,7 +321,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
             lines,
         });
         markConnectorIngested(connector.id);
-        res.status(201).json({ order });
+        res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
     }
     catch (error) {
         res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to ingest marketplace order.' });
@@ -441,6 +441,8 @@ const startServer = () => {
         repositoryHydrationState = 'ready';
         const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
         startCampaignScheduler();
+        const { startOrderScheduler } = await import('./lib/order-scheduler.js');
+        startOrderScheduler();
     })();
     startupHydration.catch((error) => {
         repositoryHydrationState = 'failed';

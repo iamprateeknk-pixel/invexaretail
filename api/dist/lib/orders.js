@@ -5,9 +5,11 @@ exports.routeOrder = routeOrder;
 exports.expireStaleReservations = expireStaleReservations;
 exports.retryBackorderAllocation = retryBackorderAllocation;
 exports.retryBackorderedOrders = retryBackorderedOrders;
-exports.createOrderWithReservation = createOrderWithReservation;
 exports.fulfillOrder = fulfillOrder;
 exports.cancelOrder = cancelOrder;
+exports.normalizedExternalReference = normalizedExternalReference;
+exports.findOrderByExternalReference = findOrderByExternalReference;
+exports.createOrderWithReservation = createOrderWithReservation;
 exports.listMemoryOrders = listMemoryOrders;
 const db_js_1 = require("./db.js");
 const warehouse_workflow_js_1 = require("./warehouse-workflow.js");
@@ -286,7 +288,7 @@ async function retryBackorderedOrders() {
  * runs, rather than only being freed the next time something else happens
  * to sweep it.
  */
-async function createOrderWithReservation(input) {
+async function createOrderInner(input) {
     if (!persistence_js_1.databaseEnabled)
         return createMemoryReservedOrder(input);
     await expireStaleReservations();
@@ -447,6 +449,51 @@ async function cancelOrder(orderId, actorId) {
     const updated = await db_js_1.prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
     return updated;
+}
+// Blueprint v4 §23: "Connector ingestion must be idempotent on platform +
+// external order ID." A marketplace that re-delivers a webhook (retry, replay,
+// double click on "ingest") gets the order that already exists - it must not
+// reserve the stock a second time. Creation for one platform+reference runs
+// one at a time so two simultaneous deliveries cannot both pass the lookup.
+const ingestLocks = new Map();
+function normalizedExternalReference(value) {
+    const trimmed = (value ?? '').trim();
+    return trimmed ? trimmed : null;
+}
+/** The order already created for this channel + external reference, if any (an expired reservation may be ingested again). */
+async function findOrderByExternalReference(channel, externalReference) {
+    const ref = normalizedExternalReference(externalReference);
+    if (!ref)
+        return null;
+    if (!persistence_js_1.databaseEnabled) {
+        return listMemoryOrders().find((order) => order.channel === channel && order.externalReference === ref && order.status !== 'EXPIRED') ?? null;
+    }
+    return db_js_1.prisma.order.findFirst({
+        where: { channel, externalReference: ref, status: { not: 'EXPIRED' } },
+        include: ORDER_INCLUDE,
+        orderBy: { createdAt: 'asc' },
+    });
+}
+async function createOrderWithReservation(input) {
+    const reference = normalizedExternalReference(input.externalReference);
+    if (!reference)
+        return createOrderInner(input);
+    const key = `${input.channel} ${reference}`;
+    const previous = ingestLocks.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(async () => {
+        const existing = await findOrderByExternalReference(input.channel, reference);
+        if (existing)
+            return { ...existing, duplicate: true };
+        return createOrderInner({ ...input, externalReference: reference });
+    });
+    ingestLocks.set(key, run);
+    try {
+        return await run;
+    }
+    finally {
+        if (ingestLocks.get(key) === run)
+            ingestLocks.delete(key);
+    }
 }
 const memoryOrders = [];
 function listMemoryOrders() {

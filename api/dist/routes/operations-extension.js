@@ -29,6 +29,8 @@ const pick_face_replenishment_js_1 = require("../lib/pick-face-replenishment.js"
 const pack_verification_js_1 = require("../lib/pack-verification.js");
 const carrier_adapter_js_1 = require("../lib/carrier-adapter.js");
 const returns_rma_js_1 = require("../lib/returns-rma.js");
+const qc_gate_js_1 = require("../lib/qc-gate.js");
+const qc_inspection_js_2 = require("../lib/qc-inspection.js");
 const demand_forecast_js_1 = require("../lib/demand-forecast.js");
 const pick_wave_js_1 = require("../lib/pick-wave.js");
 const intelligence_actions_js_1 = require("../lib/intelligence-actions.js");
@@ -1375,7 +1377,7 @@ router.post('/orders', async (req, res) => {
             customerLatitude: Number.isFinite(Number(req.body.customerLatitude)) ? Number(req.body.customerLatitude) : null,
             customerLongitude: Number.isFinite(Number(req.body.customerLongitude)) ? Number(req.body.customerLongitude) : null,
         });
-        return res.status(201).json({ order });
+        return res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
     }
     catch (error) {
         if (error instanceof orders_js_1.OrderShortageError)
@@ -1661,6 +1663,44 @@ router.get('/orders/:id/returns', async (req, res) => {
     const returnRequests = await db_js_1.prisma.returnRequest.findMany({ where: { orderId: order.id }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
     return res.json({ returnRequests });
 });
+// Blueprint v4 §24: what QC says about a returned line, and whether QC applies.
+async function returnQcContext(returnRequestId, itemIds) {
+    const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
+    const templates = persistence_js_1.databaseEnabled
+        ? await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
+        : listMemoryQcTemplates().filter((row) => row.active);
+    const inspections = persistence_js_1.databaseEnabled
+        ? await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: returnRequestId } }).catch(() => [])
+        : listMemoryQcInspections().filter((row) => row.sourceDocument === returnRequestId);
+    const categories = new Map();
+    if (persistence_js_1.databaseEnabled && itemIds.length) {
+        for (const row of await db_js_1.prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, category: true } }))
+            categories.set(row.id, row.category ?? null);
+    }
+    else {
+        for (const item of (0, repository_js_1.listItems)())
+            categories.set(item.id, item.category ?? null);
+    }
+    return {
+        qcRequired: (itemId) => (0, qc_inspection_js_2.findTemplateForCategory)(templates, categories.get(itemId) ?? null) !== null,
+        verdict: (itemId, lineId) => (0, qc_gate_js_1.verdictForLine)(inspections, { itemId, lineId }),
+    };
+}
+async function returnLot(returnRequestId, itemId) {
+    const lotNo = `RMA-${returnRequestId}`;
+    const lot = await db_js_1.prisma.lot.upsert({
+        where: { itemId_lotNo: { itemId, lotNo } },
+        update: {},
+        create: { itemId, lotNo, attributes: { source: 'return', returnRequestId } },
+    });
+    try {
+        (0, repository_js_1.ensureLotRecord)(itemId, lotNo, null, { source: 'return' }, lot.id);
+    }
+    catch {
+        // Item may not be in the in-memory catalogue during isolated tests.
+    }
+    return lot;
+}
 router.patch('/returns/:id/status', async (req, res) => {
     if (!requirePacker(req, res))
         return;
@@ -1673,40 +1713,62 @@ router.patch('/returns/:id/status', async (req, res) => {
     const nextStatus = (0, returns_rma_js_1.nextReturnStatus)(returnRequest.status, action);
     if (!nextStatus)
         return res.status(409).json({ message: `Cannot apply action ${action} to a return in status ${returnRequest.status}.` });
+    const locationId = returnRequest.order.fulfillmentLocationId;
+    if (action === 'CLOSE') {
+        const closable = (0, returns_rma_js_1.canCloseReturn)(returnRequest.lines);
+        if ('message' in closable)
+            return res.status(409).json({ message: closable.message });
+    }
     if (action === 'RECEIVE') {
         const dispositions = req.body.dispositions && typeof req.body.dispositions === 'object' ? req.body.dispositions : {};
+        const qc = await returnQcContext(returnRequest.id, returnRequest.lines.map((line) => line.itemId));
+        // Decide every line before touching stock, so one bad line cannot leave the return half-received.
+        const plans = [];
         for (const line of returnRequest.lines) {
-            const disposition = dispositions[line.id] ?? 'RESTOCK';
-            await db_js_1.prisma.returnLine.update({ where: { id: line.id }, data: { disposition } });
-            if ((0, returns_rma_js_1.isRestockDisposition)(disposition)) {
-                const lotNo = `RMA-${returnRequest.id}`;
-                const lot = await db_js_1.prisma.lot.upsert({
-                    where: { itemId_lotNo: { itemId: line.itemId, lotNo } },
-                    update: {},
-                    create: { itemId: line.itemId, lotNo, attributes: { source: 'return', returnRequestId: returnRequest.id } },
-                });
+            const plan = (0, returns_rma_js_1.planReturnLine)({ requested: dispositions[line.id], qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
+            if ('message' in plan)
+                return res.status(400).json({ message: plan.message, lineId: line.id });
+            plans.push({ line, plan });
+        }
+        for (const { line, plan } of plans) {
+            await db_js_1.prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
+            const lot = await returnLot(returnRequest.id, line.itemId);
+            if (plan.action === 'RESTOCK') {
                 const ledger = await db_js_1.prisma.stockLedger.upsert({
-                    where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId: returnRequest.order.fulfillmentLocationId } },
+                    where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } },
                     update: { onHand: { increment: line.quantity }, version: { increment: 1 } },
-                    create: { itemId: line.itemId, lotId: lot.id, locationId: returnRequest.order.fulfillmentLocationId, onHand: line.quantity, version: 1 },
+                    create: { itemId: line.itemId, lotId: lot.id, locationId, onHand: line.quantity, version: 1 },
                 });
-                try {
-                    (0, repository_js_1.ensureLotRecord)(line.itemId, lotNo, null, { source: 'return' }, lot.id);
-                }
-                catch {
-                    // Item may not be in the in-memory catalogue during isolated tests.
-                }
-                (0, repository_js_1.adjustStockLedger)(line.itemId, lot.id, returnRequest.order.fulfillmentLocationId, line.quantity);
+                (0, repository_js_1.adjustStockLedger)(line.itemId, lot.id, locationId, line.quantity);
                 await db_js_1.prisma.stockMovement.create({
                     data: {
-                        itemId: line.itemId, lotId: lot.id, locationId: returnRequest.order.fulfillmentLocationId,
-                        movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+                        itemId: line.itemId, lotId: lot.id, locationId, movementType: 'SALES_RETURN', qtyDelta: line.quantity,
                         beforeBalance: ledger.onHand - line.quantity, afterBalance: ledger.onHand,
                         sourceDocument: returnRequest.id, actor: req.user.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-                        reason: 'Customer return restocked',
+                        reason: 'Customer return restocked after inspection',
                     },
                 }).catch(() => undefined);
             }
+            else if (plan.action === 'HOLD') {
+                // Physically back in the building but not sellable: quarantine until a disposition is decided.
+                await db_js_1.prisma.stockLedger.upsert({
+                    where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } },
+                    update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
+                    create: { itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+                });
+                (0, repository_js_1.adjustQuarantineLedger)(line.itemId, lot.id, locationId, line.quantity);
+                void (0, exceptions_js_1.createExceptionCase)({
+                    type: plan.disposition === 'QC_FAILED' ? 'QC_FAIL' : 'QUARANTINE',
+                    title: plan.disposition === 'QC_FAILED' ? 'Returned goods failed QC' : 'Returned goods awaiting inspection',
+                    description: plan.note ?? null,
+                    itemId: line.itemId, lotId: lot.id, locationId, quantity: line.quantity,
+                    sourceDocument: returnRequest.id, sourceLineId: line.id, reportedById: req.user.id,
+                });
+            }
+            await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+                actorId: req.user.id, actorRole: req.user.role, action: 'RETURN_LINE_RECEIVED',
+                entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { lineId: line.id, quantity: line.quantity, disposition: plan.disposition },
+            }));
         }
     }
     const updated = await db_js_1.prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });
@@ -1714,6 +1776,87 @@ router.patch('/returns/:id/status', async (req, res) => {
         actorId: req.user.id, actorRole: req.user.role, action: `RETURN_${action}`,
         entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: returnRequest.orderId, status: nextStatus },
     }));
+    return res.json({ returnRequest: updated });
+});
+// Decide a held line: restock (needs a passing QC where QC applies), scrap, or send back to the vendor.
+router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
+    if (!requirePacker(req, res))
+        return;
+    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });
+    if (!returnRequest)
+        return res.status(404).json({ message: 'Return request not found.' });
+    if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId))
+        return res.status(403).json({ message: 'Location access denied.' });
+    if (returnRequest.status !== 'RECEIVED')
+        return res.status(409).json({ message: 'Only a received return can have its lines disposed.' });
+    const line = returnRequest.lines.find((row) => row.id === req.params.lineId);
+    if (!line)
+        return res.status(404).json({ message: 'Return line was not found.' });
+    if (!(0, returns_rma_js_1.isPendingDisposition)(line.disposition))
+        return res.status(409).json({ message: `This line was already dispositioned as ${line.disposition}.` });
+    const qc = await returnQcContext(returnRequest.id, [line.itemId]);
+    const plan = (0, returns_rma_js_1.planReturnLine)({ requested: String(req.body.disposition ?? ''), qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
+    if ('message' in plan)
+        return res.status(400).json({ message: plan.message });
+    if (plan.action === 'HOLD')
+        return res.status(409).json({ message: plan.note ?? 'This line must stay in quarantine.' });
+    const locationId = returnRequest.order.fulfillmentLocationId;
+    const lot = await returnLot(returnRequest.id, line.itemId);
+    const ledger = await db_js_1.prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } } });
+    if (!ledger || ledger.quarantine + 1e-8 < line.quantity)
+        return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
+    const restock = plan.action === 'RESTOCK';
+    await db_js_1.prisma.stockLedger.update({
+        where: { id: ledger.id },
+        data: {
+            quarantine: { decrement: line.quantity },
+            ...(restock ? { onHand: { increment: line.quantity } } : {}),
+            ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
+            version: { increment: 1 },
+        },
+    });
+    (0, repository_js_1.adjustQuarantineLedger)(line.itemId, lot.id, locationId, -line.quantity);
+    if (restock)
+        (0, repository_js_1.adjustStockLedger)(line.itemId, lot.id, locationId, line.quantity);
+    await db_js_1.prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
+    await db_js_1.prisma.stockMovement.create({
+        data: {
+            itemId: line.itemId, lotId: lot.id, locationId, movementType: restock ? 'SALES_RETURN' : plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
+            qtyDelta: restock ? line.quantity : -line.quantity, beforeBalance: restock ? ledger.onHand : ledger.quarantine,
+            afterBalance: restock ? ledger.onHand + line.quantity : ledger.quarantine - line.quantity,
+            sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user.id, timestamp: new Date(), correlationId: returnRequest.orderId,
+            reason: `Return disposition: ${plan.disposition}`,
+        },
+    }).catch(() => undefined);
+    // The quarantine case opened at receipt is decided by this action.
+    await db_js_1.prisma.exceptionCase.updateMany({
+        where: { sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
+        data: { status: 'RESOLVED', resolvedAt: new Date() },
+    }).catch(() => undefined);
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+        actorId: req.user.id, actorRole: req.user.role, action: 'RETURN_LINE_DISPOSED',
+        entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { lineId: line.id, disposition: plan.disposition, quantity: line.quantity },
+    }));
+    const refreshed = await db_js_1.prisma.returnRequest.findUnique({ where: { id: returnRequest.id }, include: { lines: true } });
+    return res.json({ returnRequest: refreshed });
+});
+// Blueprint v4 §24 "Refund status": a finance decision, recorded separately from the stock disposition.
+router.patch('/returns/:id/refund', async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    const decision = (0, returns_rma_js_1.parseRefundDecision)(req.body.status);
+    if (!decision)
+        return res.status(400).json({ message: 'Refund status must be REFUNDED or DENIED.' });
+    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id } });
+    if (!returnRequest)
+        return res.status(404).json({ message: 'Return request not found.' });
+    if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status))
+        return res.status(409).json({ message: 'A refund can be decided once the goods have been received.' });
+    const updated = await db_js_1.prisma.returnRequest.update({
+        where: { id: returnRequest.id },
+        data: { refundStatus: decision, refundNote: typeof req.body.note === 'string' ? req.body.note.slice(0, 2000) : null, refundedAt: new Date(), refundedById: req.user.id },
+    });
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: `RETURN_REFUND_${decision}`, entityType: 'ReturnRequest', entityId: returnRequest.id }));
     return res.json({ returnRequest: updated });
 });
 // Manual trigger for visibility/testing - GET /orders and every order
@@ -2361,6 +2504,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
     }
     const payloads = Array.isArray(req.body.orders) ? req.body.orders : [req.body];
     const created = [];
+    const duplicates = [];
     const errors = [];
     for (const payload of payloads) {
         const mapped = (0, connectors_js_1.mapMarketplaceOrder)(connector.platform, payload && typeof payload === 'object' ? payload : {});
@@ -2397,7 +2541,10 @@ router.post('/connectors/:id/ingest', async (req, res) => {
                 candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
                 lines,
             });
-            created.push(order);
+            if (order.duplicate)
+                duplicates.push(order);
+            else
+                created.push(order);
         }
         catch (error) {
             errors.push({ reference: mapped.externalReference, message: error instanceof Error ? error.message : 'Unable to reserve order.' });
@@ -2407,7 +2554,8 @@ router.post('/connectors/:id/ingest', async (req, res) => {
     if (persistence_js_1.databaseEnabled) {
         await db_js_1.prisma.marketplaceConnector.update({ where: { id: connector.id }, data: { lastIngestedAt: new Date() } }).catch(() => undefined);
     }
-    return res.status(created.length ? 201 : 409).json({ orders: created, errors });
+    // A payload the platform already delivered is not an error: it is acknowledged with the order it produced.
+    return res.status(created.length ? 201 : duplicates.length ? 200 : 409).json({ orders: created, duplicates, errors });
 });
 router.get('/webhook-deliveries', async (req, res) => {
     if (!requireAdmin(req, res))

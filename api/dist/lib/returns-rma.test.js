@@ -40,3 +40,35 @@ const returns_rma_js_1 = require("./returns-rma.js");
     strict_1.default.equal((0, returns_rma_js_1.isRestockDisposition)('RESTOCK'), true);
     strict_1.default.equal((0, returns_rma_js_1.isRestockDisposition)('SCRAP'), false);
 });
+const returns_rma_js_2 = require("./returns-rma.js");
+(0, node_test_1.default)('a received return is held, never restocked by default', () => {
+    strict_1.default.deepEqual((0, returns_rma_js_2.planReturnLine)({ requested: undefined, qcRequired: false, verdict: null }), { ok: true, action: 'HOLD', disposition: 'PENDING_INSPECTION', note: 'Held in quarantine until inspected.' });
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: '', qcRequired: true, verdict: null }).ok && (0, returns_rma_js_2.planReturnLine)({ requested: '', qcRequired: true, verdict: null }).action, 'HOLD');
+});
+(0, node_test_1.default)('restock needs a passing QC where QC applies; a failure holds it for scrap or vendor return', () => {
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: 'RESTOCK', qcRequired: false, verdict: null }).action, 'RESTOCK');
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: 'restock', qcRequired: true, verdict: 'PASS' }).action, 'RESTOCK');
+    const failed = (0, returns_rma_js_2.planReturnLine)({ requested: 'RESTOCK', qcRequired: true, verdict: 'FAIL' });
+    strict_1.default.deepEqual([failed.ok && failed.action, failed.ok && failed.disposition], ['HOLD', 'QC_FAILED']);
+    const missing = (0, returns_rma_js_2.planReturnLine)({ requested: 'RESTOCK', qcRequired: true, verdict: null });
+    strict_1.default.equal(missing.ok, false);
+    strict_1.default.match(missing.ok ? '' : missing.message, /QC inspection is required/);
+});
+(0, node_test_1.default)('scrap and vendor return never need QC; unknown dispositions are refused', () => {
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: 'SCRAP', qcRequired: true, verdict: null }).action, 'SCRAP');
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: 'RETURN_TO_VENDOR', qcRequired: true, verdict: 'FAIL' }).action, 'VENDOR');
+    strict_1.default.equal((0, returns_rma_js_2.planReturnLine)({ requested: 'GIVE_AWAY', qcRequired: false, verdict: null }).ok, false);
+});
+(0, node_test_1.default)('a return closes only when every line has a real disposition', () => {
+    strict_1.default.equal((0, returns_rma_js_2.isPendingDisposition)(null), true);
+    strict_1.default.equal((0, returns_rma_js_2.isPendingDisposition)('QC_FAILED'), true);
+    strict_1.default.equal((0, returns_rma_js_2.isPendingDisposition)('RESTOCK'), false);
+    strict_1.default.equal((0, returns_rma_js_2.canCloseReturn)([{ disposition: 'RESTOCK' }, { disposition: 'SCRAP' }]).ok, true);
+    strict_1.default.equal((0, returns_rma_js_2.canCloseReturn)([{ disposition: 'RESTOCK' }, { disposition: 'PENDING_INSPECTION' }]).ok, false);
+});
+(0, node_test_1.default)('a refund decision is one of two explicit values', () => {
+    strict_1.default.equal((0, returns_rma_js_2.parseRefundDecision)('REFUNDED'), 'REFUNDED');
+    strict_1.default.equal((0, returns_rma_js_2.parseRefundDecision)('DENIED'), 'DENIED');
+    strict_1.default.equal((0, returns_rma_js_2.parseRefundDecision)('PENDING'), null);
+    strict_1.default.equal((0, returns_rma_js_2.parseRefundDecision)(undefined), null);
+});

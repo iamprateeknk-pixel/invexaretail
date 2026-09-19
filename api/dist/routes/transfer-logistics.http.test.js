@@ -213,3 +213,37 @@ const carton = (lines, extra = {}) => ({
         strict_1.default.equal((0, repository_js_1.listTransfers)().find((row) => row.id === id)?.status, 'PARTIAL_RECEIVED');
     });
 });
+(0, node_test_1.default)('QC gates a transfer receipt: no inspection blocks it, a failed one quarantines instead of stocking', async () => {
+    const { createMemoryQcTemplate, recordMemoryQcInspection, resetMemoryQc } = await import('../lib/qc-inspection.js');
+    resetMemoryQc();
+    createMemoryQcTemplate({ label: 'Global', category: null, checks: [{ key: 'seal', label: 'Seal intact' }], createdById: 'user-admin-1' });
+    try {
+        await withServer(async (call) => {
+            const picker = tokenFor('picker@retail.local');
+            const admin = tokenFor('admin@retail.local');
+            const store = tokenFor('store@retail.local');
+            const id = confirmedTransfer();
+            await call('POST', `/transfers/${id}/cartons`, picker, carton([['item-1003', 'lot-1003', 10], ['item-1001', 'lot-1001', 5]]));
+            await call('POST', `/transfers/${id}/pack/complete`, picker);
+            await call('POST', `/transfers/${id}/dispatch`, admin, { vehicleNo: 'QC1' });
+            const lines = [{ itemId: 'item-1003', lotId: 'lot-1003', receivedQty: 10 }, { itemId: 'item-1001', lotId: 'lot-1001', receivedQty: 5 }];
+            const blocked = await call('POST', `/transfers/${id}/receive`, store, { requestId: `q-${unique()}`, lines });
+            strict_1.default.equal(blocked.status, 400);
+            strict_1.default.equal(blocked.body.code, 'QC_REQUIRED');
+            const inspector = { inspectedById: 'user-admin-1', sourceDocument: id, locationId: 'loc-1' };
+            recordMemoryQcInspection({ ...inspector, itemId: 'item-1003', results: { seal: 'FAIL' } });
+            recordMemoryQcInspection({ ...inspector, itemId: 'item-1001', results: { seal: 'PASS' } });
+            const soap = (0, repository_js_1.findStockLedgerEntry)('item-1003', 'lot-1003', 'loc-1');
+            const rice = (0, repository_js_1.findStockLedgerEntry)('item-1001', 'lot-1001', 'loc-1');
+            const [soapOn, soapQ, riceOn] = [soap?.onHand ?? 0, soap?.quarantine ?? 0, rice?.onHand ?? 0];
+            const done = await call('POST', `/transfers/${id}/receive`, store, { requestId: `q-${unique()}`, lines });
+            strict_1.default.equal(done.status, 200);
+            strict_1.default.equal((0, repository_js_1.findStockLedgerEntry)('item-1003', 'lot-1003', 'loc-1')?.onHand, soapOn, 'the failed lot did not become sellable');
+            strict_1.default.equal((0, repository_js_1.findStockLedgerEntry)('item-1003', 'lot-1003', 'loc-1')?.quarantine, soapQ + 10, 'it is held in quarantine');
+            strict_1.default.equal((0, repository_js_1.findStockLedgerEntry)('item-1001', 'lot-1001', 'loc-1')?.onHand, riceOn + 5, 'the passed lot is stocked as usual');
+        });
+    }
+    finally {
+        resetMemoryQc();
+    }
+});

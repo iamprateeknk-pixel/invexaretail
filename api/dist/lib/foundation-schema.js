@@ -9,6 +9,14 @@ async function ensureColumn(table, column, definition) {
         return;
     await db_js_1.prisma.$executeRawUnsafe(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
 }
+// Procurement/returns tables come from migrations on older hosts, so a missing
+// table is left alone here (its routes fail on their own) instead of aborting startup.
+async function ensureColumnIfTable(table, column, definition) {
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', table);
+    if (Number(rows[0]?.count ?? 0) === 0)
+        return;
+    await ensureColumn(table, column, definition);
+}
 exports.OPERATIONAL_TENANT_TABLES = [
     'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine',
     'TransferReceipt', 'TransferReceiptLine', 'TransferCarton', 'InventoryMovement',
@@ -100,6 +108,22 @@ async function ensureFoundationSchema() {
     await ensureColumn('Item', 'updatedById', 'VARCHAR(191) NULL');
     // Blueprint v4 §14 late-arriving movement reconciliation on counts.
     await ensureColumn('Transfer', 'logistics', 'JSON NULL');
+    // Blueprint v4 P6 procurement + returns.
+    await ensureColumnIfTable('Supplier', 'contactName', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('Supplier', 'leadTimeDays', 'INTEGER NULL');
+    await ensureColumnIfTable('Supplier', 'moq', 'DOUBLE NULL');
+    await ensureColumnIfTable('Supplier', 'paymentTerms', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('Supplier', 'categories', 'TEXT NULL');
+    await ensureColumnIfTable('Supplier', 'status', "VARCHAR(191) NOT NULL DEFAULT 'ACTIVE'");
+    await ensureColumnIfTable('PurchaseOrder', 'approvedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'approvedById', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'sentAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'closedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'closeNote', 'TEXT NULL');
+    await ensureColumnIfTable('ReturnRequest', 'refundStatus', "VARCHAR(191) NOT NULL DEFAULT 'PENDING'");
+    await ensureColumnIfTable('ReturnRequest', 'refundNote', 'TEXT NULL');
+    await ensureColumnIfTable('ReturnRequest', 'refundedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('ReturnRequest', 'refundedById', 'VARCHAR(191) NULL');
     await ensureColumn('StockCount', 'reconciliationRequired', 'BOOLEAN NOT NULL DEFAULT false');
     await ensureColumn('StockCount', 'reconciliationNote', 'TEXT NULL');
     await ensureColumn('StockCount', 'reconciliationAt', 'DATETIME(3) NULL');
@@ -320,6 +344,11 @@ async function ensureFoundationSchema() {
       \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), \`updatedAt\` DATETIME(3) NOT NULL,
       PRIMARY KEY (\`id\`), UNIQUE INDEX \`TransferCarton_transferId_cartonNumber_key\` (\`transferId\`,\`cartonNumber\`),
       INDEX \`TransferCarton_transferId_status_idx\` (\`transferId\`,\`status\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
+        `CREATE TABLE IF NOT EXISTS \`PurchaseReceipt\` (
+      \`id\` VARCHAR(191) NOT NULL, \`requestId\` VARCHAR(191) NOT NULL, \`purchaseOrderId\` VARCHAR(191) NOT NULL,
+      \`receivedById\` VARCHAR(191) NOT NULL, \`result\` JSON NOT NULL, \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (\`id\`), UNIQUE INDEX \`PurchaseReceipt_requestId_key\` (\`requestId\`), INDEX \`PurchaseReceipt_purchaseOrderId_idx\` (\`purchaseOrderId\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
         `CREATE TABLE IF NOT EXISTS \`FeatureFlag\` (
       \`id\` VARCHAR(191) NOT NULL, \`name\` VARCHAR(191) NOT NULL, \`enabled\` BOOLEAN NOT NULL DEFAULT false,

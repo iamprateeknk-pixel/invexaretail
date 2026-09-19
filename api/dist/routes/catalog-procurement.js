@@ -12,6 +12,14 @@ const repository_js_1 = require("../lib/repository.js");
 const webhook_dispatcher_js_1 = require("../lib/webhook-dispatcher.js");
 const landed_cost_js_1 = require("../lib/landed-cost.js");
 const vendor_score_js_1 = require("../lib/vendor-score.js");
+const supplier_master_js_1 = require("../lib/supplier-master.js");
+const po_lifecycle_js_1 = require("../lib/po-lifecycle.js");
+const po_receipt_js_1 = require("../lib/po-receipt.js");
+const po_planning_js_1 = require("../lib/po-planning.js");
+const qc_receive_js_1 = require("../lib/qc-receive.js");
+const qc_gate_js_1 = require("../lib/qc-gate.js");
+const approval_rules_js_1 = require("../lib/approval-rules.js");
+const exceptions_js_1 = require("../lib/exceptions.js");
 const three_way_match_js_1 = require("../lib/three-way-match.js");
 const audit_js_1 = require("../lib/audit.js");
 const price_guardrails_js_1 = require("../lib/price-guardrails.js");
@@ -151,16 +159,38 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
     return res.json({ rule });
 });
 router.get('/suppliers', async (_req, res) => {
-    return res.json({ suppliers: await db_js_1.prisma.supplier.findMany({ orderBy: { name: 'asc' } }) });
+    const suppliers = await db_js_1.prisma.supplier.findMany({ orderBy: { name: 'asc' } });
+    return res.json({ suppliers: suppliers.map(supplier_master_js_1.presentSupplier) });
 });
 router.post('/suppliers', async (req, res) => {
     if (!requireAdmin(req, res))
         return;
-    const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
-    if (name.length < 2)
-        return res.status(400).json({ message: 'Supplier name must be at least 2 characters.' });
-    const supplier = await db_js_1.prisma.supplier.create({ data: { name, email: req.body.email || null, phone: req.body.phone || null } });
-    return res.status(201).json({ supplier });
+    try {
+        const fields = (0, supplier_master_js_1.parseSupplierFields)(req.body ?? {}, true);
+        const supplier = await db_js_1.prisma.supplier.create({ data: fields });
+        return res.status(201).json({ supplier: (0, supplier_master_js_1.presentSupplier)(supplier) });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
+    }
+});
+router.put('/suppliers/:id', async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    try {
+        const fields = (0, supplier_master_js_1.parseSupplierFields)(req.body ?? {}, false);
+        if (!Object.keys(fields).length)
+            return res.status(400).json({ message: 'Nothing to update.' });
+        const existing = await db_js_1.prisma.supplier.findUnique({ where: { id: req.params.id } });
+        if (!existing)
+            return res.status(404).json({ message: 'Supplier not found.' });
+        const supplier = await db_js_1.prisma.supplier.update({ where: { id: existing.id }, data: fields });
+        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'SUPPLIER_UPDATED', entityType: 'Supplier', entityId: supplier.id, metadata: { fields: Object.keys(fields) } }));
+        return res.json({ supplier: (0, supplier_master_js_1.presentSupplier)(supplier) });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
+    }
 });
 router.get('/suppliers/:id/score', async (req, res) => {
     if (!requireReportingRole(req, res))
@@ -169,14 +199,21 @@ router.get('/suppliers/:id/score', async (req, res) => {
     if (!supplier)
         return res.status(404).json({ message: 'Supplier not found.' });
     const orders = await db_js_1.prisma.purchaseOrder.findMany({
-        where: { supplierId: supplier.id, status: { not: 'DRAFT' } },
+        where: { supplierId: supplier.id, status: { notIn: ['DRAFT', 'CANCELLED'] } },
         include: { lines: true },
     });
+    // Completion is when the last goods arrived, not when finance later closed the order.
+    const lastReceiptAt = new Map();
+    for (const receipt of await db_js_1.prisma.purchaseReceipt.findMany({ where: { purchaseOrderId: { in: orders.map((order) => order.id) } }, select: { purchaseOrderId: true, createdAt: true } }).catch(() => [])) {
+        const seen = lastReceiptAt.get(receipt.purchaseOrderId);
+        if (!seen || receipt.createdAt > seen)
+            lastReceiptAt.set(receipt.purchaseOrderId, receipt.createdAt);
+    }
     const scoreInput = orders.map((order) => ({
         quantity: order.lines.reduce((sum, line) => sum + line.quantity, 0),
         receivedQty: order.lines.reduce((sum, line) => sum + line.receivedQty, 0),
         expectedAt: order.expectedAt ? order.expectedAt.toISOString() : null,
-        completedAt: order.status === 'RECEIVED' ? order.updatedAt.toISOString() : null,
+        completedAt: ['RECEIVED', 'CLOSED'].includes(order.status) ? (lastReceiptAt.get(order.id) ?? order.updatedAt).toISOString() : null,
         createdAt: order.createdAt.toISOString(),
     }));
     const inspections = await db_js_1.prisma.qcInspection.findMany({
@@ -223,6 +260,12 @@ router.post('/purchase-orders', async (req, res) => {
     if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
         return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
     }
+    const supplier = await db_js_1.prisma.supplier.findUnique({ where: { id: String(req.body.supplierId) } });
+    if (!supplier)
+        return res.status(404).json({ message: 'Supplier not found.' });
+    if (!(0, supplier_master_js_1.canOrderFrom)(supplier.status))
+        return res.status(409).json({ message: `${supplier.name} is ${String(supplier.status).toLowerCase()} and cannot receive new purchase orders.` });
+    const leadTimeDays = supplier.leadTimeDays;
     const lineItems = await db_js_1.prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });
     const inactive = lineItems.find((row) => row.status && row.status !== 'ACTIVE');
     if (inactive)
@@ -234,7 +277,8 @@ router.post('/purchase-orders', async (req, res) => {
             supplierId: req.body.supplierId,
             locationId: req.body.locationId,
             createdById: req.user.id,
-            expectedAt: req.body.expectedAt ? new Date(req.body.expectedAt) : null,
+            // Promise date: what the buyer said, else today plus the supplier's lead time.
+            expectedAt: req.body.expectedAt ? new Date(req.body.expectedAt) : leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
             notes: req.body.notes || null,
             totalAmount: normalized.reduce((sum, line) => sum + line.quantity * line.unitCost, 0),
             freightCost: Number(req.body.freightCost) || 0,
@@ -248,80 +292,151 @@ router.post('/purchase-orders', async (req, res) => {
     });
     return res.status(201).json({ purchaseOrder });
 });
+// Blueprint v4 §22/§18: receiving is lot/expiry aware, QC-gated, records damage and
+// excess instead of hiding them, and is exactly-once per requestId.
 router.post('/purchase-orders/:id/receive', async (req, res) => {
     if (!requireAdmin(req, res))
         return;
-    const receiptLines = Array.isArray(req.body.lines) ? req.body.lines : [];
+    const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
+    if (!requestId || requestId.length > 191)
+        return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
+    const priorReceipt = await db_js_1.prisma.purchaseReceipt.findUnique({ where: { requestId } }).catch(() => null);
+    if (priorReceipt) {
+        if (priorReceipt.purchaseOrderId !== req.params.id)
+            return res.status(409).json({ message: 'This requestId was already used for a different purchase order.' });
+        return res.json({ ...priorReceipt.result, duplicate: true });
+    }
     const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
-    const quantities = new Map(receiptLines.map((line) => [String(line.lineId), Number(line.receivedQty)]));
-    for (const line of order.lines) {
-        const quantity = quantities.get(line.id) ?? 0;
-        if (!Number.isFinite(quantity) || quantity < 0 || line.receivedQty + quantity > line.quantity) {
-            return res.status(400).json({ message: `Invalid received quantity for line ${line.id}.` });
-        }
-    }
-    const { purchaseOrder, postedStock } = await db_js_1.prisma.$transaction(async (tx) => {
-        const postedStock = [];
-        for (const line of order.lines) {
-            const quantity = quantities.get(line.id) ?? 0;
-            if (quantity > 0) {
-                await tx.purchaseOrderLine.update({ where: { id: line.id }, data: { receivedQty: { increment: quantity } } });
-                const lotNo = `PO-${order.number}`;
-                const lot = await tx.lot.upsert({
-                    where: { itemId_lotNo: { itemId: line.itemId, lotNo } },
-                    update: {},
-                    create: { itemId: line.itemId, lotNo, attributes: { source: 'purchase-order', purchaseOrderId: order.id } },
+    if (!(0, po_lifecycle_js_1.isReceivablePo)(order.status))
+        return res.status(409).json({ message: `A purchase order in ${order.status} cannot be received. It must be approved and still open.` });
+    const receipt = (Array.isArray(req.body.lines) ? req.body.lines : []).map((line) => ({
+        lineId: String(line.lineId ?? ''),
+        receivedQty: Number(line.receivedQty ?? 0),
+        damagedQty: Number(line.damagedQty ?? 0),
+        excessQty: Number(line.excessQty ?? 0),
+        lotNo: typeof line.lotNo === 'string' ? line.lotNo : null,
+        expiryDate: typeof line.expiryDate === 'string' && line.expiryDate ? line.expiryDate : null,
+    }));
+    const itemRows = await db_js_1.prisma.item.findMany({
+        where: { id: { in: order.lines.map((line) => line.itemId) } },
+        select: { id: true, code: true, category: true, lotRequired: true, expiryRequired: true },
+    });
+    const rules = new Map(itemRows.map((row) => [row.id, { code: row.code, lotRequired: row.lotRequired ?? false, expiryRequired: row.expiryRequired ?? false }]));
+    const plan = (0, po_receipt_js_1.planPoReceipt)({ orderNumber: order.number, lines: order.lines, receipt, items: rules });
+    if (plan.ok === false)
+        return res.status(400).json({ message: plan.message, lineId: plan.lineId });
+    // QC gate (blueprint §25): a checklist must exist for every good-stock line, and a failed one
+    // sends that line's goods to quarantine instead of sellable stock.
+    const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
+    const templates = await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active));
+    const inspections = (await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: order.number } }).catch(() => listMemoryQcInspections().filter((row) => row.sourceDocument === order.number)));
+    const bodyInspections = (Array.isArray(req.body.qcInspections) ? req.body.qcInspections : []).map((entry) => ({
+        itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null,
+    }));
+    const recorded = [...inspections, ...bodyInspections];
+    const categoryOf = new Map(itemRows.map((row) => [row.id, row.category ?? null]));
+    const qcCheck = (0, qc_receive_js_1.assertReceiptQcComplete)(plan.postings.map((posting) => ({
+        lineId: posting.lineId, itemId: posting.itemId, itemCategory: categoryOf.get(posting.itemId) ?? null,
+        receivedQty: posting.goodQty, hasInspection: (0, qc_gate_js_1.verdictForLine)(recorded, { itemId: posting.itemId, lineId: posting.lineId }) !== null,
+    })), templates);
+    if (qcCheck.ok === false)
+        return res.status(400).json({ message: qcCheck.message, itemId: qcCheck.itemId, lineId: qcCheck.lineId, code: 'QC_REQUIRED' });
+    const gated = (0, qc_gate_js_1.quarantineFailedLines)(plan.postings.map((posting) => ({ ...posting, lotId: posting.lotNo, receivedQty: posting.goodQty })), (line) => (0, qc_gate_js_1.verdictForLine)(recorded, { itemId: line.itemId, lineId: line.lineId }));
+    const postings = gated.lines.map((line) => ({ ...line, goodQty: line.receivedQty, arrivedQty: Math.round((line.receivedQty + line.damagedQty) * 1000) / 1000 }));
+    let outcome;
+    try {
+        outcome = await db_js_1.prisma.$transaction(async (tx) => {
+            const postedStock = [];
+            for (const posting of postings) {
+                await tx.purchaseOrderLine.update({ where: { id: posting.lineId }, data: { receivedQty: { increment: posting.arrivedQty } } });
+                const existingLot = await tx.lot.findUnique({ where: { itemId_lotNo: { itemId: posting.itemId, lotNo: posting.lotNo } } });
+                const expiry = posting.expiryDate ? new Date(posting.expiryDate) : null;
+                if (existingLot?.expiryDate && expiry && existingLot.expiryDate.toISOString().slice(0, 10) !== posting.expiryDate) {
+                    throw new Error(`Lot ${posting.lotNo} already exists with expiry ${existingLot.expiryDate.toISOString().slice(0, 10)}; a lot number belongs to one batch.`);
+                }
+                const lot = existingLot ?? await tx.lot.create({
+                    data: { itemId: posting.itemId, lotNo: posting.lotNo, expiryDate: expiry, attributes: { source: 'purchase-order', purchaseOrderId: order.id } },
                 });
+                if (existingLot && !existingLot.expiryDate && expiry)
+                    await tx.lot.update({ where: { id: lot.id }, data: { expiryDate: expiry } });
+                const quarantined = Math.round((posting.damagedQty + posting.excessQty) * 1000) / 1000;
                 const ledger = await tx.stockLedger.upsert({
-                    where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId: order.locationId } },
-                    update: { onHand: { increment: quantity }, version: { increment: 1 } },
-                    create: { itemId: line.itemId, lotId: lot.id, locationId: order.locationId, onHand: quantity, version: 1 },
+                    where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } },
+                    update: { onHand: { increment: posting.goodQty }, quarantine: { increment: quarantined }, version: { increment: 1 } },
+                    create: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId, onHand: posting.goodQty, quarantine: quarantined, version: 1 },
                 });
                 postedStock.push({
-                    itemId: line.itemId,
-                    lotId: lot.id,
-                    quantity,
-                    beforeBalance: ledger.onHand - quantity,
-                    afterBalance: ledger.onHand,
+                    itemId: posting.itemId, lotId: lot.id, lotNo: posting.lotNo, quantity: posting.goodQty, quarantined,
+                    beforeBalance: ledger.onHand - posting.goodQty, afterBalance: ledger.onHand,
                 });
             }
-        }
-        const lines = await tx.purchaseOrderLine.findMany({ where: { purchaseOrderId: order.id } });
-        const received = lines.every((line) => line.receivedQty >= line.quantity);
-        const partiallyReceived = lines.some((line) => line.receivedQty > 0);
-        const purchaseOrder = await tx.purchaseOrder.update({
-            where: { id: order.id },
-            data: { status: received ? 'RECEIVED' : partiallyReceived ? 'PARTIALLY_RECEIVED' : order.status },
-            include: { supplier: true, lines: { include: { item: true } } },
+            const lines = await tx.purchaseOrderLine.findMany({ where: { purchaseOrderId: order.id } });
+            const status = (0, po_receipt_js_1.statusAfterReceipt)(order.lines, postings);
+            void lines;
+            const purchaseOrder = await tx.purchaseOrder.update({
+                where: { id: order.id },
+                data: { status },
+                include: { supplier: true, lines: { include: { item: true } } },
+            });
+            await tx.purchaseReceipt.create({
+                data: { requestId, purchaseOrderId: order.id, receivedById: req.user.id, result: JSON.parse(JSON.stringify({ purchaseOrder, stockPosted: postedStock })) },
+            });
+            return { purchaseOrder, postedStock };
         });
-        return { purchaseOrder, postedStock };
-    });
+    }
+    catch (error) {
+        // Two identical requests at once: the loser hits the unique requestId and gets the winner's result.
+        if (error?.code === 'P2002') {
+            const winner = await db_js_1.prisma.purchaseReceipt.findUnique({ where: { requestId } });
+            if (winner)
+                return res.json({ ...winner.result, duplicate: true });
+        }
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to receive this purchase order.' });
+    }
+    const { purchaseOrder, postedStock } = outcome;
     for (const receipt of postedStock) {
         try {
-            (0, repository_js_1.ensureLotRecord)(receipt.itemId, `PO-${order.number}`, null, { source: 'purchase-order' }, receipt.lotId);
+            (0, repository_js_1.ensureLotRecord)(receipt.itemId, receipt.lotNo, null, { source: 'purchase-order' }, receipt.lotId);
         }
         catch {
             // Item may not be in the in-memory catalogue during isolated tests.
         }
-        (0, repository_js_1.adjustStockLedger)(receipt.itemId, receipt.lotId, order.locationId, receipt.quantity);
-        await db_js_1.prisma.stockMovement.create({
-            data: {
-                itemId: receipt.itemId,
-                lotId: receipt.lotId,
-                locationId: order.locationId,
-                movementType: 'PURCHASE_RECEIPT',
-                qtyDelta: receipt.quantity,
-                beforeBalance: receipt.beforeBalance,
-                afterBalance: receipt.afterBalance,
-                sourceDocument: order.number,
-                actor: req.user.id,
-                timestamp: new Date(),
-                correlationId: order.id,
-                reason: 'Purchase order receive',
-            },
-        }).catch(() => undefined);
+        if (receipt.quantity > 0)
+            (0, repository_js_1.adjustStockLedger)(receipt.itemId, receipt.lotId, order.locationId, receipt.quantity);
+        if (receipt.quarantined > 0)
+            (0, repository_js_1.adjustQuarantineLedger)(receipt.itemId, receipt.lotId, order.locationId, receipt.quarantined);
+        if (receipt.quantity > 0) {
+            await db_js_1.prisma.stockMovement.create({
+                data: {
+                    itemId: receipt.itemId,
+                    lotId: receipt.lotId,
+                    locationId: order.locationId,
+                    movementType: 'PURCHASE_RECEIPT',
+                    qtyDelta: receipt.quantity,
+                    beforeBalance: receipt.beforeBalance,
+                    afterBalance: receipt.afterBalance,
+                    sourceDocument: order.number,
+                    actor: req.user.id,
+                    timestamp: new Date(),
+                    correlationId: order.id,
+                    reason: 'Purchase order receive',
+                },
+            }).catch(() => undefined);
+        }
+    }
+    // Damage and excess are cases to resolve, not silent balance changes (blueprint §26).
+    for (const posting of postings) {
+        const line = order.lines.find((row) => row.id === posting.lineId);
+        const lotId = postedStock.find((row) => row.itemId === posting.itemId && row.lotNo === posting.lotNo)?.lotId ?? null;
+        const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user.id };
+        if (posting.damagedQty > 0) {
+            void (0, exceptions_js_1.createExceptionCase)({ ...base, type: 'DAMAGE', title: `Damaged receipt on ${order.number}`, description: `${posting.damagedQty} unit(s) arrived damaged or failed QC.`, quantity: posting.damagedQty });
+        }
+        if (posting.excessQty > 0) {
+            void (0, exceptions_js_1.createExceptionCase)({ ...base, type: 'EXCESS_RECEIPT', title: `Excess receipt on ${order.number}`, description: `${posting.excessQty} unit(s) beyond the ordered ${line?.quantity ?? ''}. Accept or refuse.`, quantity: posting.excessQty });
+        }
     }
     // Blueprint P7 "Landed cost": if this PO carries freight/customs/
     // insurance/handling charges, allocate them across this receipt's lines
@@ -359,16 +474,154 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
             stockPosted: postedStock,
         },
     });
-    return res.json({ purchaseOrder, stockPosted: postedStock });
+    return res.json({ purchaseOrder, stockPosted: postedStock, duplicate: false });
 });
 router.patch('/purchase-orders/:id/status', async (req, res) => {
     if (!requireAdmin(req, res))
         return;
-    const allowed = ['DRAFT', 'SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'];
-    if (!allowed.includes(req.body.status))
+    const to = req.body.status;
+    if (!(0, po_lifecycle_js_1.isPoStatus)(to))
         return res.status(400).json({ message: 'Invalid purchase order status.' });
-    const purchaseOrder = await db_js_1.prisma.purchaseOrder.update({ where: { id: req.params.id }, data: { status: req.body.status } });
+    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
+    if (!order)
+        return res.status(404).json({ message: 'Purchase order not found.' });
+    const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
+    const check = (0, po_lifecycle_js_1.checkPoMove)({
+        from: ((0, po_lifecycle_js_1.isPoStatus)(order.status) ? order.status : 'DRAFT'), to,
+        anyReceived: order.lines.some((line) => line.receivedQty > 0),
+        invoiceStatuses: order.supplierInvoices.map((invoice) => invoice.status), note,
+    });
+    if (check.ok === false)
+        return res.status(409).json({ message: check.message });
+    // Blueprint §27: approval is a policy gate (value / branch thresholds), not just a status flip.
+    if (to === 'APPROVED') {
+        const location = await db_js_1.prisma.location.findUnique({ where: { id: order.locationId }, select: { branchId: true } }).catch(() => null);
+        const gate = await (0, approval_rules_js_1.checkApprovalGate)({
+            triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: order.id,
+            branchId: location?.branchId ?? null, value: order.totalAmount, requestedById: req.user.id,
+        });
+        if (gate.blocked)
+            return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
+    }
+    const now = new Date();
+    const purchaseOrder = await db_js_1.prisma.purchaseOrder.update({
+        where: { id: order.id },
+        data: {
+            status: to,
+            ...(to === 'APPROVED' ? { approvedAt: now, approvedById: req.user.id } : {}),
+            ...(to === 'SENT' ? { sentAt: now } : {}),
+            ...(to === 'CLOSED' ? { closedAt: now, closeNote: note || null } : {}),
+        },
+    });
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+        actorId: req.user.id, actorRole: req.user.role, action: `PURCHASE_ORDER_${to}`,
+        entityType: 'PurchaseOrder', entityId: order.id, metadata: { from: order.status, ...(note ? { note } : {}) },
+    }));
     return res.json({ purchaseOrder });
+});
+// Blueprint v4 §22 planning: recommend, with the working shown. Creating draft POs is a separate call.
+router.get('/purchase-orders/plan', async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
+    if (!locationId)
+        return res.status(400).json({ message: 'locationId is required.' });
+    const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
+    const since = new Date(Date.now() - windowDays * 86_400_000);
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId } });
+    const itemIds = rules.map((rule) => rule.itemId);
+    if (!itemIds.length)
+        return res.json({ locationId, windowDays, suggestions: [], groups: [], skipped: [], note: 'No reorder rules are set for this location.' });
+    const [items, ledger, openLines, transfers, sales, lastLines, suppliers] = await Promise.all([
+        db_js_1.prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
+        db_js_1.prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true } }),
+        db_js_1.prisma.purchaseOrderLine.findMany({
+            where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: ['SUBMITTED', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'] } } },
+            select: { itemId: true, quantity: true, receivedQty: true },
+        }),
+        db_js_1.prisma.transfer.findMany({
+            where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] } },
+            include: { lines: true },
+        }),
+        db_js_1.prisma.stockMovement.findMany({
+            where: { itemId: { in: itemIds }, locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: since } },
+            select: { itemId: true, qtyDelta: true },
+        }),
+        db_js_1.prisma.purchaseOrderLine.findMany({
+            where: { itemId: { in: itemIds }, purchaseOrder: { status: { not: 'CANCELLED' } } },
+            select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
+            orderBy: { createdAt: 'desc' },
+        }),
+        db_js_1.prisma.supplier.findMany(),
+    ]);
+    const sum = (rows, pick) => {
+        const totals = new Map();
+        for (const row of rows) {
+            const [key, value] = pick(row);
+            totals.set(key, (totals.get(key) ?? 0) + value);
+        }
+        return totals;
+    };
+    const onHand = sum(ledger, (row) => [row.itemId, row.onHand]);
+    const reserved = sum(ledger, (row) => [row.itemId, row.reserved]);
+    const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
+    const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, row.requestedQty - row.receivedQty - row.damagedQty - row.shortageQty)]);
+    const sold = sum(sales, (row) => [row.itemId, Math.abs(row.qtyDelta)]);
+    // The supplier an item was last bought from is the default; the buyer can change it in the draft.
+    const lastSupplier = new Map();
+    for (const line of lastLines)
+        if (!lastSupplier.has(line.itemId))
+            lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: line.unitCost });
+    const catalog = new Map(items.map((item) => [item.id, item]));
+    const planInputs = rules.map((rule) => ({
+        itemId: rule.itemId, code: catalog.get(rule.itemId)?.code, name: catalog.get(rule.itemId)?.name,
+        onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: rule.minQty, targetQty: rule.targetQty,
+        openPoQty: open.get(rule.itemId) ?? 0, inTransitQty: inTransit.get(rule.itemId) ?? 0,
+        avgDailyDemand: (sold.get(rule.itemId) ?? 0) / windowDays, demandDays: (sold.get(rule.itemId) ?? 0) > 0 ? windowDays : 0,
+        decimal: Boolean(catalog.get(rule.itemId)?.decimalQuantity), unitCost: lastSupplier.get(rule.itemId)?.unitCost, supplierId: lastSupplier.get(rule.itemId)?.supplierId ?? null,
+    }));
+    const result = (0, po_planning_js_1.planPurchases)({
+        items: planInputs,
+        suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, leadTimeDays: supplier.leadTimeDays, moq: supplier.moq, status: supplier.status })),
+    });
+    return res.json({ locationId, windowDays, ...result, groups: (0, po_planning_js_1.groupBySupplier)(result.suggestions) });
+});
+// The human action: turn chosen suggestions into DRAFT purchase orders, one per supplier.
+router.post('/purchase-orders/plan/draft', async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
+    const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
+    if (!locationId || !groups.length)
+        return res.status(400).json({ message: 'A location and at least one supplier group are required.' });
+    const created = [];
+    for (const group of groups) {
+        const lines = (group.lines ?? []).map((line) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), unitCost: Number(line.unitCost ?? 0) }));
+        if (!group.supplierId)
+            return res.status(400).json({ message: 'Choose a supplier for every group before creating draft orders.' });
+        if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0))
+            return res.status(400).json({ message: 'Every line needs an item and a positive quantity.' });
+        const supplier = await db_js_1.prisma.supplier.findUnique({ where: { id: group.supplierId } });
+        if (!supplier)
+            return res.status(404).json({ message: 'Supplier not found.' });
+        if (!(0, supplier_master_js_1.canOrderFrom)(supplier.status))
+            return res.status(409).json({ message: `${supplier.name} cannot receive new purchase orders.` });
+        const leadTimeDays = supplier.leadTimeDays;
+        const purchaseOrder = await db_js_1.prisma.purchaseOrder.create({
+            data: {
+                number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
+                supplierId: supplier.id, locationId, createdById: req.user.id,
+                expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
+                notes: 'Drafted from the purchase plan.',
+                totalAmount: lines.reduce((sum, line) => sum + line.quantity * line.unitCost, 0),
+                lines: { create: lines },
+            },
+            include: { supplier: true, lines: { include: { item: true } } },
+        });
+        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'PURCHASE_ORDER_DRAFTED_FROM_PLAN', entityType: 'PurchaseOrder', entityId: purchaseOrder.id, metadata: { lines: lines.length } }));
+        created.push(purchaseOrder);
+    }
+    return res.status(201).json({ purchaseOrders: created });
 });
 router.get('/purchase-orders/:id/invoices', async (req, res) => {
     if (!requireReportingRole(req, res))

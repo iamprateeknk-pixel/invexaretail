@@ -118,7 +118,7 @@ export declare function retryBackorderedOrders(): Promise<number>;
  * runs, rather than only being freed the next time something else happens
  * to sweep it.
  */
-export declare function createOrderWithReservation(input: {
+declare function createOrderInner(input: {
     channel: string;
     externalReference?: string | null;
     fulfillmentLocationId?: string | null;
@@ -282,6 +282,59 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
     expiredAt: Date | null;
     estimatedDispatchAt: Date | null;
     estimatedDeliveryAt: Date | null;
+}>;
+export declare function normalizedExternalReference(value: string | null | undefined): string | null;
+/** The order already created for this channel + external reference, if any (an expired reservation may be ingested again). */
+export declare function findOrderByExternalReference(channel: string, externalReference: string): Promise<({
+    lines: ({
+        item: {
+            name: string;
+            id: string;
+            code: string;
+        };
+        lot: {
+            id: string;
+            lotNo: string;
+        };
+    } & {
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        itemId: string;
+        lotId: string | null;
+        tenantId: string;
+        fulfillmentLocationId: string | null;
+        requestedQty: number;
+        orderId: string;
+        fulfilledQty: number;
+    })[];
+    fulfillmentLocation: {
+        name: string;
+        id: string;
+        code: string;
+    };
+} & {
+    id: string;
+    createdAt: Date;
+    updatedAt: Date;
+    status: string;
+    notes: string | null;
+    createdById: string;
+    tenantId: string;
+    channel: string;
+    externalReference: string | null;
+    fulfillmentLocationId: string;
+    customerName: string | null;
+    reservedAt: Date | null;
+    reservationExpiresAt: Date | null;
+    fulfilledAt: Date | null;
+    cancelledAt: Date | null;
+    expiredAt: Date | null;
+    estimatedDispatchAt: Date | null;
+    estimatedDeliveryAt: Date | null;
+}) | MemoryOrder>;
+export declare function createOrderWithReservation(input: Parameters<typeof createOrderInner>[0]): Promise<Awaited<ReturnType<typeof createOrderInner>> & {
+    duplicate?: boolean;
 }>;
 export { InsufficientStockError };
 type MemoryOrder = {
