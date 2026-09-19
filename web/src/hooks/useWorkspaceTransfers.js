@@ -63,6 +63,11 @@ export function useWorkspaceTransfers({
     }
   }
 
+  async function refreshTransfers() {
+    const refreshed = await apiRequest('/api/v1/transfers/list', { headers: { Authorization: `Bearer ${authToken}` } });
+    setTransfers(normalizeTransfers(refreshed.transfers, items, locations));
+  }
+
   async function changeTransferStatus(transferId, status) {
     try {
       setSubmitLoading(true);
@@ -272,6 +277,7 @@ export function useWorkspaceTransfers({
     setTransferForm,
     evidenceTransfer,
     setEvidenceTransfer,
+    refreshTransfers,
     receivingTransfer,
     setReceivingTransfer,
     receiveForm,
