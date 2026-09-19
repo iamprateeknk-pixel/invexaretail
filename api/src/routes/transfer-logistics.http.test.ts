@@ -233,3 +233,40 @@ test('a partial receipt keeps the transfer open and a retry of it still posts on
     assert.equal(listTransfers().find((row) => row.id === id)?.status, 'PARTIAL_RECEIVED');
   });
 });
+
+test('QC gates a transfer receipt: no inspection blocks it, a failed one quarantines instead of stocking', async () => {
+  const { createMemoryQcTemplate, recordMemoryQcInspection, resetMemoryQc } = await import('../lib/qc-inspection.js');
+  resetMemoryQc();
+  createMemoryQcTemplate({ label: 'Global', category: null, checks: [{ key: 'seal', label: 'Seal intact' }], createdById: 'user-admin-1' } as never);
+  try {
+    await withServer(async (call) => {
+      const picker = tokenFor('picker@retail.local');
+      const admin = tokenFor('admin@retail.local');
+      const store = tokenFor('store@retail.local');
+      const id = confirmedTransfer();
+      await call('POST', `/transfers/${id}/cartons`, picker, carton([['item-1003', 'lot-1003', 10], ['item-1001', 'lot-1001', 5]]));
+      await call('POST', `/transfers/${id}/pack/complete`, picker);
+      await call('POST', `/transfers/${id}/dispatch`, admin, { vehicleNo: 'QC1' });
+      const lines = [{ itemId: 'item-1003', lotId: 'lot-1003', receivedQty: 10 }, { itemId: 'item-1001', lotId: 'lot-1001', receivedQty: 5 }];
+
+      const blocked = await call('POST', `/transfers/${id}/receive`, store, { requestId: `q-${unique()}`, lines });
+      assert.equal(blocked.status, 400);
+      assert.equal(blocked.body.code, 'QC_REQUIRED');
+
+      const inspector = { inspectedById: 'user-admin-1', sourceDocument: id, locationId: 'loc-1' };
+      recordMemoryQcInspection({ ...inspector, itemId: 'item-1003', results: { seal: 'FAIL' } } as never);
+      recordMemoryQcInspection({ ...inspector, itemId: 'item-1001', results: { seal: 'PASS' } } as never);
+      const soap = findStockLedgerEntry('item-1003', 'lot-1003', 'loc-1');
+      const rice = findStockLedgerEntry('item-1001', 'lot-1001', 'loc-1');
+      const [soapOn, soapQ, riceOn] = [soap?.onHand ?? 0, soap?.quarantine ?? 0, rice?.onHand ?? 0];
+
+      const done = await call('POST', `/transfers/${id}/receive`, store, { requestId: `q-${unique()}`, lines });
+      assert.equal(done.status, 200);
+      assert.equal(findStockLedgerEntry('item-1003', 'lot-1003', 'loc-1')?.onHand, soapOn, 'the failed lot did not become sellable');
+      assert.equal(findStockLedgerEntry('item-1003', 'lot-1003', 'loc-1')?.quarantine, soapQ + 10, 'it is held in quarantine');
+      assert.equal(findStockLedgerEntry('item-1001', 'lot-1001', 'loc-1')?.onHand, riceOn + 5, 'the passed lot is stocked as usual');
+    });
+  } finally {
+    resetMemoryQc();
+  }
+});

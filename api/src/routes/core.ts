@@ -2,6 +2,8 @@ import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferE
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
 import { activeCartons, isTransitDelayed } from '../lib/transfer-packing.js';
+import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
+import type { QcCheckResult } from '../lib/qc-inspection.js';
 import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persistTransferReceipt, rememberReceipt } from '../lib/transfer-receipt.js';
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
@@ -3244,6 +3246,13 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       templates,
     );
     if (qc.ok === false) return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+    // Blueprint v4 §25: an inspection that failed sends the goods to quarantine
+    // (the QC_FAIL exception case already exists), never to sellable stock.
+    const recorded: InspectionLike[] = [
+      ...(inspections as unknown as InspectionLike[]),
+      ...bodyInspections.map((entry: { itemId?: string; lineId?: string; results?: Record<string, QcCheckResult> }) => ({ itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null })),
+    ];
+    receiptLines = quarantineFailedLines(receiptLines, (line) => verdictForLine(recorded, { itemId: line.itemId, lineId: line.lineId })).lines;
   }
 
   try {

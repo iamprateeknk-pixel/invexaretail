@@ -285,7 +285,7 @@ export async function retryBackorderedOrders(): Promise<number> {
  * runs, rather than only being freed the next time something else happens
  * to sweep it.
  */
-export async function createOrderWithReservation(input: {
+async function createOrderInner(input: {
   channel: string;
   externalReference?: string | null;
   fulfillmentLocationId?: string | null;
@@ -454,6 +454,50 @@ export async function cancelOrder(orderId: string, actorId: string) {
   const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });
   await persistAudit(recordAudit({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
   return updated;
+}
+
+// Blueprint v4 §23: "Connector ingestion must be idempotent on platform +
+// external order ID." A marketplace that re-delivers a webhook (retry, replay,
+// double click on "ingest") gets the order that already exists - it must not
+// reserve the stock a second time. Creation for one platform+reference runs
+// one at a time so two simultaneous deliveries cannot both pass the lookup.
+const ingestLocks = new Map<string, Promise<unknown>>();
+
+export function normalizedExternalReference(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  return trimmed ? trimmed : null;
+}
+
+/** The order already created for this channel + external reference, if any (an expired reservation may be ingested again). */
+export async function findOrderByExternalReference(channel: string, externalReference: string) {
+  const ref = normalizedExternalReference(externalReference);
+  if (!ref) return null;
+  if (!databaseEnabled) {
+    return listMemoryOrders().find((order) => order.channel === channel && order.externalReference === ref && order.status !== 'EXPIRED') ?? null;
+  }
+  return prisma.order.findFirst({
+    where: { channel, externalReference: ref, status: { not: 'EXPIRED' } },
+    include: ORDER_INCLUDE,
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+export async function createOrderWithReservation(input: Parameters<typeof createOrderInner>[0]): Promise<Awaited<ReturnType<typeof createOrderInner>> & { duplicate?: boolean }> {
+  const reference = normalizedExternalReference(input.externalReference);
+  if (!reference) return createOrderInner(input);
+  const key = `${input.channel} ${reference}`;
+  const previous = ingestLocks.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(async () => {
+    const existing = await findOrderByExternalReference(input.channel, reference);
+    if (existing) return { ...(existing as Awaited<ReturnType<typeof createOrderInner>>), duplicate: true };
+    return createOrderInner({ ...input, externalReference: reference });
+  });
+  ingestLocks.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (ingestLocks.get(key) === run) ingestLocks.delete(key);
+  }
 }
 
 export { InsufficientStockError };

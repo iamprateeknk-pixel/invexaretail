@@ -477,6 +477,11 @@ model ReturnRequest {
   status        String   @default("REQUESTED")
   reason        String?
   createdById   String
+  // Blueprint v4 §24: PENDING until finance decides; REFUNDED / DENIED afterwards.
+  refundStatus  String   @default("PENDING")
+  refundNote    String?  @db.Text
+  refundedAt    DateTime?
+  refundedById  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   companyId     String   @default("default-company")
@@ -1040,6 +1045,13 @@ model Supplier {
   name      String
   email     String?
   phone     String?
+  // Blueprint v4 §22 supplier master.
+  contactName  String?
+  leadTimeDays Int?
+  moq          Float?
+  paymentTerms String?
+  categories   String? @db.Text
+  status       String  @default("ACTIVE")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   purchaseOrders PurchaseOrder[]
@@ -1047,6 +1059,19 @@ model Supplier {
 
   @@index([tenantId])
 
+}
+
+// Blueprint v4 §22/§38: one row per accepted receive request, so a retry of the
+// same requestId returns the recorded result instead of stocking twice.
+model PurchaseReceipt {
+  id              String   @id @default(cuid())
+  requestId       String   @unique
+  purchaseOrderId String
+  receivedById    String
+  result          Json
+  createdAt       DateTime @default(now())
+
+  @@index([purchaseOrderId])
 }
 
 model PurchaseOrder {
@@ -1058,6 +1083,12 @@ model PurchaseOrder {
   createdById String
   status      String   @default("DRAFT")
   expectedAt  DateTime?
+  // Blueprint v4 §22 lifecycle stamps (Draft -> Approval -> Send -> Receive -> Close).
+  approvedAt   DateTime?
+  approvedById String?
+  sentAt       DateTime?
+  closedAt     DateTime?
+  closeNote    String?  @db.Text
   notes       String?  @db.Text
   totalAmount Float    @default(0)
   // Blueprint P7 "Landed cost": extra charges allocated across the PO's
