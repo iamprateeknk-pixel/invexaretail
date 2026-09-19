@@ -1,11 +1,20 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
+import '../services/live_events.dart';
 import '../services/local_store.dart';
 import '../services/sync_resolution.dart';
+
+/// A key that is unique per user action and stays the same across retries.
+String newRequestId() {
+  final random = Random.secure();
+  final suffix = List.generate(6, (_) => random.nextInt(36).toRadixString(36)).join();
+  return 'req-${DateTime.now().microsecondsSinceEpoch}-$suffix';
+}
 
 class SessionController extends ChangeNotifier {
   SessionController({
@@ -31,10 +40,25 @@ class SessionController extends ChangeNotifier {
   List<CountRecord> counts = [];
   List<TransferRecord> transfers = [];
   List<CountAssignment> assignments = [];
+  // Half-typed quantities, keyed itemId|locationId. Switching tabs rebuilds the
+  // count screen, so a number typed before a phone call is not lost.
+  final Map<String, String> countDrafts = {};
+  // Actionable count tasks from /mobile/work (store users). Empty on an older server.
+  List<CountTask> countTasks = [];
   List<QueuedCount> queuedCounts = [];
   List<QueuedAction> queuedActions = [];
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  LiveStatus liveStatus = LiveStatus.connecting;
+  LiveEventClient? _live;
+  Timer? _liveDebounce;
+  final Set<String> _pendingSlices = {};
+
+  /// Queued work the server refused or that clashed with newer data: the
+  /// Conflict Center lists these for an explicit retry or discard.
+  int get attentionCount =>
+      queuedCounts.where((row) => row.status != 'pending').length +
+      queuedActions.where((row) => row.status != 'pending').length;
 
   bool get isSignedIn => user != null && (api.token ?? '').isNotEmpty;
   bool get isStoreUser => user?.role == 'STORE_USER';
@@ -62,6 +86,7 @@ class SessionController extends ChangeNotifier {
         user = session.user;
         queuedCounts = await store.loadQueuedCounts(companyId);
         await refreshAll();
+        startLive();
       } else {
         queuedCounts = [];
       }
@@ -70,6 +95,7 @@ class SessionController extends ChangeNotifier {
         final refreshed = await api.refreshAccessToken();
         if (refreshed) {
           await refreshAll();
+          startLive();
         } else {
           error = err.message;
         }
@@ -106,6 +132,7 @@ class SessionController extends ChangeNotifier {
       await persistTokens(result.token, result.refreshToken);
       queuedCounts = await store.loadQueuedCounts(companyId);
       await refreshAll();
+      startLive();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -152,6 +179,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await refreshAll();
+      startLive();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -177,6 +205,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> logout({bool notify = true}) async {
+    stopLive();
     try {
       await api.logout();
     } catch (_) {}
@@ -188,11 +217,98 @@ class SessionController extends ChangeNotifier {
     counts = [];
     transfers = [];
     assignments = [];
+    countTasks = [];
+    countDrafts.clear();
     queuedCounts = [];
     selectedLocationId = null;
     api.clearToken();
     await store.clearSession();
     if (notify) notifyListeners();
+  }
+
+  // ---- Live sync (blueprint v4 §11) --------------------------------------
+
+  void startLive() {
+    if (!isSignedIn) return;
+    _live ??= LiveEventClient(
+      url: '${api.baseUrl}/api/v1/events',
+      tokenProvider: () => api.token,
+      onEvents: _onLiveTopics,
+      onUnauthorized: api.refreshAccessToken,
+      onStatus: (status) {
+        liveStatus = status;
+        notifyListeners();
+      },
+    );
+    _live!.start();
+  }
+
+  /// Foreground only: the stream is released in the background and resumed
+  /// with its cursor, so the server replays whatever was missed meanwhile.
+  void pauseLive() => _live?.stop();
+
+  /// Reconnect order (blueprint v4 §38): the session was refreshed on demand
+  /// by the API client, then the live cursor resumes (server replays what was
+  /// missed), then the outbox flushes, then the slices are reconciled.
+  void resumeLive() {
+    if (!isSignedIn) return;
+    startLive();
+    unawaited(_reconnectSync());
+  }
+
+  Future<void> _reconnectSync() async {
+    await flushQueue();
+    await _refreshSlices({'assignments', 'counts', 'stock'});
+  }
+
+  void stopLive() {
+    _live?.stop();
+    _live = null;
+    _liveDebounce?.cancel();
+    _pendingSlices.clear();
+    liveStatus = LiveStatus.connecting;
+  }
+
+  void reportNetworkOffline() => _live?.markOffline();
+
+  void _onLiveTopics(List<String> topics) {
+    _pendingSlices.addAll(invalidationsForTopics(topics));
+    _liveDebounce?.cancel();
+    _liveDebounce = Timer(const Duration(milliseconds: 300), () {
+      final slices = {..._pendingSlices};
+      _pendingSlices.clear();
+      unawaited(_refreshSlices(slices));
+    });
+  }
+
+  // Refetches only what the events invalidated. It never touches busy/error/
+  // notice, so a background update can't clobber a form the user is on.
+  Future<void> _refreshSlices(Set<String> slices) async {
+    if (!isSignedIn || slices.isEmpty) return;
+    try {
+      if (slices.contains('full')) {
+        await refreshAll();
+        return;
+      }
+      final locationId = selectedLocationId;
+      final jobs = <Future<void>>[
+        if (slices.contains('items')) api.items().then((value) => items = value),
+        if (slices.contains('counts')) api.counts().then((value) => counts = value),
+        if (slices.contains('assignments') && user?.role == 'STORE_USER')
+          api.myAssignments().then((value) => assignments = value),
+        if ((slices.contains('assignments') || slices.contains('stock')) && user?.role == 'STORE_USER')
+          _loadCountTasks(),
+        if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
+        if (slices.contains('putaway') && locationId != null)
+          api.putawayTasks(locationId).then((value) => putawayTasks = value),
+        if (slices.contains('transfers')) api.transfers().then((value) => transfers = value),
+        if (slices.contains('dashboard')) api.dashboard().then((value) => dashboard = value),
+      ];
+      await Future.wait(jobs);
+      notifyListeners();
+    } on ApiException {
+      // A stale slice is acceptable; the next event or app resume retries.
+    }
   }
 
   Future<void> selectLocation(String locationId) async {
@@ -219,14 +335,34 @@ class SessionController extends ChangeNotifier {
       } on ApiException {
         assignments = [];
       }
+      await _loadCountTasks();
     } else {
       assignments = [];
+      countTasks = [];
     }
     selectedLocationId ??= locations.isEmpty ? null : locations.first.id;
     await refreshStock();
     await refreshPutaway();
     await flushQueue();
     notifyListeners();
+  }
+
+  Future<void> _loadCountTasks() async {
+    try {
+      countTasks = await api.countTasks();
+    } on ApiException {
+      // Older server (no /mobile/work) or offline: the count screen falls back
+      // to the catalog + stock list it already had.
+      countTasks = [];
+    }
+  }
+
+  /// The task for an assigned item, if the work feed returned one.
+  CountTask? taskFor(String itemId, String locationId) {
+    for (final task in countTasks) {
+      if (task.item.id == itemId && task.locationId == locationId) return task;
+    }
+    return null;
   }
 
   Future<void> refreshStock() async {
@@ -303,30 +439,42 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// [weight] counts send one decimal total for the item (server splits it
+  /// over the lots); everything else counts one lot. The idempotency key is
+  /// made once per user action, so the offline retry reuses it.
   Future<bool> submitCount({
     required String itemId,
     required String locationId,
-    required int physicalQuantity,
+    required double physicalQuantity,
     String? lotNo,
+    bool weight = false,
   }) async {
     error = null;
     notice = null;
     busy = true;
     notifyListeners();
+    final requestId = newRequestId();
     try {
-      final created = await api.submitCount(
-        itemId: itemId,
-        locationId: locationId,
-        physicalQuantity: physicalQuantity,
-        lotNo: lotNo,
-      );
+      if (weight) {
+        final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity, requestId: requestId);
+        counts = [...created, ...counts];
+      } else {
+        final created = await api.submitCount(
+          itemId: itemId,
+          locationId: locationId,
+          physicalQuantity: physicalQuantity,
+          lotNo: lotNo,
+          requestId: requestId,
+        );
+        counts = [created, ...counts];
+      }
       notice = 'Count submitted for review.';
       // Update local state from the response instead of re-fetching the
       // whole counts list and dashboard on every submit - that was costing
       // two extra sequential round trips per save. The submitted item's
       // assignment (if any) is closed server-side, so drop it locally too.
-      counts = [created, ...counts];
       assignments = assignments.where((row) => !(row.itemId == itemId && row.locationId == locationId)).toList();
+      countTasks = countTasks.where((row) => !(row.item.id == itemId && row.locationId == locationId)).toList();
       unawaited(_refreshDashboardQuietly());
       return true;
     } on ApiException catch (err) {
@@ -336,6 +484,8 @@ class SessionController extends ChangeNotifier {
           locationId: locationId,
           physicalQuantity: physicalQuantity,
           lotNo: lotNo,
+          mode: weight ? 'weight' : 'manual',
+          requestId: requestId,
         );
         notice = 'Offline. Count queued and will sync when the API is reachable.';
         return true;
@@ -364,17 +514,22 @@ class SessionController extends ChangeNotifier {
   Future<void> enqueueCount({
     required String itemId,
     required String locationId,
-    required int physicalQuantity,
+    required double physicalQuantity,
     String? lotNo,
+    String mode = 'manual',
+    String? requestId,
   }) async {
+    final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
     queuedCounts = [
       ...queuedCounts,
       QueuedCount(
-        localId: 'local-${DateTime.now().microsecondsSinceEpoch}',
+        localId: localId,
+        requestId: requestId ?? localId,
         itemId: itemId,
         locationId: locationId,
         physicalQuantity: physicalQuantity,
         lotNo: lotNo,
+        mode: mode,
         createdAt: DateTime.now().toIso8601String(),
       ),
     ];
@@ -434,13 +589,23 @@ class SessionController extends ChangeNotifier {
         continue;
       }
       try {
-        await api.submitCount(
-          itemId: item.itemId,
-          locationId: item.locationId,
-          physicalQuantity: item.physicalQuantity,
-          lotNo: item.lotNo,
-          mode: item.mode,
-        );
+        if (item.mode == 'weight') {
+          await api.submitWeightCount(
+            itemId: item.itemId,
+            locationId: item.locationId,
+            totalQuantity: item.physicalQuantity,
+            requestId: item.requestId,
+          );
+        } else {
+          await api.submitCount(
+            itemId: item.itemId,
+            locationId: item.locationId,
+            physicalQuantity: item.physicalQuantity,
+            lotNo: item.lotNo,
+            mode: item.mode,
+            requestId: item.requestId,
+          );
+        }
         sent += 1;
       } on ApiException catch (err) {
         item.attempts += 1;

@@ -8,7 +8,9 @@ linter:
     prefer_const_literals_to_create_immutables: true
 
 analyzer:
-  exclude: [build/**]
+  exclude:
+    - build/**
+    - android/**
   errors:
     missing_required_param: error
     missing_return: error

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { CycleCountPlanner } from '../../counts/CycleCountPlanner';
 import { ItemSearchSelect } from '../../ItemSearchSelect';
+import { StockTakeCampaigns } from '../../counts/StockTakeCampaigns';
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -20,7 +21,7 @@ export function CountsPage() {
     setModalOpen, setBulkCountForm, locationId, storeUsers, cycleCountPlan, currentLocationName,
     cycleCountStoreUserId, setCycleCountStoreUserId, cycleCountClasses, setCycleCountClasses,
     submitCycleCountAssign, submitLoading, role, countForm, setCountForm, submitBlindCount,
-    authToken, loading, setSelectedCountTask, assignments, items,
+    authToken, loading, setSelectedCountTask, assignments, items, locations, campaignRevision,
     toleranceRules, toleranceRuleForm, setToleranceRuleForm, createToleranceRule, toggleToleranceRule,
     approvalRequests, approvalRules, approvalRuleForm, setApprovalRuleForm, decideApprovalRequest, createApprovalRule, toggleApprovalRule,
     evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule,
@@ -107,6 +108,16 @@ export function CountsPage() {
         />
       )}
 
+      {canManageCounts && activeSection === 'counts' && (
+        <StockTakeCampaigns
+          token={authToken}
+          locations={locations}
+          storeUsers={storeUsers}
+          locationId={locationId}
+          refreshKey={campaignRevision}
+        />
+      )}
+
       {role === 'STORE_USER' && activeSection === 'counts' && (
         <Card>
           <CardHeader><CardTitle className="text-base">Blind count entry</CardTitle><p className="text-xs text-muted-foreground">System quantity stays hidden until submission.</p></CardHeader>
@@ -140,6 +151,9 @@ export function CountsPage() {
                   <TableCell><Badge variant={task.priority === 'Urgent' ? 'destructive' : 'outline'}>{task.priority}</Badge></TableCell>
                   <TableCell>
                     <Badge variant={task.overdue ? 'destructive' : statusBadgeVariant(task.status)}>{task.overdue ? `${task.status} · Overdue` : task.status}</Badge>
+                    {task.reconciliationRequired && (
+                      <Badge variant="warning" className="ml-1.5" title={task.reconciliationNote}><AlertTriangle className="size-3" />Late movement</Badge>
+                    )}
                     {task.toleranceRecommendation?.recommendRecount && (
                       <Badge variant="warning" className="ml-1.5" title={task.toleranceRecommendation.reason}><AlertTriangle className="size-3" />Recount</Badge>
                     )}

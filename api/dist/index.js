@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -17,6 +50,13 @@ const enterprise_analytics_js_1 = __importDefault(require("./routes/enterprise-a
 const core_js_1 = __importDefault(require("./routes/core.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
+const events_js_1 = __importStar(require("./routes/events.js"));
+const campaigns_js_1 = __importDefault(require("./routes/campaigns.js"));
+const item_master_js_1 = __importDefault(require("./routes/item-master.js"));
+const transfer_logistics_js_1 = __importDefault(require("./routes/transfer-logistics.js"));
+const command_center_js_1 = __importDefault(require("./routes/command-center.js"));
+const request_metrics_js_1 = require("./lib/request-metrics.js");
+const import_control_center_js_1 = __importDefault(require("./routes/import-control-center.js"));
 const control_plane_js_1 = require("./routes/control-plane.js");
 const cors_origins_js_1 = require("./lib/cors-origins.js");
 const platform_js_1 = require("./lib/platform.js");
@@ -78,6 +118,7 @@ app.use((req, res, next) => {
     res.setHeader('X-Request-Id', requestId);
     next();
 });
+app.use(request_metrics_js_1.requestMetricsMiddleware);
 // Rate limiting: General API
 app.use('/api', (0, express_rate_limit_1.default)({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
 // The auth router applies its own per-endpoint limiters. Adding a second one
@@ -221,6 +262,15 @@ app.use('/sync/v1', control_plane_js_1.syncRouter);
 app.use('/api/v1/auth', enterprise_auth_js_1.default);
 app.use('/api/v1/admin', enterprise_management_js_1.default);
 app.use('/api/v1/analytics', enterprise_analytics_js_1.default);
+// Blueprint v4 §11: live event stream + payload-free mutation events. The
+// publisher must sit before every router that owns a mutating route.
+app.use('/api/v1', events_js_1.default);
+app.use('/api/v1', campaigns_js_1.default);
+app.use('/api/v1', item_master_js_1.default);
+app.use('/api/v1', import_control_center_js_1.default);
+app.use('/api/v1', events_js_1.publishMutationEvents);
+app.use('/api/v1', transfer_logistics_js_1.default);
+app.use('/api/v1', command_center_js_1.default);
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', core_js_1.default);
 app.use('/api/v1', catalog_procurement_js_1.default);
@@ -275,7 +325,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
             lines,
         });
         markConnectorIngested(connector.id);
-        res.status(201).json({ order });
+        res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
     }
     catch (error) {
         res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to ingest marketplace order.' });
@@ -376,6 +426,13 @@ const hydrateRepository = async () => {
     catch (error) {
         console.warn('Audit history could not be hydrated; continuing without historical audit entries.', error instanceof Error ? error.message : error);
     }
+    try {
+        const { hydrateCampaignsFromDatabase } = await import('./lib/campaign-persistence.js');
+        await hydrateCampaignsFromDatabase();
+    }
+    catch (error) {
+        console.warn('Stock-take campaigns could not be hydrated; continuing without them.', error instanceof Error ? error.message : error);
+    }
     console.log('✅ Inventory repository hydrated from database');
 };
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind
@@ -386,6 +443,10 @@ const startServer = () => {
         await authHydration;
         await hydrateRepository();
         repositoryHydrationState = 'ready';
+        const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
+        startCampaignScheduler();
+        const { startOrderScheduler } = await import('./lib/order-scheduler.js');
+        startOrderScheduler();
     })();
     startupHydration.catch((error) => {
         repositoryHydrationState = 'failed';

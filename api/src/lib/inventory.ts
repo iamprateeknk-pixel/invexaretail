@@ -32,8 +32,10 @@ export type BlindCountInput = {
   stockValue?: number;
   lotNo?: string;
   expiryDate?: string;
-  mode?: 'scan' | 'manual';
+  mode?: 'scan' | 'manual' | 'weight';
   submittedBy?: string;
+  // Idempotency key (blueprint v4 §38).
+  requestId?: string;
 };
 
 export type TransferLineInput = {
@@ -71,6 +73,52 @@ export function canAccessLocation(context: AccessContext, locationId: string): b
   }
 
   return context.assignedLocationIds.includes(locationId);
+}
+
+// Blueprint v4 §1/§7 non-negotiable rule: operational roles (the ones doing
+// physical count/pick/scan work) must never be offered a zero-stock item or
+// lot as something to act on. Admin/management roles keep full visibility
+// for maintenance and reconciliation.
+export function hidesZeroStockForRole(role: Role): boolean {
+  return role === 'STORE_USER' || role === 'WAREHOUSE_PICKER';
+}
+
+export type ItemOperationalMeta = {
+  countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+  pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+  allocationStrategy?: 'FIFO' | 'FEFO';
+  lotRequired?: boolean;
+  expiryRequired?: boolean;
+  decimalQuantity?: boolean;
+};
+
+// Blueprint v4 §6 "Operations" field group. Only keys actually present in
+// the request body are returned, so a partial PUT never clobbers a field
+// the caller didn't mean to touch (Object.assign-style partial update).
+export function parseItemOperationalMeta(body: Record<string, unknown>): ItemOperationalMeta {
+  const meta: ItemOperationalMeta = {};
+  if (body.countMethod !== undefined) {
+    if (body.countMethod !== 'LOT_SCAN' && body.countMethod !== 'ITEM_WEIGHT') {
+      throw new Error('countMethod must be LOT_SCAN or ITEM_WEIGHT.');
+    }
+    meta.countMethod = body.countMethod;
+  }
+  if (body.pickMethod !== undefined) {
+    if (body.pickMethod !== 'LOT_SCAN' && body.pickMethod !== 'ITEM_QTY_FIFO') {
+      throw new Error('pickMethod must be LOT_SCAN or ITEM_QTY_FIFO.');
+    }
+    meta.pickMethod = body.pickMethod;
+  }
+  if (body.allocationStrategy !== undefined) {
+    if (body.allocationStrategy !== 'FIFO' && body.allocationStrategy !== 'FEFO') {
+      throw new Error('allocationStrategy must be FIFO or FEFO.');
+    }
+    meta.allocationStrategy = body.allocationStrategy;
+  }
+  if (body.lotRequired !== undefined) meta.lotRequired = Boolean(body.lotRequired);
+  if (body.expiryRequired !== undefined) meta.expiryRequired = Boolean(body.expiryRequired);
+  if (body.decimalQuantity !== undefined) meta.decimalQuantity = Boolean(body.decimalQuantity);
+  return meta;
 }
 
 export function sanitizeStockForRole(

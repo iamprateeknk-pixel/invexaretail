@@ -36,9 +36,9 @@ export declare function createExceptionCase(input: CreateExceptionCaseInput): Pr
     itemId: string | null;
     lotId: string | null;
     locationId: string | null;
+    quantity: number | null;
     priority: import("@prisma/client").$Enums.ExceptionPriority;
     tenantId: string;
-    quantity: number | null;
     metadata: import("@prisma/client/runtime/client").JsonValue | null;
     title: string;
     dueAt: Date | null;

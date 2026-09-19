@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import type { CompanyProfileRecord, CountAssignmentRecord, CountRecord, ItemRecord, LocationRecord, TransferRecord, UserRecord } from './repository.js';
 import type { AuditEvent } from './audit.js';
-import { companyProfile, counts, countAssignments, dailyMovements, items, locations, setCompanyProfile, stockLedger, syncCheckpoints, transfers, users } from './repository.js';
+import { transferCartons, companyProfile, counts, countAssignments, dailyMovements, items, locations, setCompanyProfile, stockLedger, syncCheckpoints, transfers, users } from './repository.js';
 import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
@@ -81,6 +81,12 @@ function requireDatabase(): void {
   }
 }
 
+// Packing/dispatch details live in one JSON column; JSON null means "not set yet".
+function logisticsOf(transfer: unknown): Pick<TransferRecord, 'packing' | 'dispatch'> {
+  const raw = (transfer as { logistics?: { packing?: TransferRecord['packing'] | null; dispatch?: TransferRecord['dispatch'] | null } | null }).logistics;
+  return { ...(raw?.packing ? { packing: raw.packing } : {}), ...(raw?.dispatch ? { dispatch: raw.dispatch } : {}) };
+}
+
 export async function hydrateRepositoryFromDatabase(): Promise<void> {
   if (!databaseEnabled) return;
 
@@ -108,6 +114,26 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     subcategory: item.subcategory ?? undefined,
     company: item.company ?? undefined,
     unit: item.unit ?? undefined,
+    countMethod: item.countMethod ?? 'LOT_SCAN',
+    pickMethod: item.pickMethod ?? 'LOT_SCAN',
+    allocationStrategy: item.allocationStrategy ?? 'FEFO',
+    lotRequired: item.lotRequired ?? true,
+    expiryRequired: item.expiryRequired ?? false,
+    decimalQuantity: item.decimalQuantity ?? false,
+    status: (item.status ?? 'ACTIVE') as 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+    archiveReason: item.archiveReason ?? undefined,
+    archivedAt: item.archivedAt?.toISOString(),
+    archivedById: item.archivedById ?? undefined,
+    barcode: item.barcode ?? undefined,
+    hsn: item.hsn ?? undefined,
+    gstRate: item.gstRate ?? undefined,
+    mrp: item.mrp ?? undefined,
+    leadTimeDays: item.leadTimeDays ?? undefined,
+    shelfLifeDays: item.shelfLifeDays ?? undefined,
+    aliases: Array.isArray(item.aliases) ? (item.aliases as string[]) : undefined,
+    version: item.version ?? 1,
+    createdById: item.createdById ?? undefined,
+    updatedById: item.updatedById ?? undefined,
     lots: item.lots.map((lot) => ({
       id: lot.id,
       itemId: lot.itemId,
@@ -130,7 +156,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     locationId: count.locationId,
     physicalQuantity: count.physicalQty,
     bookQty: count.bookQty,
-    mode: count.mode as 'scan' | 'manual',
+    mode: count.mode as 'scan' | 'manual' | 'weight',
     submittedBy: count.submittedById,
     role: 'STORE_USER' as const,
     createdAt: count.createdAt.toISOString(),
@@ -139,6 +165,13 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     reviewedAt: count.approvedAt?.toISOString(),
     reviewReason: count.reviewReason ?? undefined,
     parentCountId: count.parentCountId ?? undefined,
+    requestId: (count as { requestId?: string | null }).requestId ?? undefined,
+    reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
+    reconciliationNote: (count as { reconciliationNote?: string | null }).reconciliationNote ?? undefined,
+    reconciliationAt: (count as { reconciliationAt?: Date | null }).reconciliationAt?.toISOString(),
+    bookQtyOriginal: (count as { bookQtyOriginal?: number | null }).bookQtyOriginal ?? undefined,
+    lateDelta: (count as { lateDelta?: number }).lateDelta ?? 0,
+    lateMovementKeys: Array.isArray((count as { lateMovementKeys?: unknown }).lateMovementKeys) ? (count as { lateMovementKeys: string[] }).lateMovementKeys : undefined,
   })));
 
   stockLedger.splice(0, stockLedger.length, ...dbStockLedger.map((row) => ({
@@ -171,6 +204,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     status: row.status,
     countId: row.countId ?? undefined,
     parentCountId: row.parentCountId ?? undefined,
+    campaignId: (row as { campaignId?: string | null }).campaignId ?? undefined,
     createdAt: row.createdAt.toISOString(),
   })));
 
@@ -184,8 +218,31 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     cartonCount: transfer.cartonCount ?? undefined,
     notes: transfer.notes ?? undefined,
     lines: transfer.lines.map((line: any) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty, receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty ?? 0 })),
+    ...logisticsOf(transfer),
     createdAt: transfer.createdAt.toISOString(),
   })));
+
+  try {
+    const dbCartons = await prisma.transferCarton.findMany({ orderBy: { createdAt: 'asc' } });
+    transferCartons.splice(0, transferCartons.length, ...dbCartons.map((row) => {
+      const contents = (row.contents ?? {}) as { lines?: Array<{ itemId: string; lotId: string; quantity: number }>; packedById?: string; sealedAt?: string; requestId?: string };
+      return {
+        id: row.id,
+        transferId: row.transferId,
+        cartonNumber: row.cartonNumber,
+        packageId: row.qrCode ?? row.cartonNumber,
+        lines: contents.lines ?? [],
+        quantity: row.quantity,
+        weightKg: row.weight ?? undefined,
+        status: (row.status === 'VOID' ? 'VOID' : 'SEALED') as 'SEALED' | 'VOID',
+        packedById: contents.packedById ?? '',
+        sealedAt: contents.sealedAt ?? row.createdAt.toISOString(),
+        requestId: contents.requestId,
+      };
+    }));
+  } catch (error) {
+    console.warn('Transfer cartons could not be hydrated:', error instanceof Error ? error.message : error);
+  }
 
   // These tables were introduced after the original Hostinger deployment.
   // Keep startup compatible while the migration is pending, then hydrate them
@@ -259,10 +316,36 @@ export async function loadTransferPickSlips(transferId: string): Promise<AuditEv
 export async function persistItem(item: ItemRecord, companyId = 'default-company'): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
+  const operationalFields = {
+    countMethod: item.countMethod,
+    pickMethod: item.pickMethod,
+    allocationStrategy: item.allocationStrategy,
+    lotRequired: item.lotRequired,
+    expiryRequired: item.expiryRequired,
+    decimalQuantity: item.decimalQuantity,
+  };
+  // The full item state is written every time, so a cleared optional field
+  // must become NULL (an undefined key would leave the old value in place).
+  const masterFields = {
+    status: item.status ?? 'ACTIVE',
+    archiveReason: item.archiveReason ?? null,
+    archivedAt: item.archivedAt ? new Date(item.archivedAt) : null,
+    archivedById: item.archivedById ?? null,
+    barcode: item.barcode ?? null,
+    hsn: item.hsn ?? null,
+    gstRate: item.gstRate ?? null,
+    mrp: item.mrp ?? null,
+    leadTimeDays: item.leadTimeDays ?? null,
+    shelfLifeDays: item.shelfLifeDays ?? null,
+    aliases: (item.aliases?.length ? item.aliases : Prisma.JsonNull) as Prisma.InputJsonValue,
+    version: item.version ?? 1,
+    createdById: item.createdById ?? null,
+    updatedById: item.updatedById ?? null,
+  };
   await prisma.item.upsert({
     where: { id: item.id },
-    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit } as any,
-    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit } as any,
+    update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields, ...masterFields } as any,
+    create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields, ...masterFields } as any,
   });
   for (const lot of item.lots) {
     await prisma.lot.upsert({
@@ -546,9 +629,23 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
         `);
       }
     }
-    for (const checkpoint of input.checkpoints) await tx.syncCheckpoint.upsert({ where: { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } }, update: { syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId } });
+    for (const checkpoint of input.checkpoints) {
+      const key = { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } };
+      const next = new Date(checkpoint.syncedThroughAt);
+      const existing = await tx.syncCheckpoint.findUnique({ where: key });
+      // Only ever move forward: a backfill of an older day must not regress the branch.
+      if (existing && existing.syncedThroughAt >= next) continue;
+      await tx.syncCheckpoint.upsert({ where: key, update: { syncedThroughAt: next, lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: next, lastImportBatchId: input.batchId } });
+    }
   }, { maxWait: 10_000, timeout: 120_000 });
   return { committedRows };
+}
+
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+export async function persistCountDeletion(id: string): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
 
 export async function persistCount(count: CountRecord): Promise<void> {
@@ -572,7 +669,8 @@ export async function persistCount(count: CountRecord): Promise<void> {
       mode: count.mode,
       submittedById: count.submittedBy,
       parentCountId: count.parentCountId ?? null,
-    },
+      requestId: count.requestId ?? null,
+    } as never,
   });
 }
 
@@ -600,6 +698,24 @@ export async function listStockFromDatabase(locationId: string): Promise<Persist
  * resulting variance to the stock ledger, in the same transaction, so the
  * count status and the on-hand quantity can never disagree.
  */
+/** Writes the reconciliation state (and a recomputed book quantity) of a count. */
+export async function persistCountReconciliation(count: CountRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.stockCount.update({
+    where: { id: count.id },
+    data: {
+      bookQty: count.bookQty,
+      reconciliationRequired: count.reconciliationRequired ?? false,
+      reconciliationNote: count.reconciliationNote ?? null,
+      reconciliationAt: count.reconciliationAt ? new Date(count.reconciliationAt) : null,
+      bookQtyOriginal: count.bookQtyOriginal ?? null,
+      lateDelta: count.lateDelta ?? 0,
+      lateMovementKeys: (count.lateMovementKeys ?? []) as unknown as Prisma.InputJsonValue,
+    } as never,
+  });
+}
+
 export async function persistCountReview(count: CountRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
@@ -668,7 +784,8 @@ export async function persistCountAssignment(assignment: CountAssignmentRecord):
       instructions: assignment.instructions,
       status: assignment.status,
       parentCountId: assignment.parentCountId ?? null,
-    },
+      campaignId: assignment.campaignId ?? null,
+    } as any,
   });
 }
 
@@ -713,6 +830,30 @@ export async function persistTransfer(transfer: TransferRecord): Promise<void> {
       cartonCount: transfer.cartonCount ?? null,
       lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
     },
+  });
+}
+
+export async function persistTransferCarton(carton: import('./transfer-packing.js').TransferCartonRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  const contents = { lines: carton.lines, packedById: carton.packedById, sealedAt: carton.sealedAt, requestId: carton.requestId ?? null };
+  await prisma.transferCarton.upsert({
+    where: { id: carton.id },
+    update: { status: carton.status, contents: contents as never },
+    create: {
+      id: carton.id, transferId: carton.transferId, cartonNumber: carton.cartonNumber, qrCode: carton.packageId,
+      contents: contents as never, quantity: carton.quantity, weight: carton.weightKg ?? null, status: carton.status,
+    },
+  });
+}
+
+/** Packing completion / dispatch details / carton count for a transfer. */
+export async function persistTransferLogistics(transfer: TransferRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.transfer.update({
+    where: { id: transfer.id },
+    data: { cartonCount: transfer.cartonCount ?? null, logistics: { packing: transfer.packing ?? null, dispatch: transfer.dispatch ?? null } as never },
   });
 }
 

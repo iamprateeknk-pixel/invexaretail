@@ -66,6 +66,8 @@ export declare function persistDailyMovementImport(input: {
 }): Promise<{
     committedRows: number;
 }>;
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+export declare function persistCountDeletion(id: string): Promise<void>;
 export declare function persistCount(count: CountRecord): Promise<void>;
 export declare function listStockFromDatabase(locationId: string): Promise<PersistedStockRow[]>;
 /**
@@ -73,11 +75,16 @@ export declare function listStockFromDatabase(locationId: string): Promise<Persi
  * resulting variance to the stock ledger, in the same transaction, so the
  * count status and the on-hand quantity can never disagree.
  */
+/** Writes the reconciliation state (and a recomputed book quantity) of a count. */
+export declare function persistCountReconciliation(count: CountRecord): Promise<void>;
 export declare function persistCountReview(count: CountRecord): Promise<void>;
 export declare function persistCountAssignment(assignment: CountAssignmentRecord): Promise<void>;
 export declare function persistCountAssignmentUpdate(assignment: CountAssignmentRecord): Promise<void>;
 export declare function persistAssignmentSubmitted(assignmentId: string, countId: string): Promise<void>;
 export declare function persistTransfer(transfer: TransferRecord): Promise<void>;
+export declare function persistTransferCarton(carton: import('./transfer-packing.js').TransferCartonRecord): Promise<void>;
+/** Packing completion / dispatch details / carton count for a transfer. */
+export declare function persistTransferLogistics(transfer: TransferRecord): Promise<void>;
 export declare function persistTransferStatus(transfer: TransferRecord): Promise<void>;
 export declare function persistConfirmedPickAllocations(transferId: string, allocations: Array<{
     itemId: string;

@@ -1,0 +1,10 @@
+import type { CampaignItemRecord, CampaignRecord } from './stock-take-campaign.js';
+export declare const campaigns: CampaignRecord[];
+export declare const campaignItems: CampaignItemRecord[];
+export declare function listCampaigns(companyId?: string): CampaignRecord[];
+export declare function getCampaign(id: string): CampaignRecord | undefined;
+export declare function saveCampaign(campaign: CampaignRecord): CampaignRecord;
+export declare function listCampaignItems(campaignId: string): CampaignItemRecord[];
+export declare function saveCampaignItems(rows: CampaignItemRecord[]): void;
+export declare function replaceCampaignState(nextCampaigns: CampaignRecord[], nextItems: CampaignItemRecord[]): void;
+export declare function resetCampaignStateForTests(): void;

@@ -9,6 +9,20 @@ async function ensureColumn(table, column, definition) {
         return;
     await db_js_1.prisma.$executeRawUnsafe(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
 }
+// Procurement/returns tables come from migrations on older hosts, so a missing
+// table is left alone here (its routes fail on their own) instead of aborting startup.
+async function ensureColumnIfTable(table, column, definition) {
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', table);
+    if (Number(rows[0]?.count ?? 0) === 0)
+        return;
+    await ensureColumn(table, column, definition);
+}
+async function ensureIndexUnique(table, name, columns) {
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?', table, name);
+    if (Number(rows[0]?.count ?? 0) > 0)
+        return;
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX \`${name}\` ON \`${table}\` (${columns})`);
+}
 exports.OPERATIONAL_TENANT_TABLES = [
     'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine',
     'TransferReceipt', 'TransferReceiptLine', 'TransferCarton', 'InventoryMovement',
@@ -74,6 +88,118 @@ async function ensureFoundationSchema() {
     await ensureIndex('Location', 'Location_tenantId_idx', '`tenantId`');
     await ensureColumn('Item', 'tenantId', "VARCHAR(191) NOT NULL DEFAULT 'tenant-invexa'");
     await ensureIndex('Item', 'Item_tenantId_idx', '`tenantId`');
+    // Blueprint v4 §6 Item Master operational fields. Same hydration hazard as
+    // Item.description above: findMany() selects every scalar, so a database
+    // that has not run the migration must still get these columns.
+    await ensureColumn('Item', 'countMethod', "VARCHAR(191) NOT NULL DEFAULT 'LOT_SCAN'");
+    await ensureColumn('Item', 'pickMethod', "VARCHAR(191) NOT NULL DEFAULT 'LOT_SCAN'");
+    await ensureColumn('Item', 'allocationStrategy', "VARCHAR(191) NOT NULL DEFAULT 'FEFO'");
+    await ensureColumn('Item', 'lotRequired', 'BOOLEAN NOT NULL DEFAULT true');
+    await ensureColumn('Item', 'expiryRequired', 'BOOLEAN NOT NULL DEFAULT false');
+    await ensureColumn('Item', 'decimalQuantity', 'BOOLEAN NOT NULL DEFAULT false');
+    // Blueprint v4 §6 canonical Item Master fields.
+    await ensureColumn('Item', 'status', "VARCHAR(191) NOT NULL DEFAULT 'ACTIVE'");
+    await ensureColumn('Item', 'archiveReason', 'VARCHAR(191) NULL');
+    await ensureColumn('Item', 'archivedAt', 'DATETIME(3) NULL');
+    await ensureColumn('Item', 'archivedById', 'VARCHAR(191) NULL');
+    await ensureColumn('Item', 'barcode', 'VARCHAR(191) NULL');
+    await ensureColumn('Item', 'hsn', 'VARCHAR(191) NULL');
+    await ensureColumn('Item', 'gstRate', 'DOUBLE NULL');
+    await ensureColumn('Item', 'mrp', 'DOUBLE NULL');
+    await ensureColumn('Item', 'leadTimeDays', 'INTEGER NULL');
+    await ensureColumn('Item', 'shelfLifeDays', 'INTEGER NULL');
+    await ensureColumn('Item', 'aliases', 'JSON NULL');
+    await ensureColumn('Item', 'version', 'INTEGER NOT NULL DEFAULT 1');
+    await ensureColumn('Item', 'createdById', 'VARCHAR(191) NULL');
+    await ensureColumn('Item', 'updatedById', 'VARCHAR(191) NULL');
+    // Blueprint v4 §14 late-arriving movement reconciliation on counts.
+    await ensureColumn('Transfer', 'logistics', 'JSON NULL');
+    // Blueprint v4 P6 procurement + returns.
+    await ensureColumnIfTable('Supplier', 'contactName', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('Supplier', 'leadTimeDays', 'INTEGER NULL');
+    await ensureColumnIfTable('Supplier', 'moq', 'DOUBLE NULL');
+    await ensureColumnIfTable('Supplier', 'paymentTerms', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('Supplier', 'categories', 'TEXT NULL');
+    await ensureColumnIfTable('Supplier', 'status', "VARCHAR(191) NOT NULL DEFAULT 'ACTIVE'");
+    await ensureColumnIfTable('PurchaseOrder', 'approvedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'approvedById', 'VARCHAR(191) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'sentAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'closedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('PurchaseOrder', 'closeNote', 'TEXT NULL');
+    // One order per platform + external id (blueprint v4 §23). Skipped, loudly, if old data already
+    // holds duplicates: the in-process lock still protects a single instance.
+    try {
+        const dup = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM (SELECT 1 FROM `Order` WHERE externalReference IS NOT NULL GROUP BY channel, externalReference HAVING COUNT(*) > 1) d');
+        if (Number(dup[0]?.count ?? 0) === 0)
+            await ensureIndexUnique('Order', 'Order_channel_externalReference_key', '`channel`, `externalReference`');
+        else
+            console.warn('[schema] Order has duplicate (channel, externalReference) rows; unique index not created.');
+    }
+    catch (error) {
+        console.warn('[schema] order external-reference index not created:', error instanceof Error ? error.message : error);
+    }
+    await ensureColumnIfTable('ReturnRequest', 'refundStatus', "VARCHAR(191) NOT NULL DEFAULT 'PENDING'");
+    await ensureColumnIfTable('ReturnRequest', 'refundNote', 'TEXT NULL');
+    await ensureColumnIfTable('ReturnRequest', 'refundedAt', 'DATETIME(3) NULL');
+    await ensureColumnIfTable('ReturnRequest', 'refundedById', 'VARCHAR(191) NULL');
+    await ensureColumn('StockCount', 'reconciliationRequired', 'BOOLEAN NOT NULL DEFAULT false');
+    await ensureColumn('StockCount', 'reconciliationNote', 'TEXT NULL');
+    await ensureColumn('StockCount', 'reconciliationAt', 'DATETIME(3) NULL');
+    await ensureColumn('StockCount', 'bookQtyOriginal', 'DOUBLE NULL');
+    await ensureColumn('StockCount', 'lateDelta', 'DOUBLE NOT NULL DEFAULT 0');
+    await ensureColumn('StockCount', 'lateMovementKeys', 'JSON NULL');
+    await ensureIndex('StockCount', 'StockCount_reconciliationRequired_idx', '`reconciliationRequired`');
+    await ensureColumn('StockCount', 'requestId', 'VARCHAR(191) NULL');
+    await ensureIndex('StockCount', 'StockCount_submittedById_requestId_idx', '`submittedById`, `requestId`');
+    await ensureIndex('Item', 'Item_status_idx', '`status`');
+    await ensureIndex('Item', 'Item_barcode_idx', '`barcode`');
+    // Blueprint v4 §12 stock-take campaigns: assignments created by a
+    // campaign's daily allocation carry its id (countAssignment.findMany()
+    // selects every scalar during hydration, too).
+    await ensureColumn('CountAssignment', 'campaignId', 'VARCHAR(191) NULL');
+    await ensureIndex('CountAssignment', 'CountAssignment_campaignId_idx', '`campaignId`');
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS \`StockTakeCampaign\` (
+    \`id\` VARCHAR(191) NOT NULL,
+    \`companyId\` VARCHAR(191) NOT NULL DEFAULT 'default-company',
+    \`tenantId\` VARCHAR(191) NOT NULL DEFAULT 'tenant-invexa',
+    \`name\` VARCHAR(191) NOT NULL,
+    \`locationId\` VARCHAR(191) NOT NULL,
+    \`status\` VARCHAR(191) NOT NULL DEFAULT 'DRAFT',
+    \`dailyItemsPerUser\` INTEGER NOT NULL,
+    \`userIds\` JSON NOT NULL,
+    \`priorityOrder\` JSON NOT NULL,
+    \`includeNewStock\` BOOLEAN NOT NULL DEFAULT true,
+    \`timezone\` VARCHAR(191) NOT NULL DEFAULT 'Asia/Kolkata',
+    \`startDate\` VARCHAR(191) NOT NULL,
+    \`endDate\` VARCHAR(191) NULL,
+    \`lastRunDate\` VARCHAR(191) NULL,
+    \`pausedFrom\` VARCHAR(191) NULL,
+    \`createdById\` VARCHAR(191) NOT NULL,
+    \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    \`updatedAt\` DATETIME(3) NOT NULL,
+    \`activatedAt\` DATETIME(3) NULL,
+    \`completedAt\` DATETIME(3) NULL,
+    \`cancelledAt\` DATETIME(3) NULL,
+    PRIMARY KEY (\`id\`),
+    INDEX \`StockTakeCampaign_companyId_locationId_status_idx\` (\`companyId\`, \`locationId\`, \`status\`),
+    INDEX \`StockTakeCampaign_tenantId_idx\` (\`tenantId\`)
+  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS \`StockTakeCampaignItem\` (
+    \`campaignId\` VARCHAR(191) NOT NULL,
+    \`itemId\` VARCHAR(191) NOT NULL,
+    \`status\` VARCHAR(191) NOT NULL DEFAULT 'PENDING',
+    \`excludedReason\` VARCHAR(191) NULL,
+    \`assignedToId\` VARCHAR(191) NULL,
+    \`assignmentId\` VARCHAR(191) NULL,
+    \`countId\` VARCHAR(191) NULL,
+    \`assignedDate\` DATETIME(3) NULL,
+    \`lastCountedAt\` DATETIME(3) NULL,
+    \`recounts\` INTEGER NOT NULL DEFAULT 0,
+    \`addedAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    \`updatedAt\` DATETIME(3) NOT NULL,
+    PRIMARY KEY (\`campaignId\`, \`itemId\`),
+    INDEX \`StockTakeCampaignItem_campaignId_status_idx\` (\`campaignId\`, \`status\`)
+  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await ensureColumn('Lot', 'status', "VARCHAR(191) NOT NULL DEFAULT 'AVAILABLE'");
     await ensureColumn('CompanyProfile', 'industryKey', 'VARCHAR(191) NULL');
     // P5 receiving persists cumulative discrepancies per transfer lot. Prisma
@@ -236,6 +362,11 @@ async function ensureFoundationSchema() {
       \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), \`updatedAt\` DATETIME(3) NOT NULL,
       PRIMARY KEY (\`id\`), UNIQUE INDEX \`TransferCarton_transferId_cartonNumber_key\` (\`transferId\`,\`cartonNumber\`),
       INDEX \`TransferCarton_transferId_status_idx\` (\`transferId\`,\`status\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
+        `CREATE TABLE IF NOT EXISTS \`PurchaseReceipt\` (
+      \`id\` VARCHAR(191) NOT NULL, \`requestId\` VARCHAR(191) NOT NULL, \`purchaseOrderId\` VARCHAR(191) NOT NULL,
+      \`receivedById\` VARCHAR(191) NOT NULL, \`result\` JSON NOT NULL, \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (\`id\`), UNIQUE INDEX \`PurchaseReceipt_requestId_key\` (\`requestId\`), INDEX \`PurchaseReceipt_purchaseOrderId_idx\` (\`purchaseOrderId\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
         `CREATE TABLE IF NOT EXISTS \`FeatureFlag\` (
       \`id\` VARCHAR(191) NOT NULL, \`name\` VARCHAR(191) NOT NULL, \`enabled\` BOOLEAN NOT NULL DEFAULT false,

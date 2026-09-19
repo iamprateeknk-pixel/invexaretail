@@ -11,13 +11,17 @@ exports.loadTransferPickSlips = loadTransferPickSlips;
 exports.persistItem = persistItem;
 exports.persistOpeningStockImport = persistOpeningStockImport;
 exports.persistDailyMovementImport = persistDailyMovementImport;
+exports.persistCountDeletion = persistCountDeletion;
 exports.persistCount = persistCount;
 exports.listStockFromDatabase = listStockFromDatabase;
+exports.persistCountReconciliation = persistCountReconciliation;
 exports.persistCountReview = persistCountReview;
 exports.persistCountAssignment = persistCountAssignment;
 exports.persistCountAssignmentUpdate = persistCountAssignmentUpdate;
 exports.persistAssignmentSubmitted = persistAssignmentSubmitted;
 exports.persistTransfer = persistTransfer;
+exports.persistTransferCarton = persistTransferCarton;
+exports.persistTransferLogistics = persistTransferLogistics;
 exports.persistTransferStatus = persistTransferStatus;
 exports.persistConfirmedPickAllocations = persistConfirmedPickAllocations;
 exports.persistEnterpriseUser = persistEnterpriseUser;
@@ -88,6 +92,11 @@ function requireDatabase() {
         throw new Error('Database persistence is disabled. Set DATABASE_URL to the Hostinger MySQL database.');
     }
 }
+// Packing/dispatch details live in one JSON column; JSON null means "not set yet".
+function logisticsOf(transfer) {
+    const raw = transfer.logistics;
+    return { ...(raw?.packing ? { packing: raw.packing } : {}), ...(raw?.dispatch ? { dispatch: raw.dispatch } : {}) };
+}
 async function hydrateRepositoryFromDatabase() {
     if (!exports.databaseEnabled)
         return;
@@ -113,6 +122,26 @@ async function hydrateRepositoryFromDatabase() {
         subcategory: item.subcategory ?? undefined,
         company: item.company ?? undefined,
         unit: item.unit ?? undefined,
+        countMethod: item.countMethod ?? 'LOT_SCAN',
+        pickMethod: item.pickMethod ?? 'LOT_SCAN',
+        allocationStrategy: item.allocationStrategy ?? 'FEFO',
+        lotRequired: item.lotRequired ?? true,
+        expiryRequired: item.expiryRequired ?? false,
+        decimalQuantity: item.decimalQuantity ?? false,
+        status: (item.status ?? 'ACTIVE'),
+        archiveReason: item.archiveReason ?? undefined,
+        archivedAt: item.archivedAt?.toISOString(),
+        archivedById: item.archivedById ?? undefined,
+        barcode: item.barcode ?? undefined,
+        hsn: item.hsn ?? undefined,
+        gstRate: item.gstRate ?? undefined,
+        mrp: item.mrp ?? undefined,
+        leadTimeDays: item.leadTimeDays ?? undefined,
+        shelfLifeDays: item.shelfLifeDays ?? undefined,
+        aliases: Array.isArray(item.aliases) ? item.aliases : undefined,
+        version: item.version ?? 1,
+        createdById: item.createdById ?? undefined,
+        updatedById: item.updatedById ?? undefined,
         lots: item.lots.map((lot) => ({
             id: lot.id,
             itemId: lot.itemId,
@@ -142,6 +171,13 @@ async function hydrateRepositoryFromDatabase() {
         reviewedAt: count.approvedAt?.toISOString(),
         reviewReason: count.reviewReason ?? undefined,
         parentCountId: count.parentCountId ?? undefined,
+        requestId: count.requestId ?? undefined,
+        reconciliationRequired: count.reconciliationRequired ?? false,
+        reconciliationNote: count.reconciliationNote ?? undefined,
+        reconciliationAt: count.reconciliationAt?.toISOString(),
+        bookQtyOriginal: count.bookQtyOriginal ?? undefined,
+        lateDelta: count.lateDelta ?? 0,
+        lateMovementKeys: Array.isArray(count.lateMovementKeys) ? count.lateMovementKeys : undefined,
     })));
     repository_js_1.stockLedger.splice(0, repository_js_1.stockLedger.length, ...dbStockLedger.map((row) => ({
         itemId: row.itemId,
@@ -171,6 +207,7 @@ async function hydrateRepositoryFromDatabase() {
         status: row.status,
         countId: row.countId ?? undefined,
         parentCountId: row.parentCountId ?? undefined,
+        campaignId: row.campaignId ?? undefined,
         createdAt: row.createdAt.toISOString(),
     })));
     repository_js_1.transfers.splice(0, repository_js_1.transfers.length, ...dbTransfers.map((transfer) => ({
@@ -183,8 +220,31 @@ async function hydrateRepositoryFromDatabase() {
         cartonCount: transfer.cartonCount ?? undefined,
         notes: transfer.notes ?? undefined,
         lines: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty, receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty ?? 0 })),
+        ...logisticsOf(transfer),
         createdAt: transfer.createdAt.toISOString(),
     })));
+    try {
+        const dbCartons = await db_js_1.prisma.transferCarton.findMany({ orderBy: { createdAt: 'asc' } });
+        repository_js_1.transferCartons.splice(0, repository_js_1.transferCartons.length, ...dbCartons.map((row) => {
+            const contents = (row.contents ?? {});
+            return {
+                id: row.id,
+                transferId: row.transferId,
+                cartonNumber: row.cartonNumber,
+                packageId: row.qrCode ?? row.cartonNumber,
+                lines: contents.lines ?? [],
+                quantity: row.quantity,
+                weightKg: row.weight ?? undefined,
+                status: (row.status === 'VOID' ? 'VOID' : 'SEALED'),
+                packedById: contents.packedById ?? '',
+                sealedAt: contents.sealedAt ?? row.createdAt.toISOString(),
+                requestId: contents.requestId,
+            };
+        }));
+    }
+    catch (error) {
+        console.warn('Transfer cartons could not be hydrated:', error instanceof Error ? error.message : error);
+    }
     // These tables were introduced after the original Hostinger deployment.
     // Keep startup compatible while the migration is pending, then hydrate them
     // normally once present so sync state survives an API restart.
@@ -258,10 +318,36 @@ async function persistItem(item, companyId = 'default-company') {
     if (!exports.databaseEnabled)
         return;
     requireDatabase();
+    const operationalFields = {
+        countMethod: item.countMethod,
+        pickMethod: item.pickMethod,
+        allocationStrategy: item.allocationStrategy,
+        lotRequired: item.lotRequired,
+        expiryRequired: item.expiryRequired,
+        decimalQuantity: item.decimalQuantity,
+    };
+    // The full item state is written every time, so a cleared optional field
+    // must become NULL (an undefined key would leave the old value in place).
+    const masterFields = {
+        status: item.status ?? 'ACTIVE',
+        archiveReason: item.archiveReason ?? null,
+        archivedAt: item.archivedAt ? new Date(item.archivedAt) : null,
+        archivedById: item.archivedById ?? null,
+        barcode: item.barcode ?? null,
+        hsn: item.hsn ?? null,
+        gstRate: item.gstRate ?? null,
+        mrp: item.mrp ?? null,
+        leadTimeDays: item.leadTimeDays ?? null,
+        shelfLifeDays: item.shelfLifeDays ?? null,
+        aliases: (item.aliases?.length ? item.aliases : client_1.Prisma.JsonNull),
+        version: item.version ?? 1,
+        createdById: item.createdById ?? null,
+        updatedById: item.updatedById ?? null,
+    };
     await db_js_1.prisma.item.upsert({
         where: { id: item.id },
-        update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit },
-        create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, unit: item.unit },
+        update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields, ...masterFields },
+        create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields, ...masterFields },
     });
     for (const lot of item.lots) {
         await db_js_1.prisma.lot.upsert({
@@ -531,10 +617,24 @@ async function persistDailyMovementImport(input) {
         `);
             }
         }
-        for (const checkpoint of input.checkpoints)
-            await tx.syncCheckpoint.upsert({ where: { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } }, update: { syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: new Date(checkpoint.syncedThroughAt), lastImportBatchId: input.batchId } });
+        for (const checkpoint of input.checkpoints) {
+            const key = { locationId_sourceType: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType } };
+            const next = new Date(checkpoint.syncedThroughAt);
+            const existing = await tx.syncCheckpoint.findUnique({ where: key });
+            // Only ever move forward: a backfill of an older day must not regress the branch.
+            if (existing && existing.syncedThroughAt >= next)
+                continue;
+            await tx.syncCheckpoint.upsert({ where: key, update: { syncedThroughAt: next, lastImportBatchId: input.batchId }, create: { locationId: checkpoint.locationId, sourceType: checkpoint.sourceType, syncedThroughAt: next, lastImportBatchId: input.batchId } });
+        }
     }, { maxWait: 10_000, timeout: 120_000 });
     return { committedRows };
+}
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+async function persistCountDeletion(id) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
 async function persistCount(count) {
     if (!exports.databaseEnabled)
@@ -558,6 +658,7 @@ async function persistCount(count) {
             mode: count.mode,
             submittedById: count.submittedBy,
             parentCountId: count.parentCountId ?? null,
+            requestId: count.requestId ?? null,
         },
     });
 }
@@ -584,6 +685,24 @@ async function listStockFromDatabase(locationId) {
  * resulting variance to the stock ledger, in the same transaction, so the
  * count status and the on-hand quantity can never disagree.
  */
+/** Writes the reconciliation state (and a recomputed book quantity) of a count. */
+async function persistCountReconciliation(count) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.stockCount.update({
+        where: { id: count.id },
+        data: {
+            bookQty: count.bookQty,
+            reconciliationRequired: count.reconciliationRequired ?? false,
+            reconciliationNote: count.reconciliationNote ?? null,
+            reconciliationAt: count.reconciliationAt ? new Date(count.reconciliationAt) : null,
+            bookQtyOriginal: count.bookQtyOriginal ?? null,
+            lateDelta: count.lateDelta ?? 0,
+            lateMovementKeys: (count.lateMovementKeys ?? []),
+        },
+    });
+}
 async function persistCountReview(count) {
     if (!exports.databaseEnabled)
         return;
@@ -652,6 +771,7 @@ async function persistCountAssignment(assignment) {
             instructions: assignment.instructions,
             status: assignment.status,
             parentCountId: assignment.parentCountId ?? null,
+            campaignId: assignment.campaignId ?? null,
         },
     });
 }
@@ -697,6 +817,30 @@ async function persistTransfer(transfer) {
             cartonCount: transfer.cartonCount ?? null,
             lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
         },
+    });
+}
+async function persistTransferCarton(carton) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    const contents = { lines: carton.lines, packedById: carton.packedById, sealedAt: carton.sealedAt, requestId: carton.requestId ?? null };
+    await db_js_1.prisma.transferCarton.upsert({
+        where: { id: carton.id },
+        update: { status: carton.status, contents: contents },
+        create: {
+            id: carton.id, transferId: carton.transferId, cartonNumber: carton.cartonNumber, qrCode: carton.packageId,
+            contents: contents, quantity: carton.quantity, weight: carton.weightKg ?? null, status: carton.status,
+        },
+    });
+}
+/** Packing completion / dispatch details / carton count for a transfer. */
+async function persistTransferLogistics(transfer) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.transfer.update({
+        where: { id: transfer.id },
+        data: { cartonCount: transfer.cartonCount ?? null, logistics: { packing: transfer.packing ?? null, dispatch: transfer.dispatch ?? null } },
     });
 }
 async function persistTransferStatus(transfer) {

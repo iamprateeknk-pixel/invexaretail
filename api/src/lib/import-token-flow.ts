@@ -1,5 +1,6 @@
 import type { DailyImportPreview, DailyStockRow } from './daily-stock-sync.js';
 import { buildImportErrorReport, errorReportToCsv } from './import-center.js';
+import { summarizeRowCounters } from './import-control-center.js';
 import type { ImportBatchRecord, StagedImportRow } from './import-batch-store.js';
 import { countRowsByStatus, getBatch, listRows } from './import-batch-store.js';
 import type { DailyMovementRecord, LotRecord } from './repository.js';
@@ -348,6 +349,8 @@ export async function buildBatchPreviewPayload(batchId: string) {
     validRows: counts.VALID,
     invalidRows: counts.INVALID,
     duplicateRows: counts.DUPLICATE,
+    // Blueprint v4 §10.1: unmatched item / branch / lot are counted apart from other rejections.
+    counters: summarizeRowCounters(rows),
     errors: errors.slice(0, 100),
     sample,
     branches: batch.metadata?.branches,

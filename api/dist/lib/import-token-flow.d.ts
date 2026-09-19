@@ -66,6 +66,7 @@ export declare function buildBatchPreviewPayload(batchId: string): Promise<{
     validRows: number;
     invalidRows: number;
     duplicateRows: number;
+    counters: import("./import-control-center.js").RowCounters;
     errors: {
         rowNumber: number;
         message: string;

@@ -13,6 +13,15 @@ double asDouble(Object? value, [double fallback = 0]) {
   return fallback;
 }
 
+/// Whole numbers print without a decimal point (12), KG-style quantities keep
+/// up to three places (2.5, 0.125) - never 12.0 or 2.500.
+String formatQty(num? value) {
+  if (value == null) return '-';
+  final rounded = (value * 1000).round() / 1000;
+  if (rounded == rounded.roundToDouble()) return rounded.round().toString();
+  return rounded.toString();
+}
+
 String asString(Object? value, [String fallback = '']) {
   if (value == null) return fallback;
   return value.toString();
@@ -217,6 +226,9 @@ class CatalogItem {
     required this.code,
     required this.name,
     this.unit,
+    this.barcode,
+    this.countMethod = 'LOT_SCAN',
+    this.decimalQuantity = false,
     this.lots = const [],
   });
 
@@ -224,7 +236,26 @@ class CatalogItem {
   final String code;
   final String name;
   final String? unit;
+  final String? barcode;
+  // Blueprint v4 §13: LOT_SCAN counts pieces by scanning lots; ITEM_WEIGHT
+  // takes one decimal total and the server splits it over the lots.
+  final String countMethod;
+  final bool decimalQuantity;
   final List<LotRecord> lots;
+
+  bool get isWeightCounted => countMethod == 'ITEM_WEIGHT';
+  bool get allowsDecimal => decimalQuantity || isWeightCounted;
+
+  CatalogItem withLots(List<LotRecord> next) => CatalogItem(
+        id: id,
+        code: code,
+        name: name,
+        unit: unit,
+        barcode: barcode,
+        countMethod: countMethod,
+        decimalQuantity: decimalQuantity,
+        lots: next,
+      );
 
   factory CatalogItem.fromJson(Map<String, dynamic> json) {
     return CatalogItem(
@@ -232,6 +263,9 @@ class CatalogItem {
       code: asString(json['code'], asString(json['sku'])),
       name: asString(json['name'], asString(json['id'])),
       unit: json['unit'] == null ? null : asString(json['unit']),
+      barcode: json['barcode'] == null ? null : asString(json['barcode']),
+      countMethod: asString(json['countMethod'], 'LOT_SCAN'),
+      decimalQuantity: json['decimalQuantity'] == true,
       lots: asList(json['lots']).map((row) => LotRecord.fromJson(asMap(row))).toList(),
     );
   }
@@ -251,9 +285,9 @@ class StockRow {
   final String itemId;
   final String locationId;
   final String? lotId;
-  final int? bookQuantity;
-  final int? physicalQuantity;
-  final int? variance;
+  final double? bookQuantity;
+  final double? physicalQuantity;
+  final double? variance;
   final double? stockValue;
 
   factory StockRow.fromJson(Map<String, dynamic> json) {
@@ -261,9 +295,9 @@ class StockRow {
       itemId: asString(json['itemId']),
       locationId: asString(json['locationId']),
       lotId: json['lotId'] == null ? null : asString(json['lotId']),
-      bookQuantity: json.containsKey('bookQuantity') ? asInt(json['bookQuantity']) : null,
-      physicalQuantity: json.containsKey('physicalQuantity') ? asInt(json['physicalQuantity']) : null,
-      variance: json.containsKey('variance') ? asInt(json['variance']) : null,
+      bookQuantity: json.containsKey('bookQuantity') ? asDouble(json['bookQuantity']) : null,
+      physicalQuantity: json.containsKey('physicalQuantity') ? asDouble(json['physicalQuantity']) : null,
+      variance: json.containsKey('variance') ? asDouble(json['variance']) : null,
       stockValue: json.containsKey('stockValue') ? asDouble(json['stockValue']) : null,
     );
   }
@@ -287,10 +321,10 @@ class CountRecord {
   final String id;
   final String itemId;
   final String locationId;
-  final int physicalQuantity;
+  final double physicalQuantity;
   final String? lotId;
-  final int? bookQty;
-  final int? variance;
+  final double? bookQty;
+  final double? variance;
   final String? mode;
   final String? submittedBy;
   final String? status;
@@ -301,10 +335,10 @@ class CountRecord {
       id: asString(json['id']),
       itemId: asString(json['itemId']),
       locationId: asString(json['locationId']),
-      physicalQuantity: asInt(json['physicalQuantity'] ?? json['qty']),
+      physicalQuantity: asDouble(json['physicalQuantity'] ?? json['qty']),
       lotId: json['lotId'] == null ? null : asString(json['lotId']),
-      bookQty: json.containsKey('bookQty') ? asInt(json['bookQty']) : null,
-      variance: json.containsKey('variance') ? asInt(json['variance']) : null,
+      bookQty: json.containsKey('bookQty') ? asDouble(json['bookQty']) : null,
+      variance: json.containsKey('variance') ? asDouble(json['variance']) : null,
       mode: json['mode'] == null ? null : asString(json['mode']),
       submittedBy: json['submittedBy'] == null ? null : asString(json['submittedBy']),
       status: json['status'] == null ? null : asString(json['status']),
@@ -318,19 +352,68 @@ class TransferLine {
     required this.itemId,
     required this.quantity,
     this.lotId,
+    this.receivedQty = 0,
+    this.damagedQty = 0,
+    this.shortageQty = 0,
   });
 
   final String itemId;
   final String? lotId;
-  final int quantity;
+  final double quantity;
+  final double receivedQty;
+  final double damagedQty;
+  final double shortageQty;
+
+  /// Still open to receive: what was sent minus everything already booked
+  /// against this line (good, damaged or closed as short).
+  double get remaining {
+    final left = quantity - receivedQty - damagedQty - shortageQty;
+    return left < 0.0005 ? 0 : (left * 1000).round() / 1000;
+  }
 
   factory TransferLine.fromJson(Map<String, dynamic> json) {
     return TransferLine(
       itemId: asString(json['itemId']),
       lotId: json['lotId'] == null ? null : asString(json['lotId']),
-      quantity: asInt(json['quantity']),
+      quantity: asDouble(json['quantity']),
+      receivedQty: asDouble(json['receivedQty']),
+      damagedQty: asDouble(json['damagedQty']),
+      shortageQty: asDouble(json['shortageQty']),
     );
   }
+}
+
+/// A sealed carton on a transfer; its package id is what the label/QR carries.
+class TransferCarton {
+  const TransferCarton({required this.packageId, required this.quantity, this.weightKg});
+
+  final String packageId;
+  final double quantity;
+  final double? weightKg;
+
+  factory TransferCarton.fromJson(Map<String, dynamic> json) => TransferCarton(
+        packageId: asString(json['packageId']),
+        quantity: asDouble(json['quantity']),
+        weightKg: json['weightKg'] == null ? null : asDouble(json['weightKg']),
+      );
+}
+
+class TransferDispatch {
+  const TransferDispatch({this.carrier, this.awb, this.vehicleNo, this.expectedArrivalAt});
+
+  final String? carrier;
+  final String? awb;
+  final String? vehicleNo;
+  final String? expectedArrivalAt;
+
+  bool get isEmpty => carrier == null && awb == null && vehicleNo == null;
+
+  factory TransferDispatch.fromJson(Map<String, dynamic> json) => TransferDispatch(
+        carrier: json['carrier'] == null ? null : asString(json['carrier']),
+        awb: json['awb'] == null ? null : asString(json['awb']),
+        vehicleNo: json['vehicleNo'] == null ? null : asString(json['vehicleNo']),
+        expectedArrivalAt: json['expectedArrivalAt'] == null ? null : asString(json['expectedArrivalAt']),
+      );
 }
 
 class TransferRecord {
@@ -342,6 +425,9 @@ class TransferRecord {
     this.cartonCount,
     this.lines = const [],
     this.createdAt,
+    this.cartons = const [],
+    this.dispatch,
+    this.delayed = false,
   });
 
   final String id;
@@ -351,9 +437,20 @@ class TransferRecord {
   final int? cartonCount;
   final List<TransferLine> lines;
   final String? createdAt;
+  final List<TransferCarton> cartons;
+  final TransferDispatch? dispatch;
+  // Blueprint v4 §17: past its promised arrival and still not received.
+  final bool delayed;
 
-  int get totalQuantity =>
-      lines.fold<int>(0, (sum, line) => sum + line.quantity);
+  double get totalQuantity =>
+      lines.fold<double>(0, (sum, line) => sum + line.quantity);
+
+  /// A scanned carton label or a typed transfer id points at this transfer.
+  bool matchesCode(String code) {
+    final wanted = code.trim().toLowerCase();
+    if (wanted.isEmpty) return false;
+    return id.toLowerCase() == wanted || cartons.any((carton) => carton.packageId.toLowerCase() == wanted);
+  }
 
   factory TransferRecord.fromJson(Map<String, dynamic> json) {
     return TransferRecord(
@@ -364,6 +461,9 @@ class TransferRecord {
       cartonCount: json.containsKey('cartonCount') ? asInt(json['cartonCount']) : null,
       lines: asList(json['lines']).map((row) => TransferLine.fromJson(asMap(row))).toList(),
       createdAt: json['createdAt'] == null ? null : asString(json['createdAt']),
+      cartons: asList(json['cartons']).map((row) => TransferCarton.fromJson(asMap(row))).toList(),
+      dispatch: json['dispatch'] is Map ? TransferDispatch.fromJson(asMap(json['dispatch'])) : null,
+      delayed: json['delayed'] == true,
     );
   }
 }
@@ -380,6 +480,7 @@ class CountAssignment {
     this.status,
     this.countDate,
     this.assignedById,
+    this.instructions,
   });
 
   final String id;
@@ -392,6 +493,7 @@ class CountAssignment {
   final String? status;
   final String? countDate;
   final String? assignedById;
+  final String? instructions;
 
   /// Every item assigned to a store user in one admin action shares the
   /// same location, assigner, and countDate timestamp - grouping on that
@@ -412,6 +514,44 @@ class CountAssignment {
       status: json['status'] == null ? null : asString(json['status']),
       countDate: json['countDate'] == null ? null : asString(json['countDate']),
       assignedById: json['assignedById'] == null ? null : asString(json['assignedById']),
+      instructions: json['instructions'] == null ? null : asString(json['instructions']),
+    );
+  }
+}
+
+/// One open count task from `GET /mobile/work` (blueprint v4 §37). It carries
+/// only what is worth counting: lots with stock on the shelf, no quantities.
+class CountTask {
+  const CountTask({
+    required this.assignmentId,
+    required this.locationId,
+    required this.item,
+    this.lots = const [],
+    this.recount = false,
+  });
+
+  final String assignmentId;
+  final String locationId;
+  final CatalogItem item;
+  final List<LotRecord> lots;
+  final bool recount;
+
+  factory CountTask.fromJson(Map<String, dynamic> json) {
+    final item = CatalogItem.fromJson(asMap(json['item']));
+    final lots = asList(json['lots'])
+        .map((row) => asMap(row))
+        .map((row) => LotRecord(
+              id: asString(row['lotId']),
+              lotNo: asString(row['lotNo']),
+              expiryDate: row['expiryDate'] == null ? null : asString(row['expiryDate']),
+            ))
+        .toList();
+    return CountTask(
+      assignmentId: asString(json['assignmentId']),
+      locationId: asString(json['locationId']),
+      item: item.withLots(lots),
+      lots: lots,
+      recount: json['recount'] == true,
     );
   }
 }
@@ -428,14 +568,20 @@ class QueuedCount {
     this.attempts = 0,
     this.lastError,
     this.status = 'pending',
-  });
+    String? requestId,
+  }) : requestId = requestId ?? localId;
 
   final String localId;
   final String itemId;
   final String locationId;
-  final int physicalQuantity;
+  final double physicalQuantity;
   final String? lotNo;
+  // 'scan' / 'manual' post one lot's count; 'weight' posts one decimal total
+  // for the item and the server splits it over the lots.
   final String mode;
+  // Idempotency key (blueprint v4 §38): sent with every attempt, so a retry
+  // after a timeout or a reconnect can never record the count twice.
+  final String requestId;
   final String createdAt;
   int attempts;
   String? lastError;
@@ -449,18 +595,20 @@ class QueuedCount {
       localId: asString(json['localId']),
       itemId: asString(json['itemId']),
       locationId: asString(json['locationId']),
-      physicalQuantity: asInt(json['physicalQuantity']),
+      physicalQuantity: asDouble(json['physicalQuantity']),
       lotNo: json['lotNo'] == null || asString(json['lotNo']).isEmpty ? null : asString(json['lotNo']),
       mode: asString(json['mode'], 'manual'),
       createdAt: asString(json['createdAt']),
       attempts: asInt(json['attempts']),
       lastError: json['lastError'] == null ? null : asString(json['lastError']),
       status: asString(json['status'], 'pending'),
+      requestId: json['requestId'] == null ? null : asString(json['requestId']),
     );
   }
 
   Map<String, dynamic> toJson() => {
         'localId': localId,
+        'requestId': requestId,
         'itemId': itemId,
         'locationId': locationId,
         'physicalQuantity': physicalQuantity,

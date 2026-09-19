@@ -9,6 +9,7 @@ exports.buildBatchPreviewPayload = buildBatchPreviewPayload;
 exports.buildErrorCsv = buildErrorCsv;
 exports.duplicateConflictMessage = duplicateConflictMessage;
 const import_center_js_1 = require("./import-center.js");
+const import_control_center_js_1 = require("./import-control-center.js");
 const import_batch_store_js_1 = require("./import-batch-store.js");
 function asRecord(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
@@ -314,6 +315,8 @@ async function buildBatchPreviewPayload(batchId) {
         validRows: counts.VALID,
         invalidRows: counts.INVALID,
         duplicateRows: counts.DUPLICATE,
+        // Blueprint v4 §10.1: unmatched item / branch / lot are counted apart from other rejections.
+        counters: (0, import_control_center_js_1.summarizeRowCounters)(rows),
         errors: errors.slice(0, 100),
         sample,
         branches: batch.metadata?.branches,

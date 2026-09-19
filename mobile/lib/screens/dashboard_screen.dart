@@ -132,7 +132,7 @@ class _QueueTile extends StatelessWidget {
           ],
         ),
         subtitle: Text(
-          '${lookupLocationName(controller.locations, item.locationId)} · qty ${item.physicalQuantity}'
+          '${lookupLocationName(controller.locations, item.locationId)} · qty ${formatQty(item.physicalQuantity)}${item.mode == 'weight' ? ' (weight)' : ''}'
           '${item.lastError == null ? '' : '\n${item.lastError}'}',
         ),
         isThreeLine: item.lastError != null,

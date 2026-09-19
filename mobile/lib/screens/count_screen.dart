@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
+import '../services/scan_feedback.dart';
+import '../services/stock_candidates.dart';
 import '../state/session_controller.dart';
 import '../widgets/barcode_scan_sheet.dart';
 import '../widgets/item_search_field.dart';
@@ -60,10 +62,36 @@ class _CountScreenState extends State<CountScreen> {
       return controller.allowAdHocCount ? controller.items : const [];
     }
     final assignedIds = _selectedBatchRows.map((row) => row.itemId).toSet();
-    return controller.items.where((item) => assignedIds.contains(item.id)).toList();
+    // The work feed already dropped zero-stock items and lots and says how each
+    // item is counted; an older server has no feed, so fall back to the catalog.
+    if (controller.isStoreUser && controller.countTasks.isNotEmpty) {
+      return [
+        for (final task in controller.countTasks)
+          if (assignedIds.contains(task.item.id) && task.locationId == _locationId) task.item,
+      ];
+    }
+    final assigned = controller.items.where((item) => assignedIds.contains(item.id)).toList();
+    return _limitToStock(assigned);
+  }
+
+  // Store users are never offered a zero-stock item or lot (blueprint v4 §7),
+  // so scan, search and the lot picker only see what is on the shelf. The
+  // stock list belongs to the selected location, so only apply it when that
+  // is the location being counted.
+  List<CatalogItem> _limitToStock(List<CatalogItem> candidates) {
+    final controller = widget.controller;
+    final locationId = _locationId;
+    if (!controller.isStoreUser || locationId == null || controller.selectedLocationId != locationId) {
+      return candidates;
+    }
+    return stockedCandidates(candidates, controller.stock, locationId);
   }
 
   void _selectBatch(String batchKey, List<CountAssignment> rows) {
+    // Load the stock for the batch's branch so zero-stock lots stay hidden.
+    if (widget.controller.selectedLocationId != rows.first.locationId) {
+      widget.controller.selectLocation(rows.first.locationId);
+    }
     setState(() {
       _selectedBatchKey = batchKey;
       _locationId = rows.first.locationId;
@@ -73,23 +101,80 @@ class _CountScreenState extends State<CountScreen> {
     });
   }
 
+  String? get _draftKey => _itemId == null || _locationId == null ? null : '$_itemId|$_locationId';
+
+  void _saveDraft() {
+    final key = _draftKey;
+    if (key == null) return;
+    if (_qty.text.trim().isEmpty) {
+      widget.controller.countDrafts.remove(key);
+    } else {
+      widget.controller.countDrafts[key] = _qty.text;
+    }
+  }
+
+  /// Switches the item being counted, restoring a draft typed earlier.
+  void _pickItem(String? itemId, {String? lotNo}) {
+    _itemId = itemId;
+    _lotNo = lotNo;
+    _qty.text = _draftKey == null ? '' : (widget.controller.countDrafts[_draftKey!] ?? '');
+  }
+
+  // Blueprint v4 §13: pieces are whole numbers; a KG / decimal item takes one
+  // decimal total (up to 3 places).
+  double? _parseQty(CatalogItem? item) {
+    final text = _qty.text.trim();
+    if (text.isEmpty) return null;
+    if (item != null && item.allowsDecimal) {
+      final value = double.tryParse(text);
+      if (value == null || value < 0) return null;
+      return (value * 1000).round() / 1000;
+    }
+    final whole = int.tryParse(text);
+    return whole == null || whole < 0 ? null : whole.toDouble();
+  }
+
+  CatalogItem? _find(List<CatalogItem> items, String? id) {
+    for (final item in items) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
   Future<void> _submit() async {
     final itemId = _itemId;
     final locationId = _locationId ?? widget.controller.selectedLocationId;
-    final qty = int.tryParse(_qty.text.trim());
-    if (itemId == null || locationId == null || qty == null || qty < 0) {
-      widget.controller.setError('Choose an item, location, and a non-negative quantity.');
+    final item = _find(_countableItems, itemId);
+    final qty = _parseQty(item);
+    if (itemId == null || locationId == null || qty == null) {
+      await ScanFeedback.rejected();
+      widget.controller.setError(item != null && item.allowsDecimal
+          ? 'Choose an item and enter a valid weight (up to 3 decimals).'
+          : 'Choose an item, location, and a whole, non-negative quantity.');
       return;
     }
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
       physicalQuantity: qty,
-      lotNo: _lotNo,
+      lotNo: item != null && item.isWeightCounted ? null : _lotNo,
+      weight: item != null && item.isWeightCounted,
     );
-    if (ok && mounted) {
-      _qty.clear();
+    if (!ok || !mounted) {
+      if (!ok) await ScanFeedback.rejected();
+      return;
     }
+    await ScanFeedback.saved();
+    widget.controller.countDrafts.remove(_draftKey);
+    // Save & Next: go straight to the next item still open in this batch.
+    final remaining = _selectedBatchRows.where((row) => row.itemId != itemId).toList();
+    setState(() {
+      _pickItem(remaining.isEmpty ? null : remaining.first.itemId);
+      if (remaining.isNotEmpty) {
+        final next = _find(_countableItems, _itemId);
+        _lotNo = next == null || next.lots.isEmpty ? null : next.lots.first.lotNo;
+      }
+    });
   }
 
   Future<void> _scanItem(List<CatalogItem> items) async {
@@ -99,7 +184,7 @@ class _CountScreenState extends State<CountScreen> {
     CatalogItem? match;
     LotRecord? matchedLot;
     for (final item in items) {
-      if (item.code.trim().toLowerCase() == normalized) {
+      if (item.code.trim().toLowerCase() == normalized || (item.barcode ?? '').trim().toLowerCase() == normalized) {
         match = item;
         break;
       }
@@ -113,13 +198,13 @@ class _CountScreenState extends State<CountScreen> {
       if (match != null) break;
     }
     if (match == null) {
+      await ScanFeedback.rejected();
       widget.controller.setError('No assigned item matches barcode "$code".');
       return;
     }
-    setState(() {
-      _itemId = match!.id;
-      _lotNo = matchedLot?.lotNo ?? (match.lots.isEmpty ? null : match.lots.first.lotNo);
-    });
+    await ScanFeedback.accepted();
+    final found = match;
+    setState(() => _pickItem(found.id, lotNo: matchedLot?.lotNo ?? (found.lots.isEmpty ? null : found.lots.first.lotNo)));
   }
 
   // Physical counting by repeated scan: every successful scan of the
@@ -130,14 +215,17 @@ class _CountScreenState extends State<CountScreen> {
     final code = await showBarcodeScanner(context, title: 'Scan ${item.name} to add +1');
     if (code == null || !mounted) return;
     final normalized = code.trim().toLowerCase();
-    final matchesItem = normalized == item.code.trim().toLowerCase();
+    final matchesItem = normalized == item.code.trim().toLowerCase() || normalized == (item.barcode ?? '').trim().toLowerCase();
     final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
     if (!matchesItem && !matchesLot) {
+      await ScanFeedback.rejected();
       widget.controller.setError('Scanned barcode does not match ${item.name}.');
       return;
     }
+    await ScanFeedback.accepted();
     final current = int.tryParse(_qty.text.trim()) ?? 0;
     setState(() => _qty.text = (current + 1).toString());
+    _saveDraft();
   }
 
   @override
@@ -161,6 +249,7 @@ class _CountScreenState extends State<CountScreen> {
       }
     }
     final lots = selectedItem?.lots ?? const <LotRecord>[];
+    final isWeight = selectedItem != null && selectedItem.isWeightCounted;
 
     return RefreshIndicator(
       color: invexaEmerald,
@@ -216,9 +305,8 @@ class _CountScreenState extends State<CountScreen> {
                     selectedItemId: _itemId,
                     onChanged: (value) {
                       setState(() {
-                        _itemId = value;
                         final next = items.where((item) => item.id == value).toList();
-                        _lotNo = next.isEmpty || next.first.lots.isEmpty ? null : next.first.lots.first.lotNo;
+                        _pickItem(value, lotNo: next.isEmpty || next.first.lots.isEmpty ? null : next.first.lots.first.lotNo);
                       });
                     },
                   ),
@@ -233,7 +321,8 @@ class _CountScreenState extends State<CountScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            if (lots.isNotEmpty)
+            // A weight item is counted as one total - the user never picks a lot.
+            if (lots.isNotEmpty && !isWeight)
               DropdownButtonFormField<String>(
                 key: ValueKey('count-lot-$_itemId'),
                 initialValue: lots.any((lot) => lot.lotNo == _lotNo) ? _lotNo : lots.first.lotNo,
@@ -252,17 +341,26 @@ class _CountScreenState extends State<CountScreen> {
                   child: TextField(
                     key: const ValueKey('count-qty'),
                     controller: _qty,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Physical quantity'),
+                    keyboardType: selectedItem != null && selectedItem.allowsDecimal
+                        ? const TextInputType.numberWithOptions(decimal: true)
+                        : TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: isWeight
+                          ? 'Total weight${selectedItem.unit == null ? '' : ' (${selectedItem.unit})'}'
+                          : 'Physical quantity',
+                      helperText: isWeight ? 'Weigh everything on the shelf and enter one total.' : null,
+                    ),
+                    onChanged: (_) => _saveDraft(),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filledTonal(
-                  key: const ValueKey('count-scan-qty'),
-                  tooltip: 'Scan barcode to add +1',
-                  icon: const Icon(Icons.add_a_photo_outlined),
-                  onPressed: selectedItem == null ? null : () => _scanToIncrement(selectedItem!),
-                ),
+                if (!isWeight)
+                  IconButton.filledTonal(
+                    key: const ValueKey('count-scan-qty'),
+                    tooltip: 'Scan barcode to add +1',
+                    icon: const Icon(Icons.add_a_photo_outlined),
+                    onPressed: selectedItem == null ? null : () => _scanToIncrement(selectedItem!),
+                  ),
               ],
             ),
             if (controller.error != null) ...[
@@ -276,7 +374,7 @@ class _CountScreenState extends State<CountScreen> {
             const SizedBox(height: 16),
             FilledButton(
               onPressed: controller.busy ? null : _submit,
-              child: const Text('Submit count'),
+              child: Text(hasAssignments && _selectedBatchRows.length > 1 ? 'Save & next' : 'Submit count'),
             ),
           ],
           const SizedBox(height: 28),
@@ -286,12 +384,12 @@ class _CountScreenState extends State<CountScreen> {
             const Text('No counts yet.', style: TextStyle(color: invexaMuted))
           else
             ...controller.counts.take(20).map((count) {
-              final book = controller.showBookQuantity && count.bookQty != null ? ' · book ${count.bookQty}' : '';
+              final book = controller.showBookQuantity && count.bookQty != null ? ' · book ${formatQty(count.bookQty)}' : '';
               return Card(
                 child: ListTile(
                   title: Text(lookupItemName(controller.items, count.itemId)),
                   subtitle: Text(
-                    '${lookupLocationName(controller.locations, count.locationId)} · qty ${count.physicalQuantity}$book',
+                    '${lookupLocationName(controller.locations, count.locationId)} · qty ${formatQty(count.physicalQuantity)}$book',
                   ),
                   trailing: Text(count.status ?? 'PENDING_REVIEW', style: const TextStyle(fontSize: 12, color: invexaMuted)),
                 ),
@@ -320,6 +418,7 @@ class _BatchCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dueDate = rows.first.dueDate;
     final priority = rows.first.priority;
+    final instructions = rows.first.instructions;
     return Card(
       color: selected ? invexaEmerald.withValues(alpha: 0.12) : null,
       shape: RoundedRectangleBorder(
@@ -330,6 +429,7 @@ class _BatchCard extends StatelessWidget {
         onTap: onTap,
         title: Text('$locationName · ${rows.length} item${rows.length == 1 ? '' : 's'}'),
         subtitle: Text([
+          if (instructions != null && instructions.trim().isNotEmpty) instructions.trim(),
           if (priority != null && priority != 'NORMAL') priority,
           if (dueDate != null) 'Due ${dueDate.split('T').first}',
         ].join(' · ')),

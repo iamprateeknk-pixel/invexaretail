@@ -1,7 +1,11 @@
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
-import { persistTransferReceipt } from '../lib/transfer-receipt.js';
+import { activeCartons, isTransitDelayed } from '../lib/transfer-packing.js';
+import { recordThenPersist } from '../lib/record-then-persist.js';
+import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
+import type { QcCheckResult } from '../lib/qc-inspection.js';
+import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persistTransferReceipt, rememberReceipt } from '../lib/transfer-receipt.js';
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
 import { type NextFunction, type Request, type Response, Router } from 'express';
@@ -23,6 +27,9 @@ import { controlPlane } from '../lib/saas/control-plane.js';
 import {
   canAccessLocation,
   sanitizeStockForRole,
+  hidesZeroStockForRole,
+  parseItemOperationalMeta,
+  type ItemOperationalMeta,
   validateBlindCountSubmission,
   validateTransferRequest,
   validateTransferStatusChange,
@@ -58,8 +65,10 @@ import {
 import {
   createCountAssignment,
   createCountRecord,
+  removeCountRecord,
   createItemRecord,
   createRecountAssignment,
+  findAssignmentForCount,
   createTransferRecord,
   adjustStockLedger,
   adjustQuarantineLedger,
@@ -72,12 +81,15 @@ import {
   listCountAssignments,
   listCountAssignmentsFor,
   listCounts,
+  counts as countsStore,
+  updateItemRecord,
   listItems,
   listDailyMovements,
   listLocations,
   listStockLedgerForLocation,
   listSyncCheckpoints,
   listTransfers,
+  listTransferCartons,
   listUsers,
   locations,
   markAssignmentSubmitted,
@@ -111,6 +123,11 @@ import { reserveStockForTransfer, releaseReservedStock, InsufficientStockError, 
 import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { generateThermalTransferLabel, getReprintAudit, recordReprint } from '../lib/thermal-pdf.js';
 import { listAuditEvents, recordAudit } from '../lib/audit.js';
+import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
+import { applyLateMovementsQuietly } from '../lib/late-movement-service.js';
+import { allocateWeightCount, totalVariance } from '../lib/weight-allocation.js';
+import { publishEvent } from '../lib/event-bus.js';
+import { findIdentityConflict, isOperationalItem, resolveItemByIdentity, parseItemMasterFields, parseStatusFilter, seesInactiveItems, visibleItems } from '../lib/item-master.js';
 import {
   databaseEnabled,
   listStockFromDatabase,
@@ -119,12 +136,14 @@ import {
   persistAudit,
   persistCompanyProfile,
   persistCount,
+  persistCountDeletion,
   persistCountAssignment,
   persistCountAssignmentUpdate,
   persistCountReview,
   persistItem,
   persistOpeningStockImport,
   persistDailyMovementImport,
+  persistCountReconciliation,
   persistLocationCreate,
   persistLocationDelete,
   persistLocationUpdate,
@@ -136,6 +155,7 @@ import {
   persistUserUpdate,
 } from '../lib/persistence.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
+import { allocatePick, isPickableLot, isPooledPick } from '../lib/kg-pick.js';
 import { allocateLots, parseTransferImport, PICK_EXCEPTION_REASONS, validatePickInput } from '../lib/warehouse-workflow.js';
 import {
   applyIndustryPack,
@@ -194,6 +214,19 @@ function xmlEscape(value: unknown): string {
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? '');
+}
+
+// Blueprint v4 §6: an inactive or archived item stays in history but cannot
+// take part in any new transaction.
+function inactiveItemMessage(itemIds: string[]): string | null {
+  const catalog = listItems();
+  for (const id of itemIds) {
+    const item = catalog.find((entry) => entry.id === id);
+    if (item && !isOperationalItem(item)) {
+      return `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be used in new transactions.`;
+    }
+  }
+  return null;
 }
 
 router.get('/permissions/catalog', async (req: Request, res: Response) => {
@@ -623,13 +656,34 @@ router.delete('/users/:userId', async (req: Request, res: Response) => {
 
 router.get('/items', (req: Request, res: Response) => {
   const companyId = req.companyId ?? req.user?.companyId ?? DEFAULT_COMPANY_ID;
-  return res.json({ items: itemsForCompany(companyId, listItems()) });
+  let filter;
+  try {
+    filter = parseStatusFilter(req.query.status);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid status filter.' });
+  }
+  // Operational users only ever see ACTIVE items; admins can ask for
+  // ARCHIVED / all to maintain the master (blueprint v4 §6).
+  return res.json({ items: visibleItems(req.user!.role, itemsForCompany(companyId, listItems()), filter) });
 });
 
 router.post('/items', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins can create items.' });
   }
+  if (typeof req.body.code !== 'string' || !req.body.code.trim() || typeof req.body.name !== 'string' || !req.body.name.trim()) {
+    return res.status(400).json({ message: 'Item Code and Item Name are required.' });
+  }
+  let operationalMeta: ItemOperationalMeta;
+  let masterFields: ReturnType<typeof parseItemMasterFields>;
+  try {
+    operationalMeta = parseItemOperationalMeta(req.body);
+    masterFields = parseItemMasterFields(req.body);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
+  }
+  const claimConflict = findIdentityConflict(listItems(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+  if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
     const item = createInventoryItem({
       code: req.body.code,
@@ -638,8 +692,9 @@ router.post('/items', async (req: Request, res: Response) => {
       subcategory: req.body.subcategory,
       company: req.body.company,
       unit: req.body.unit,
+      ...operationalMeta,
     });
-    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit });
+    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta, ...masterFields, createdById: req.user!.id });
     registerItemCompany(saved.id, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistItem(saved, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({
@@ -666,17 +721,38 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   if (listItems().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
-  Object.assign(item, {
+  let operationalMeta: ItemOperationalMeta;
+  let masterFields: ReturnType<typeof parseItemMasterFields>;
+  try {
+    operationalMeta = parseItemOperationalMeta(req.body);
+    masterFields = parseItemMasterFields(req.body);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
+  }
+  const claimConflict = findIdentityConflict(listItems(), item.id, {
+    code: nextCode !== item.code ? nextCode : undefined,
+    barcode: masterFields.barcode,
+    aliases: masterFields.aliases,
+  });
+  if (claimConflict) return res.status(409).json({ message: claimConflict });
+  const patch = {
     code: nextCode,
     name: nextName,
     category: req.body.category === undefined ? item.category : String(req.body.category || '').trim() || undefined,
     subcategory: req.body.subcategory === undefined ? item.subcategory : String(req.body.subcategory || '').trim() || undefined,
     company: req.body.company === undefined ? item.company : String(req.body.company || '').trim() || undefined,
     unit: req.body.unit === undefined ? item.unit : String(req.body.unit || '').trim() || undefined,
-  });
-  await persistItem(item);
-  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: item.id, metadata: { code: item.code, name: item.name } }));
-  return res.json({ item });
+    ...operationalMeta,
+    ...masterFields,
+    version: (item.version ?? 1) + 1,
+    updatedById: req.user!.id,
+  };
+  // Write to the stored record (item is only a copy) so the change is
+  // visible to every later request, not just this response.
+  const updated = updateItemRecord(item.id, patch)!;
+  await persistItem(updated);
+  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: updated.id, metadata: { code: updated.code, name: updated.name } }));
+  return res.json({ item: updated });
 });
 
 router.put('/items/:itemId/lots/:lotId', async (req: Request, res: Response) => {
@@ -731,7 +807,13 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
         availableQuantity: row.onHand,
       }));
 
-  return res.json({ locationId, items: rows.map((row) => sanitizeStockForRole(context.role, row)) });
+  const activeItemIds = new Set(listItems().filter(isOperationalItem).map((item) => item.id));
+  const visibleRows = (hidesZeroStockForRole(context.role)
+    ? rows.filter((row) => row.availableQuantity > 0)
+    : rows
+  ).filter((row) => seesInactiveItems(context.role) || activeItemIds.has(row.itemId));
+
+  return res.json({ locationId, items: visibleRows.map((row) => sanitizeStockForRole(context.role, row)) });
 });
 
 // ============================================
@@ -777,6 +859,121 @@ router.get('/counts', async (req: Request, res: Response) => {
   return res.json({ counts });
 });
 
+// Blueprint v4 §14: a reviewer acknowledges a late-movement flag once they have
+// looked at it (and adjusted stock if needed). The recomputed figures stay on
+// the count for the audit trail.
+router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, res: Response) => {
+  if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
+  const count = listCounts().find((candidate) => candidate.id === firstParam(req.params.countId));
+  if (!count) return res.status(404).json({ message: 'Stock count was not found.' });
+  if (!canAccessLocation(accessContext(req.user!), count.locationId)) return res.status(403).json({ message: 'This user cannot review counts at that location.' });
+  if (!count.reconciliationRequired) return res.status(409).json({ message: 'This count has no open reconciliation flag.' });
+  let note: string;
+  try {
+    note = parseCountReviewReason(req.body?.note);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'A resolution note is required.' });
+  }
+  const stored = countsStore.find((candidate) => candidate.id === count.id)!;
+  stored.reconciliationRequired = false;
+  stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user!.id}: ${note}`.trim();
+  await persistCountReconciliation(stored);
+  await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'COUNT_RECONCILIATION_RESOLVED', entityType: 'StockCount', entityId: count.id, metadata: { note, lateDelta: stored.lateDelta } }));
+  publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
+  return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
+});
+
+// Blueprint v4 §38: a client-generated idempotency key makes a retried submit
+// (offline outbox, request timeout) return the count it already created.
+function parseRequestId(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > 191) throw new Error('requestId must be text of at most 191 characters.');
+  return value.trim() || undefined;
+}
+
+function countsForRequest(userId: string, requestId: string) {
+  return listCounts().filter((count) => count.submittedBy === userId && count.requestId === requestId);
+}
+
+// A store user stays blind to book quantity and variance in every response.
+function countResponse(role: string, count: { id: string; itemId: string; lotId: string; locationId: string; physicalQuantity: number; bookQty: number }) {
+  return role === 'STORE_USER'
+    ? { id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, physicalQuantity: count.physicalQuantity }
+    : { ...count, variance: count.physicalQuantity - count.bookQty };
+}
+
+type LotCountArgs = {
+  userId: string;
+  userRole: string;
+  role: Role;
+  item: ReturnType<typeof listItems>[number];
+  lot: ReturnType<typeof listItems>[number]['lots'][number];
+  locationId: string;
+  physicalQuantity: number;
+  mode: 'scan' | 'manual' | 'weight';
+  requestId?: string;
+  assignment?: ReturnType<typeof findActiveAssignment>;
+  // 'auto' closes the assignment once every lot with stock is counted (scan
+  // counts); weight counts close it themselves after allocating the item total.
+  closeAssignment: 'auto' | 'never';
+};
+
+/** Records one lot's count: memory + database + audit, and the assignment/campaign bookkeeping. */
+async function commitLotCount(args: LotCountArgs) {
+  const { item, lot, assignment } = args;
+  const bookQty = findStockLedgerEntry(item.id, lot.id, args.locationId)?.onHand ?? 0;
+  const saved = submitStockCount({
+    itemId: item.id,
+    lotId: lot.id,
+    locationId: args.locationId,
+    physicalQuantity: args.physicalQuantity,
+    mode: args.mode,
+    submittedBy: args.userId,
+    role: args.role,
+  });
+  // Memory first, database second, and the memory copy is withdrawn if the database refuses.
+  await recordThenPersist(
+    () => createCountRecord({
+      id: saved.id,
+      itemId: saved.itemId,
+      lotId: saved.lotId,
+      locationId: saved.locationId,
+      physicalQuantity: saved.physicalQuantity,
+      bookQty,
+      mode: saved.mode,
+      submittedBy: saved.submittedBy,
+      role: saved.role,
+      createdAt: saved.createdAt,
+      parentCountId: assignment?.parentCountId,
+      requestId: args.requestId,
+    }),
+    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }),
+    (record) => removeCountRecord(record.id),
+  );
+  const followUps: Promise<unknown>[] = [
+    persistAudit(recordAudit({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
+  ];
+  if (assignment && args.closeAssignment === 'auto') {
+    const requiredLotIds = item.lots
+      .filter((candidate) => (findStockLedgerEntry(item.id, candidate.id, args.locationId)?.onHand ?? 0) !== 0)
+      .map((candidate) => candidate.id);
+    const countedLotIds = new Set(
+      listCounts()
+        .filter((count) => count.itemId === item.id && count.locationId === args.locationId && count.submittedBy === args.userId && count.createdAt >= assignment.createdAt)
+        .map((count) => count.lotId),
+    );
+    countedLotIds.add(saved.lotId);
+    if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
+      markAssignmentSubmitted(assignment.id, saved.id);
+      followUps.push(persistAssignmentSubmitted(assignment.id, saved.id));
+      // A campaign task just moved to SUBMITTED: keep coverage in step.
+      followUps.push(reconcileCampaignQuietly(assignment.campaignId));
+    }
+  }
+  await Promise.all(followUps);
+  return { saved, bookQty };
+}
+
 router.post('/stock-counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const input = req.body as BlindCountInput;
@@ -787,14 +984,30 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
 
   try {
     const validated = validateBlindCountSubmission(context.role, input);
+    const requestId = parseRequestId(input.requestId);
+    if (requestId) {
+      const [prior] = countsForRequest(req.user!.id, requestId);
+      if (prior) return res.status(200).json({ success: true, duplicate: true, count: countResponse(context.role, prior) });
+    }
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
     if (!item) return res.status(400).json({ message: 'Item was not found.' });
+    if (!isOperationalItem(item)) return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
 
     const lot = validated.lotNo
       ? item.lots.find((candidate) => candidate.lotNo.toLowerCase() === validated.lotNo!.toLowerCase())
       : item.lots[0];
     if (!lot) return res.status(400).json({ message: `Lot "${validated.lotNo}" was not found for this item.` });
+
+    // Blueprint v4 §13: pieces are whole numbers; only weight / decimal items take fractions.
+    if (!item.decimalQuantity && item.countMethod !== 'ITEM_WEIGHT' && !Number.isInteger(validated.physicalQuantity)) {
+      return res.status(400).json({ message: `Item ${item.code} is counted in whole units.` });
+    }
+
+    // Blueprint v4 §7: operational users never act on a zero-stock lot.
+    if (hidesZeroStockForRole(context.role) && (findStockLedgerEntry(item.id, lot.id, validated.locationId)?.onHand ?? 0) <= 0) {
+      return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });
+    }
 
     if (findPendingCountForLot(req.user!.id, item.id, lot.id, validated.locationId)) {
       return res.status(409).json({ message: 'This lot is already submitted and waiting for review.' });
@@ -809,84 +1022,107 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       }
     }
 
-    const bookQty = findStockLedgerEntry(item.id, lot.id, validated.locationId)?.onHand ?? 0;
-
-    const saved = submitStockCount({
-      itemId: validated.itemId,
-      lotId: lot.id,
-      locationId: validated.locationId,
-      physicalQuantity: validated.physicalQuantity,
-      mode: validated.mode ?? 'manual',
-      submittedBy: req.user!.id,
-      role: context.role,
+    const { saved, bookQty } = await commitLotCount({
+      userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
+      physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
     });
+    return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
+  }
+});
 
-    createCountRecord({
-      id: saved.id,
-      itemId: saved.itemId,
-      lotId: saved.lotId,
-      locationId: saved.locationId,
-      physicalQuantity: saved.physicalQuantity,
-      bookQty,
-      mode: saved.mode,
-      submittedBy: saved.submittedBy,
-      role: saved.role,
-      createdAt: saved.createdAt,
-      parentCountId: assignment?.parentCountId,
-    });
-    // persistCount must land before anything references it as committed;
-    // the audit write and the (optional) assignment-close write are each
-    // independent of the other, so they run concurrently instead of as two
-    // more sequential round trips stacked on top of persistCount - this was
-    // the difference between 3 and 2 serial DB writes per submitted count.
-    await persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId });
+// Blueprint v4 §13.2: loose KG / item-weight counting. The user enters one
+// decimal total for the item; the server spreads it over the item's lots in
+// FIFO/FEFO order (lib/weight-allocation.ts) and creates a count per lot. The
+// user never picks or splits lots, and a store user is never shown the split
+// (it would reveal the book quantities the count is blind to).
+const weightInFlight = new Set<string>();
 
-    const followUps: Promise<unknown>[] = [
-      persistAudit(recordAudit({
-        actorId: req.user!.id,
-        actorRole: req.user!.role,
-        action: 'STOCK_COUNT_SUBMITTED',
-        entityType: 'StockCount',
-        entityId: saved.id,
-      })),
-    ];
-
-    if (assignment) {
-      const requiredLotIds = item.lots
-        .filter((candidate) => (findStockLedgerEntry(item.id, candidate.id, validated.locationId)?.onHand ?? 0) !== 0)
-        .map((candidate) => candidate.id);
-      const countedLotIds = new Set(
-        listCounts()
-          .filter((count) =>
-            count.itemId === item.id
-            && count.locationId === validated.locationId
-            && count.submittedBy === req.user!.id
-            && count.createdAt >= assignment.createdAt)
-          .map((count) => count.lotId),
-      );
-      countedLotIds.add(saved.lotId);
-      if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
-        markAssignmentSubmitted(assignment.id, saved.id);
-        followUps.push(persistAssignmentSubmitted(assignment.id, saved.id));
+router.post('/stock-counts/weight', async (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string };
+  if (!input?.itemId || !input?.locationId) return res.status(400).json({ message: 'Item and location are required for a count submission.' });
+  const locationId = input.locationId;
+  if (!canAccessLocation(context, locationId)) {
+    return res.status(403).json({ message: 'This user cannot submit a count for the selected location.' });
+  }
+  try {
+    const total = Number(input.totalQuantity);
+    if (input.totalQuantity === undefined || input.totalQuantity === null || (input.totalQuantity as unknown) === '' || !Number.isFinite(total) || total < 0) {
+      return res.status(400).json({ message: 'Counted quantity must be a non-negative number.' });
+    }
+    const requestId = parseRequestId(input.requestId);
+    if (requestId) {
+      const prior = countsForRequest(req.user!.id, requestId);
+      if (prior.length) {
+        return res.status(200).json({
+          success: true, duplicate: true,
+          ...(context.role === 'STORE_USER' ? { lots: prior.length } : { counts: prior.map((count) => countResponse(context.role, count)) }),
+        });
       }
     }
 
-    await Promise.all(followUps);
+    const item = listItems().find((candidate) => candidate.id === input.itemId);
+    if (!item) return res.status(400).json({ message: 'Item was not found.' });
+    if (!isOperationalItem(item)) return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
+    if (item.countMethod !== 'ITEM_WEIGHT') {
+      return res.status(400).json({ message: `Item ${item.code} is counted by scanning lots, not by weight.` });
+    }
 
-    // Store User stays blind to book quantity and variance even in the submission response.
-    const responseCount = context.role === 'STORE_USER'
-      ? {
-          id: saved.id,
-          itemId: saved.itemId,
-          lotId: saved.lotId,
-          locationId: saved.locationId,
-          physicalQuantity: saved.physicalQuantity,
-        }
-      : { ...saved, bookQty, variance: saved.physicalQuantity - bookQty };
+    let assignment;
+    if (context.role === 'STORE_USER') {
+      assignment = findActiveAssignment(req.user!.id, item.id, locationId);
+      if (!assignment) return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
+    }
 
-    return res.status(201).json({ success: true, count: responseCount });
+    const lots = item.lots.map((lot) => ({
+      lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+      bookQty: findStockLedgerEntry(item.id, lot.id, locationId)?.onHand ?? 0,
+    }));
+    const allocation = allocateWeightCount(total, lots, item.allocationStrategy ?? 'FEFO');
+    if (allocation.some((row) => findPendingCountForLot(req.user!.id, item.id, row.lotId, locationId))) {
+      return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
+    }
+
+    // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
+    // so a retry never finds half a count and calls it done.
+    const flightKey = requestId ? `${req.user!.id}|${requestId}` : '';
+    if (flightKey && weightInFlight.has(flightKey)) return res.status(409).json({ message: 'This count is already being saved. Retry in a moment.' });
+    if (flightKey) weightInFlight.add(flightKey);
+    const saved: Array<Awaited<ReturnType<typeof commitLotCount>>> = [];
+    try {
+      for (const row of allocation) {
+        const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
+        saved.push(await commitLotCount({
+          userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
+          physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+        }));
+      }
+    } catch (error) {
+      for (const row of saved) {
+        removeCountRecord(row.saved.id);
+        await persistCountDeletion(row.saved.id).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      if (flightKey) weightInFlight.delete(flightKey);
+    }
+    // The whole item was counted in one entry, so the task is complete now.
+    if (assignment) {
+      markAssignmentSubmitted(assignment.id, saved[0].saved.id);
+      await Promise.all([persistAssignmentSubmitted(assignment.id, saved[0].saved.id), reconcileCampaignQuietly(assignment.campaignId)]);
+    }
+
+    if (context.role === 'STORE_USER') return res.status(201).json({ success: true, lots: saved.length });
+    return res.status(201).json({
+      success: true,
+      counts: saved.map((row) => countResponse(context.role, { ...row.saved, bookQty: row.bookQty })),
+      allocation: allocation.map((row) => ({ lotId: row.lotId, lotNo: row.lotNo, bookQty: row.bookQty, physicalQuantity: row.physicalQty })),
+      totalVariance: totalVariance(allocation),
+    });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid weight count payload' });
   }
 });
 
@@ -920,6 +1156,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason });
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
     const variance = updated.physicalQuantity - updated.bookQty;
+    const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
     let recountAssignment;
     if (status === 'RECOUNT') {
       const recount = createRecountAssignment(updated, req.user!.id);
@@ -952,6 +1189,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       },
     });
     if (status === 'APPROVED') maybeEmitStockLow(updated.itemId, updated.locationId, updated.bookQty);
+    await reconcileCampaignQuietly(reviewedCampaignId);
     return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Stock count was not found.';
@@ -1001,6 +1239,8 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
   if (unknownItemId) {
     return res.status(400).json({ message: `Item "${unknownItemId}" was not found.` });
   }
+  const inactiveAssignItem = inactiveItemMessage(itemIds);
+  if (inactiveAssignItem) return res.status(400).json({ message: inactiveAssignItem });
 
   let parsedDueDate: string | undefined;
   let parsedPriority;
@@ -1086,6 +1326,56 @@ router.get('/count-assignments/mine', (req: Request, res: Response) => {
     return { ...assignment, itemName: item?.name ?? assignment.itemId, itemCode: item?.code };
   });
   return res.json({ assignments });
+});
+
+// Blueprint v4 §37: the mobile app is task-first. This is the one call a
+// phone needs to render its Work tab: the user's open count tasks (only
+// items that still have counted-in stock at the location, with only the lots
+// worth counting and no quantities, so the blind count stays blind) and the
+// transfers waiting to be received at their branch. No full catalog.
+router.get('/mobile/work', (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const isStore = context.role === 'STORE_USER';
+  const countTasks = isStore
+    ? listCountAssignmentsFor(req.user!.id).flatMap((assignment) => {
+        const item = listItems().find((candidate) => candidate.id === assignment.itemId);
+        if (!item || !isOperationalItem(item) || !canAccessLocation(context, assignment.locationId)) return [];
+        const lots = item.lots
+          .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && (findStockLedgerEntry(item.id, lot.id, assignment.locationId)?.onHand ?? 0) > 0)
+          .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
+        // Nothing on the shelf to count: not an actionable task for a store user.
+        if (!lots.length) return [];
+        return [{
+          assignmentId: assignment.id,
+          locationId: assignment.locationId,
+          countDate: assignment.countDate,
+          dueDate: assignment.dueDate,
+          priority: assignment.priority ?? 'NORMAL',
+          instructions: assignment.instructions,
+          campaignId: assignment.campaignId,
+          recount: Boolean(assignment.parentCountId),
+          item: {
+            id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
+            countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
+          },
+          lots,
+        }];
+      })
+    : [];
+  const receiveTasks = ['STORE_USER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER'].includes(context.role)
+    ? listTransfers()
+        .filter((transfer) => ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(transfer.status) && canAccessLocation(context, transfer.destinationLocationId))
+        .map((transfer) => ({
+          transferId: transfer.id,
+          sourceLocationId: transfer.sourceLocationId,
+          destinationLocationId: transfer.destinationLocationId,
+          status: transfer.status,
+          lineCount: transfer.lines.length,
+          cartonCount: transfer.cartonCount,
+          createdAt: transfer.createdAt,
+        }))
+    : [];
+  return res.json({ countTasks, receiveTasks });
 });
 
 router.get('/count-assignments', (req: Request, res: Response) => {
@@ -1225,7 +1515,12 @@ router.get('/transfers/list', (req: Request, res: Response) => {
   const transfers = listTransfers().filter((transfer) =>
     canAccessLocation(context, transfer.sourceLocationId)
     || canAccessLocation(context, transfer.destinationLocationId),
-  );
+  ).map((transfer) => ({
+    ...transfer,
+    // Carton labels and the transit flag (blueprint §17/§18) so a receiver can find a transfer by carton.
+    cartons: activeCartons(listTransferCartons(transfer.id)).map((carton) => ({ packageId: carton.packageId, quantity: carton.quantity, weightKg: carton.weightKg })),
+    delayed: isTransitDelayed({ status: transfer.status, expectedArrivalAt: transfer.dispatch?.expectedArrivalAt }),
+  }));
   return res.json({ transfers });
 });
 
@@ -1252,6 +1547,8 @@ router.post('/transfers', async (req: Request, res: Response) => {
 
     const cartonCount = parseCartonCount(input.cartonCount);
     const validated = validateTransferRequest(context.role, { ...input, cartonCount });
+    const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
+    if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
     const workflow = getActiveWorkflow();
     if (workflow.expiryBlocking) {
       const expired = validated.lines.filter((line) => {
@@ -1402,6 +1699,11 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
   if (!canAccessLocation(context, transfer.sourceLocationId)
     && !canAccessLocation(context, transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Transfer location access denied.' });
+  }
+
+  // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
+  if (nextStatus === 'DISPATCHED' && !transfer.packing && activeCartons(listTransferCartons(transfer.id)).length > 0) {
+    return res.status(409).json({ message: 'Packing was started for this transfer. Complete it before dispatching.' });
   }
 
   try {
@@ -1776,7 +2078,9 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Import history access denied.' });
   }
   try {
-    return res.json({ batches: await listImportBatches(Number(req.query.limit ?? 100)) });
+    const batches = await listImportBatches(Number(req.query.limit ?? 100));
+    // Blueprint v4 §10.1: a batch is reversible while it is POSTED and is not itself a reversal.
+    return res.json({ batches: batches.map((batch) => ({ ...batch, reversible: batch.status === 'POSTED' && !String(batch.type).includes('REVERS') })) });
   } catch (error) {
     return res.status(503).json({ message: error instanceof Error ? error.message : 'Import history is unavailable.' });
   }
@@ -2120,10 +2424,18 @@ function configuredPurchaseWarehouse() {
 }
 
 function dailyItem(row: DailyStockRow) {
-  const code = row.itemCode ? listItems().find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
+  const catalog = listItems();
+  const code = row.itemCode ? catalog.find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
   if (code) return code;
-  const matched = listItems().filter((item) => normalName(item.name) === normalName(row.itemName));
-  return matched.length === 1 ? matched[0] : undefined;
+  // ERP alias / barcode mapping (blueprint v4 §10); a row with a code never falls back to its name.
+  if (row.itemCode) return resolveItemByIdentity(catalog, { code: row.itemCode }).item;
+  const matched = catalog.filter((item) => normalName(item.name) === normalName(row.itemName));
+  if (matched.length === 1) return matched[0];
+  return matched.length === 0 ? resolveItemByIdentity(catalog, { name: row.itemName }).item : undefined;
+}
+
+function inactiveImportMessage(item: { code: string; status?: string }): string {
+  return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 
 function planDailyImport(preview: DailyImportPreview, importedBy: string) {
@@ -2132,6 +2444,7 @@ function planDailyImport(preview: DailyImportPreview, importedBy: string) {
   for (const row of preview.validRows) {
     const item = dailyItem(row);
     if (!item) { errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Unknown or ambiguous Item Name: ${row.itemName}` }); continue; }
+    if (!isOperationalItem(item)) { errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) }); continue; }
     const location = preview.importType === 'PURCHASE' ? warehouse : matchImportLocation(row.locationName, listLocations());
     if (!location) { errors.push({ rowNumber: row.rowNumber, message: `Unknown ${preview.importType === 'PURCHASE' ? 'H.O. Basni warehouse' : 'sales branch'}: ${row.locationName}` }); continue; }
     if (preview.importType === 'PURCHASE' && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
@@ -2232,6 +2545,8 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       metadata: batch.metadata ?? undefined,
     });
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
+    // Movements dated before an existing count make that count's book quantity stale.
+    await applyLateMovementsQuietly(movements, req.user!.id);
     await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
@@ -2424,6 +2739,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
     for (const entry of plan.prepared) if (entry.newLot) ensureLotRecord(entry.newLot.itemId, entry.newLot.lotNo, entry.newLot.expiryDate, entry.newLot.attributes, entry.newLot.id);
     for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);
+    await applyLateMovementsQuietly(movements, req.user!.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `${importType}_IMPORT_COMMITTED`, entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, rows: persisted.committedRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, purchaseWarehouse: warehouse?.name } }));
     return res.status(201).json({ message: `${importType === 'PURCHASE' ? 'Purchase received into H.O. Basni' : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`, batchId, committedRows: persisted.committedRows });
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit import.' }); }
@@ -2444,9 +2760,9 @@ router.get('/sync-status', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 function exactItemMatch(itemCode?: string, itemName?: string) {
-  if (itemCode) return listItems().find((item) => item.code.trim().toLowerCase() === itemCode.trim().toLowerCase());
-  const candidates = listItems().filter((item) => item.name.trim().toLowerCase() === itemName?.trim().toLowerCase());
-  return candidates.length === 1 ? candidates[0] : undefined;
+  // Code, barcode or ERP alias when a code is given (never falling back to
+  // the name); otherwise a unique name or alias.
+  return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
 function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean) {
@@ -2471,6 +2787,10 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
     const item = exactItemMatch(row.itemCode, row.itemName);
     if (!item) {
       errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
+      continue;
+    }
+    if (!isOperationalItem(item)) {
+      errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) });
       continue;
     }
     const lots = item.lots.map((lot) => ({
@@ -2565,7 +2885,7 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
     const pickedQty = picked.get(`${line.itemId}|${line.lotId}`) ?? 0;
     return {
       lineId: `${transfer.id}:${index}`, itemId: line.itemId, itemCode: item?.code, itemName: item?.name,
-      unit: item?.unit ?? 'PCS', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
+      unit: item?.unit ?? 'PCS', pickMethod: item?.pickMethod ?? 'LOT_SCAN', lotStatus: lot?.status ?? 'AVAILABLE', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
       lotId: line.lotId, lotNo: lot?.lotNo, expiryDate: lot?.expiryDate,
       lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,
     };
@@ -2573,47 +2893,126 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
   return res.json({ transfer: { ...transfer, lines }, pickSlips: slips.map((event) => event.metadata) });
 });
 
+// Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
+async function pooledPickState(transfer: TransferRecord, itemId: string) {
+  const item = listItems().find((candidate) => candidate.id === itemId);
+  if (!item) throw new Error('Item was not found.');
+  if (!isPooledPick(item)) throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
+  const requestedTotal = transfer.lines.filter((line) => line.itemId === itemId).reduce((sum, line) => sum + line.quantity, 0);
+  if (!(requestedTotal > 0)) throw new Error('This item is not part of the transfer.');
+  const priorSlips = await savedPickSlips(transfer.id);
+  const pickedByLot = new Map<string, number>();
+  for (const slip of priorSlips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
+    if (line.itemId === itemId) pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
+  }
+  const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
+  const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
+  const lots = item.lots.map((lot) => ({
+    lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+    available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
+  }));
+  return { item, remaining: Math.max(0, Math.round((requestedTotal - pickedTotal) * 1000) / 1000), lots };
+}
+
+router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
+  const transfer = listTransfers().find((entry) => entry.id === firstParam(req.params.transferId));
+  const context = accessContext(req.user!);
+  if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  try {
+    const quantity = Number(req.body?.quantity);
+    const state = await pooledPickState(transfer, String(req.body?.itemId ?? ''));
+    if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8) throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
+    const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
+    return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to preview this pick.' });
+  }
+});
+
 router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
   const transfer = listTransfers().find((entry) => entry.id === transferId);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  const prior = await savedPickSlips(transferId);
+  // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
+  const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  if (requestId) {
+    const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
+    if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
+  }
   if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return res.status(400).json({ message: `Transfer cannot be picked while ${transfer.status}.` });
-  const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
   if (!lines.length && !exceptions.length) return res.status(400).json({ message: 'At least one picked line or exception is required.' });
   const itemMap = new Map(listItems().map((item) => [item.id, item]));
   const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
-  const prior = await savedPickSlips(transferId);
   const priorPicked = new Map<string, number>();
   for (const slip of prior) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`; priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
   }
   try {
+    // A KG line carries only item + weight: the server chooses the lots (FIFO/FEFO), the picker never splits them.
+    const expanded: any[] = [];
+    for (const line of lines) {
+      const item = itemMap.get(line.itemId);
+      if (item && isPooledPick(item) && !line.lotId) {
+        const state = await pooledPickState(transfer, line.itemId);
+        const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
+        const { allocations, shortfall } = allocatePick({
+          requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
+          lots: state.lots.map((lot) => ({ ...lot, available: Math.max(0, lot.available - expanded.filter((row) => row.lotId === lot.lotId).reduce((sum, row) => sum + row.quantity, 0)) })),
+        });
+        if (shortfall > 0) throw new Error(`Only ${Math.round((Number(line.quantity) - shortfall) * 1000) / 1000} of ${item.code} is available in pickable lots. Report it as No Stock or pick less.`);
+        if (pending + Number(line.quantity) > state.remaining + 1e-8) throw new Error(`${item.code} exceeds remaining requested quantity.`);
+        for (const allocation of allocations) expanded.push({ itemId: line.itemId, lotId: allocation.lotId, quantity: allocation.quantity, inputMethod: 'MANUAL', allocated: true });
+      } else {
+        expanded.push(line);
+      }
+    }
+    lines = expanded;
+
+    const runningLot = new Map(priorPicked);
+    const runningItem = new Map<string, number>();
+    for (const [key, quantity] of priorPicked) runningItem.set(key.split('|')[0], (runningItem.get(key.split('|')[0]) ?? 0) + quantity);
     for (const line of lines) {
       const requested = transfer.lines.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId);
       const item = itemMap.get(line.itemId);
       const lot = item?.lots.find((entry) => entry.id === line.lotId);
-      if (!requested || !item || !lot) throw new Error('Picked item/lot is not part of this transfer.');
+      const pooled = Boolean(item && isPooledPick(item));
+      if (!item || !lot || (!requested && !pooled)) throw new Error('Picked item/lot is not part of this transfer.');
       const quantity = Number(line.quantity);
       validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, lotNo: lot.lotNo });
-      const already = priorPicked.get(`${line.itemId}|${line.lotId}`) ?? 0;
-      if (already + quantity > requested.quantity) throw new Error(`${item.code}/${lot.lotNo} exceeds remaining requested quantity.`);
-      const available = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
-      if (quantity > available) throw new Error(`${item.code}/${lot.lotNo} exceeds available stock.`);
+      const lotKey = `${line.itemId}|${line.lotId}`;
+      const alreadyLot = runningLot.get(lotKey) ?? 0;
+      if (pooled) {
+        const total = transfer.lines.filter((entry) => entry.itemId === line.itemId).reduce((sum, entry) => sum + entry.quantity, 0);
+        if ((runningItem.get(line.itemId) ?? 0) + quantity > total + 1e-8) throw new Error(`${item.code} exceeds remaining requested quantity.`);
+      } else if (alreadyLot + quantity > requested!.quantity + 1e-8) {
+        throw new Error(`${item.code}/${lot.lotNo} exceeds remaining requested quantity.`);
+      }
+      const onHand = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
+      // Blueprint §15: never a zero, blocked or expired lot - and stock already picked on this transfer is spoken for.
+      if (!isPickableLot({ status: lot.status, available: onHand - alreadyLot, expiryDate: lot.expiryDate })) {
+        throw new Error(`${item.code}/${lot.lotNo} cannot be picked: it is blocked, expired or has no stock left.`);
+      }
+      if (quantity > onHand - alreadyLot + 1e-8) throw new Error(`${item.code}/${lot.lotNo} exceeds available stock.`);
+      runningLot.set(lotKey, alreadyLot + quantity);
+      runningItem.set(line.itemId, (runningItem.get(line.itemId) ?? 0) + quantity);
     }
     for (const exception of exceptions) {
       if (!PICK_EXCEPTION_REASONS.includes(exception.reason)) throw new Error('Exception reason must be No Stock, Wrong Item or Damaged Item.');
       if (!Number.isFinite(Number(exception.quantity)) || Number(exception.quantity) <= 0) throw new Error('Exception quantity must be greater than zero.');
     }
     const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
-    const metadata = { id: slipId, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
+    const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata }));
 
     // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
     // Wrong Item or Damaged Item exception opens an owned Exception Inbox
     // case for supervisor resolution instead of silently dropping the line.
     const PICK_EXCEPTION_TYPE: Record<string, 'MISSING_STOCK' | 'WRONG_ITEM' | 'DAMAGE'> = {
+      NO_STOCK: 'MISSING_STOCK', WRONG_ITEM: 'WRONG_ITEM', DAMAGED_ITEM: 'DAMAGE',
       'No Stock': 'MISSING_STOCK', 'Wrong Item': 'WRONG_ITEM', 'Damaged Item': 'DAMAGE',
     };
     for (const exception of exceptions) {
@@ -2621,7 +3020,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       const itemLabel = item ? `${item.code} - ${item.name}` : exception.itemId ?? 'item';
       void createExceptionCase({
         type: PICK_EXCEPTION_TYPE[exception.reason] ?? 'TRANSFER_DISCREPANCY',
-        title: `${exception.reason}: ${itemLabel}`,
+        title: `${String(exception.reason).replaceAll('_', ' ').toLowerCase()}: ${itemLabel}`,
         description: `Reported while picking transfer ${transfer.id}.`,
         itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
         quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
@@ -2759,6 +3158,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
       if (!code && !name) continue;
       const item = exactItemMatch(code || undefined, name || undefined);
       if (!item) { errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` }); continue; }
+      if (!isOperationalItem(item)) { errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) }); continue; }
       if (seen.has(item.id)) continue; seen.add(item.id);
       const availableStock = ledger.filter((row) => row.itemId === item.id).reduce((sum, row) => sum + row.onHand, 0);
       if (availableStock <= 0) { errors.push({ rowNumber: index + 1, message: `${item.code} excluded because available stock is zero.` }); continue; }
@@ -2792,7 +3192,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
   const ledger = listStockLedgerForLocation(locationId); const deduped = [...new Set(itemIds)]; const excluded = []; const eligible = [];
   for (const itemId of deduped) {
     const available = ledger.filter((row) => row.itemId === itemId).reduce((sum, row) => sum + row.onHand, 0);
-    if (available <= 0) excluded.push(itemId); else eligible.push(itemId);
+    if (available <= 0 || inactiveItemMessage([itemId])) excluded.push(itemId); else eligible.push(itemId);
   }
   const assignments = eligible.map((itemId) => createCountAssignment({ id: `assign-${Math.random().toString(36).slice(2, 10)}`, locationId, itemId, assignedToId: storeUserId, assignedById: req.user!.id, countDate: countDate ? new Date(countDate).toISOString() : new Date().toISOString(), dueDate: parsedDueDate, priority: parsedPriority, instructions }));
   await Promise.all(assignments.map(persistCountAssignment));
@@ -2864,15 +3264,30 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   const transferId = firstParam(req.params.transferId);
   const transfer = listTransfers().find((record) => record.id === transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer not found.' });
-  if (!isReceivableStatus(transfer.status)) {
-    return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
-  }
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
   }
 
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
   if (!requestId || requestId.length > 191) return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
+
+  // A retry (client timeout, offline outbox) of a receipt that already went
+  // through answers with the recorded result - before the status gate, because
+  // that receipt may itself have completed the transfer.
+  const prior = await findReceiptByRequestId(requestId).catch(() => null);
+  if (prior) {
+    if (prior.transferId !== transferId) return res.status(409).json({ message: 'This requestId was already used for a different transfer.' });
+    return res.json({
+      success: true, duplicate: true, transfer,
+      receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
+    });
+  }
+  if (!isReceivableStatus(transfer.status)) {
+    return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
+  }
+  // The same request twice at once must not both post: the second waits for the client's next retry.
+  if (!beginReceiptRequest(requestId)) return res.status(409).json({ message: 'This receipt is already being processed. Retry in a moment.' });
+  try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
   if (Array.isArray(req.body.lines)) {
@@ -2932,6 +3347,13 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       templates,
     );
     if (qc.ok === false) return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+    // Blueprint v4 §25: an inspection that failed sends the goods to quarantine
+    // (the QC_FAIL exception case already exists), never to sellable stock.
+    const recorded: InspectionLike[] = [
+      ...(inspections as unknown as InspectionLike[]),
+      ...bodyInspections.map((entry: { itemId?: string; lineId?: string; results?: Record<string, QcCheckResult> }) => ({ itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null })),
+    ];
+    receiptLines = quarantineFailedLines(receiptLines, (line) => verdictForLine(recorded, { itemId: line.itemId, lineId: line.lineId })).lines;
   }
 
   try {
@@ -3046,6 +3468,10 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
 
     const nextTransfer = listTransfers().find((record) => record.id === transferId);
     if (nextTransfer) void emitTransferUpdated(nextTransfer);
+    rememberReceipt({
+      requestId, transferId, receiptId: persisted?.receiptId, status: status as 'RECEIVED' | 'PARTIAL_RECEIVED', receivedBy: req.user!.id,
+      receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+    });
     return res.json({
       success: true, duplicate: persisted?.duplicate ?? false,
       transfer: nextTransfer,
@@ -3053,6 +3479,9 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+  }
+  } finally {
+    endReceiptRequest(requestId);
   }
 });
 

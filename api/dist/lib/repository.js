@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.syncCheckpoints = exports.dailyMovements = exports.users = exports.stockMovements = exports.countAssignments = exports.stockLedger = exports.transfers = exports.counts = exports.items = exports.locations = exports.companyProfile = void 0;
+exports.syncCheckpoints = exports.dailyMovements = exports.users = exports.stockMovements = exports.countAssignments = exports.stockLedger = exports.transferCartons = exports.transfers = exports.counts = exports.items = exports.locations = exports.companyProfile = void 0;
 exports.getCompanyProfile = getCompanyProfile;
 exports.setCompanyProfile = setCompanyProfile;
 exports.findUserById = findUserById;
@@ -12,6 +12,7 @@ exports.adjustStockLedger = adjustStockLedger;
 exports.adjustQuarantineLedger = adjustQuarantineLedger;
 exports.listLocations = listLocations;
 exports.listItems = listItems;
+exports.updateItemRecord = updateItemRecord;
 exports.createItemRecord = createItemRecord;
 exports.upsertItemRecord = upsertItemRecord;
 exports.ensureLotRecord = ensureLotRecord;
@@ -22,6 +23,7 @@ exports.listDailyMovements = listDailyMovements;
 exports.upsertSyncCheckpoint = upsertSyncCheckpoint;
 exports.listSyncCheckpoints = listSyncCheckpoints;
 exports.createCountRecord = createCountRecord;
+exports.removeCountRecord = removeCountRecord;
 exports.listCounts = listCounts;
 exports.createTransferRecord = createTransferRecord;
 exports.listStockMovements = listStockMovements;
@@ -37,6 +39,10 @@ exports.findActiveAssignment = findActiveAssignment;
 exports.markAssignmentSubmitted = markAssignmentSubmitted;
 exports.updateTransferStatus = updateTransferStatus;
 exports.updateTransferReceiptProgress = updateTransferReceiptProgress;
+exports.listTransferCartons = listTransferCartons;
+exports.addTransferCarton = addTransferCarton;
+exports.setTransferCartonStatus = setTransferCartonStatus;
+exports.setTransferLogistics = setTransferLogistics;
 exports.listTransfers = listTransfers;
 const seed_js_1 = require("./seed.js");
 // Single-tenant: one profile for the whole deployment, not one per company.
@@ -52,6 +58,7 @@ exports.locations = [...seed_js_1.seedLocations];
 exports.items = [...seed_js_1.seedItems];
 exports.counts = [...seed_js_1.seedCounts];
 exports.transfers = [...seed_js_1.seedTransfers];
+exports.transferCartons = [];
 exports.stockLedger = [...seed_js_1.seedStockLedger];
 exports.countAssignments = [];
 exports.stockMovements = [];
@@ -110,6 +117,17 @@ function listItems() {
         lots: [...item.lots],
     }));
 }
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+function updateItemRecord(id, patch) {
+    const stored = exports.items.find((candidate) => candidate.id === id);
+    if (!stored)
+        return undefined;
+    Object.assign(stored, patch);
+    return { ...stored, lots: [...stored.lots] };
+}
 function createItemRecord(input) {
     const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
     const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
@@ -121,6 +139,23 @@ function createItemRecord(input) {
         subcategory: input.subcategory,
         company: input.company,
         unit: input.unit,
+        countMethod: input.countMethod,
+        pickMethod: input.pickMethod,
+        allocationStrategy: input.allocationStrategy,
+        lotRequired: input.lotRequired,
+        expiryRequired: input.expiryRequired,
+        decimalQuantity: input.decimalQuantity,
+        status: 'ACTIVE',
+        barcode: input.barcode,
+        hsn: input.hsn,
+        gstRate: input.gstRate,
+        mrp: input.mrp,
+        leadTimeDays: input.leadTimeDays,
+        shelfLifeDays: input.shelfLifeDays,
+        aliases: input.aliases,
+        version: 1,
+        createdById: input.createdById,
+        updatedById: input.createdById,
         lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
     };
     exports.items.push(item);
@@ -171,15 +206,29 @@ function updateLotExpiry(lotId, expiryDate) {
 }
 function recordDailyMovement(input) { exports.dailyMovements.push(input); return { ...input }; }
 function listDailyMovements() { return exports.dailyMovements.map((entry) => ({ ...entry })); }
-function upsertSyncCheckpoint(input) { const current = exports.syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType); if (current)
-    Object.assign(current, input);
-else
-    exports.syncCheckpoints.push(input); return { ...input }; }
+// A checkpoint only ever moves forward: backfilling an older day's file must
+// not make the branch look less synced than it already was.
+function upsertSyncCheckpoint(input) {
+    const current = exports.syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType);
+    if (!current) {
+        exports.syncCheckpoints.push({ ...input });
+        return { ...input };
+    }
+    if (input.syncedThroughAt > current.syncedThroughAt)
+        Object.assign(current, input);
+    return { ...current };
+}
 function listSyncCheckpoints() { return exports.syncCheckpoints.map((entry) => ({ ...entry })); }
 function createCountRecord(input) {
     const record = { status: 'PENDING_REVIEW', ...input };
     exports.counts.push(record);
     return { ...record };
+}
+/** Undoes createCountRecord when the database write behind it failed. */
+function removeCountRecord(id) {
+    const index = exports.counts.findIndex((row) => row.id === id);
+    if (index >= 0)
+        exports.counts.splice(index, 1);
 }
 function listCounts() {
     return [...exports.counts];
@@ -282,6 +331,7 @@ function createRecountAssignment(count, reviewedBy) {
         priority: previous?.priority ?? 'HIGH',
         instructions: count.reviewReason ? `Recount: ${count.reviewReason}` : previous?.instructions,
         parentCountId: count.id,
+        campaignId: previous?.campaignId,
     });
     return { assignment, cancelled: previous ? { ...previous } : undefined };
 }
@@ -321,6 +371,35 @@ function updateTransferReceiptProgress(id, lines) {
     if (!transfer)
         throw new Error('Transfer was not found.');
     transfer.lines = lines.map((line) => ({ ...line }));
+    return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
+}
+function listTransferCartons(transferId) {
+    return exports.transferCartons
+        .filter((carton) => !transferId || carton.transferId === transferId)
+        .map((carton) => ({ ...carton, lines: carton.lines.map((line) => ({ ...line })) }));
+}
+function addTransferCarton(carton) {
+    exports.transferCartons.push({ ...carton, lines: carton.lines.map((line) => ({ ...line })) });
+    return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+function setTransferCartonStatus(id, status) {
+    const carton = exports.transferCartons.find((row) => row.id === id);
+    if (!carton)
+        return undefined;
+    carton.status = status;
+    return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+/** Records packing completion and/or dispatch details on the stored transfer. */
+function setTransferLogistics(id, patch) {
+    const transfer = exports.transfers.find((record) => record.id === id);
+    if (!transfer)
+        throw new Error('Transfer was not found.');
+    if (patch.packing !== undefined)
+        transfer.packing = patch.packing;
+    if (patch.dispatch !== undefined)
+        transfer.dispatch = patch.dispatch;
+    if (patch.cartonCount !== undefined)
+        transfer.cartonCount = patch.cartonCount;
     return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }
 function listTransfers() {

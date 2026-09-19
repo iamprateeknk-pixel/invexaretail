@@ -13,10 +13,10 @@ class _ItemStockSummary {
   final List<StockRow> rows = [];
 
   int get lotCount => rows.length;
-  int get totalPhysical => rows.fold(0, (sum, row) => sum + (row.physicalQuantity ?? 0));
-  int? get totalBook {
+  double get totalPhysical => rows.fold<double>(0, (sum, row) => sum + (row.physicalQuantity ?? 0));
+  double? get totalBook {
     if (rows.any((row) => row.bookQuantity == null)) return null;
-    return rows.fold<int>(0, (sum, row) => sum + (row.bookQuantity ?? 0));
+    return rows.fold<double>(0, (sum, row) => sum + (row.bookQuantity ?? 0));
   }
 }
 
@@ -145,11 +145,11 @@ class _StockTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final book = showBookQuantity && summary.totalBook != null ? ' · Book ${summary.totalBook}' : '';
+    final book = showBookQuantity && summary.totalBook != null ? ' · Book ${formatQty(summary.totalBook)}' : '';
     return Card(
       child: ListTile(
         title: Text(summary.name),
-        subtitle: Text('${summary.code} · ${summary.lotCount} lot${summary.lotCount == 1 ? '' : 's'} · On hand ${summary.totalPhysical}$book'),
+        subtitle: Text('${summary.code} · ${summary.lotCount} lot${summary.lotCount == 1 ? '' : 's'} · On hand ${formatQty(summary.totalPhysical)}$book'),
         trailing: const Icon(Icons.chevron_right, color: invexaMuted),
         onTap: onTap,
       ),
@@ -182,10 +182,10 @@ class _ItemStockDetailSheet extends StatelessWidget {
               children: [
                 _StatChip(label: 'Lots', value: '${summary.lotCount}'),
                 const SizedBox(width: 8),
-                _StatChip(label: 'On hand', value: '${summary.totalPhysical}'),
+                _StatChip(label: 'On hand', value: formatQty(summary.totalPhysical)),
                 if (controller.showBookQuantity && summary.totalBook != null) ...[
                   const SizedBox(width: 8),
-                  _StatChip(label: 'Book', value: '${summary.totalBook}'),
+                  _StatChip(label: 'Book', value: formatQty(summary.totalBook)),
                 ],
               ],
             ),
@@ -201,8 +201,8 @@ class _ItemStockDetailSheet extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final row = summary.rows[index];
                   final lotNo = lookupLotNo(controller.items, row.itemId, row.lotId);
-                  final physical = row.physicalQuantity == null ? 'hidden' : '${row.physicalQuantity}';
-                  final book = controller.showBookQuantity && row.bookQuantity != null ? ' · book ${row.bookQuantity}' : '';
+                  final physical = row.physicalQuantity == null ? 'hidden' : formatQty(row.physicalQuantity);
+                  final book = controller.showBookQuantity && row.bookQuantity != null ? ' · book ${formatQty(row.bookQuantity)}' : '';
                   return Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [

@@ -11,6 +11,13 @@ import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
+import eventsRouter, { publishMutationEvents } from './routes/events.js';
+import campaignsRouter from './routes/campaigns.js';
+import itemMasterRouter from './routes/item-master.js';
+import transferLogisticsRouter from './routes/transfer-logistics.js';
+import commandCenterRouter from './routes/command-center.js';
+import { requestMetricsMiddleware } from './lib/request-metrics.js';
+import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
 import { buildPlatformMeta } from './lib/platform.js';
@@ -76,6 +83,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Request-Id', requestId);
   next();
 });
+
+app.use(requestMetricsMiddleware);
 
 // Rate limiting: General API
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
@@ -231,6 +240,16 @@ app.use('/api/v1/auth', enterpriseAuthRouter);
 app.use('/api/v1/admin', enterpriseManagementRouter);
 app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
 
+// Blueprint v4 §11: live event stream + payload-free mutation events. The
+// publisher must sit before every router that owns a mutating route.
+app.use('/api/v1', eventsRouter);
+app.use('/api/v1', campaignsRouter);
+app.use('/api/v1', itemMasterRouter);
+app.use('/api/v1', importControlCenterRouter);
+app.use('/api/v1', publishMutationEvents);
+app.use('/api/v1', transferLogisticsRouter);
+app.use('/api/v1', commandCenterRouter);
+
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
@@ -285,7 +304,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req: Request, res:
       lines,
     });
     markConnectorIngested(connector.id);
-    res.status(201).json({ order });
+    res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
   } catch (error) {
     res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to ingest marketplace order.' });
   }
@@ -380,6 +399,12 @@ const hydrateRepository = async () => {
   } catch (error) {
     console.warn('Audit history could not be hydrated; continuing without historical audit entries.', error instanceof Error ? error.message : error);
   }
+  try {
+    const { hydrateCampaignsFromDatabase } = await import('./lib/campaign-persistence.js');
+    await hydrateCampaignsFromDatabase();
+  } catch (error) {
+    console.warn('Stock-take campaigns could not be hydrated; continuing without them.', error instanceof Error ? error.message : error);
+  }
   console.log('✅ Inventory repository hydrated from database');
 };
 
@@ -391,6 +416,10 @@ const startServer = () => {
     await authHydration;
     await hydrateRepository();
     repositoryHydrationState = 'ready';
+    const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
+    startCampaignScheduler();
+    const { startOrderScheduler } = await import('./lib/order-scheduler.js');
+    startOrderScheduler();
   })();
   startupHydration.catch((error) => {
     repositoryHydrationState = 'failed';

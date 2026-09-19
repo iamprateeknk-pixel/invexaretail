@@ -16,6 +16,28 @@ export type ItemRecord = {
   subcategory?: string;
   company?: string;
   unit?: string;
+  // Blueprint v4 §6 operational metadata - see schema.prisma Item for field docs.
+  countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+  pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+  allocationStrategy?: 'FIFO' | 'FEFO';
+  lotRequired?: boolean;
+  expiryRequired?: boolean;
+  decimalQuantity?: boolean;
+  // Blueprint v4 §6 canonical Item Master - see lib/item-master.ts.
+  status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  archiveReason?: string;
+  archivedAt?: string;
+  archivedById?: string;
+  barcode?: string;
+  hsn?: string;
+  gstRate?: number;
+  mrp?: number;
+  leadTimeDays?: number;
+  shelfLifeDays?: number;
+  aliases?: string[];
+  version?: number;
+  createdById?: string;
+  updatedById?: string;
   lots: LotRecord[];
 };
 
@@ -35,16 +57,24 @@ export type CountRecord = {
   locationId: string;
   physicalQuantity: number;
   bookQty: number;
-  mode: 'scan' | 'manual';
+  mode: 'scan' | 'manual' | 'weight';
   submittedBy: string;
   role: Role;
   createdAt: string;
+  requestId?: string;
   status?: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RECOUNT';
   reviewedBy?: string;
   reviewedAt?: string;
   reviewReason?: string;
   parentCountId?: string;
   varianceMovementId?: string;
+  // Blueprint v4 §14 - see lib/late-movements.ts.
+  reconciliationRequired?: boolean;
+  reconciliationNote?: string;
+  reconciliationAt?: string;
+  bookQtyOriginal?: number;
+  lateDelta?: number;
+  lateMovementKeys?: string[];
 };
 
 export type StockLedgerRecord = {
@@ -79,6 +109,7 @@ export type CountAssignmentRecord = {
   status: 'ASSIGNED' | 'SUBMITTED' | 'CANCELLED';
   countId?: string;
   parentCountId?: string;
+  campaignId?: string;
   createdAt: string;
 };
 
@@ -93,10 +124,15 @@ export type TransferRecord = {
   cartonCount?: number;
   photos?: string[];
   notes?: string;
+  // Blueprint v4 §16: set once every expected line is covered by sealed cartons.
+  packing?: { completedAt: string; completedById: string; cartonCount: number };
+  // Blueprint v4 §17: set at dispatch.
+  dispatch?: { dispatchedAt: string; dispatchedById: string; carrier?: string; awb?: string; vehicleNo?: string; expectedArrivalAt?: string };
   createdAt: string;
 };
 
 import type { StockMovementRecord } from './stock-ledger.js';
+import type { TransferCartonRecord } from './transfer-packing.js';
 import { seedCounts, seedItems, seedLocations, seedStockLedger, seedTransfers, seedUsers } from './seed.js';
 
 export type CompanyProfileRecord = {
@@ -127,6 +163,7 @@ export const items: ItemRecord[] = [...seedItems];
 export const counts: CountRecord[] = [...seedCounts];
 
 export const transfers: TransferRecord[] = [...seedTransfers];
+export const transferCartons: TransferCartonRecord[] = [];
 
 export const stockLedger: StockLedgerRecord[] = [...seedStockLedger];
 
@@ -200,7 +237,18 @@ export function listItems(): ItemRecord[] {
   }));
 }
 
-export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string }): ItemRecord {
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+export function updateItemRecord(id: string, patch: Partial<Omit<ItemRecord, 'id' | 'lots'>>): ItemRecord | undefined {
+  const stored = items.find((candidate) => candidate.id === id);
+  if (!stored) return undefined;
+  Object.assign(stored, patch);
+  return { ...stored, lots: [...stored.lots] };
+}
+
+export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean; barcode?: string; hsn?: string; gstRate?: number; mrp?: number; leadTimeDays?: number; shelfLifeDays?: number; aliases?: string[]; createdById?: string }): ItemRecord {
   const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
   const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -212,6 +260,23 @@ export function createItemRecord(input: { code: string; name: string; category?:
     subcategory: input.subcategory,
     company: input.company,
     unit: input.unit,
+    countMethod: input.countMethod,
+    pickMethod: input.pickMethod,
+    allocationStrategy: input.allocationStrategy,
+    lotRequired: input.lotRequired,
+    expiryRequired: input.expiryRequired,
+    decimalQuantity: input.decimalQuantity,
+    status: 'ACTIVE',
+    barcode: input.barcode,
+    hsn: input.hsn,
+    gstRate: input.gstRate,
+    mrp: input.mrp,
+    leadTimeDays: input.leadTimeDays,
+    shelfLifeDays: input.shelfLifeDays,
+    aliases: input.aliases,
+    version: 1,
+    createdById: input.createdById,
+    updatedById: input.createdById,
     lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
   };
 
@@ -264,13 +329,26 @@ export function updateLotExpiry(lotId: string, expiryDate: string | null): LotRe
 
 export function recordDailyMovement(input: DailyMovementRecord): DailyMovementRecord { dailyMovements.push(input); return { ...input }; }
 export function listDailyMovements(): DailyMovementRecord[] { return dailyMovements.map((entry) => ({ ...entry })); }
-export function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord { const current = syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType); if (current) Object.assign(current, input); else syncCheckpoints.push(input); return { ...input }; }
+// A checkpoint only ever moves forward: backfilling an older day's file must
+// not make the branch look less synced than it already was.
+export function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord {
+  const current = syncCheckpoints.find((entry) => entry.locationId === input.locationId && entry.sourceType === input.sourceType);
+  if (!current) { syncCheckpoints.push({ ...input }); return { ...input }; }
+  if (input.syncedThroughAt > current.syncedThroughAt) Object.assign(current, input);
+  return { ...current };
+}
 export function listSyncCheckpoints(): SyncCheckpointRecord[] { return syncCheckpoints.map((entry) => ({ ...entry })); }
 
 export function createCountRecord(input: CountRecord): CountRecord {
   const record = { status: 'PENDING_REVIEW' as const, ...input };
   counts.push(record);
   return { ...record };
+}
+
+/** Undoes createCountRecord when the database write behind it failed. */
+export function removeCountRecord(id: string): void {
+  const index = counts.findIndex((row) => row.id === id);
+  if (index >= 0) counts.splice(index, 1);
 }
 
 export function listCounts(): CountRecord[] {
@@ -386,6 +464,7 @@ export function createRecountAssignment(count: CountRecord, reviewedBy: string):
     priority: previous?.priority ?? 'HIGH',
     instructions: count.reviewReason ? `Recount: ${count.reviewReason}` : previous?.instructions,
     parentCountId: count.id,
+    campaignId: previous?.campaignId,
   });
   return { assignment, cancelled: previous ? { ...previous } : undefined };
 }
@@ -433,6 +512,34 @@ export function updateTransferReceiptProgress(
   const transfer = transfers.find((record) => record.id === id);
   if (!transfer) throw new Error('Transfer was not found.');
   transfer.lines = lines.map((line) => ({ ...line }));
+  return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
+}
+
+export function listTransferCartons(transferId?: string): TransferCartonRecord[] {
+  return transferCartons
+    .filter((carton) => !transferId || carton.transferId === transferId)
+    .map((carton) => ({ ...carton, lines: carton.lines.map((line) => ({ ...line })) }));
+}
+
+export function addTransferCarton(carton: TransferCartonRecord): TransferCartonRecord {
+  transferCartons.push({ ...carton, lines: carton.lines.map((line) => ({ ...line })) });
+  return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+
+export function setTransferCartonStatus(id: string, status: TransferCartonRecord['status']): TransferCartonRecord | undefined {
+  const carton = transferCartons.find((row) => row.id === id);
+  if (!carton) return undefined;
+  carton.status = status;
+  return { ...carton, lines: carton.lines.map((line) => ({ ...line })) };
+}
+
+/** Records packing completion and/or dispatch details on the stored transfer. */
+export function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'packing' | 'dispatch' | 'cartonCount'>): TransferRecord {
+  const transfer = transfers.find((record) => record.id === id);
+  if (!transfer) throw new Error('Transfer was not found.');
+  if (patch.packing !== undefined) transfer.packing = patch.packing;
+  if (patch.dispatch !== undefined) transfer.dispatch = patch.dispatch;
+  if (patch.cartonCount !== undefined) transfer.cartonCount = patch.cartonCount;
   return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }
 

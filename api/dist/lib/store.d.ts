@@ -6,6 +6,12 @@ export type InventoryItemInput = {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+    pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+    allocationStrategy?: 'FIFO' | 'FEFO';
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
 };
 export type InventoryLot = {
     id: string;
@@ -22,6 +28,12 @@ export type InventoryItem = {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+    pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+    allocationStrategy?: 'FIFO' | 'FEFO';
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
     lots: InventoryLot[];
 };
 export type StockCountInput = {
@@ -29,7 +41,7 @@ export type StockCountInput = {
     lotId: string;
     locationId: string;
     physicalQuantity: number;
-    mode: 'scan' | 'manual';
+    mode: 'scan' | 'manual' | 'weight';
     submittedBy: string;
     role: Role;
 };
@@ -39,7 +51,7 @@ export type StockCountRecord = {
     lotId: string;
     locationId: string;
     physicalQuantity: number;
-    mode: 'scan' | 'manual';
+    mode: 'scan' | 'manual' | 'weight';
     submittedBy: string;
     role: Role;
     createdAt: string;

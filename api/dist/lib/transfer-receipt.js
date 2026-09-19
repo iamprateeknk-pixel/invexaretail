@@ -1,5 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.rememberReceipt = rememberReceipt;
+exports.beginReceiptRequest = beginReceiptRequest;
+exports.endReceiptRequest = endReceiptRequest;
+exports.findReceiptByRequestId = findReceiptByRequestId;
 exports.persistTransferReceipt = persistTransferReceipt;
 const node_crypto_1 = require("node:crypto");
 const db_js_1 = require("./db.js");
@@ -36,6 +40,44 @@ async function ensureReceiptSchema() {
   )`);
     await db_js_1.prisma.$executeRawUnsafe(`ALTER TABLE TransferReceiptLine ADD COLUMN IF NOT EXISTS excessQty DOUBLE NOT NULL DEFAULT 0`);
     schemaReady = true;
+}
+// Blueprint v4 §18: "duplicate receive request returns prior result rather
+// than double-posting". The database keeps the durable copy (TransferReceipt
+// has a unique requestId); this register makes the same true when the API runs
+// without a database and answers a retry without a query while the process is up.
+const memoryReceipts = new Map();
+const inFlight = new Set();
+function rememberReceipt(receipt) {
+    memoryReceipts.set(receipt.requestId, receipt);
+}
+/** Claims a requestId for the duration of one request; false while another identical request is running. */
+function beginReceiptRequest(requestId) {
+    if (inFlight.has(requestId))
+        return false;
+    inFlight.add(requestId);
+    return true;
+}
+function endReceiptRequest(requestId) {
+    inFlight.delete(requestId);
+}
+async function findReceiptByRequestId(requestId) {
+    const remembered = memoryReceipts.get(requestId);
+    if (remembered)
+        return remembered;
+    if (!persistence_js_1.databaseEnabled)
+        return null;
+    await ensureReceiptSchema();
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT id, transferId, receivedById, status, notes, createdAt FROM TransferReceipt WHERE requestId = ? LIMIT 1', requestId);
+    const row = rows[0];
+    if (!row)
+        return null;
+    const totals = await db_js_1.prisma.$queryRawUnsafe('SELECT COALESCE(SUM(receivedQty),0) receivedQty, COALESCE(SUM(damagedQty),0) damagedQty, COALESCE(SUM(shortageQty),0) shortageQty, COALESCE(SUM(excessQty),0) excessQty FROM TransferReceiptLine WHERE receiptId = ?', row.id);
+    const total = totals[0] ?? { receivedQty: 0, damagedQty: 0, shortageQty: 0, excessQty: 0 };
+    return {
+        requestId, transferId: row.transferId, receiptId: row.id, status: row.status, receivedBy: row.receivedById,
+        receivedAt: row.createdAt.toISOString(), receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty),
+        shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), notes: row.notes ?? undefined,
+    };
 }
 async function persistTransferReceipt(input) {
     if (!persistence_js_1.databaseEnabled)

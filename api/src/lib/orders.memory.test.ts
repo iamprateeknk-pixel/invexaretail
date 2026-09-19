@@ -33,3 +33,30 @@ test('memory mode splits a line that one location cannot fill alone', async () =
     assert.equal(error instanceof OrderShortageError, true);
   }
 });
+
+test('the same platform order delivered twice reserves once (idempotent on platform + external id)', async () => {
+  const input = { channel: 'FLIPKART', externalReference: ' FK-1001 ', createdById: 'connector', allowSplit: true, lines: [{ itemId: 'item-1001', quantity: 1 }] };
+  const before = listMemoryOrders().length;
+  const first = await createOrderWithReservation(input);
+  assert.equal(first.duplicate, undefined);
+  const again = await createOrderWithReservation({ ...input, externalReference: 'FK-1001' });
+  assert.equal(again.duplicate, true);
+  assert.equal(again.id, first.id);
+  assert.equal(listMemoryOrders().length, before + 1);
+
+  // Two deliveries arriving together still make one order.
+  const [a, b] = await Promise.all([
+    createOrderWithReservation({ ...input, externalReference: 'FK-2002' }),
+    createOrderWithReservation({ ...input, externalReference: 'FK-2002' }),
+  ]);
+  assert.equal(a.id, b.id);
+  assert.equal([a, b].filter((order) => order.duplicate).length, 1);
+  assert.equal(listMemoryOrders().length, before + 2);
+
+  // The same number on another platform is a different order; no reference never dedupes.
+  const other = await createOrderWithReservation({ ...input, channel: 'AMAZON', externalReference: 'FK-1001' });
+  assert.notEqual(other.id, first.id);
+  const x = await createOrderWithReservation({ ...input, externalReference: null });
+  const y = await createOrderWithReservation({ ...input, externalReference: null });
+  assert.notEqual(x.id, y.id);
+});

@@ -81,6 +81,7 @@ class _ItemSearchScreenState extends State<_ItemSearchScreen> {
         .where((item) =>
             item.name.toLowerCase().contains(needle) ||
             item.code.toLowerCase().contains(needle) ||
+            (item.barcode ?? '').toLowerCase().contains(needle) ||
             item.lots.any((lot) => lot.lotNo.toLowerCase().contains(needle)))
         .toList();
   }

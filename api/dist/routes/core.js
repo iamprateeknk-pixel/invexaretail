@@ -40,6 +40,9 @@ exports.planStockUpdate = planStockUpdate;
 const transfer_evidence_js_1 = require("../lib/transfer-evidence.js");
 const item_photos_js_1 = require("../lib/item-photos.js");
 const receipt_validation_js_1 = require("../lib/receipt-validation.js");
+const transfer_packing_js_1 = require("../lib/transfer-packing.js");
+const record_then_persist_js_1 = require("../lib/record-then-persist.js");
+const qc_gate_js_1 = require("../lib/qc-gate.js");
 const transfer_receipt_js_1 = require("../lib/transfer-receipt.js");
 // Core inventory API consumed by the web app: locations, items, counts,
 // transfers, picker tasks, dashboard, audit and CSV import/export.
@@ -74,8 +77,14 @@ const reservation_js_1 = require("../lib/reservation.js");
 const picker_js_1 = require("../lib/picker.js");
 const thermal_pdf_js_1 = require("../lib/thermal-pdf.js");
 const audit_js_1 = require("../lib/audit.js");
+const campaign_service_js_1 = require("../lib/campaign-service.js");
+const late_movement_service_js_1 = require("../lib/late-movement-service.js");
+const weight_allocation_js_1 = require("../lib/weight-allocation.js");
+const event_bus_js_1 = require("../lib/event-bus.js");
+const item_master_js_1 = require("../lib/item-master.js");
 const persistence_js_1 = require("../lib/persistence.js");
 const stock_import_js_1 = require("../lib/stock-import.js");
+const kg_pick_js_1 = require("../lib/kg-pick.js");
 const warehouse_workflow_js_1 = require("../lib/warehouse-workflow.js");
 const industry_packs_js_1 = require("../lib/industry-packs.js");
 const daily_stock_sync_js_1 = require("../lib/daily-stock-sync.js");
@@ -103,6 +112,18 @@ function xmlEscape(value) {
 }
 function firstParam(value) {
     return Array.isArray(value) ? value[0] : (value ?? '');
+}
+// Blueprint v4 §6: an inactive or archived item stays in history but cannot
+// take part in any new transaction.
+function inactiveItemMessage(itemIds) {
+    const catalog = (0, repository_js_1.listItems)();
+    for (const id of itemIds) {
+        const item = catalog.find((entry) => entry.id === id);
+        if (item && !(0, item_master_js_1.isOperationalItem)(item)) {
+            return `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be used in new transactions.`;
+        }
+    }
+    return null;
 }
 router.get('/permissions/catalog', async (req, res) => {
     if (req.user.role !== 'ADMIN')
@@ -509,12 +530,36 @@ router.delete('/users/:userId', async (req, res) => {
 });
 router.get('/items', (req, res) => {
     const companyId = req.companyId ?? req.user?.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID;
-    return res.json({ items: (0, tenant_scope_js_1.itemsForCompany)(companyId, (0, repository_js_1.listItems)()) });
+    let filter;
+    try {
+        filter = (0, item_master_js_1.parseStatusFilter)(req.query.status);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid status filter.' });
+    }
+    // Operational users only ever see ACTIVE items; admins can ask for
+    // ARCHIVED / all to maintain the master (blueprint v4 §6).
+    return res.json({ items: (0, item_master_js_1.visibleItems)(req.user.role, (0, tenant_scope_js_1.itemsForCompany)(companyId, (0, repository_js_1.listItems)()), filter) });
 });
 router.post('/items', async (req, res) => {
     if (!isOperationalAdmin(req.user.role)) {
         return res.status(403).json({ message: 'Only admins can create items.' });
     }
+    if (typeof req.body.code !== 'string' || !req.body.code.trim() || typeof req.body.name !== 'string' || !req.body.name.trim()) {
+        return res.status(400).json({ message: 'Item Code and Item Name are required.' });
+    }
+    let operationalMeta;
+    let masterFields;
+    try {
+        operationalMeta = (0, inventory_js_1.parseItemOperationalMeta)(req.body);
+        masterFields = (0, item_master_js_1.parseItemMasterFields)(req.body);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
+    }
+    const claimConflict = (0, item_master_js_1.findIdentityConflict)((0, repository_js_1.listItems)(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+    if (claimConflict)
+        return res.status(409).json({ message: claimConflict });
     try {
         const item = (0, store_js_1.createInventoryItem)({
             code: req.body.code,
@@ -523,8 +568,9 @@ router.post('/items', async (req, res) => {
             subcategory: req.body.subcategory,
             company: req.body.company,
             unit: req.body.unit,
+            ...operationalMeta,
         });
-        const saved = (0, repository_js_1.createItemRecord)({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit });
+        const saved = (0, repository_js_1.createItemRecord)({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta, ...masterFields, createdById: req.user.id });
         (0, tenant_scope_js_1.registerItemCompany)(saved.id, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistItem)(saved, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
@@ -554,17 +600,40 @@ router.put('/items/:itemId', async (req, res) => {
     if ((0, repository_js_1.listItems)().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
         return res.status(409).json({ message: 'Another item already uses this Item Code.' });
     }
-    Object.assign(item, {
+    let operationalMeta;
+    let masterFields;
+    try {
+        operationalMeta = (0, inventory_js_1.parseItemOperationalMeta)(req.body);
+        masterFields = (0, item_master_js_1.parseItemMasterFields)(req.body);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
+    }
+    const claimConflict = (0, item_master_js_1.findIdentityConflict)((0, repository_js_1.listItems)(), item.id, {
+        code: nextCode !== item.code ? nextCode : undefined,
+        barcode: masterFields.barcode,
+        aliases: masterFields.aliases,
+    });
+    if (claimConflict)
+        return res.status(409).json({ message: claimConflict });
+    const patch = {
         code: nextCode,
         name: nextName,
         category: req.body.category === undefined ? item.category : String(req.body.category || '').trim() || undefined,
         subcategory: req.body.subcategory === undefined ? item.subcategory : String(req.body.subcategory || '').trim() || undefined,
         company: req.body.company === undefined ? item.company : String(req.body.company || '').trim() || undefined,
         unit: req.body.unit === undefined ? item.unit : String(req.body.unit || '').trim() || undefined,
-    });
-    await (0, persistence_js_1.persistItem)(item);
-    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: item.id, metadata: { code: item.code, name: item.name } }));
-    return res.json({ item });
+        ...operationalMeta,
+        ...masterFields,
+        version: (item.version ?? 1) + 1,
+        updatedById: req.user.id,
+    };
+    // Write to the stored record (item is only a copy) so the change is
+    // visible to every later request, not just this response.
+    const updated = (0, repository_js_1.updateItemRecord)(item.id, patch);
+    await (0, persistence_js_1.persistItem)(updated);
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'ITEM_UPDATED', entityType: 'Item', entityId: updated.id, metadata: { code: updated.code, name: updated.name } }));
+    return res.json({ item: updated });
 });
 router.put('/items/:itemId/lots/:lotId', async (req, res) => {
     if (!isOperationalAdmin(req.user.role))
@@ -617,7 +686,11 @@ router.get('/stock/:locationId', async (req, res) => {
             reservedQuantity: 0,
             availableQuantity: row.onHand,
         }));
-    return res.json({ locationId, items: rows.map((row) => (0, inventory_js_1.sanitizeStockForRole)(context.role, row)) });
+    const activeItemIds = new Set((0, repository_js_1.listItems)().filter(item_master_js_1.isOperationalItem).map((item) => item.id));
+    const visibleRows = ((0, inventory_js_1.hidesZeroStockForRole)(context.role)
+        ? rows.filter((row) => row.availableQuantity > 0)
+        : rows).filter((row) => (0, item_master_js_1.seesInactiveItems)(context.role) || activeItemIds.has(row.itemId));
+    return res.json({ locationId, items: visibleRows.map((row) => (0, inventory_js_1.sanitizeStockForRole)(context.role, row)) });
 });
 // ============================================
 // COUNTS
@@ -659,6 +732,101 @@ router.get('/counts', async (req, res) => {
     }));
     return res.json({ counts });
 });
+// Blueprint v4 §14: a reviewer acknowledges a late-movement flag once they have
+// looked at it (and adjusted stock if needed). The recomputed figures stay on
+// the count for the audit trail.
+router.post('/stock-counts/:countId/reconciliation/ack', async (req, res) => {
+    if (!(0, count_lifecycle_js_1.canManageCountWork)(req.user.role))
+        return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
+    const count = (0, repository_js_1.listCounts)().find((candidate) => candidate.id === firstParam(req.params.countId));
+    if (!count)
+        return res.status(404).json({ message: 'Stock count was not found.' });
+    if (!(0, inventory_js_1.canAccessLocation)(accessContext(req.user), count.locationId))
+        return res.status(403).json({ message: 'This user cannot review counts at that location.' });
+    if (!count.reconciliationRequired)
+        return res.status(409).json({ message: 'This count has no open reconciliation flag.' });
+    let note;
+    try {
+        note = (0, count_lifecycle_js_1.parseCountReviewReason)(req.body?.note);
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'A resolution note is required.' });
+    }
+    const stored = repository_js_1.counts.find((candidate) => candidate.id === count.id);
+    stored.reconciliationRequired = false;
+    stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user.id}: ${note}`.trim();
+    await (0, persistence_js_1.persistCountReconciliation)(stored);
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'COUNT_RECONCILIATION_RESOLVED', entityType: 'StockCount', entityId: count.id, metadata: { note, lateDelta: stored.lateDelta } }));
+    (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
+    return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
+});
+// Blueprint v4 §38: a client-generated idempotency key makes a retried submit
+// (offline outbox, request timeout) return the count it already created.
+function parseRequestId(value) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
+    if (typeof value !== 'string' || value.length > 191)
+        throw new Error('requestId must be text of at most 191 characters.');
+    return value.trim() || undefined;
+}
+function countsForRequest(userId, requestId) {
+    return (0, repository_js_1.listCounts)().filter((count) => count.submittedBy === userId && count.requestId === requestId);
+}
+// A store user stays blind to book quantity and variance in every response.
+function countResponse(role, count) {
+    return role === 'STORE_USER'
+        ? { id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, physicalQuantity: count.physicalQuantity }
+        : { ...count, variance: count.physicalQuantity - count.bookQty };
+}
+/** Records one lot's count: memory + database + audit, and the assignment/campaign bookkeeping. */
+async function commitLotCount(args) {
+    const { item, lot, assignment } = args;
+    const bookQty = (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, args.locationId)?.onHand ?? 0;
+    const saved = (0, store_js_1.submitStockCount)({
+        itemId: item.id,
+        lotId: lot.id,
+        locationId: args.locationId,
+        physicalQuantity: args.physicalQuantity,
+        mode: args.mode,
+        submittedBy: args.userId,
+        role: args.role,
+    });
+    // Memory first, database second, and the memory copy is withdrawn if the database refuses.
+    await (0, record_then_persist_js_1.recordThenPersist)(() => (0, repository_js_1.createCountRecord)({
+        id: saved.id,
+        itemId: saved.itemId,
+        lotId: saved.lotId,
+        locationId: saved.locationId,
+        physicalQuantity: saved.physicalQuantity,
+        bookQty,
+        mode: saved.mode,
+        submittedBy: saved.submittedBy,
+        role: saved.role,
+        createdAt: saved.createdAt,
+        parentCountId: assignment?.parentCountId,
+        requestId: args.requestId,
+    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }), (record) => (0, repository_js_1.removeCountRecord)(record.id));
+    const followUps = [
+        (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
+    ];
+    if (assignment && args.closeAssignment === 'auto') {
+        const requiredLotIds = item.lots
+            .filter((candidate) => ((0, repository_js_1.findStockLedgerEntry)(item.id, candidate.id, args.locationId)?.onHand ?? 0) !== 0)
+            .map((candidate) => candidate.id);
+        const countedLotIds = new Set((0, repository_js_1.listCounts)()
+            .filter((count) => count.itemId === item.id && count.locationId === args.locationId && count.submittedBy === args.userId && count.createdAt >= assignment.createdAt)
+            .map((count) => count.lotId));
+        countedLotIds.add(saved.lotId);
+        if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
+            (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved.id);
+            followUps.push((0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved.id));
+            // A campaign task just moved to SUBMITTED: keep coverage in step.
+            followUps.push((0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId));
+        }
+    }
+    await Promise.all(followUps);
+    return { saved, bookQty };
+}
 router.post('/stock-counts', async (req, res) => {
     const context = accessContext(req.user);
     const input = req.body;
@@ -667,14 +835,30 @@ router.post('/stock-counts', async (req, res) => {
     }
     try {
         const validated = (0, inventory_js_1.validateBlindCountSubmission)(context.role, input);
+        const requestId = parseRequestId(input.requestId);
+        if (requestId) {
+            const [prior] = countsForRequest(req.user.id, requestId);
+            if (prior)
+                return res.status(200).json({ success: true, duplicate: true, count: countResponse(context.role, prior) });
+        }
         const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === validated.itemId);
         if (!item)
             return res.status(400).json({ message: 'Item was not found.' });
+        if (!(0, item_master_js_1.isOperationalItem)(item))
+            return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
         const lot = validated.lotNo
             ? item.lots.find((candidate) => candidate.lotNo.toLowerCase() === validated.lotNo.toLowerCase())
             : item.lots[0];
         if (!lot)
             return res.status(400).json({ message: `Lot "${validated.lotNo}" was not found for this item.` });
+        // Blueprint v4 §13: pieces are whole numbers; only weight / decimal items take fractions.
+        if (!item.decimalQuantity && item.countMethod !== 'ITEM_WEIGHT' && !Number.isInteger(validated.physicalQuantity)) {
+            return res.status(400).json({ message: `Item ${item.code} is counted in whole units.` });
+        }
+        // Blueprint v4 §7: operational users never act on a zero-stock lot.
+        if ((0, inventory_js_1.hidesZeroStockForRole)(context.role) && ((0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, validated.locationId)?.onHand ?? 0) <= 0) {
+            return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });
+        }
         if ((0, repository_js_1.findPendingCountForLot)(req.user.id, item.id, lot.id, validated.locationId)) {
             return res.status(409).json({ message: 'This lot is already submitted and waiting for review.' });
         }
@@ -686,75 +870,112 @@ router.post('/stock-counts', async (req, res) => {
                 return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
             }
         }
-        const bookQty = (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, validated.locationId)?.onHand ?? 0;
-        const saved = (0, store_js_1.submitStockCount)({
-            itemId: validated.itemId,
-            lotId: lot.id,
-            locationId: validated.locationId,
-            physicalQuantity: validated.physicalQuantity,
-            mode: validated.mode ?? 'manual',
-            submittedBy: req.user.id,
-            role: context.role,
+        const { saved, bookQty } = await commitLotCount({
+            userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId: validated.locationId,
+            physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
         });
-        (0, repository_js_1.createCountRecord)({
-            id: saved.id,
-            itemId: saved.itemId,
-            lotId: saved.lotId,
-            locationId: saved.locationId,
-            physicalQuantity: saved.physicalQuantity,
-            bookQty,
-            mode: saved.mode,
-            submittedBy: saved.submittedBy,
-            role: saved.role,
-            createdAt: saved.createdAt,
-            parentCountId: assignment?.parentCountId,
-        });
-        // persistCount must land before anything references it as committed;
-        // the audit write and the (optional) assignment-close write are each
-        // independent of the other, so they run concurrently instead of as two
-        // more sequential round trips stacked on top of persistCount - this was
-        // the difference between 3 and 2 serial DB writes per submitted count.
-        await (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId });
-        const followUps = [
-            (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
-                actorId: req.user.id,
-                actorRole: req.user.role,
-                action: 'STOCK_COUNT_SUBMITTED',
-                entityType: 'StockCount',
-                entityId: saved.id,
-            })),
-        ];
-        if (assignment) {
-            const requiredLotIds = item.lots
-                .filter((candidate) => ((0, repository_js_1.findStockLedgerEntry)(item.id, candidate.id, validated.locationId)?.onHand ?? 0) !== 0)
-                .map((candidate) => candidate.id);
-            const countedLotIds = new Set((0, repository_js_1.listCounts)()
-                .filter((count) => count.itemId === item.id
-                && count.locationId === validated.locationId
-                && count.submittedBy === req.user.id
-                && count.createdAt >= assignment.createdAt)
-                .map((count) => count.lotId));
-            countedLotIds.add(saved.lotId);
-            if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
-                (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved.id);
-                followUps.push((0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved.id));
-            }
-        }
-        await Promise.all(followUps);
-        // Store User stays blind to book quantity and variance even in the submission response.
-        const responseCount = context.role === 'STORE_USER'
-            ? {
-                id: saved.id,
-                itemId: saved.itemId,
-                lotId: saved.lotId,
-                locationId: saved.locationId,
-                physicalQuantity: saved.physicalQuantity,
-            }
-            : { ...saved, bookQty, variance: saved.physicalQuantity - bookQty };
-        return res.status(201).json({ success: true, count: responseCount });
+        return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
     }
     catch (error) {
         return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
+    }
+});
+// Blueprint v4 §13.2: loose KG / item-weight counting. The user enters one
+// decimal total for the item; the server spreads it over the item's lots in
+// FIFO/FEFO order (lib/weight-allocation.ts) and creates a count per lot. The
+// user never picks or splits lots, and a store user is never shown the split
+// (it would reveal the book quantities the count is blind to).
+const weightInFlight = new Set();
+router.post('/stock-counts/weight', async (req, res) => {
+    const context = accessContext(req.user);
+    const input = req.body;
+    if (!input?.itemId || !input?.locationId)
+        return res.status(400).json({ message: 'Item and location are required for a count submission.' });
+    const locationId = input.locationId;
+    if (!(0, inventory_js_1.canAccessLocation)(context, locationId)) {
+        return res.status(403).json({ message: 'This user cannot submit a count for the selected location.' });
+    }
+    try {
+        const total = Number(input.totalQuantity);
+        if (input.totalQuantity === undefined || input.totalQuantity === null || input.totalQuantity === '' || !Number.isFinite(total) || total < 0) {
+            return res.status(400).json({ message: 'Counted quantity must be a non-negative number.' });
+        }
+        const requestId = parseRequestId(input.requestId);
+        if (requestId) {
+            const prior = countsForRequest(req.user.id, requestId);
+            if (prior.length) {
+                return res.status(200).json({
+                    success: true, duplicate: true,
+                    ...(context.role === 'STORE_USER' ? { lots: prior.length } : { counts: prior.map((count) => countResponse(context.role, count)) }),
+                });
+            }
+        }
+        const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === input.itemId);
+        if (!item)
+            return res.status(400).json({ message: 'Item was not found.' });
+        if (!(0, item_master_js_1.isOperationalItem)(item))
+            return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
+        if (item.countMethod !== 'ITEM_WEIGHT') {
+            return res.status(400).json({ message: `Item ${item.code} is counted by scanning lots, not by weight.` });
+        }
+        let assignment;
+        if (context.role === 'STORE_USER') {
+            assignment = (0, repository_js_1.findActiveAssignment)(req.user.id, item.id, locationId);
+            if (!assignment)
+                return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
+        }
+        const lots = item.lots.map((lot) => ({
+            lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+            bookQty: (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, locationId)?.onHand ?? 0,
+        }));
+        const allocation = (0, weight_allocation_js_1.allocateWeightCount)(total, lots, item.allocationStrategy ?? 'FEFO');
+        if (allocation.some((row) => (0, repository_js_1.findPendingCountForLot)(req.user.id, item.id, row.lotId, locationId))) {
+            return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
+        }
+        // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
+        // so a retry never finds half a count and calls it done.
+        const flightKey = requestId ? `${req.user.id}|${requestId}` : '';
+        if (flightKey && weightInFlight.has(flightKey))
+            return res.status(409).json({ message: 'This count is already being saved. Retry in a moment.' });
+        if (flightKey)
+            weightInFlight.add(flightKey);
+        const saved = [];
+        try {
+            for (const row of allocation) {
+                const lot = item.lots.find((candidate) => candidate.id === row.lotId);
+                saved.push(await commitLotCount({
+                    userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
+                    physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+                }));
+            }
+        }
+        catch (error) {
+            for (const row of saved) {
+                (0, repository_js_1.removeCountRecord)(row.saved.id);
+                await (0, persistence_js_1.persistCountDeletion)(row.saved.id).catch(() => undefined);
+            }
+            throw error;
+        }
+        finally {
+            if (flightKey)
+                weightInFlight.delete(flightKey);
+        }
+        // The whole item was counted in one entry, so the task is complete now.
+        if (assignment) {
+            (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved[0].saved.id);
+            await Promise.all([(0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved[0].saved.id), (0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId)]);
+        }
+        if (context.role === 'STORE_USER')
+            return res.status(201).json({ success: true, lots: saved.length });
+        return res.status(201).json({
+            success: true,
+            counts: saved.map((row) => countResponse(context.role, { ...row.saved, bookQty: row.bookQty })),
+            allocation: allocation.map((row) => ({ lotId: row.lotId, lotNo: row.lotNo, bookQty: row.bookQty, physicalQuantity: row.physicalQty })),
+            totalVariance: (0, weight_allocation_js_1.totalVariance)(allocation),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid weight count payload' });
     }
 });
 router.patch('/stock-counts/:countId/review', async (req, res) => {
@@ -789,6 +1010,7 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         await (0, persistence_js_1.persistCountReview)({ ...current, status, reviewedBy: req.user.id, reviewedAt, reviewReason });
         const updated = (0, repository_js_1.updateCountReview)(countId, status, req.user.id, reviewReason);
         const variance = updated.physicalQuantity - updated.bookQty;
+        const reviewedCampaignId = (0, repository_js_1.findAssignmentForCount)(countId)?.campaignId;
         let recountAssignment;
         if (status === 'RECOUNT') {
             const recount = (0, repository_js_1.createRecountAssignment)(updated, req.user.id);
@@ -823,6 +1045,7 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         });
         if (status === 'APPROVED')
             (0, webhook_dispatcher_js_1.maybeEmitStockLow)(updated.itemId, updated.locationId, updated.bookQty);
+        await (0, campaign_service_js_1.reconcileCampaignQuietly)(reviewedCampaignId);
         return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
     }
     catch (error) {
@@ -859,6 +1082,9 @@ router.post('/count-assignments', async (req, res) => {
     if (unknownItemId) {
         return res.status(400).json({ message: `Item "${unknownItemId}" was not found.` });
     }
+    const inactiveAssignItem = inactiveItemMessage(itemIds);
+    if (inactiveAssignItem)
+        return res.status(400).json({ message: inactiveAssignItem });
     let parsedDueDate;
     let parsedPriority;
     try {
@@ -948,6 +1174,57 @@ router.get('/count-assignments/mine', (req, res) => {
         return { ...assignment, itemName: item?.name ?? assignment.itemId, itemCode: item?.code };
     });
     return res.json({ assignments });
+});
+// Blueprint v4 §37: the mobile app is task-first. This is the one call a
+// phone needs to render its Work tab: the user's open count tasks (only
+// items that still have counted-in stock at the location, with only the lots
+// worth counting and no quantities, so the blind count stays blind) and the
+// transfers waiting to be received at their branch. No full catalog.
+router.get('/mobile/work', (req, res) => {
+    const context = accessContext(req.user);
+    const isStore = context.role === 'STORE_USER';
+    const countTasks = isStore
+        ? (0, repository_js_1.listCountAssignmentsFor)(req.user.id).flatMap((assignment) => {
+            const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === assignment.itemId);
+            if (!item || !(0, item_master_js_1.isOperationalItem)(item) || !(0, inventory_js_1.canAccessLocation)(context, assignment.locationId))
+                return [];
+            const lots = item.lots
+                .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && ((0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, assignment.locationId)?.onHand ?? 0) > 0)
+                .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
+            // Nothing on the shelf to count: not an actionable task for a store user.
+            if (!lots.length)
+                return [];
+            return [{
+                    assignmentId: assignment.id,
+                    locationId: assignment.locationId,
+                    countDate: assignment.countDate,
+                    dueDate: assignment.dueDate,
+                    priority: assignment.priority ?? 'NORMAL',
+                    instructions: assignment.instructions,
+                    campaignId: assignment.campaignId,
+                    recount: Boolean(assignment.parentCountId),
+                    item: {
+                        id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
+                        countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
+                    },
+                    lots,
+                }];
+        })
+        : [];
+    const receiveTasks = ['STORE_USER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER'].includes(context.role)
+        ? (0, repository_js_1.listTransfers)()
+            .filter((transfer) => ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(transfer.status) && (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId))
+            .map((transfer) => ({
+            transferId: transfer.id,
+            sourceLocationId: transfer.sourceLocationId,
+            destinationLocationId: transfer.destinationLocationId,
+            status: transfer.status,
+            lineCount: transfer.lines.length,
+            cartonCount: transfer.cartonCount,
+            createdAt: transfer.createdAt,
+        }))
+        : [];
+    return res.json({ countTasks, receiveTasks });
 });
 router.get('/count-assignments', (req, res) => {
     if (!(0, count_lifecycle_js_1.canManageCountWork)(req.user.role)) {
@@ -1071,7 +1348,12 @@ router.post('/cycle-counts/:locationId/assign', async (req, res) => {
 router.get('/transfers/list', (req, res) => {
     const context = accessContext(req.user);
     const transfers = (0, repository_js_1.listTransfers)().filter((transfer) => (0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId)
-        || (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId));
+        || (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId)).map((transfer) => ({
+        ...transfer,
+        // Carton labels and the transit flag (blueprint §17/§18) so a receiver can find a transfer by carton.
+        cartons: (0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(transfer.id)).map((carton) => ({ packageId: carton.packageId, quantity: carton.quantity, weightKg: carton.weightKg })),
+        delayed: (0, transfer_packing_js_1.isTransitDelayed)({ status: transfer.status, expectedArrivalAt: transfer.dispatch?.expectedArrivalAt }),
+    }));
     return res.json({ transfers });
 });
 router.post('/transfers', async (req, res) => {
@@ -1095,6 +1377,9 @@ router.post('/transfers', async (req, res) => {
         }
         const cartonCount = (0, transfer_lifecycle_js_1.parseCartonCount)(input.cartonCount);
         const validated = (0, inventory_js_1.validateTransferRequest)(context.role, { ...input, cartonCount });
+        const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
+        if (inactiveTransferItem)
+            return res.status(400).json({ message: inactiveTransferItem });
         const workflow = (0, industry_packs_js_1.getActiveWorkflow)();
         if (workflow.expiryBlocking) {
             const expired = validated.lines.filter((line) => {
@@ -1248,6 +1533,10 @@ router.patch('/transfers/:transferId/status', async (req, res) => {
     if (!(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId)
         && !(0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId)) {
         return res.status(403).json({ message: 'Transfer location access denied.' });
+    }
+    // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
+    if (nextStatus === 'DISPATCHED' && !transfer.packing && (0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(transfer.id)).length > 0) {
+        return res.status(409).json({ message: 'Packing was started for this transfer. Complete it before dispatching.' });
     }
     try {
         (0, inventory_js_1.validateTransferStatusChange)(context.role, transfer.status, nextStatus);
@@ -1610,7 +1899,9 @@ router.get('/imports/batches', async (req, res) => {
         return res.status(403).json({ message: 'Import history access denied.' });
     }
     try {
-        return res.json({ batches: await (0, import_reversal_js_1.listImportBatches)(Number(req.query.limit ?? 100)) });
+        const batches = await (0, import_reversal_js_1.listImportBatches)(Number(req.query.limit ?? 100));
+        // Blueprint v4 §10.1: a batch is reversible while it is POSTED and is not itself a reversal.
+        return res.json({ batches: batches.map((batch) => ({ ...batch, reversible: batch.status === 'POSTED' && !String(batch.type).includes('REVERS') })) });
     }
     catch (error) {
         return res.status(503).json({ message: error instanceof Error ? error.message : 'Import history is unavailable.' });
@@ -1985,11 +2276,20 @@ function configuredPurchaseWarehouse() {
     return basni ?? (warehouses.length === 1 ? warehouses[0] : undefined);
 }
 function dailyItem(row) {
-    const code = row.itemCode ? (0, repository_js_1.listItems)().find((item) => normalName(item.code) === normalName(row.itemCode)) : undefined;
+    const catalog = (0, repository_js_1.listItems)();
+    const code = row.itemCode ? catalog.find((item) => normalName(item.code) === normalName(row.itemCode)) : undefined;
     if (code)
         return code;
-    const matched = (0, repository_js_1.listItems)().filter((item) => normalName(item.name) === normalName(row.itemName));
-    return matched.length === 1 ? matched[0] : undefined;
+    // ERP alias / barcode mapping (blueprint v4 §10); a row with a code never falls back to its name.
+    if (row.itemCode)
+        return (0, item_master_js_1.resolveItemByIdentity)(catalog, { code: row.itemCode }).item;
+    const matched = catalog.filter((item) => normalName(item.name) === normalName(row.itemName));
+    if (matched.length === 1)
+        return matched[0];
+    return matched.length === 0 ? (0, item_master_js_1.resolveItemByIdentity)(catalog, { name: row.itemName }).item : undefined;
+}
+function inactiveImportMessage(item) {
+    return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 function planDailyImport(preview, importedBy) {
     const errors = [...preview.errors];
@@ -2001,6 +2301,10 @@ function planDailyImport(preview, importedBy) {
         const item = dailyItem(row);
         if (!item) {
             errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Unknown or ambiguous Item Name: ${row.itemName}` });
+            continue;
+        }
+        if (!(0, item_master_js_1.isOperationalItem)(item)) {
+            errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) });
             continue;
         }
         const location = preview.importType === 'PURCHASE' ? warehouse : (0, daily_stock_sync_js_1.matchImportLocation)(row.locationName, (0, repository_js_1.listLocations)());
@@ -2118,6 +2422,8 @@ async function commitImportBatchToken(req, res, batchToken) {
             metadata: batch.metadata ?? undefined,
         });
         await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
+        // Movements dated before an existing count make that count's book quantity stale.
+        await (0, late_movement_service_js_1.applyLateMovementsQuietly)(movements, req.user.id);
         await (0, import_batch_store_js_1.transitionBatch)(batch.id, 'POSTED', { committedRows: persisted.committedRows });
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
             actorId: req.user.id,
@@ -2327,6 +2633,7 @@ async function commitDailyImport(req, res, importType) {
         }
         for (const checkpoint of checkpoints)
             (0, repository_js_1.upsertSyncCheckpoint)(checkpoint);
+        await (0, late_movement_service_js_1.applyLateMovementsQuietly)(movements, req.user.id);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: `${importType}_IMPORT_COMMITTED`, entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, rows: persisted.committedRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, purchaseWarehouse: warehouse?.name } }));
         return res.status(201).json({ message: `${importType === 'PURCHASE' ? 'Purchase received into H.O. Basni' : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`, batchId, committedRows: persisted.committedRows });
     }
@@ -2346,10 +2653,9 @@ router.get('/sync-status', (req, res) => {
 // Warehouse transfer import, lot-aware picker sessions and bulk stock take
 // ---------------------------------------------------------------------------
 function exactItemMatch(itemCode, itemName) {
-    if (itemCode)
-        return (0, repository_js_1.listItems)().find((item) => item.code.trim().toLowerCase() === itemCode.trim().toLowerCase());
-    const candidates = (0, repository_js_1.listItems)().filter((item) => item.name.trim().toLowerCase() === itemName?.trim().toLowerCase());
-    return candidates.length === 1 ? candidates[0] : undefined;
+    // Code, barcode or ERP alias when a code is given (never falling back to
+    // the name); otherwise a unique name or alias.
+    return (0, item_master_js_1.resolveItemByIdentity)((0, repository_js_1.listItems)(), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 function transferImportPlan(preview, sourceLocationId, destinationLocationId, mergeDuplicates) {
     const errors = [...preview.errors];
@@ -2375,6 +2681,10 @@ function transferImportPlan(preview, sourceLocationId, destinationLocationId, me
         const item = exactItemMatch(row.itemCode, row.itemName);
         if (!item) {
             errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
+            continue;
+        }
+        if (!(0, item_master_js_1.isOperationalItem)(item)) {
+            errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) });
             continue;
         }
         const lots = item.lots.map((lot) => ({
@@ -2477,12 +2787,54 @@ router.get('/picker/transfers/:transferId', async (req, res) => {
         const pickedQty = picked.get(`${line.itemId}|${line.lotId}`) ?? 0;
         return {
             lineId: `${transfer.id}:${index}`, itemId: line.itemId, itemCode: item?.code, itemName: item?.name,
-            unit: item?.unit ?? 'PCS', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
+            unit: item?.unit ?? 'PCS', pickMethod: item?.pickMethod ?? 'LOT_SCAN', lotStatus: lot?.status ?? 'AVAILABLE', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
             lotId: line.lotId, lotNo: lot?.lotNo, expiryDate: lot?.expiryDate,
             lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,
         };
     });
     return res.json({ transfer: { ...transfer, lines }, pickSlips: slips.map((event) => event.metadata) });
+});
+// Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
+async function pooledPickState(transfer, itemId) {
+    const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === itemId);
+    if (!item)
+        throw new Error('Item was not found.');
+    if (!(0, kg_pick_js_1.isPooledPick)(item))
+        throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
+    const requestedTotal = transfer.lines.filter((line) => line.itemId === itemId).reduce((sum, line) => sum + line.quantity, 0);
+    if (!(requestedTotal > 0))
+        throw new Error('This item is not part of the transfer.');
+    const priorSlips = await savedPickSlips(transfer.id);
+    const pickedByLot = new Map();
+    for (const slip of priorSlips)
+        for (const line of (slip.metadata?.lines ?? [])) {
+            if (line.itemId === itemId)
+                pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
+        }
+    const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
+    const ledger = (0, repository_js_1.listStockLedgerForLocation)(transfer.sourceLocationId);
+    const lots = item.lots.map((lot) => ({
+        lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+        available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
+    }));
+    return { item, remaining: Math.max(0, Math.round((requestedTotal - pickedTotal) * 1000) / 1000), lots };
+}
+router.post('/picker/transfers/:transferId/allocation-preview', async (req, res) => {
+    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === firstParam(req.params.transferId));
+    const context = accessContext(req.user);
+    if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId))
+        return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+    try {
+        const quantity = Number(req.body?.quantity);
+        const state = await pooledPickState(transfer, String(req.body?.itemId ?? ''));
+        if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8)
+            throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
+        const { allocations, shortfall } = (0, kg_pick_js_1.allocatePick)({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
+        return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to preview this pick.' });
+    }
 });
 router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
@@ -2490,15 +2842,22 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
     const context = accessContext(req.user);
     if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId))
         return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+    const prior = await savedPickSlips(transferId);
+    // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
+    const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+    if (requestId) {
+        const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user.id);
+        if (saved)
+            return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
+    }
     if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status))
         return res.status(400).json({ message: `Transfer cannot be picked while ${transfer.status}.` });
-    const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+    let lines = Array.isArray(req.body.lines) ? req.body.lines : [];
     const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
     if (!lines.length && !exceptions.length)
         return res.status(400).json({ message: 'At least one picked line or exception is required.' });
     const itemMap = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
     const ledger = (0, repository_js_1.listStockLedgerForLocation)(transfer.sourceLocationId);
-    const prior = await savedPickSlips(transferId);
     const priorPicked = new Map();
     for (const slip of prior)
         for (const line of (slip.metadata?.lines ?? [])) {
@@ -2506,20 +2865,61 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
             priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
         }
     try {
+        // A KG line carries only item + weight: the server chooses the lots (FIFO/FEFO), the picker never splits them.
+        const expanded = [];
+        for (const line of lines) {
+            const item = itemMap.get(line.itemId);
+            if (item && (0, kg_pick_js_1.isPooledPick)(item) && !line.lotId) {
+                const state = await pooledPickState(transfer, line.itemId);
+                const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
+                const { allocations, shortfall } = (0, kg_pick_js_1.allocatePick)({
+                    requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
+                    lots: state.lots.map((lot) => ({ ...lot, available: Math.max(0, lot.available - expanded.filter((row) => row.lotId === lot.lotId).reduce((sum, row) => sum + row.quantity, 0)) })),
+                });
+                if (shortfall > 0)
+                    throw new Error(`Only ${Math.round((Number(line.quantity) - shortfall) * 1000) / 1000} of ${item.code} is available in pickable lots. Report it as No Stock or pick less.`);
+                if (pending + Number(line.quantity) > state.remaining + 1e-8)
+                    throw new Error(`${item.code} exceeds remaining requested quantity.`);
+                for (const allocation of allocations)
+                    expanded.push({ itemId: line.itemId, lotId: allocation.lotId, quantity: allocation.quantity, inputMethod: 'MANUAL', allocated: true });
+            }
+            else {
+                expanded.push(line);
+            }
+        }
+        lines = expanded;
+        const runningLot = new Map(priorPicked);
+        const runningItem = new Map();
+        for (const [key, quantity] of priorPicked)
+            runningItem.set(key.split('|')[0], (runningItem.get(key.split('|')[0]) ?? 0) + quantity);
         for (const line of lines) {
             const requested = transfer.lines.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId);
             const item = itemMap.get(line.itemId);
             const lot = item?.lots.find((entry) => entry.id === line.lotId);
-            if (!requested || !item || !lot)
+            const pooled = Boolean(item && (0, kg_pick_js_1.isPooledPick)(item));
+            if (!item || !lot || (!requested && !pooled))
                 throw new Error('Picked item/lot is not part of this transfer.');
             const quantity = Number(line.quantity);
             (0, warehouse_workflow_js_1.validatePickInput)({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, lotNo: lot.lotNo });
-            const already = priorPicked.get(`${line.itemId}|${line.lotId}`) ?? 0;
-            if (already + quantity > requested.quantity)
+            const lotKey = `${line.itemId}|${line.lotId}`;
+            const alreadyLot = runningLot.get(lotKey) ?? 0;
+            if (pooled) {
+                const total = transfer.lines.filter((entry) => entry.itemId === line.itemId).reduce((sum, entry) => sum + entry.quantity, 0);
+                if ((runningItem.get(line.itemId) ?? 0) + quantity > total + 1e-8)
+                    throw new Error(`${item.code} exceeds remaining requested quantity.`);
+            }
+            else if (alreadyLot + quantity > requested.quantity + 1e-8) {
                 throw new Error(`${item.code}/${lot.lotNo} exceeds remaining requested quantity.`);
-            const available = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
-            if (quantity > available)
+            }
+            const onHand = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
+            // Blueprint §15: never a zero, blocked or expired lot - and stock already picked on this transfer is spoken for.
+            if (!(0, kg_pick_js_1.isPickableLot)({ status: lot.status, available: onHand - alreadyLot, expiryDate: lot.expiryDate })) {
+                throw new Error(`${item.code}/${lot.lotNo} cannot be picked: it is blocked, expired or has no stock left.`);
+            }
+            if (quantity > onHand - alreadyLot + 1e-8)
                 throw new Error(`${item.code}/${lot.lotNo} exceeds available stock.`);
+            runningLot.set(lotKey, alreadyLot + quantity);
+            runningItem.set(line.itemId, (runningItem.get(line.itemId) ?? 0) + quantity);
         }
         for (const exception of exceptions) {
             if (!warehouse_workflow_js_1.PICK_EXCEPTION_REASONS.includes(exception.reason))
@@ -2528,12 +2928,13 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
                 throw new Error('Exception quantity must be greater than zero.');
         }
         const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
-        const metadata = { id: slipId, pickerId: req.user.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
+        const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata }));
         // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
         // Wrong Item or Damaged Item exception opens an owned Exception Inbox
         // case for supervisor resolution instead of silently dropping the line.
         const PICK_EXCEPTION_TYPE = {
+            NO_STOCK: 'MISSING_STOCK', WRONG_ITEM: 'WRONG_ITEM', DAMAGED_ITEM: 'DAMAGE',
             'No Stock': 'MISSING_STOCK', 'Wrong Item': 'WRONG_ITEM', 'Damaged Item': 'DAMAGE',
         };
         for (const exception of exceptions) {
@@ -2541,7 +2942,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
             const itemLabel = item ? `${item.code} - ${item.name}` : exception.itemId ?? 'item';
             void (0, exceptions_js_1.createExceptionCase)({
                 type: PICK_EXCEPTION_TYPE[exception.reason] ?? 'TRANSFER_DISCREPANCY',
-                title: `${exception.reason}: ${itemLabel}`,
+                title: `${String(exception.reason).replaceAll('_', ' ').toLowerCase()}: ${itemLabel}`,
                 description: `Reported while picking transfer ${transfer.id}.`,
                 itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
                 quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
@@ -2698,6 +3099,10 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req, re
                 errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` });
                 continue;
             }
+            if (!(0, item_master_js_1.isOperationalItem)(item)) {
+                errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) });
+                continue;
+            }
             if (seen.has(item.id))
                 continue;
             seen.add(item.id);
@@ -2744,7 +3149,7 @@ router.post('/stock-takes/bulk-assign', async (req, res) => {
     const eligible = [];
     for (const itemId of deduped) {
         const available = ledger.filter((row) => row.itemId === itemId).reduce((sum, row) => sum + row.onHand, 0);
-        if (available <= 0)
+        if (available <= 0 || inactiveItemMessage([itemId]))
             excluded.push(itemId);
         else
             eligible.push(itemId);
@@ -2811,199 +3216,230 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
     const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer not found.' });
-    if (!(0, transfer_lifecycle_js_1.isReceivableStatus)(transfer.status)) {
-        return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
-    }
     if (!(0, inventory_js_1.canAccessLocation)(accessContext(req.user), transfer.destinationLocationId)) {
         return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
     }
     const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
     if (!requestId || requestId.length > 191)
         return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
-    const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
-    let receiptLines;
-    if (Array.isArray(req.body.lines)) {
-        receiptLines = req.body.lines.map((line) => ({
-            lineId: typeof line.lineId === 'string' ? line.lineId : undefined,
-            itemId: String(line.itemId ?? ''),
-            lotId: String(line.lotId ?? ''),
-            receivedQty: Number(line.receivedQty),
-            damagedQty: Number(line.damagedQty ?? 0),
-            shortageQty: Number(line.shortageQty ?? 0),
-            excessQty: Number(line.excessQty ?? 0),
-        }));
-    }
-    else if (transfer.lines.length === 1) {
-        receiptLines = [{
-                itemId: transfer.lines[0].itemId,
-                lotId: transfer.lines[0].lotId,
-                receivedQty: Number(req.body.receivedQty),
-                damagedQty: Number(req.body.damagedQty ?? 0),
-                shortageQty: Number(req.body.shortageQty ?? 0),
-                excessQty: Number(req.body.excessQty ?? 0),
-            }];
-    }
-    else {
-        return res.status(400).json({ message: 'Multi-lot transfers require a separate receipt line for every item and lot.' });
-    }
-    const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
-    if (damagedLines.length > 0) {
-        const destinationLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
-        for (const line of damagedLines) {
-            const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)({
-                transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
-                branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
-            });
-            if (gate.blocked)
-                return res.status(400).json({ message: gate.reason });
-        }
-    }
-    {
-        const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
-        const templates = persistence_js_1.databaseEnabled
-            ? await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
-            : listMemoryQcTemplates().filter((row) => row.active);
-        const inspections = persistence_js_1.databaseEnabled
-            ? await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: transferId } }).catch(() => listMemoryQcInspections())
-            : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
-        const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
-        const itemsById = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
-        const qc = (0, qc_receive_js_1.assertReceiptQcComplete)(receiptLines.map((line) => ({
-            lineId: line.lineId,
-            itemId: line.itemId,
-            itemCategory: itemsById.get(line.itemId)?.category ?? null,
-            receivedQty: line.receivedQty,
-            hasInspection: inspections.some((inspection) => inspection.itemId === line.itemId && (inspection.sourceLineId === line.lineId || !line.lineId))
-                || bodyInspections.some((inspection) => inspection.itemId === line.itemId || (line.lineId && inspection.lineId === line.lineId)),
-        })), templates);
-        if (qc.ok === false)
-            return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
-    }
-    try {
-        const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({
-            requestId, transferId, destinationLocationId: transfer.destinationLocationId,
-            receivedById: req.user.id, notes, lines: receiptLines,
+    // A retry (client timeout, offline outbox) of a receipt that already went
+    // through answers with the recorded result - before the status gate, because
+    // that receipt may itself have completed the transfer.
+    const prior = await (0, transfer_receipt_js_1.findReceiptByRequestId)(requestId).catch(() => null);
+    if (prior) {
+        if (prior.transferId !== transferId)
+            return res.status(409).json({ message: 'This requestId was already used for a different transfer.' });
+        return res.json({
+            success: true, duplicate: true, transfer,
+            receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
         });
-        let status;
-        let summary;
-        if (persisted) {
-            status = persisted.status;
-            summary = persisted;
-            // Mirror committed database state only after the transaction succeeds.
-            (0, repository_js_1.updateTransferStatus)(transfer.id, status);
-            (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, persisted.lines.map((line) => ({
-                itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
-                receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
-            })));
-            if (!persisted.duplicate)
-                for (const line of receiptLines) {
-                    if (line.receivedQty > 0)
-                        (0, repository_js_1.adjustStockLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.receivedQty);
-                    if (line.damagedQty > 0)
-                        (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.damagedQty);
-                    if (Number(line.excessQty ?? 0) > 0)
-                        (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, Number(line.excessQty));
-                }
+    }
+    if (!(0, transfer_lifecycle_js_1.isReceivableStatus)(transfer.status)) {
+        return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
+    }
+    // The same request twice at once must not both post: the second waits for the client's next retry.
+    if (!(0, transfer_receipt_js_1.beginReceiptRequest)(requestId))
+        return res.status(409).json({ message: 'This receipt is already being processed. Retry in a moment.' });
+    try {
+        const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
+        let receiptLines;
+        if (Array.isArray(req.body.lines)) {
+            receiptLines = req.body.lines.map((line) => ({
+                lineId: typeof line.lineId === 'string' ? line.lineId : undefined,
+                itemId: String(line.itemId ?? ''),
+                lotId: String(line.lotId ?? ''),
+                receivedQty: Number(line.receivedQty),
+                damagedQty: Number(line.damagedQty ?? 0),
+                shortageQty: Number(line.shortageQty ?? 0),
+                excessQty: Number(line.excessQty ?? 0),
+            }));
+        }
+        else if (transfer.lines.length === 1) {
+            receiptLines = [{
+                    itemId: transfer.lines[0].itemId,
+                    lotId: transfer.lines[0].lotId,
+                    receivedQty: Number(req.body.receivedQty),
+                    damagedQty: Number(req.body.damagedQty ?? 0),
+                    shortageQty: Number(req.body.shortageQty ?? 0),
+                    excessQty: Number(req.body.excessQty ?? 0),
+                }];
         }
         else {
-            summary = (0, receipt_validation_js_1.validateReceiptLines)(transfer.lines, receiptLines);
-            status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
-            (0, repository_js_1.updateTransferStatus)(transfer.id, status);
-            const nextLines = transfer.lines.map((line) => {
-                const input = receiptLines.find((candidate) => candidate.itemId === line.itemId && candidate.lotId === line.lotId);
-                return {
-                    ...line,
-                    receivedQty: Number(line.receivedQty ?? 0) + Number(input?.receivedQty ?? 0),
-                    damagedQty: Number(line.damagedQty ?? 0) + Number(input?.damagedQty ?? 0),
-                    shortageQty: Number(line.shortageQty ?? 0) + Number(input?.shortageQty ?? 0),
-                    excessQty: Number(line.excessQty ?? 0) + Number(input?.excessQty ?? 0),
-                };
+            return res.status(400).json({ message: 'Multi-lot transfers require a separate receipt line for every item and lot.' });
+        }
+        const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
+        if (damagedLines.length > 0) {
+            const destinationLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
+            for (const line of damagedLines) {
+                const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)({
+                    transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
+                    branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
+                });
+                if (gate.blocked)
+                    return res.status(400).json({ message: gate.reason });
+            }
+        }
+        {
+            const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
+            const templates = persistence_js_1.databaseEnabled
+                ? await db_js_1.prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
+                : listMemoryQcTemplates().filter((row) => row.active);
+            const inspections = persistence_js_1.databaseEnabled
+                ? await db_js_1.prisma.qcInspection.findMany({ where: { sourceDocument: transferId } }).catch(() => listMemoryQcInspections())
+                : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
+            const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
+            const itemsById = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
+            const qc = (0, qc_receive_js_1.assertReceiptQcComplete)(receiptLines.map((line) => ({
+                lineId: line.lineId,
+                itemId: line.itemId,
+                itemCategory: itemsById.get(line.itemId)?.category ?? null,
+                receivedQty: line.receivedQty,
+                hasInspection: inspections.some((inspection) => inspection.itemId === line.itemId && (inspection.sourceLineId === line.lineId || !line.lineId))
+                    || bodyInspections.some((inspection) => inspection.itemId === line.itemId || (line.lineId && inspection.lineId === line.lineId)),
+            })), templates);
+            if (qc.ok === false)
+                return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+            // Blueprint v4 §25: an inspection that failed sends the goods to quarantine
+            // (the QC_FAIL exception case already exists), never to sellable stock.
+            const recorded = [
+                ...inspections,
+                ...bodyInspections.map((entry) => ({ itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null })),
+            ];
+            receiptLines = (0, qc_gate_js_1.quarantineFailedLines)(receiptLines, (line) => (0, qc_gate_js_1.verdictForLine)(recorded, { itemId: line.itemId, lineId: line.lineId })).lines;
+        }
+        try {
+            const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({
+                requestId, transferId, destinationLocationId: transfer.destinationLocationId,
+                receivedById: req.user.id, notes, lines: receiptLines,
             });
-            (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, nextLines);
-            for (const input of receiptLines) {
-                if (input.receivedQty > 0)
-                    (0, repository_js_1.adjustStockLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.receivedQty);
-                if (input.damagedQty > 0)
-                    (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.damagedQty);
-                if (Number(input.excessQty ?? 0) > 0)
-                    (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, Number(input.excessQty));
+            let status;
+            let summary;
+            if (persisted) {
+                status = persisted.status;
+                summary = persisted;
+                // Mirror committed database state only after the transaction succeeds.
+                (0, repository_js_1.updateTransferStatus)(transfer.id, status);
+                (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, persisted.lines.map((line) => ({
+                    itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
+                    receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
+                })));
+                if (!persisted.duplicate)
+                    for (const line of receiptLines) {
+                        if (line.receivedQty > 0)
+                            (0, repository_js_1.adjustStockLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.receivedQty);
+                        if (line.damagedQty > 0)
+                            (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, line.damagedQty);
+                        if (Number(line.excessQty ?? 0) > 0)
+                            (0, repository_js_1.adjustQuarantineLedger)(line.itemId, line.lotId, transfer.destinationLocationId, Number(line.excessQty));
+                    }
             }
-        }
-        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
-            actorId: req.user.id, actorRole: req.user.role,
-            action: status === 'RECEIVED' ? 'TRANSFER_RECEIVED' : 'TRANSFER_PARTIALLY_RECEIVED',
-            entityType: 'Transfer', entityId: transferId,
-            metadata: { requestId, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, lines: receiptLines, duplicate: persisted?.duplicate ?? false },
-        }));
-        // Blueprint Module H: a damaged or short receiving line is a discrepancy
-        // case, not an invisible balance correction. Open an owned Exception
-        // Inbox case per affected line so QC/quarantine disposition is tracked
-        // to closure. Best-effort only - never fail a successful receipt.
-        if (!persisted?.duplicate) {
-            for (const line of receiptLines) {
-                const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === line.itemId);
-                const itemLabel = item ? `${item.code} - ${item.name}` : line.itemId;
-                // Blueprint Module B / section 8.3: good stock that just landed on
-                // hand still needs to be physically put away into a bin. Open a
-                // putaway task with a suggested bin rather than leaving newly
-                // received stock sitting at the dock indefinitely.
-                if (line.receivedQty > 0) {
-                    void (0, putaway_js_1.createPutawayTask)({
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                    });
-                    void (0, bin_stock_js_1.persistBinStockDelta)({
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        binId: bin_stock_js_1.STAGING_BIN_ID, qtyDelta: line.receivedQty,
-                    });
-                }
-                if (line.damagedQty > 0) {
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'DAMAGE',
-                        title: `Damaged receipt: ${itemLabel}`,
-                        description: `${line.damagedQty} units received damaged against transfer ${transferId}.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
-                }
-                if (line.shortageQty > 0) {
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'SHORT_RECEIPT',
-                        title: `Short receipt: ${itemLabel}`,
-                        description: `${line.shortageQty} units short against transfer ${transferId}.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
-                }
-                if (Number(line.excessQty ?? 0) > 0) {
-                    // Blueprint: "excess receipt... never silently absorb." The
-                    // quantity is already held in quarantine; this case requires an
-                    // explicit accept (posts to onHand) or reject (returned/destroyed)
-                    // decision before it can become sellable.
-                    void (0, exceptions_js_1.createExceptionCase)({
-                        type: 'EXCESS_RECEIPT',
-                        title: `Excess receipt: ${itemLabel}`,
-                        description: `${line.excessQty} units received beyond the requested quantity on transfer ${transferId}. Accept or reject.`,
-                        itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
-                        quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
-                        reportedById: req.user.id,
-                    });
+            else {
+                summary = (0, receipt_validation_js_1.validateReceiptLines)(transfer.lines, receiptLines);
+                status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
+                (0, repository_js_1.updateTransferStatus)(transfer.id, status);
+                const nextLines = transfer.lines.map((line) => {
+                    const input = receiptLines.find((candidate) => candidate.itemId === line.itemId && candidate.lotId === line.lotId);
+                    return {
+                        ...line,
+                        receivedQty: Number(line.receivedQty ?? 0) + Number(input?.receivedQty ?? 0),
+                        damagedQty: Number(line.damagedQty ?? 0) + Number(input?.damagedQty ?? 0),
+                        shortageQty: Number(line.shortageQty ?? 0) + Number(input?.shortageQty ?? 0),
+                        excessQty: Number(line.excessQty ?? 0) + Number(input?.excessQty ?? 0),
+                    };
+                });
+                (0, repository_js_1.updateTransferReceiptProgress)(transfer.id, nextLines);
+                for (const input of receiptLines) {
+                    if (input.receivedQty > 0)
+                        (0, repository_js_1.adjustStockLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.receivedQty);
+                    if (input.damagedQty > 0)
+                        (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, input.damagedQty);
+                    if (Number(input.excessQty ?? 0) > 0)
+                        (0, repository_js_1.adjustQuarantineLedger)(input.itemId, input.lotId, transfer.destinationLocationId, Number(input.excessQty));
                 }
             }
+            await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+                actorId: req.user.id, actorRole: req.user.role,
+                action: status === 'RECEIVED' ? 'TRANSFER_RECEIVED' : 'TRANSFER_PARTIALLY_RECEIVED',
+                entityType: 'Transfer', entityId: transferId,
+                metadata: { requestId, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, lines: receiptLines, duplicate: persisted?.duplicate ?? false },
+            }));
+            // Blueprint Module H: a damaged or short receiving line is a discrepancy
+            // case, not an invisible balance correction. Open an owned Exception
+            // Inbox case per affected line so QC/quarantine disposition is tracked
+            // to closure. Best-effort only - never fail a successful receipt.
+            if (!persisted?.duplicate) {
+                for (const line of receiptLines) {
+                    const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === line.itemId);
+                    const itemLabel = item ? `${item.code} - ${item.name}` : line.itemId;
+                    // Blueprint Module B / section 8.3: good stock that just landed on
+                    // hand still needs to be physically put away into a bin. Open a
+                    // putaway task with a suggested bin rather than leaving newly
+                    // received stock sitting at the dock indefinitely.
+                    if (line.receivedQty > 0) {
+                        void (0, putaway_js_1.createPutawayTask)({
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                        });
+                        void (0, bin_stock_js_1.persistBinStockDelta)({
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            binId: bin_stock_js_1.STAGING_BIN_ID, qtyDelta: line.receivedQty,
+                        });
+                    }
+                    if (line.damagedQty > 0) {
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'DAMAGE',
+                            title: `Damaged receipt: ${itemLabel}`,
+                            description: `${line.damagedQty} units received damaged against transfer ${transferId}.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                    if (line.shortageQty > 0) {
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'SHORT_RECEIPT',
+                            title: `Short receipt: ${itemLabel}`,
+                            description: `${line.shortageQty} units short against transfer ${transferId}.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                    if (Number(line.excessQty ?? 0) > 0) {
+                        // Blueprint: "excess receipt... never silently absorb." The
+                        // quantity is already held in quarantine; this case requires an
+                        // explicit accept (posts to onHand) or reject (returned/destroyed)
+                        // decision before it can become sellable.
+                        void (0, exceptions_js_1.createExceptionCase)({
+                            type: 'EXCESS_RECEIPT',
+                            title: `Excess receipt: ${itemLabel}`,
+                            description: `${line.excessQty} units received beyond the requested quantity on transfer ${transferId}. Accept or reject.`,
+                            itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
+                            quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
+                            reportedById: req.user.id,
+                        });
+                    }
+                }
+            }
+            const nextTransfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+            if (nextTransfer)
+                void (0, webhook_dispatcher_js_1.emitTransferUpdated)(nextTransfer);
+            (0, transfer_receipt_js_1.rememberReceipt)({
+                requestId, transferId, receiptId: persisted?.receiptId, status: status, receivedBy: req.user.id,
+                receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+            });
+            return res.json({
+                success: true, duplicate: persisted?.duplicate ?? false,
+                transfer: nextTransfer,
+                receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user.id, ...summary, status, notes },
+            });
         }
-        const nextTransfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
-        if (nextTransfer)
-            void (0, webhook_dispatcher_js_1.emitTransferUpdated)(nextTransfer);
-        return res.json({
-            success: true, duplicate: persisted?.duplicate ?? false,
-            transfer: nextTransfer,
-            receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user.id, ...summary, status, notes },
-        });
+        catch (error) {
+            return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+        }
     }
-    catch (error) {
-        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+    finally {
+        (0, transfer_receipt_js_1.endReceiptRequest)(requestId);
     }
 });
 router.post('/items/:itemId/photos', upload.single('photo'), async (req, res) => {

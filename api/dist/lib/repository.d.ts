@@ -33,6 +33,26 @@ export type ItemRecord = {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: 'LOT_SCAN' | 'ITEM_WEIGHT';
+    pickMethod?: 'LOT_SCAN' | 'ITEM_QTY_FIFO';
+    allocationStrategy?: 'FIFO' | 'FEFO';
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
+    status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+    archiveReason?: string;
+    archivedAt?: string;
+    archivedById?: string;
+    barcode?: string;
+    hsn?: string;
+    gstRate?: number;
+    mrp?: number;
+    leadTimeDays?: number;
+    shelfLifeDays?: number;
+    aliases?: string[];
+    version?: number;
+    createdById?: string;
+    updatedById?: string;
     lots: LotRecord[];
 };
 export type LotRecord = {
@@ -50,16 +70,23 @@ export type CountRecord = {
     locationId: string;
     physicalQuantity: number;
     bookQty: number;
-    mode: 'scan' | 'manual';
+    mode: 'scan' | 'manual' | 'weight';
     submittedBy: string;
     role: Role;
     createdAt: string;
+    requestId?: string;
     status?: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RECOUNT';
     reviewedBy?: string;
     reviewedAt?: string;
     reviewReason?: string;
     parentCountId?: string;
     varianceMovementId?: string;
+    reconciliationRequired?: boolean;
+    reconciliationNote?: string;
+    reconciliationAt?: string;
+    bookQtyOriginal?: number;
+    lateDelta?: number;
+    lateMovementKeys?: string[];
 };
 export type StockLedgerRecord = {
     itemId: string;
@@ -89,6 +116,7 @@ export type CountAssignmentRecord = {
     status: 'ASSIGNED' | 'SUBMITTED' | 'CANCELLED';
     countId?: string;
     parentCountId?: string;
+    campaignId?: string;
     createdAt: string;
 };
 export type TransferRecord = {
@@ -110,9 +138,23 @@ export type TransferRecord = {
     cartonCount?: number;
     photos?: string[];
     notes?: string;
+    packing?: {
+        completedAt: string;
+        completedById: string;
+        cartonCount: number;
+    };
+    dispatch?: {
+        dispatchedAt: string;
+        dispatchedById: string;
+        carrier?: string;
+        awb?: string;
+        vehicleNo?: string;
+        expectedArrivalAt?: string;
+    };
     createdAt: string;
 };
 import type { StockMovementRecord } from './stock-ledger.js';
+import type { TransferCartonRecord } from './transfer-packing.js';
 export type CompanyProfileRecord = {
     name: string;
     email?: string;
@@ -128,6 +170,7 @@ export declare const locations: LocationRecord[];
 export declare const items: ItemRecord[];
 export declare const counts: CountRecord[];
 export declare const transfers: TransferRecord[];
+export declare const transferCartons: TransferCartonRecord[];
 export declare const stockLedger: StockLedgerRecord[];
 export declare const countAssignments: CountAssignmentRecord[];
 export declare const stockMovements: StockMovementRecord[];
@@ -151,6 +194,11 @@ export declare function adjustStockLedger(itemId: string, lotId: string, locatio
 export declare function adjustQuarantineLedger(itemId: string, lotId: string, locationId: string, delta: number): StockLedgerRecord;
 export declare function listLocations(): LocationRecord[];
 export declare function listItems(): ItemRecord[];
+/**
+ * Applies a patch to the stored item. listItems() hands out copies, so edits
+ * made to one of those never reach the repository - always go through here.
+ */
+export declare function updateItemRecord(id: string, patch: Partial<Omit<ItemRecord, 'id' | 'lots'>>): ItemRecord | undefined;
 export declare function createItemRecord(input: {
     code: string;
     name: string;
@@ -158,6 +206,20 @@ export declare function createItemRecord(input: {
     subcategory?: string;
     company?: string;
     unit?: string;
+    countMethod?: ItemRecord['countMethod'];
+    pickMethod?: ItemRecord['pickMethod'];
+    allocationStrategy?: ItemRecord['allocationStrategy'];
+    lotRequired?: boolean;
+    expiryRequired?: boolean;
+    decimalQuantity?: boolean;
+    barcode?: string;
+    hsn?: string;
+    gstRate?: number;
+    mrp?: number;
+    leadTimeDays?: number;
+    shelfLifeDays?: number;
+    aliases?: string[];
+    createdById?: string;
 }): ItemRecord;
 export declare function upsertItemRecord(input: {
     code: string;
@@ -178,6 +240,8 @@ export declare function listDailyMovements(): DailyMovementRecord[];
 export declare function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord;
 export declare function listSyncCheckpoints(): SyncCheckpointRecord[];
 export declare function createCountRecord(input: CountRecord): CountRecord;
+/** Undoes createCountRecord when the database write behind it failed. */
+export declare function removeCountRecord(id: string): void;
 export declare function listCounts(): CountRecord[];
 export declare function createTransferRecord(input: TransferRecord): TransferRecord;
 export declare function listStockMovements(filter?: {
@@ -209,4 +273,9 @@ export declare function updateTransferReceiptProgress(id: string, lines: Array<{
     shortageQty?: number;
     excessQty?: number;
 }>): TransferRecord;
+export declare function listTransferCartons(transferId?: string): TransferCartonRecord[];
+export declare function addTransferCarton(carton: TransferCartonRecord): TransferCartonRecord;
+export declare function setTransferCartonStatus(id: string, status: TransferCartonRecord['status']): TransferCartonRecord | undefined;
+/** Records packing completion and/or dispatch details on the stored transfer. */
+export declare function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'packing' | 'dispatch' | 'cartonCount'>): TransferRecord;
 export declare function listTransfers(): TransferRecord[];
