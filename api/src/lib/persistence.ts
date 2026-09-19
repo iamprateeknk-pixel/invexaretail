@@ -839,6 +839,70 @@ export async function persistTransfer(transfer: TransferRecord): Promise<void> {
   });
 }
 
+function transferReservationTotals(transfer: TransferRecord): Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }> {
+  const totals = new Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }>();
+  for (const line of transfer.lines) {
+    const key = `${line.itemId}\u0000${line.lotId}\u0000${transfer.sourceLocationId}`;
+    const current = totals.get(key);
+    if (current) current.quantity += line.quantity;
+    else totals.set(key, { itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: line.quantity });
+  }
+  return totals;
+}
+
+export async function persistTransferReplacement(current: TransferRecord, next: TransferRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.$transaction(async (tx) => {
+    for (const line of transferReservationTotals(current).values()) {
+      const ledger = await tx.stockLedger.findUnique({
+        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+      });
+      if (ledger) {
+        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+      }
+    }
+    for (const line of transferReservationTotals(next).values()) {
+      const ledger = await tx.stockLedger.findUnique({
+        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+      });
+      const available = (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0);
+      if (!ledger || available < line.quantity - 1e-8) {
+        throw new Error(`Only ${Math.max(0, available)} units are available for lot ${line.lotId} at this location - ${line.quantity} were requested.`);
+      }
+      await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { increment: line.quantity }, version: { increment: 1 } } });
+    }
+    await tx.transferLine.deleteMany({ where: { transferId: current.id } });
+    await tx.transfer.update({
+      where: { id: current.id },
+      data: {
+        sourceLocationId: next.sourceLocationId,
+        destinationLocationId: next.destinationLocationId,
+        notes: next.notes ?? null,
+        cartonCount: next.cartonCount ?? null,
+        lines: { create: next.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
+      },
+    });
+  });
+}
+
+export async function persistTransferDeletion(transfer: TransferRecord): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.$transaction(async (tx) => {
+    for (const line of transferReservationTotals(transfer).values()) {
+      const ledger = await tx.stockLedger.findUnique({
+        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+      });
+      if (ledger) {
+        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+      }
+    }
+    await tx.transferLine.deleteMany({ where: { transferId: transfer.id } });
+    await tx.transfer.delete({ where: { id: transfer.id } });
+  });
+}
+
 export async function persistTransferCarton(carton: import('./transfer-packing.js').TransferCartonRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();

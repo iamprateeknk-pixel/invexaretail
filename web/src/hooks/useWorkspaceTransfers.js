@@ -18,6 +18,7 @@ export function useWorkspaceTransfers({
   const [transfers, setTransfers] = useState([]);
   const [transferForm, setTransferForm] = useState({ source: 'loc-1', destination: 'wh-1', itemId: 'sku-001', lotId: 'LOT-331', qty: 8, cartonCount: 1, photos: [] });
   const [evidenceTransfer, setEvidenceTransfer] = useState(null);
+  const [editingTransfer, setEditingTransfer] = useState(null);
   const [receivingTransfer, setReceivingTransfer] = useState(null);
   const [receiveForm, setReceiveForm] = useState({ requestId: '', lines: [], notes: '', photos: [] });
   const [pickerTasks, setPickerTasks] = useState([]);
@@ -30,11 +31,12 @@ export function useWorkspaceTransfers({
   async function requestTransfer() {
     try {
       setSubmitLoading(true);
-      const created = await apiRequest('/api/v1/transfers', {
-        method: 'POST',
+      const endpoint = editingTransfer ? `/api/v1/transfers/${editingTransfer.id}` : '/api/v1/transfers';
+      const created = await apiRequest(endpoint, {
+        method: editingTransfer ? 'PATCH' : 'POST',
         headers: { Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
-          sourceLocationId: role === 'STORE_USER' ? locationId : transferForm.source,
+          sourceLocationId: role === 'STORE_USER' ? (editingTransfer?.sourceLocationId ?? locationId) : transferForm.source,
           destinationLocationId: transferForm.destination,
           lines: [{ itemId: transferForm.itemId, lotId: transferForm.lotId, quantity: Number(transferForm.qty) }],
           cartonCount: transferForm.cartonCount || undefined,
@@ -52,9 +54,10 @@ export function useWorkspaceTransfers({
       }
       const refreshed = await apiRequest('/api/v1/transfers/list', { headers: { Authorization: `Bearer ${authToken}` } });
       setTransfers(normalizeTransfers(refreshed.transfers, items, locations));
-      showToast('Transfer request created successfully!', 'success');
+      showToast(editingTransfer ? 'Transfer updated successfully.' : 'Transfer request created successfully!', 'success');
       addNotification('Transfer Request Created', `${transferForm.qty} units to ${transferForm.destination}`, 'success');
       setModalOpen(null);
+      setEditingTransfer(null);
       setTransferForm((current) => ({ ...current, photos: [] }));
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to request transfer.', 'error');
@@ -66,6 +69,50 @@ export function useWorkspaceTransfers({
   async function refreshTransfers() {
     const refreshed = await apiRequest('/api/v1/transfers/list', { headers: { Authorization: `Bearer ${authToken}` } });
     setTransfers(normalizeTransfers(refreshed.transfers, items, locations));
+  }
+
+  function openTransferEditor(transfer) {
+    const line = transfer.lines?.[0];
+    if (!line || transfer.lines.length !== 1) {
+      showToast('Multi-line imported transfers cannot be edited in the single-item form.', 'warning');
+      return;
+    }
+    setEditingTransfer(transfer);
+    setTransferForm({
+      source: transfer.sourceLocationId,
+      destination: transfer.destinationLocationId,
+      itemId: line.itemId,
+      lotId: line.lotId,
+      qty: Number(line.quantity),
+      cartonCount: transfer.cartonCount || 1,
+      photos: [],
+    });
+    setModalOpen('transfer');
+  }
+
+  function closeTransferEditor() {
+    setEditingTransfer(null);
+    setModalOpen(null);
+  }
+
+  async function deleteTransfers(transferIds) {
+    const uniqueIds = [...new Set(transferIds)].filter(Boolean);
+    if (!uniqueIds.length) return { deleted: 0, failed: 0 };
+    try {
+      setSubmitLoading(true);
+      const results = await Promise.allSettled(uniqueIds.map((transferId) => apiRequest(`/api/v1/transfers/${transferId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      })));
+      await refreshTransfers();
+      const failed = results.filter((result) => result.status === 'rejected');
+      const deleted = results.length - failed.length;
+      if (deleted) showToast(`${deleted} transfer${deleted === 1 ? '' : 's'} deleted.`, 'success');
+      if (failed.length) showToast(failed[0].reason instanceof Error ? failed[0].reason.message : `${failed.length} transfer(s) could not be deleted.`, 'error');
+      return { deleted, failed: failed.length };
+    } finally {
+      setSubmitLoading(false);
+    }
   }
 
   async function changeTransferStatus(transferId, status) {
@@ -277,6 +324,8 @@ export function useWorkspaceTransfers({
     setTransferForm,
     evidenceTransfer,
     setEvidenceTransfer,
+    editingTransfer,
+    setEditingTransfer,
     refreshTransfers,
     receivingTransfer,
     setReceivingTransfer,
@@ -295,6 +344,9 @@ export function useWorkspaceTransfers({
     transferImportForm,
     setTransferImportForm,
     requestTransfer,
+    openTransferEditor,
+    closeTransferEditor,
+    deleteTransfers,
     changeTransferStatus,
     openTransferReceipt,
     updateReceiptLine,

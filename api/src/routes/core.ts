@@ -71,6 +71,8 @@ import {
   createRecountAssignment,
   findAssignmentForCount,
   createTransferRecord,
+  replaceTransferRecord,
+  removeTransferRecord,
   adjustStockLedger,
   adjustQuarantineLedger,
   ensureLotRecord,
@@ -150,6 +152,8 @@ import {
   persistLocationDelete,
   persistLocationUpdate,
   persistTransfer,
+  persistTransferReplacement,
+  persistTransferDeletion,
   persistTransferStatus,
   persistConfirmedPickAllocations,
   persistUserCreate,
@@ -1687,6 +1691,73 @@ router.post('/transfers', async (req: Request, res: Response) => {
     }
   } catch (error) {
     return res.status(403).json({ message: error instanceof Error ? error.message : 'Invalid transfer payload' });
+  }
+});
+
+const EDITABLE_TRANSFER_STATUSES = new Set<TransferRecord['status']>(['DRAFT', 'SUBMITTED', 'REQUESTED']);
+
+function canModifyTransfer(context: AccessContext, userId: string, transfer: TransferRecord): boolean {
+  if (!canCreateTransfer(context.role) || !EDITABLE_TRANSFER_STATUSES.has(transfer.status)) return false;
+  if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) return false;
+  return context.role !== 'STORE_USER' || transfer.requestedBy === userId;
+}
+
+router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const transferId = firstParam(req.params.transferId);
+  const current = listTransfers().find((record) => record.id === transferId);
+  if (!current) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!canModifyTransfer(context, req.user!.id, current)) return res.status(403).json({ message: 'Only an editable transfer request can be changed by its requester or a transfer manager.' });
+  if (activeCartons(listTransferCartons(current.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer can no longer be edited.' });
+
+  try {
+    const input = req.body as TransferInput;
+    if (!canAccessLocation(context, input.sourceLocationId) || !canAccessLocation(context, input.destinationLocationId)) {
+      return res.status(403).json({ message: 'Transfer location access denied.' });
+    }
+    if (context.role === 'STORE_USER') {
+      const destination = listLocations().find((location) => location.id === input.destinationLocationId);
+      if (input.sourceLocationId !== current.sourceLocationId || destination?.type !== 'warehouse') {
+        return res.status(400).json({ message: 'Store users can only edit their request to the same source branch and a warehouse destination.' });
+      }
+    }
+    const cartonCount = parseCartonCount(input.cartonCount);
+    const validated = validateTransferRequest(context.role, { ...input, cartonCount });
+    const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
+    if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
+    const invalidLot = validated.lines.find((line) => !listItems().find((item) => item.id === line.itemId)?.lots.some((lot) => lot.id === line.lotId));
+    if (invalidLot) return res.status(400).json({ message: 'Each transfer lot must belong to its selected item.' });
+    if (getActiveWorkflow().expiryBlocking) {
+      const blocked = validated.lines.find((line) => {
+        const lot = listItems().find((item) => item.id === line.itemId)?.lots.find((entry) => entry.id === line.lotId);
+        return lot && ((lot.status && lot.status !== 'AVAILABLE') || Boolean(lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now()));
+      });
+      if (blocked) return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
+    }
+    const next: TransferRecord = { ...current, sourceLocationId: validated.sourceLocationId, destinationLocationId: validated.destinationLocationId, lines: validated.lines, cartonCount, notes: validated.notes };
+    await persistTransferReplacement(current, next);
+    const updated = replaceTransferRecord(current.id, next);
+    await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_EDITED', entityType: 'Transfer', entityId: current.id }));
+    return res.json({ success: true, transfer: updated });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to edit transfer.' });
+  }
+});
+
+router.delete('/transfers/:transferId', async (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const transferId = firstParam(req.params.transferId);
+  const transfer = listTransfers().find((record) => record.id === transferId);
+  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!canModifyTransfer(context, req.user!.id, transfer)) return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
+  if (activeCartons(listTransferCartons(transfer.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
+  try {
+    await persistTransferDeletion(transfer);
+    removeTransferRecord(transfer.id);
+    await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DELETED', entityType: 'Transfer', entityId: transfer.id }));
+    return res.json({ success: true, transferId: transfer.id });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to delete transfer.' });
   }
 });
 

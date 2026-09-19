@@ -270,3 +270,29 @@ test('QC gates a transfer receipt: no inspection blocks it, a failed one quarant
     resetMemoryQc();
   }
 });
+test('editable transfer requests can be changed and deleted, but started transfers are protected', async () => {
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const created = await call('POST', '/transfers', admin, {
+      sourceLocationId: 'wh-1', destinationLocationId: 'loc-1', cartonCount: 1,
+      lines: [{ itemId: 'item-1003', lotId: 'lot-1003', quantity: 1 }],
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.transfer.id;
+
+    const edited = await call('PATCH', `/transfers/${id}`, admin, {
+      sourceLocationId: 'wh-1', destinationLocationId: 'loc-1', cartonCount: 2,
+      lines: [{ itemId: 'item-1003', lotId: 'lot-1003', quantity: 2 }],
+    });
+    assert.equal(edited.status, 200);
+    assert.deepEqual([edited.body.transfer.cartonCount, edited.body.transfer.lines[0].quantity], [2, 2]);
+
+    const listed = (await call('GET', '/transfers/list', admin)).body.transfers.find((row: { id: string }) => row.id === id);
+    assert.deepEqual([listed.cartonCount, listed.lines[0].quantity], [2, 2]);
+    assert.equal((await call('DELETE', `/transfers/${id}`, admin)).status, 200);
+    assert.equal(listTransfers().some((row) => row.id === id), false);
+
+    const started = confirmedTransfer();
+    assert.equal((await call('DELETE', `/transfers/${started}`, admin)).status, 403);
+  });
+});

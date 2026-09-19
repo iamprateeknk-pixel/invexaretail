@@ -7,18 +7,17 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 
 export function TransferRequestDialog() {
   const {
-    items, locations, modalOpen, requestTransfer,
-    role, setModalOpen, setTransferForm, submitLoading,
-    transferForm,
+    closeTransferEditor, editingTransfer, items, locations, modalOpen, requestTransfer,
+    role, setTransferForm, submitLoading, transferForm,
   } = useWorkspace();
   return (
-    <Dialog open={modalOpen === 'transfer'} onOpenChange={(open) => !open && setModalOpen(null)}>
+    <Dialog open={modalOpen === 'transfer'} onOpenChange={(open) => !open && closeTransferEditor()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Transfer Request</DialogTitle>
+            <DialogTitle>{editingTransfer ? 'Edit Transfer Request' : 'Create Transfer Request'}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4">
-            {role === 'ADMIN' && (
+            {role !== 'STORE_USER' && (
               <>
                 <div className="grid gap-2">
                   <Label>Source Location</Label>
@@ -79,8 +78,8 @@ export function TransferRequestDialog() {
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setModalOpen(null)}>Cancel</Button>
-            <Button type="button" onClick={requestTransfer} disabled={submitLoading}>{submitLoading ? 'Creating...' : 'Create Transfer'}</Button>
+            <Button type="button" variant="outline" onClick={closeTransferEditor}>Cancel</Button>
+            <Button type="button" onClick={requestTransfer} disabled={submitLoading}>{submitLoading ? (editingTransfer ? 'Saving...' : 'Creating...') : (editingTransfer ? 'Save Changes' : 'Create Transfer')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

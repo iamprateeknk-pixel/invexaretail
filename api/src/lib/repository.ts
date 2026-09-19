@@ -360,6 +360,20 @@ export function createTransferRecord(input: TransferRecord): TransferRecord {
   return { ...input, lines: input.lines.map((line) => ({ ...line })) };
 }
 
+export function replaceTransferRecord(id: string, input: TransferRecord): TransferRecord {
+  const index = transfers.findIndex((record) => record.id === id);
+  if (index < 0) throw new Error('Transfer was not found.');
+  transfers[index] = { ...input, lines: input.lines.map((line) => ({ ...line })) };
+  return { ...transfers[index], lines: transfers[index].lines.map((line) => ({ ...line })) };
+}
+
+export function removeTransferRecord(id: string): TransferRecord | undefined {
+  const index = transfers.findIndex((record) => record.id === id);
+  if (index < 0) return undefined;
+  const [removed] = transfers.splice(index, 1);
+  return { ...removed, lines: removed.lines.map((line) => ({ ...line })) };
+}
+
 function makeMovementId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
