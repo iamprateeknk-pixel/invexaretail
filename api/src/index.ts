@@ -16,6 +16,7 @@ import campaignsRouter from './routes/campaigns.js';
 import itemMasterRouter from './routes/item-master.js';
 import transferLogisticsRouter from './routes/transfer-logistics.js';
 import commandCenterRouter from './routes/command-center.js';
+import { requestMetricsMiddleware } from './lib/request-metrics.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
@@ -82,6 +83,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Request-Id', requestId);
   next();
 });
+
+app.use(requestMetricsMiddleware);
 
 // Rate limiting: General API
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));

@@ -23,6 +23,7 @@ function Bars({ pulse, field, label }) {
 export default function CommandCenter({ token, liveRevision, locationsById }) {
   const [data, setData] = useState(null);
   const [reports, setReports] = useState(null);
+  const [health, setHealth] = useState(null);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
   const mounted = useRef(true);
@@ -35,9 +36,11 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
       apiRequest('/api/v1/command-center', { headers }),
       apiRequest('/api/v1/reports/transfer-cycle', { headers }).catch(() => null),
       apiRequest('/api/v1/reports/count-accuracy?groupBy=branch', { headers }).catch(() => null),
-    ]).then(([center, cycle, accuracy]) => {
+      // Admin-only; everyone else simply does not get the panel.
+      apiRequest('/api/v1/ops/metrics', { headers }).catch(() => null),
+    ]).then(([center, cycle, accuracy, metrics]) => {
       if (!mounted.current) return;
-      setData(center.commandCenter); setReports({ cycle: cycle?.report, accuracy: accuracy?.rows ?? [] }); setError('');
+      setData(center.commandCenter); setReports({ cycle: cycle?.report, accuracy: accuracy?.rows ?? [] }); setHealth(metrics); setError('');
     }).catch((err) => { if (mounted.current) setError(err instanceof Error ? err.message : 'The command center is unavailable.'); });
   }, [token, liveRevision]);
 
@@ -170,6 +173,27 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
           </CardContent>
         </Card>
       </div>
+
+      {health && (
+        <Card>
+          <CardHeader className="flex-row flex-wrap items-center justify-between space-y-0">
+            <CardTitle className="text-base">System health</CardTitle>
+            <span className="text-xs text-muted-foreground">up {Math.round(health.api.uptimeSeconds / 60)} min · {health.api.totalRequests} requests · {health.api.serverErrors} server errors · {health.process.rssMb} MB · {health.database.connected ? 'database connected' : 'memory mode'}</span>
+          </CardHeader>
+          <CardContent className="grid gap-6 lg:grid-cols-2">
+            <div>
+              <p className="mb-2 text-sm font-medium">Slowest routes (95th percentile)</p>
+              {health.api.slowest.slice(0, 5).map((row) => <div key={`${row.method} ${row.route}`} className="flex justify-between border-b py-1.5 text-xs last:border-0"><span className="truncate">{row.method} {row.route}</span><span className="text-muted-foreground">{row.p95Ms} ms · {row.count} calls</span></div>)}
+              {!health.api.slowest.length && <p className="text-xs text-muted-foreground">No traffic recorded yet.</p>}
+            </div>
+            <div>
+              <p className="mb-2 text-sm font-medium">Routes failing with server errors</p>
+              {health.api.failing.slice(0, 5).map((row) => <div key={`${row.method} ${row.route}`} className="flex justify-between border-b py-1.5 text-xs last:border-0"><span className="truncate">{row.method} {row.route}</span><span className="text-destructive">{row.serverErrors} ({row.errorRatePercent}%)</span></div>)}
+              {!health.api.failing.length && <p className="text-xs text-muted-foreground">None.</p>}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {reports && (
         <Card>

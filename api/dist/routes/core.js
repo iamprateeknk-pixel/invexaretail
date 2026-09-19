@@ -41,6 +41,7 @@ const transfer_evidence_js_1 = require("../lib/transfer-evidence.js");
 const item_photos_js_1 = require("../lib/item-photos.js");
 const receipt_validation_js_1 = require("../lib/receipt-validation.js");
 const transfer_packing_js_1 = require("../lib/transfer-packing.js");
+const record_then_persist_js_1 = require("../lib/record-then-persist.js");
 const qc_gate_js_1 = require("../lib/qc-gate.js");
 const transfer_receipt_js_1 = require("../lib/transfer-receipt.js");
 // Core inventory API consumed by the web app: locations, items, counts,
@@ -789,7 +790,8 @@ async function commitLotCount(args) {
         submittedBy: args.userId,
         role: args.role,
     });
-    (0, repository_js_1.createCountRecord)({
+    // Memory first, database second, and the memory copy is withdrawn if the database refuses.
+    await (0, record_then_persist_js_1.recordThenPersist)(() => (0, repository_js_1.createCountRecord)({
         id: saved.id,
         itemId: saved.itemId,
         lotId: saved.lotId,
@@ -802,11 +804,7 @@ async function commitLotCount(args) {
         createdAt: saved.createdAt,
         parentCountId: assignment?.parentCountId,
         requestId: args.requestId,
-    });
-    // persistCount must land before anything references it as committed; the
-    // audit write and the (optional) assignment-close write are independent of
-    // each other, so they run concurrently.
-    await (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId });
+    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }), (record) => (0, repository_js_1.removeCountRecord)(record.id));
     const followUps = [
         (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
     ];
@@ -886,6 +884,7 @@ router.post('/stock-counts', async (req, res) => {
 // FIFO/FEFO order (lib/weight-allocation.ts) and creates a count per lot. The
 // user never picks or splits lots, and a store user is never shown the split
 // (it would reveal the book quantities the count is blind to).
+const weightInFlight = new Set();
 router.post('/stock-counts/weight', async (req, res) => {
     const context = accessContext(req.user);
     const input = req.body;
@@ -932,13 +931,33 @@ router.post('/stock-counts/weight', async (req, res) => {
         if (allocation.some((row) => (0, repository_js_1.findPendingCountForLot)(req.user.id, item.id, row.lotId, locationId))) {
             return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
         }
+        // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
+        // so a retry never finds half a count and calls it done.
+        const flightKey = requestId ? `${req.user.id}|${requestId}` : '';
+        if (flightKey && weightInFlight.has(flightKey))
+            return res.status(409).json({ message: 'This count is already being saved. Retry in a moment.' });
+        if (flightKey)
+            weightInFlight.add(flightKey);
         const saved = [];
-        for (const row of allocation) {
-            const lot = item.lots.find((candidate) => candidate.id === row.lotId);
-            saved.push(await commitLotCount({
-                userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
-                physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
-            }));
+        try {
+            for (const row of allocation) {
+                const lot = item.lots.find((candidate) => candidate.id === row.lotId);
+                saved.push(await commitLotCount({
+                    userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
+                    physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+                }));
+            }
+        }
+        catch (error) {
+            for (const row of saved) {
+                (0, repository_js_1.removeCountRecord)(row.saved.id);
+                await (0, persistence_js_1.persistCountDeletion)(row.saved.id).catch(() => undefined);
+            }
+            throw error;
+        }
+        finally {
+            if (flightKey)
+                weightInFlight.delete(flightKey);
         }
         // The whole item was counted in one entry, so the task is complete now.
         if (assignment) {

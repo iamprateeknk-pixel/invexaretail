@@ -2,6 +2,7 @@ import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferE
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
 import { activeCartons, isTransitDelayed } from '../lib/transfer-packing.js';
+import { recordThenPersist } from '../lib/record-then-persist.js';
 import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import type { QcCheckResult } from '../lib/qc-inspection.js';
 import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persistTransferReceipt, rememberReceipt } from '../lib/transfer-receipt.js';
@@ -64,6 +65,7 @@ import {
 import {
   createCountAssignment,
   createCountRecord,
+  removeCountRecord,
   createItemRecord,
   createRecountAssignment,
   findAssignmentForCount,
@@ -134,6 +136,7 @@ import {
   persistAudit,
   persistCompanyProfile,
   persistCount,
+  persistCountDeletion,
   persistCountAssignment,
   persistCountAssignmentUpdate,
   persistCountReview,
@@ -927,24 +930,25 @@ async function commitLotCount(args: LotCountArgs) {
     submittedBy: args.userId,
     role: args.role,
   });
-  createCountRecord({
-    id: saved.id,
-    itemId: saved.itemId,
-    lotId: saved.lotId,
-    locationId: saved.locationId,
-    physicalQuantity: saved.physicalQuantity,
-    bookQty,
-    mode: saved.mode,
-    submittedBy: saved.submittedBy,
-    role: saved.role,
-    createdAt: saved.createdAt,
-    parentCountId: assignment?.parentCountId,
-    requestId: args.requestId,
-  });
-  // persistCount must land before anything references it as committed; the
-  // audit write and the (optional) assignment-close write are independent of
-  // each other, so they run concurrently.
-  await persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId });
+  // Memory first, database second, and the memory copy is withdrawn if the database refuses.
+  await recordThenPersist(
+    () => createCountRecord({
+      id: saved.id,
+      itemId: saved.itemId,
+      lotId: saved.lotId,
+      locationId: saved.locationId,
+      physicalQuantity: saved.physicalQuantity,
+      bookQty,
+      mode: saved.mode,
+      submittedBy: saved.submittedBy,
+      role: saved.role,
+      createdAt: saved.createdAt,
+      parentCountId: assignment?.parentCountId,
+      requestId: args.requestId,
+    }),
+    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }),
+    (record) => removeCountRecord(record.id),
+  );
   const followUps: Promise<unknown>[] = [
     persistAudit(recordAudit({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
   ];
@@ -1032,6 +1036,8 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
 // FIFO/FEFO order (lib/weight-allocation.ts) and creates a count per lot. The
 // user never picks or splits lots, and a store user is never shown the split
 // (it would reveal the book quantities the count is blind to).
+const weightInFlight = new Set<string>();
+
 router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string };
@@ -1078,13 +1084,28 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
     }
 
-    const saved = [];
-    for (const row of allocation) {
-      const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
-      saved.push(await commitLotCount({
-        userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
-        physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
-      }));
+    // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
+    // so a retry never finds half a count and calls it done.
+    const flightKey = requestId ? `${req.user!.id}|${requestId}` : '';
+    if (flightKey && weightInFlight.has(flightKey)) return res.status(409).json({ message: 'This count is already being saved. Retry in a moment.' });
+    if (flightKey) weightInFlight.add(flightKey);
+    const saved: Array<Awaited<ReturnType<typeof commitLotCount>>> = [];
+    try {
+      for (const row of allocation) {
+        const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
+        saved.push(await commitLotCount({
+          userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
+          physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+        }));
+      }
+    } catch (error) {
+      for (const row of saved) {
+        removeCountRecord(row.saved.id);
+        await persistCountDeletion(row.saved.id).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      if (flightKey) weightInFlight.delete(flightKey);
     }
     // The whole item was counted in one entry, so the task is complete now.
     if (assignment) {

@@ -240,6 +240,8 @@ export declare function listDailyMovements(): DailyMovementRecord[];
 export declare function upsertSyncCheckpoint(input: SyncCheckpointRecord): SyncCheckpointRecord;
 export declare function listSyncCheckpoints(): SyncCheckpointRecord[];
 export declare function createCountRecord(input: CountRecord): CountRecord;
+/** Undoes createCountRecord when the database write behind it failed. */
+export declare function removeCountRecord(id: string): void;
 export declare function listCounts(): CountRecord[];
 export declare function createTransferRecord(input: TransferRecord): TransferRecord;
 export declare function listStockMovements(filter?: {

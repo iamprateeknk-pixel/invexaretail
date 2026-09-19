@@ -8,6 +8,8 @@ import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scop
 import { listCountAssignments, listCounts, listItems, listLocations, listSyncCheckpoints, listTransfers } from '../lib/repository.js';
 import { databaseEnabled } from '../lib/persistence.js';
 import { buildCommandCenter } from '../lib/command-center.js';
+import { metricsSnapshot } from '../lib/request-metrics.js';
+import { stuckTransfers } from '../lib/command-center.js';
 import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type AccuracyGroup } from '../lib/report-builders.js';
 
 // Blueprint v4 §29 Command Center and §30 Reports. Read-only.
@@ -105,6 +107,20 @@ router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-export-${new Date().toISOString().slice(0, 10)}.csv"`);
   return res.send(auditCsv(events, names));
+});
+
+// Blueprint v4 §40 Observability: request latency/error by route, sync health, stuck transfers.
+router.get('/ops/metrics', ...guard, (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Operational metrics are for admins.' });
+  const memory = process.memoryUsage();
+  return res.json({
+    generatedAt: new Date().toISOString(),
+    api: metricsSnapshot(),
+    sync: { liveClients: subscriberCount(), lastEventId: latestEventId() },
+    warehouse: { stuckTransfers: stuckTransfers(listTransfers(), new Date()).rows.length },
+    process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
+    database: { connected: databaseEnabled },
+  });
 });
 
 export default router;

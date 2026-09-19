@@ -23,6 +23,7 @@ exports.listDailyMovements = listDailyMovements;
 exports.upsertSyncCheckpoint = upsertSyncCheckpoint;
 exports.listSyncCheckpoints = listSyncCheckpoints;
 exports.createCountRecord = createCountRecord;
+exports.removeCountRecord = removeCountRecord;
 exports.listCounts = listCounts;
 exports.createTransferRecord = createTransferRecord;
 exports.listStockMovements = listStockMovements;
@@ -222,6 +223,12 @@ function createCountRecord(input) {
     const record = { status: 'PENDING_REVIEW', ...input };
     exports.counts.push(record);
     return { ...record };
+}
+/** Undoes createCountRecord when the database write behind it failed. */
+function removeCountRecord(id) {
+    const index = exports.counts.findIndex((row) => row.id === id);
+    if (index >= 0)
+        exports.counts.splice(index, 1);
 }
 function listCounts() {
     return [...exports.counts];

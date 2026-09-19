@@ -345,6 +345,12 @@ export function createCountRecord(input: CountRecord): CountRecord {
   return { ...record };
 }
 
+/** Undoes createCountRecord when the database write behind it failed. */
+export function removeCountRecord(id: string): void {
+  const index = counts.findIndex((row) => row.id === id);
+  if (index >= 0) counts.splice(index, 1);
+}
+
 export function listCounts(): CountRecord[] {
   return [...counts];
 }

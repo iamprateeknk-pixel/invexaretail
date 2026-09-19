@@ -641,6 +641,13 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
   return { committedRows };
 }
 
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+export async function persistCountDeletion(id: string): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
+}
+
 export async function persistCount(count: CountRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();

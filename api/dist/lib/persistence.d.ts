@@ -66,6 +66,8 @@ export declare function persistDailyMovementImport(input: {
 }): Promise<{
     committedRows: number;
 }>;
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+export declare function persistCountDeletion(id: string): Promise<void>;
 export declare function persistCount(count: CountRecord): Promise<void>;
 export declare function listStockFromDatabase(locationId: string): Promise<PersistedStockRow[]>;
 /**

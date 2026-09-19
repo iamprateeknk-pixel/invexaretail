@@ -11,6 +11,7 @@ exports.loadTransferPickSlips = loadTransferPickSlips;
 exports.persistItem = persistItem;
 exports.persistOpeningStockImport = persistOpeningStockImport;
 exports.persistDailyMovementImport = persistDailyMovementImport;
+exports.persistCountDeletion = persistCountDeletion;
 exports.persistCount = persistCount;
 exports.listStockFromDatabase = listStockFromDatabase;
 exports.persistCountReconciliation = persistCountReconciliation;
@@ -627,6 +628,13 @@ async function persistDailyMovementImport(input) {
         }
     }, { maxWait: 10_000, timeout: 120_000 });
     return { committedRows };
+}
+/** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
+async function persistCountDeletion(id) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
 async function persistCount(count) {
     if (!exports.databaseEnabled)
