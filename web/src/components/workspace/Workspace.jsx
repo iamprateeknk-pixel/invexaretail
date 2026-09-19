@@ -8,6 +8,7 @@ import { CountsPage } from './pages/CountsPage';
 import { TransfersPage } from './pages/TransfersPage';
 import { PickingPage } from './pages/PickingPage';
 import { CommandCenterPage } from './pages/CommandCenterPage';
+import { CampaignsPage } from './pages/CampaignsPage';
 import { PutawayPage } from './pages/PutawayPage';
 import { QcPage } from './pages/QcPage';
 import { ConnectorsPage } from './pages/ConnectorsPage';
@@ -45,6 +46,7 @@ const SECTION_PAGES = {
   catalog: CatalogPage,
   expiry: ExpiryPage,
   counts: CountsPage,
+  campaigns: CampaignsPage,
   approvals: CountsPage,
   'command-center': CommandCenterPage,
   transfers: TransfersPage,
