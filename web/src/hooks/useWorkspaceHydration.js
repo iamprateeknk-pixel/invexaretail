@@ -46,9 +46,9 @@ export function useWorkspaceHydration({
 }) {
   async function hydrateWorkspace(token, currentRole) {
     const headers = { Authorization: `Bearer ${token}` };
-    const locationsResponse = await apiRequest('/api/v1/locations', { headers });
-    const visibleLocations = locationsResponse.locations ?? [];
-    const [itemsResponse, countsResponse, transfersResponse, dashboardResponse, workspaceResponse, runtimeResponse] = await Promise.all([
+    // Independent resources load together so login does not pay an extra network round-trip.
+    const [locationsResponse, itemsResponse, countsResponse, transfersResponse, dashboardResponse, workspaceResponse, runtimeResponse] = await Promise.all([
+      apiRequest('/api/v1/locations', { headers }),
       apiRequest('/api/v1/items', { headers }),
       apiRequest('/api/v1/counts', { headers }),
       apiRequest('/api/v1/transfers/list', { headers }),
