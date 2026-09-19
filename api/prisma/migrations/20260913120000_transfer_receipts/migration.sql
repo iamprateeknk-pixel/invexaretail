@@ -1,6 +1,6 @@
 -- Additive P5 transfer receipt migration. Safe for existing Hostinger MySQL data.
 ALTER TABLE `TransferLine`
-  ADD COLUMN IF NOT EXISTS `shortageQty` DOUBLE NOT NULL DEFAULT 0;
+  ADD COLUMN `shortageQty` DOUBLE NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS `TransferReceipt` (
   `id` VARCHAR(191) NOT NULL,
