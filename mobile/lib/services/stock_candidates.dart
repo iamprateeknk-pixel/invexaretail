@@ -26,7 +26,7 @@ List<CatalogItem> stockedCandidates(List<CatalogItem> items, List<StockRow> stoc
     if (lotIds == null) continue;
     final lots = item.lots.where((lot) => lotIds.contains(lot.id)).toList();
     if (lots.isEmpty) continue;
-    result.add(CatalogItem(id: item.id, code: item.code, name: item.name, unit: item.unit, barcode: item.barcode, lots: lots));
+    result.add(item.withLots(lots));
   }
   return result;
 }

@@ -850,6 +850,10 @@ router.post('/stock-counts', async (req, res) => {
             : item.lots[0];
         if (!lot)
             return res.status(400).json({ message: `Lot "${validated.lotNo}" was not found for this item.` });
+        // Blueprint v4 §13: pieces are whole numbers; only weight / decimal items take fractions.
+        if (!item.decimalQuantity && item.countMethod !== 'ITEM_WEIGHT' && !Number.isInteger(validated.physicalQuantity)) {
+            return res.status(400).json({ message: `Item ${item.code} is counted in whole units.` });
+        }
         // Blueprint v4 §7: operational users never act on a zero-stock lot.
         if ((0, inventory_js_1.hidesZeroStockForRole)(context.role) && ((0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, validated.locationId)?.onHand ?? 0) <= 0) {
             return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });

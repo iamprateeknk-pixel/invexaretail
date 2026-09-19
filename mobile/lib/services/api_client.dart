@@ -200,9 +200,10 @@ class InvexaApi {
   Future<CountRecord> submitCount({
     required String itemId,
     required String locationId,
-    required int physicalQuantity,
+    required double physicalQuantity,
     String? lotNo,
     String mode = 'manual',
+    String? requestId,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts', body: {
       'itemId': itemId,
@@ -210,8 +211,32 @@ class InvexaApi {
       'physicalQuantity': physicalQuantity,
       'mode': mode,
       if (lotNo != null && lotNo.isNotEmpty) 'lotNo': lotNo,
+      if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
     });
     return CountRecord.fromJson(asMap(payload['count']));
+  }
+
+  /// Loose-weight count: one decimal total for the item. The server splits it
+  /// over the lots (FIFO/FEFO); a store user's response carries no split.
+  Future<List<CountRecord>> submitWeightCount({
+    required String itemId,
+    required String locationId,
+    required double totalQuantity,
+    String? requestId,
+  }) async {
+    final payload = await _send('POST', '/api/v1/stock-counts/weight', body: {
+      'itemId': itemId,
+      'locationId': locationId,
+      'totalQuantity': totalQuantity,
+      if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+    });
+    return asList(payload['counts']).map((row) => CountRecord.fromJson(asMap(row))).toList();
+  }
+
+  /// The task-first work feed. Older servers don't have it: callers fall back.
+  Future<List<CountTask>> countTasks() async {
+    final payload = await _send('GET', '/api/v1/mobile/work');
+    return asList(payload['countTasks']).map((row) => CountTask.fromJson(asMap(row))).toList();
   }
 
   Future<List<TransferRecord>> transfers() async {

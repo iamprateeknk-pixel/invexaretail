@@ -4,6 +4,7 @@ import '../config/role_home.dart';
 import '../config/theme.dart';
 import '../services/live_events.dart';
 import '../state/session_controller.dart';
+import 'conflict_center_screen.dart';
 import 'count_screen.dart';
 import 'dashboard_screen.dart';
 import 'pick_screen.dart';
@@ -44,6 +45,19 @@ class _HomeShellState extends State<HomeShell> {
         title: Text(home.destinations[safeIndex].id == 'home' ? home.title : home.destinations[safeIndex].label),
         actions: [
           _LiveStatusIcon(status: controller.liveStatus),
+          if (controller.queuedCounts.isNotEmpty || controller.queuedActions.isNotEmpty)
+            IconButton(
+              key: const ValueKey('open-sync-center'),
+              tooltip: controller.attentionCount > 0 ? 'Sync center - ${controller.attentionCount} need your decision' : 'Sync center',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => ConflictCenterScreen(controller: controller)),
+              ),
+              icon: Badge(
+                isLabelVisible: controller.attentionCount > 0,
+                label: Text('${controller.attentionCount}'),
+                child: const Icon(Icons.sync_problem_outlined),
+              ),
+            ),
           IconButton(
             tooltip: 'Full workspace',
             onPressed: () {

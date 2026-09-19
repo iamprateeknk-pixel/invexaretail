@@ -71,6 +71,18 @@ function weightItem(tag) {
         strict_1.default.equal((0, repository_js_1.listCounts)().filter((count) => count.requestId === key).length, 1);
     });
 });
+(0, node_test_1.default)('piece items only take whole-number counts', async () => {
+    await withServer(async (call) => {
+        const admin = tokenFor('admin@retail.local');
+        const fraction = await call('POST', '/stock-counts', admin, { itemId: 'item-1001', locationId: 'loc-1', physicalQuantity: 2.5, mode: 'manual' });
+        strict_1.default.equal(fraction.status, 400);
+        strict_1.default.match(fraction.body.message, /whole units/);
+        const { item } = weightItem(unique());
+        // A weight item may be counted lot by lot with decimals.
+        const lot = item.lots[0];
+        strict_1.default.equal((await call('POST', '/stock-counts', admin, { itemId: item.id, locationId: 'loc-1', lotNo: lot.lotNo, physicalQuantity: 1.5, mode: 'manual' })).status, 201);
+    });
+});
 (0, node_test_1.default)('a store user cannot count a lot that has no stock, and never sees book quantity', async () => {
     await withServer(async (call) => {
         const admin = tokenFor('admin@retail.local');
