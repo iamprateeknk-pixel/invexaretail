@@ -1,16 +1,45 @@
 -- P2-P11: bin-level stock, routing signals, split fulfilment, marketplace connectors.
 
-ALTER TABLE `Location`
-  ADD COLUMN IF NOT EXISTS `latitude` DOUBLE NULL,
-  ADD COLUMN IF NOT EXISTS `longitude` DOUBLE NULL,
-  ADD COLUMN IF NOT EXISTS `deliverySlaHours` DOUBLE NULL,
-  ADD COLUMN IF NOT EXISTS `shippingCostPerKm` DOUBLE NULL;
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Location' AND COLUMN_NAME = 'latitude') = 0, 'ALTER TABLE `Location` ADD COLUMN `latitude` DOUBLE NULL', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
 
-ALTER TABLE `OrderLine`
-  ADD COLUMN IF NOT EXISTS `fulfillmentLocationId` VARCHAR(191) NULL;
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Location' AND COLUMN_NAME = 'longitude') = 0, 'ALTER TABLE `Location` ADD COLUMN `longitude` DOUBLE NULL', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
 
-ALTER TABLE `StockMovement`
-  ADD COLUMN IF NOT EXISTS `binId` VARCHAR(191) NULL;
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Location' AND COLUMN_NAME = 'deliverySlaHours') = 0, 'ALTER TABLE `Location` ADD COLUMN `deliverySlaHours` DOUBLE NULL', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Location' AND COLUMN_NAME = 'shippingCostPerKm') = 0, 'ALTER TABLE `Location` ADD COLUMN `shippingCostPerKm` DOUBLE NULL', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'OrderLine' AND COLUMN_NAME = 'f') = 0, 'ALTER TABLE `OrderLine` ADD COLUMN `f` u', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'OrderLine' AND COLUMN_NAME = 'V') = 0, 'ALTER TABLE `OrderLine` ADD COLUMN `V` A', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'StockMovement' AND COLUMN_NAME = 'b') = 0, 'ALTER TABLE `StockMovement` ADD COLUMN `b` i', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
+SET @sqlstmt := IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'StockMovement' AND COLUMN_NAME = 'V') = 0, 'ALTER TABLE `StockMovement` ADD COLUMN `V` A', 'SELECT 1');
+PREPARE invexa_stmt FROM @sqlstmt;
+EXECUTE invexa_stmt;
+DEALLOCATE PREPARE invexa_stmt;
+
 
 CREATE TABLE IF NOT EXISTS `BinStock` (
   `id` VARCHAR(191) NOT NULL,
