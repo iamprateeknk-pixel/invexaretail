@@ -352,19 +352,68 @@ class TransferLine {
     required this.itemId,
     required this.quantity,
     this.lotId,
+    this.receivedQty = 0,
+    this.damagedQty = 0,
+    this.shortageQty = 0,
   });
 
   final String itemId;
   final String? lotId;
-  final int quantity;
+  final double quantity;
+  final double receivedQty;
+  final double damagedQty;
+  final double shortageQty;
+
+  /// Still open to receive: what was sent minus everything already booked
+  /// against this line (good, damaged or closed as short).
+  double get remaining {
+    final left = quantity - receivedQty - damagedQty - shortageQty;
+    return left < 0.0005 ? 0 : (left * 1000).round() / 1000;
+  }
 
   factory TransferLine.fromJson(Map<String, dynamic> json) {
     return TransferLine(
       itemId: asString(json['itemId']),
       lotId: json['lotId'] == null ? null : asString(json['lotId']),
-      quantity: asInt(json['quantity']),
+      quantity: asDouble(json['quantity']),
+      receivedQty: asDouble(json['receivedQty']),
+      damagedQty: asDouble(json['damagedQty']),
+      shortageQty: asDouble(json['shortageQty']),
     );
   }
+}
+
+/// A sealed carton on a transfer; its package id is what the label/QR carries.
+class TransferCarton {
+  const TransferCarton({required this.packageId, required this.quantity, this.weightKg});
+
+  final String packageId;
+  final double quantity;
+  final double? weightKg;
+
+  factory TransferCarton.fromJson(Map<String, dynamic> json) => TransferCarton(
+        packageId: asString(json['packageId']),
+        quantity: asDouble(json['quantity']),
+        weightKg: json['weightKg'] == null ? null : asDouble(json['weightKg']),
+      );
+}
+
+class TransferDispatch {
+  const TransferDispatch({this.carrier, this.awb, this.vehicleNo, this.expectedArrivalAt});
+
+  final String? carrier;
+  final String? awb;
+  final String? vehicleNo;
+  final String? expectedArrivalAt;
+
+  bool get isEmpty => carrier == null && awb == null && vehicleNo == null;
+
+  factory TransferDispatch.fromJson(Map<String, dynamic> json) => TransferDispatch(
+        carrier: json['carrier'] == null ? null : asString(json['carrier']),
+        awb: json['awb'] == null ? null : asString(json['awb']),
+        vehicleNo: json['vehicleNo'] == null ? null : asString(json['vehicleNo']),
+        expectedArrivalAt: json['expectedArrivalAt'] == null ? null : asString(json['expectedArrivalAt']),
+      );
 }
 
 class TransferRecord {
@@ -376,6 +425,9 @@ class TransferRecord {
     this.cartonCount,
     this.lines = const [],
     this.createdAt,
+    this.cartons = const [],
+    this.dispatch,
+    this.delayed = false,
   });
 
   final String id;
@@ -385,9 +437,20 @@ class TransferRecord {
   final int? cartonCount;
   final List<TransferLine> lines;
   final String? createdAt;
+  final List<TransferCarton> cartons;
+  final TransferDispatch? dispatch;
+  // Blueprint v4 §17: past its promised arrival and still not received.
+  final bool delayed;
 
-  int get totalQuantity =>
-      lines.fold<int>(0, (sum, line) => sum + line.quantity);
+  double get totalQuantity =>
+      lines.fold<double>(0, (sum, line) => sum + line.quantity);
+
+  /// A scanned carton label or a typed transfer id points at this transfer.
+  bool matchesCode(String code) {
+    final wanted = code.trim().toLowerCase();
+    if (wanted.isEmpty) return false;
+    return id.toLowerCase() == wanted || cartons.any((carton) => carton.packageId.toLowerCase() == wanted);
+  }
 
   factory TransferRecord.fromJson(Map<String, dynamic> json) {
     return TransferRecord(
@@ -398,6 +461,9 @@ class TransferRecord {
       cartonCount: json.containsKey('cartonCount') ? asInt(json['cartonCount']) : null,
       lines: asList(json['lines']).map((row) => TransferLine.fromJson(asMap(row))).toList(),
       createdAt: json['createdAt'] == null ? null : asString(json['createdAt']),
+      cartons: asList(json['cartons']).map((row) => TransferCarton.fromJson(asMap(row))).toList(),
+      dispatch: json['dispatch'] is Map ? TransferDispatch.fromJson(asMap(json['dispatch'])) : null,
+      delayed: json['delayed'] == true,
     );
   }
 }

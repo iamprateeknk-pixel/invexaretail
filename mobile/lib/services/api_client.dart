@@ -239,6 +239,17 @@ class InvexaApi {
     return asList(payload['countTasks']).map((row) => CountTask.fromJson(asMap(row))).toList();
   }
 
+  /// Carton label / QR -> its transfer (blueprint v4 §18).
+  Future<TransferRecord?> transferByPackage(String packageId) async {
+    try {
+      final payload = await _send('GET', '/api/v1/transfers/by-package/${Uri.encodeComponent(packageId.trim())}');
+      return TransferRecord.fromJson(asMap(payload['transfer']));
+    } on ApiException catch (err) {
+      if (err.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<List<TransferRecord>> transfers() async {
     final payload = await _send('GET', '/api/v1/transfers/list');
     return asList(payload['transfers']).map((row) => TransferRecord.fromJson(asMap(row))).toList();
