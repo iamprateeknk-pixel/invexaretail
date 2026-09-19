@@ -1,4 +1,4 @@
--- CreateTable
+/* CreateTable */
 CREATE TABLE `User` (
     `id` VARCHAR(191) NOT NULL,
     `name` VARCHAR(191) NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE `User` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `Location` (
     `id` VARCHAR(191) NOT NULL,
     `code` VARCHAR(191) NOT NULL,
@@ -27,7 +27,7 @@ CREATE TABLE `Location` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `Item` (
     `id` VARCHAR(191) NOT NULL,
     `code` VARCHAR(191) NOT NULL,
@@ -42,7 +42,7 @@ CREATE TABLE `Item` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `Lot` (
     `id` VARCHAR(191) NOT NULL,
     `lotNo` VARCHAR(191) NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE `Lot` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `StockLedger` (
     `id` VARCHAR(191) NOT NULL,
     `itemId` VARCHAR(191) NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE `StockLedger` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `StockCount` (
     `id` VARCHAR(191) NOT NULL,
     `itemId` VARCHAR(191) NOT NULL,
@@ -90,7 +90,7 @@ CREATE TABLE `StockCount` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `Transfer` (
     `id` VARCHAR(191) NOT NULL,
     `sourceLocationId` VARCHAR(191) NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE `Transfer` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
+/* CreateTable */
 CREATE TABLE `TransferLine` (
     `id` VARCHAR(191) NOT NULL,
     `transferId` VARCHAR(191) NOT NULL,
@@ -120,42 +120,42 @@ CREATE TABLE `TransferLine` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `Lot` ADD CONSTRAINT `Lot_itemId_fkey` FOREIGN KEY (`itemId`) REFERENCES `Item`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockLedger` ADD CONSTRAINT `StockLedger_itemId_fkey` FOREIGN KEY (`itemId`) REFERENCES `Item`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockLedger` ADD CONSTRAINT `StockLedger_lotId_fkey` FOREIGN KEY (`lotId`) REFERENCES `Lot`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockLedger` ADD CONSTRAINT `StockLedger_locationId_fkey` FOREIGN KEY (`locationId`) REFERENCES `Location`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockCount` ADD CONSTRAINT `StockCount_itemId_fkey` FOREIGN KEY (`itemId`) REFERENCES `Item`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockCount` ADD CONSTRAINT `StockCount_lotId_fkey` FOREIGN KEY (`lotId`) REFERENCES `Lot`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockCount` ADD CONSTRAINT `StockCount_locationId_fkey` FOREIGN KEY (`locationId`) REFERENCES `Location`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `StockCount` ADD CONSTRAINT `StockCount_submittedById_fkey` FOREIGN KEY (`submittedById`) REFERENCES `User`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `Transfer` ADD CONSTRAINT `Transfer_sourceLocationId_fkey` FOREIGN KEY (`sourceLocationId`) REFERENCES `Location`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `Transfer` ADD CONSTRAINT `Transfer_requestedById_fkey` FOREIGN KEY (`requestedById`) REFERENCES `User`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `TransferLine` ADD CONSTRAINT `TransferLine_transferId_fkey` FOREIGN KEY (`transferId`) REFERENCES `Transfer`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `TransferLine` ADD CONSTRAINT `TransferLine_itemId_fkey` FOREIGN KEY (`itemId`) REFERENCES `Item`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
+/* AddForeignKey */
 ALTER TABLE `TransferLine` ADD CONSTRAINT `TransferLine_lotId_fkey` FOREIGN KEY (`lotId`) REFERENCES `Lot`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
