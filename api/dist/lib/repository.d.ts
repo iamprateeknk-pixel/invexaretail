@@ -244,6 +244,8 @@ export declare function createCountRecord(input: CountRecord): CountRecord;
 export declare function removeCountRecord(id: string): void;
 export declare function listCounts(): CountRecord[];
 export declare function createTransferRecord(input: TransferRecord): TransferRecord;
+export declare function replaceTransferRecord(id: string, input: TransferRecord): TransferRecord;
+export declare function removeTransferRecord(id: string): TransferRecord | undefined;
 export declare function listStockMovements(filter?: {
     itemId?: string;
     locationId?: string;

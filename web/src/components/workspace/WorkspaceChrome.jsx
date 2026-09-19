@@ -199,8 +199,8 @@ export function WorkspaceChrome({ children }) {
 
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2 xl:flex">
-              <span className={`size-2 rounded-full ${navigator.onLine ? 'bg-emerald-500' : 'bg-destructive'}`} />
-              <span className="text-xs text-muted-foreground">{navigator.onLine ? 'Live sync' : 'Offline queue'}</span>
+              <span className={`size-2 rounded-full ${liveStatus === 'live' ? 'bg-emerald-500' : liveStatus === 'offline' ? 'bg-destructive' : 'bg-amber-500'}`} />
+              <span className="text-xs text-muted-foreground">{liveStatus === 'live' ? 'Live sync' : liveStatus === 'offline' ? 'Offline queue' : liveStatus === 'polling' ? 'Polling sync' : 'Sync reconnecting'}</span>
             </div>
             <Button variant="ghost" size="icon" onClick={() => setDarkMode((value) => !value)} aria-label="Toggle theme">
               {darkMode ? <Sun className="size-4" /> : <Moon className="size-4" />}
@@ -259,6 +259,7 @@ export function WorkspaceChrome({ children }) {
               {loading && <Badge variant="outline">Syncing…</Badge>}
               {liveStatus === 'live' && <Badge variant="success" title="Changes from other users and devices appear automatically">Live</Badge>}
               {liveStatus === 'offline' && <Badge variant="warning" title="No network - showing the last synced data">Offline</Badge>}
+              {liveStatus === 'polling' && <Badge variant="warning" title="Live updates are temporarily unavailable; data refreshes automatically every 12 seconds.">Polling sync</Badge>}
               {(liveStatus === 'reconnecting' || liveStatus === 'stale') && <Badge variant="warning" title="Live updates paused - refreshing periodically until reconnected">{liveStatus === 'stale' ? 'Sync stale' : 'Reconnecting…'}</Badge>}
               {apiError && <Badge variant="destructive" title={apiError}>Stock sync failed</Badge>}
               {!apiError && moduleWarning && <Badge variant="warning" title={moduleWarning}>Module limited</Badge>}

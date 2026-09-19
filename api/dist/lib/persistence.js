@@ -21,6 +21,8 @@ exports.persistCountAssignmentUpdate = persistCountAssignmentUpdate;
 exports.persistCountAssignmentDelete = persistCountAssignmentDelete;
 exports.persistAssignmentSubmitted = persistAssignmentSubmitted;
 exports.persistTransfer = persistTransfer;
+exports.persistTransferReplacement = persistTransferReplacement;
+exports.persistTransferDeletion = persistTransferDeletion;
 exports.persistTransferCarton = persistTransferCarton;
 exports.persistTransferLogistics = persistTransferLogistics;
 exports.persistTransferStatus = persistTransferStatus;
@@ -824,6 +826,71 @@ async function persistTransfer(transfer) {
             cartonCount: transfer.cartonCount ?? null,
             lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
         },
+    });
+}
+function transferReservationTotals(transfer) {
+    const totals = new Map();
+    for (const line of transfer.lines) {
+        const key = `${line.itemId}\u0000${line.lotId}\u0000${transfer.sourceLocationId}`;
+        const current = totals.get(key);
+        if (current)
+            current.quantity += line.quantity;
+        else
+            totals.set(key, { itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: line.quantity });
+    }
+    return totals;
+}
+async function persistTransferReplacement(current, next) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.$transaction(async (tx) => {
+        for (const line of transferReservationTotals(current).values()) {
+            const ledger = await tx.stockLedger.findUnique({
+                where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+            });
+            if (ledger) {
+                await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+            }
+        }
+        for (const line of transferReservationTotals(next).values()) {
+            const ledger = await tx.stockLedger.findUnique({
+                where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+            });
+            const available = (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0);
+            if (!ledger || available < line.quantity - 1e-8) {
+                throw new Error(`Only ${Math.max(0, available)} units are available for lot ${line.lotId} at this location - ${line.quantity} were requested.`);
+            }
+            await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { increment: line.quantity }, version: { increment: 1 } } });
+        }
+        await tx.transferLine.deleteMany({ where: { transferId: current.id } });
+        await tx.transfer.update({
+            where: { id: current.id },
+            data: {
+                sourceLocationId: next.sourceLocationId,
+                destinationLocationId: next.destinationLocationId,
+                notes: next.notes ?? null,
+                cartonCount: next.cartonCount ?? null,
+                lines: { create: next.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
+            },
+        });
+    });
+}
+async function persistTransferDeletion(transfer) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.$transaction(async (tx) => {
+        for (const line of transferReservationTotals(transfer).values()) {
+            const ledger = await tx.stockLedger.findUnique({
+                where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+            });
+            if (ledger) {
+                await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+            }
+        }
+        await tx.transferLine.deleteMany({ where: { transferId: transfer.id } });
+        await tx.transfer.delete({ where: { id: transfer.id } });
     });
 }
 async function persistTransferCarton(carton) {

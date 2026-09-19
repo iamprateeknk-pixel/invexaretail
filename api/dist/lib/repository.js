@@ -26,6 +26,8 @@ exports.createCountRecord = createCountRecord;
 exports.removeCountRecord = removeCountRecord;
 exports.listCounts = listCounts;
 exports.createTransferRecord = createTransferRecord;
+exports.replaceTransferRecord = replaceTransferRecord;
+exports.removeTransferRecord = removeTransferRecord;
 exports.listStockMovements = listStockMovements;
 exports.updateCountReview = updateCountReview;
 exports.findPendingCountForLot = findPendingCountForLot;
@@ -237,6 +239,20 @@ function listCounts() {
 function createTransferRecord(input) {
     exports.transfers.push(input);
     return { ...input, lines: input.lines.map((line) => ({ ...line })) };
+}
+function replaceTransferRecord(id, input) {
+    const index = exports.transfers.findIndex((record) => record.id === id);
+    if (index < 0)
+        throw new Error('Transfer was not found.');
+    exports.transfers[index] = { ...input, lines: input.lines.map((line) => ({ ...line })) };
+    return { ...exports.transfers[index], lines: exports.transfers[index].lines.map((line) => ({ ...line })) };
+}
+function removeTransferRecord(id) {
+    const index = exports.transfers.findIndex((record) => record.id === id);
+    if (index < 0)
+        return undefined;
+    const [removed] = exports.transfers.splice(index, 1);
+    return { ...removed, lines: removed.lines.map((line) => ({ ...line })) };
 }
 function makeMovementId(prefix) {
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

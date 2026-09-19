@@ -121,7 +121,7 @@ export function createLiveClient({
 
   async function connectOnce(attempt) {
     controller = new AbortController();
-    setStatus(attempt === 0 ? LIVE_STATUS.connecting : LIVE_STATUS.reconnecting);
+    setStatus(attempt === 0 ? LIVE_STATUS.connecting : attempt >= 3 ? LIVE_STATUS.polling : LIVE_STATUS.reconnecting);
     const token = getToken();
     if (!token) { setStatus(LIVE_STATUS.unauthorized); stopped = true; return; }
     const headers = { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' };
@@ -190,7 +190,7 @@ export function createLiveClient({
         continue;
       }
       if (typeof navigator !== 'undefined' && navigator.onLine === false) setStatus(LIVE_STATUS.offline);
-      else if (status !== LIVE_STATUS.stale) setStatus(LIVE_STATUS.reconnecting);
+      else if (![LIVE_STATUS.stale, LIVE_STATUS.polling].includes(status)) setStatus(LIVE_STATUS.reconnecting);
       await sleep(backoffDelay(attempt, random));
     }
   }

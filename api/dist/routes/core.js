@@ -697,11 +697,10 @@ router.get('/stock/:locationId', async (req, res) => {
 // ============================================
 router.get('/counts', async (req, res) => {
     const context = accessContext(req.user);
-    if (context.role === 'WAREHOUSE_PICKER')
-        return res.json({ counts: [] });
+    const blindCountWorker = ['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role);
     const visible = (0, repository_js_1.listCounts)().filter((count) => (0, inventory_js_1.canAccessLocation)(context, count.locationId)
-        && (context.role !== 'STORE_USER' || count.submittedBy === req.user.id));
-    if (context.role === 'STORE_USER') {
+        && (!blindCountWorker || count.submittedBy === req.user.id));
+    if (blindCountWorker) {
         return res.json({
             counts: visible.map((count) => ({
                 id: count.id,
@@ -774,7 +773,7 @@ function countsForRequest(userId, requestId) {
 }
 // A store user stays blind to book quantity and variance in every response.
 function countResponse(role, count) {
-    return role === 'STORE_USER'
+    return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)
         ? { id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, physicalQuantity: count.physicalQuantity }
         : { ...count, variance: count.physicalQuantity - count.bookQty };
 }
@@ -864,7 +863,7 @@ router.post('/stock-counts', async (req, res) => {
         }
         // Store Users may only count what Admin assigned them; Admin can record ad hoc counts freely.
         let assignment;
-        if (context.role === 'STORE_USER') {
+        if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
             assignment = (0, repository_js_1.findActiveAssignment)(req.user.id, item.id, validated.locationId);
             if (!assignment) {
                 return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
@@ -1071,7 +1070,7 @@ router.post('/count-assignments', async (req, res) => {
         return res.status(403).json({ message: 'This user cannot assign counts at the selected location.' });
     }
     const storeUser = (0, repository_js_1.findUserById)(storeUserId);
-    if (!storeUser || storeUser.role !== 'STORE_USER') {
+    if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
         return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
     }
     if (!(0, inventory_js_1.canAccessLocation)({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
@@ -1134,7 +1133,7 @@ router.patch('/count-assignments/:assignmentId', async (req, res) => {
         return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
     const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
     const assignee = (0, repository_js_1.findUserById)(assignedToId);
-    if (!assignee || assignee.role !== 'STORE_USER' || !assignee.assignedLocationIds.includes(current.locationId)) {
+    if (!assignee || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
         return res.status(400).json({ message: 'Assignee must be a Store User assigned to this location.' });
     }
     const countDate = req.body.countDate ? new Date(req.body.countDate) : new Date(current.countDate);
@@ -1236,8 +1235,8 @@ router.delete('/count-assignments/:assignmentId', async (req, res) => {
     return res.json({ success: true, assignmentId, preservedCountId: current.countId ?? null });
 });
 router.get('/count-assignments/mine', (req, res) => {
-    if (req.user.role !== 'STORE_USER') {
-        return res.status(403).json({ message: 'Only store users have a count task list.' });
+    if (!['STORE_USER', 'WAREHOUSE_PICKER'].includes(req.user.role)) {
+        return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
     }
     const assignments = (0, repository_js_1.listCountAssignmentsFor)(req.user.id).map((assignment) => {
         const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === assignment.itemId);
@@ -1350,7 +1349,7 @@ router.post('/cycle-counts/:locationId/assign', async (req, res) => {
         return res.status(400).json({ message: 'storeUserId is required.' });
     }
     const storeUser = (0, repository_js_1.findUserById)(storeUserId);
-    if (!storeUser || storeUser.role !== 'STORE_USER') {
+    if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
         return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
     }
     if (!(0, inventory_js_1.canAccessLocation)({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
@@ -1523,6 +1522,81 @@ router.post('/transfers', async (req, res) => {
     }
     catch (error) {
         return res.status(403).json({ message: error instanceof Error ? error.message : 'Invalid transfer payload' });
+    }
+});
+const EDITABLE_TRANSFER_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'REQUESTED']);
+function canModifyTransfer(context, userId, transfer) {
+    if (!(0, transfer_lifecycle_js_1.canCreateTransfer)(context.role) || !EDITABLE_TRANSFER_STATUSES.has(transfer.status))
+        return false;
+    if (!(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId) && !(0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId))
+        return false;
+    return context.role !== 'STORE_USER' || transfer.requestedBy === userId;
+}
+router.patch('/transfers/:transferId', async (req, res) => {
+    const context = accessContext(req.user);
+    const transferId = firstParam(req.params.transferId);
+    const current = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    if (!current)
+        return res.status(404).json({ message: 'Transfer was not found.' });
+    if (!canModifyTransfer(context, req.user.id, current))
+        return res.status(403).json({ message: 'Only an editable transfer request can be changed by its requester or a transfer manager.' });
+    if ((0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(current.id)).length)
+        return res.status(409).json({ message: 'Packing has started, so this transfer can no longer be edited.' });
+    try {
+        const input = req.body;
+        if (!(0, inventory_js_1.canAccessLocation)(context, input.sourceLocationId) || !(0, inventory_js_1.canAccessLocation)(context, input.destinationLocationId)) {
+            return res.status(403).json({ message: 'Transfer location access denied.' });
+        }
+        if (context.role === 'STORE_USER') {
+            const destination = (0, repository_js_1.listLocations)().find((location) => location.id === input.destinationLocationId);
+            if (input.sourceLocationId !== current.sourceLocationId || destination?.type !== 'warehouse') {
+                return res.status(400).json({ message: 'Store users can only edit their request to the same source branch and a warehouse destination.' });
+            }
+        }
+        const cartonCount = (0, transfer_lifecycle_js_1.parseCartonCount)(input.cartonCount);
+        const validated = (0, inventory_js_1.validateTransferRequest)(context.role, { ...input, cartonCount });
+        const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
+        if (inactiveTransferItem)
+            return res.status(400).json({ message: inactiveTransferItem });
+        const invalidLot = validated.lines.find((line) => !(0, repository_js_1.listItems)().find((item) => item.id === line.itemId)?.lots.some((lot) => lot.id === line.lotId));
+        if (invalidLot)
+            return res.status(400).json({ message: 'Each transfer lot must belong to its selected item.' });
+        if ((0, industry_packs_js_1.getActiveWorkflow)().expiryBlocking) {
+            const blocked = validated.lines.find((line) => {
+                const lot = (0, repository_js_1.listItems)().find((item) => item.id === line.itemId)?.lots.find((entry) => entry.id === line.lotId);
+                return lot && ((lot.status && lot.status !== 'AVAILABLE') || Boolean(lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now()));
+            });
+            if (blocked)
+                return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
+        }
+        const next = { ...current, sourceLocationId: validated.sourceLocationId, destinationLocationId: validated.destinationLocationId, lines: validated.lines, cartonCount, notes: validated.notes };
+        await (0, persistence_js_1.persistTransferReplacement)(current, next);
+        const updated = (0, repository_js_1.replaceTransferRecord)(current.id, next);
+        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'TRANSFER_EDITED', entityType: 'Transfer', entityId: current.id }));
+        return res.json({ success: true, transfer: updated });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to edit transfer.' });
+    }
+});
+router.delete('/transfers/:transferId', async (req, res) => {
+    const context = accessContext(req.user);
+    const transferId = firstParam(req.params.transferId);
+    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    if (!transfer)
+        return res.status(404).json({ message: 'Transfer was not found.' });
+    if (!canModifyTransfer(context, req.user.id, transfer))
+        return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
+    if ((0, transfer_packing_js_1.activeCartons)((0, repository_js_1.listTransferCartons)(transfer.id)).length)
+        return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
+    try {
+        await (0, persistence_js_1.persistTransferDeletion)(transfer);
+        (0, repository_js_1.removeTransferRecord)(transfer.id);
+        await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'TRANSFER_DELETED', entityType: 'Transfer', entityId: transfer.id }));
+        return res.json({ success: true, transferId: transfer.id });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to delete transfer.' });
     }
 });
 router.post('/replenishment-actions/transfer', async (req, res) => {
@@ -3202,7 +3276,7 @@ router.post('/stock-takes/bulk-assign', async (req, res) => {
         return res.status(403).json({ message: 'This user cannot assign stock takes at the selected location.' });
     }
     const user = (0, repository_js_1.findUserById)(storeUserId);
-    if (!user || user.role !== 'STORE_USER' || !user.assignedLocationIds.includes(locationId))
+    if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role) || !user.assignedLocationIds.includes(locationId))
         return res.status(400).json({ message: 'Selected Store User is not assigned to this location.' });
     let parsedDueDate;
     let parsedPriority;

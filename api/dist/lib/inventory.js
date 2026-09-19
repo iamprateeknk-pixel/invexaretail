@@ -64,7 +64,7 @@ function parseItemOperationalMeta(body) {
     return meta;
 }
 function sanitizeStockForRole(role, snapshot) {
-    if (role === 'STORE_USER') {
+    if (role === 'STORE_USER' || role === 'WAREHOUSE_PICKER') {
         return {
             itemId: snapshot.itemId,
             ...(snapshot.lotId ? { lotId: snapshot.lotId } : {}),
@@ -97,7 +97,7 @@ function validateBlindCountSubmission(role, input) {
     if (!Number.isFinite(input.physicalQuantity) || input.physicalQuantity < 0) {
         throw new Error('Physical quantity must be a non-negative number.');
     }
-    if (role === 'STORE_USER') {
+    if (role === 'STORE_USER' || role === 'WAREHOUSE_PICKER') {
         if ('bookQuantity' in input && input.bookQuantity !== undefined) {
             throw new Error('Store users cannot submit book quantity in blind counts.');
         }
