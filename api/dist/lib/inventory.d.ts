@@ -26,8 +26,9 @@ export type BlindCountInput = {
     stockValue?: number;
     lotNo?: string;
     expiryDate?: string;
-    mode?: 'scan' | 'manual';
+    mode?: 'scan' | 'manual' | 'weight';
     submittedBy?: string;
+    requestId?: string;
 };
 export type TransferLineInput = {
     itemId: string;

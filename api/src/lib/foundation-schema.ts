@@ -119,6 +119,8 @@ export async function ensureFoundationSchema(): Promise<void> {
   await ensureColumn('StockCount', 'lateDelta', 'DOUBLE NOT NULL DEFAULT 0');
   await ensureColumn('StockCount', 'lateMovementKeys', 'JSON NULL');
   await ensureIndex('StockCount', 'StockCount_reconciliationRequired_idx', '`reconciliationRequired`');
+  await ensureColumn('StockCount', 'requestId', 'VARCHAR(191) NULL');
+  await ensureIndex('StockCount', 'StockCount_submittedById_requestId_idx', '`submittedById`, `requestId`');
   await ensureIndex('Item', 'Item_status_idx', '`status`');
   await ensureIndex('Item', 'Item_barcode_idx', '`barcode`');
   // Blueprint v4 §12 stock-take campaigns: assignments created by a

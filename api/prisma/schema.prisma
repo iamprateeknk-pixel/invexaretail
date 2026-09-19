@@ -830,6 +830,10 @@ model StockCount {
   // been. Instead of silently rewriting history the count is flagged;
   // a still-pending count has its book quantity recomputed (bookQtyOriginal
   // keeps what was first recorded).
+  // Blueprint v4 §38: client-generated idempotency key. A retried submit
+  // (offline outbox, timeout) returns the count it already created instead of
+  // creating another. Weight counts share one key across their lot counts.
+  requestId       String?
   reconciliationRequired Boolean   @default(false)
   reconciliationNote     String?   @db.Text
   reconciliationAt       DateTime?
@@ -842,6 +846,7 @@ model StockCount {
 
   @@index([tenantId])
   @@index([reconciliationRequired])
+  @@index([submittedById, requestId])
 
 }
 

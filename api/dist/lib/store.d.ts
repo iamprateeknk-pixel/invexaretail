@@ -41,7 +41,7 @@ export type StockCountInput = {
     lotId: string;
     locationId: string;
     physicalQuantity: number;
-    mode: 'scan' | 'manual';
+    mode: 'scan' | 'manual' | 'weight';
     submittedBy: string;
     role: Role;
 };
@@ -51,7 +51,7 @@ export type StockCountRecord = {
     lotId: string;
     locationId: string;
     physicalQuantity: number;
-    mode: 'scan' | 'manual';
+    mode: 'scan' | 'manual' | 'weight';
     submittedBy: string;
     role: Role;
     createdAt: string;

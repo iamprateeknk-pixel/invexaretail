@@ -150,7 +150,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     locationId: count.locationId,
     physicalQuantity: count.physicalQty,
     bookQty: count.bookQty,
-    mode: count.mode as 'scan' | 'manual',
+    mode: count.mode as 'scan' | 'manual' | 'weight',
     submittedBy: count.submittedById,
     role: 'STORE_USER' as const,
     createdAt: count.createdAt.toISOString(),
@@ -159,6 +159,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     reviewedAt: count.approvedAt?.toISOString(),
     reviewReason: count.reviewReason ?? undefined,
     parentCountId: count.parentCountId ?? undefined,
+    requestId: (count as { requestId?: string | null }).requestId ?? undefined,
     reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
     reconciliationNote: (count as { reconciliationNote?: string | null }).reconciliationNote ?? undefined,
     reconciliationAt: (count as { reconciliationAt?: Date | null }).reconciliationAt?.toISOString(),
@@ -632,7 +633,8 @@ export async function persistCount(count: CountRecord): Promise<void> {
       mode: count.mode,
       submittedById: count.submittedBy,
       parentCountId: count.parentCountId ?? null,
-    },
+      requestId: count.requestId ?? null,
+    } as never,
   });
 }
 

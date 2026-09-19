@@ -163,6 +163,7 @@ async function hydrateRepositoryFromDatabase() {
         reviewedAt: count.approvedAt?.toISOString(),
         reviewReason: count.reviewReason ?? undefined,
         parentCountId: count.parentCountId ?? undefined,
+        requestId: count.requestId ?? undefined,
         reconciliationRequired: count.reconciliationRequired ?? false,
         reconciliationNote: count.reconciliationNote ?? undefined,
         reconciliationAt: count.reconciliationAt?.toISOString(),
@@ -619,6 +620,7 @@ async function persistCount(count) {
             mode: count.mode,
             submittedById: count.submittedBy,
             parentCountId: count.parentCountId ?? null,
+            requestId: count.requestId ?? null,
         },
     });
 }

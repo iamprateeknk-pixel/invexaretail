@@ -57,10 +57,11 @@ export type CountRecord = {
   locationId: string;
   physicalQuantity: number;
   bookQty: number;
-  mode: 'scan' | 'manual';
+  mode: 'scan' | 'manual' | 'weight';
   submittedBy: string;
   role: Role;
   createdAt: string;
+  requestId?: string;
   status?: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RECOUNT';
   reviewedBy?: string;
   reviewedAt?: string;

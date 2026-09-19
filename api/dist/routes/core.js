@@ -76,6 +76,7 @@ const thermal_pdf_js_1 = require("../lib/thermal-pdf.js");
 const audit_js_1 = require("../lib/audit.js");
 const campaign_service_js_1 = require("../lib/campaign-service.js");
 const late_movement_service_js_1 = require("../lib/late-movement-service.js");
+const weight_allocation_js_1 = require("../lib/weight-allocation.js");
 const event_bus_js_1 = require("../lib/event-bus.js");
 const item_master_js_1 = require("../lib/item-master.js");
 const persistence_js_1 = require("../lib/persistence.js");
@@ -755,6 +756,76 @@ router.post('/stock-counts/:countId/reconciliation/ack', async (req, res) => {
     (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
     return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
 });
+// Blueprint v4 §38: a client-generated idempotency key makes a retried submit
+// (offline outbox, request timeout) return the count it already created.
+function parseRequestId(value) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
+    if (typeof value !== 'string' || value.length > 191)
+        throw new Error('requestId must be text of at most 191 characters.');
+    return value.trim() || undefined;
+}
+function countsForRequest(userId, requestId) {
+    return (0, repository_js_1.listCounts)().filter((count) => count.submittedBy === userId && count.requestId === requestId);
+}
+// A store user stays blind to book quantity and variance in every response.
+function countResponse(role, count) {
+    return role === 'STORE_USER'
+        ? { id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, physicalQuantity: count.physicalQuantity }
+        : { ...count, variance: count.physicalQuantity - count.bookQty };
+}
+/** Records one lot's count: memory + database + audit, and the assignment/campaign bookkeeping. */
+async function commitLotCount(args) {
+    const { item, lot, assignment } = args;
+    const bookQty = (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, args.locationId)?.onHand ?? 0;
+    const saved = (0, store_js_1.submitStockCount)({
+        itemId: item.id,
+        lotId: lot.id,
+        locationId: args.locationId,
+        physicalQuantity: args.physicalQuantity,
+        mode: args.mode,
+        submittedBy: args.userId,
+        role: args.role,
+    });
+    (0, repository_js_1.createCountRecord)({
+        id: saved.id,
+        itemId: saved.itemId,
+        lotId: saved.lotId,
+        locationId: saved.locationId,
+        physicalQuantity: saved.physicalQuantity,
+        bookQty,
+        mode: saved.mode,
+        submittedBy: saved.submittedBy,
+        role: saved.role,
+        createdAt: saved.createdAt,
+        parentCountId: assignment?.parentCountId,
+        requestId: args.requestId,
+    });
+    // persistCount must land before anything references it as committed; the
+    // audit write and the (optional) assignment-close write are independent of
+    // each other, so they run concurrently.
+    await (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId });
+    const followUps = [
+        (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
+    ];
+    if (assignment && args.closeAssignment === 'auto') {
+        const requiredLotIds = item.lots
+            .filter((candidate) => ((0, repository_js_1.findStockLedgerEntry)(item.id, candidate.id, args.locationId)?.onHand ?? 0) !== 0)
+            .map((candidate) => candidate.id);
+        const countedLotIds = new Set((0, repository_js_1.listCounts)()
+            .filter((count) => count.itemId === item.id && count.locationId === args.locationId && count.submittedBy === args.userId && count.createdAt >= assignment.createdAt)
+            .map((count) => count.lotId));
+        countedLotIds.add(saved.lotId);
+        if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
+            (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved.id);
+            followUps.push((0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved.id));
+            // A campaign task just moved to SUBMITTED: keep coverage in step.
+            followUps.push((0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId));
+        }
+    }
+    await Promise.all(followUps);
+    return { saved, bookQty };
+}
 router.post('/stock-counts', async (req, res) => {
     const context = accessContext(req.user);
     const input = req.body;
@@ -763,6 +834,12 @@ router.post('/stock-counts', async (req, res) => {
     }
     try {
         const validated = (0, inventory_js_1.validateBlindCountSubmission)(context.role, input);
+        const requestId = parseRequestId(input.requestId);
+        if (requestId) {
+            const [prior] = countsForRequest(req.user.id, requestId);
+            if (prior)
+                return res.status(200).json({ success: true, duplicate: true, count: countResponse(context.role, prior) });
+        }
         const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === validated.itemId);
         if (!item)
             return res.status(400).json({ message: 'Item was not found.' });
@@ -773,6 +850,10 @@ router.post('/stock-counts', async (req, res) => {
             : item.lots[0];
         if (!lot)
             return res.status(400).json({ message: `Lot "${validated.lotNo}" was not found for this item.` });
+        // Blueprint v4 §7: operational users never act on a zero-stock lot.
+        if ((0, inventory_js_1.hidesZeroStockForRole)(context.role) && ((0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, validated.locationId)?.onHand ?? 0) <= 0) {
+            return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });
+        }
         if ((0, repository_js_1.findPendingCountForLot)(req.user.id, item.id, lot.id, validated.locationId)) {
             return res.status(409).json({ message: 'This lot is already submitted and waiting for review.' });
         }
@@ -784,77 +865,91 @@ router.post('/stock-counts', async (req, res) => {
                 return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
             }
         }
-        const bookQty = (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, validated.locationId)?.onHand ?? 0;
-        const saved = (0, store_js_1.submitStockCount)({
-            itemId: validated.itemId,
-            lotId: lot.id,
-            locationId: validated.locationId,
-            physicalQuantity: validated.physicalQuantity,
-            mode: validated.mode ?? 'manual',
-            submittedBy: req.user.id,
-            role: context.role,
+        const { saved, bookQty } = await commitLotCount({
+            userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId: validated.locationId,
+            physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
         });
-        (0, repository_js_1.createCountRecord)({
-            id: saved.id,
-            itemId: saved.itemId,
-            lotId: saved.lotId,
-            locationId: saved.locationId,
-            physicalQuantity: saved.physicalQuantity,
-            bookQty,
-            mode: saved.mode,
-            submittedBy: saved.submittedBy,
-            role: saved.role,
-            createdAt: saved.createdAt,
-            parentCountId: assignment?.parentCountId,
-        });
-        // persistCount must land before anything references it as committed;
-        // the audit write and the (optional) assignment-close write are each
-        // independent of the other, so they run concurrently instead of as two
-        // more sequential round trips stacked on top of persistCount - this was
-        // the difference between 3 and 2 serial DB writes per submitted count.
-        await (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId });
-        const followUps = [
-            (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
-                actorId: req.user.id,
-                actorRole: req.user.role,
-                action: 'STOCK_COUNT_SUBMITTED',
-                entityType: 'StockCount',
-                entityId: saved.id,
-            })),
-        ];
-        if (assignment) {
-            const requiredLotIds = item.lots
-                .filter((candidate) => ((0, repository_js_1.findStockLedgerEntry)(item.id, candidate.id, validated.locationId)?.onHand ?? 0) !== 0)
-                .map((candidate) => candidate.id);
-            const countedLotIds = new Set((0, repository_js_1.listCounts)()
-                .filter((count) => count.itemId === item.id
-                && count.locationId === validated.locationId
-                && count.submittedBy === req.user.id
-                && count.createdAt >= assignment.createdAt)
-                .map((count) => count.lotId));
-            countedLotIds.add(saved.lotId);
-            if (requiredLotIds.length === 0 || requiredLotIds.every((lotId) => countedLotIds.has(lotId))) {
-                (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved.id);
-                followUps.push((0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved.id));
-                // A campaign task just moved to SUBMITTED: keep coverage in step.
-                followUps.push((0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId));
-            }
-        }
-        await Promise.all(followUps);
-        // Store User stays blind to book quantity and variance even in the submission response.
-        const responseCount = context.role === 'STORE_USER'
-            ? {
-                id: saved.id,
-                itemId: saved.itemId,
-                lotId: saved.lotId,
-                locationId: saved.locationId,
-                physicalQuantity: saved.physicalQuantity,
-            }
-            : { ...saved, bookQty, variance: saved.physicalQuantity - bookQty };
-        return res.status(201).json({ success: true, count: responseCount });
+        return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
     }
     catch (error) {
         return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
+    }
+});
+// Blueprint v4 §13.2: loose KG / item-weight counting. The user enters one
+// decimal total for the item; the server spreads it over the item's lots in
+// FIFO/FEFO order (lib/weight-allocation.ts) and creates a count per lot. The
+// user never picks or splits lots, and a store user is never shown the split
+// (it would reveal the book quantities the count is blind to).
+router.post('/stock-counts/weight', async (req, res) => {
+    const context = accessContext(req.user);
+    const input = req.body;
+    if (!input?.itemId || !input?.locationId)
+        return res.status(400).json({ message: 'Item and location are required for a count submission.' });
+    const locationId = input.locationId;
+    if (!(0, inventory_js_1.canAccessLocation)(context, locationId)) {
+        return res.status(403).json({ message: 'This user cannot submit a count for the selected location.' });
+    }
+    try {
+        const total = Number(input.totalQuantity);
+        if (input.totalQuantity === undefined || input.totalQuantity === null || input.totalQuantity === '' || !Number.isFinite(total) || total < 0) {
+            return res.status(400).json({ message: 'Counted quantity must be a non-negative number.' });
+        }
+        const requestId = parseRequestId(input.requestId);
+        if (requestId) {
+            const prior = countsForRequest(req.user.id, requestId);
+            if (prior.length) {
+                return res.status(200).json({
+                    success: true, duplicate: true,
+                    ...(context.role === 'STORE_USER' ? { lots: prior.length } : { counts: prior.map((count) => countResponse(context.role, count)) }),
+                });
+            }
+        }
+        const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === input.itemId);
+        if (!item)
+            return res.status(400).json({ message: 'Item was not found.' });
+        if (!(0, item_master_js_1.isOperationalItem)(item))
+            return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
+        if (item.countMethod !== 'ITEM_WEIGHT') {
+            return res.status(400).json({ message: `Item ${item.code} is counted by scanning lots, not by weight.` });
+        }
+        let assignment;
+        if (context.role === 'STORE_USER') {
+            assignment = (0, repository_js_1.findActiveAssignment)(req.user.id, item.id, locationId);
+            if (!assignment)
+                return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
+        }
+        const lots = item.lots.map((lot) => ({
+            lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+            bookQty: (0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, locationId)?.onHand ?? 0,
+        }));
+        const allocation = (0, weight_allocation_js_1.allocateWeightCount)(total, lots, item.allocationStrategy ?? 'FEFO');
+        if (allocation.some((row) => (0, repository_js_1.findPendingCountForLot)(req.user.id, item.id, row.lotId, locationId))) {
+            return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
+        }
+        const saved = [];
+        for (const row of allocation) {
+            const lot = item.lots.find((candidate) => candidate.id === row.lotId);
+            saved.push(await commitLotCount({
+                userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
+                physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+            }));
+        }
+        // The whole item was counted in one entry, so the task is complete now.
+        if (assignment) {
+            (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved[0].saved.id);
+            await Promise.all([(0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved[0].saved.id), (0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId)]);
+        }
+        if (context.role === 'STORE_USER')
+            return res.status(201).json({ success: true, lots: saved.length });
+        return res.status(201).json({
+            success: true,
+            counts: saved.map((row) => countResponse(context.role, { ...row.saved, bookQty: row.bookQty })),
+            allocation: allocation.map((row) => ({ lotId: row.lotId, lotNo: row.lotNo, bookQty: row.bookQty, physicalQuantity: row.physicalQty })),
+            totalVariance: (0, weight_allocation_js_1.totalVariance)(allocation),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid weight count payload' });
     }
 });
 router.patch('/stock-counts/:countId/review', async (req, res) => {
@@ -1053,6 +1148,57 @@ router.get('/count-assignments/mine', (req, res) => {
         return { ...assignment, itemName: item?.name ?? assignment.itemId, itemCode: item?.code };
     });
     return res.json({ assignments });
+});
+// Blueprint v4 §37: the mobile app is task-first. This is the one call a
+// phone needs to render its Work tab: the user's open count tasks (only
+// items that still have counted-in stock at the location, with only the lots
+// worth counting and no quantities, so the blind count stays blind) and the
+// transfers waiting to be received at their branch. No full catalog.
+router.get('/mobile/work', (req, res) => {
+    const context = accessContext(req.user);
+    const isStore = context.role === 'STORE_USER';
+    const countTasks = isStore
+        ? (0, repository_js_1.listCountAssignmentsFor)(req.user.id).flatMap((assignment) => {
+            const item = (0, repository_js_1.listItems)().find((candidate) => candidate.id === assignment.itemId);
+            if (!item || !(0, item_master_js_1.isOperationalItem)(item) || !(0, inventory_js_1.canAccessLocation)(context, assignment.locationId))
+                return [];
+            const lots = item.lots
+                .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && ((0, repository_js_1.findStockLedgerEntry)(item.id, lot.id, assignment.locationId)?.onHand ?? 0) > 0)
+                .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
+            // Nothing on the shelf to count: not an actionable task for a store user.
+            if (!lots.length)
+                return [];
+            return [{
+                    assignmentId: assignment.id,
+                    locationId: assignment.locationId,
+                    countDate: assignment.countDate,
+                    dueDate: assignment.dueDate,
+                    priority: assignment.priority ?? 'NORMAL',
+                    instructions: assignment.instructions,
+                    campaignId: assignment.campaignId,
+                    recount: Boolean(assignment.parentCountId),
+                    item: {
+                        id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
+                        countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
+                    },
+                    lots,
+                }];
+        })
+        : [];
+    const receiveTasks = ['STORE_USER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER'].includes(context.role)
+        ? (0, repository_js_1.listTransfers)()
+            .filter((transfer) => ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(transfer.status) && (0, inventory_js_1.canAccessLocation)(context, transfer.destinationLocationId))
+            .map((transfer) => ({
+            transferId: transfer.id,
+            sourceLocationId: transfer.sourceLocationId,
+            destinationLocationId: transfer.destinationLocationId,
+            status: transfer.status,
+            lineCount: transfer.lines.length,
+            cartonCount: transfer.cartonCount,
+            createdAt: transfer.createdAt,
+        }))
+        : [];
+    return res.json({ countTasks, receiveTasks });
 });
 router.get('/count-assignments', (req, res) => {
     if (!(0, count_lifecycle_js_1.canManageCountWork)(req.user.role)) {

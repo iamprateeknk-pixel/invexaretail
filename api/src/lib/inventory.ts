@@ -32,8 +32,10 @@ export type BlindCountInput = {
   stockValue?: number;
   lotNo?: string;
   expiryDate?: string;
-  mode?: 'scan' | 'manual';
+  mode?: 'scan' | 'manual' | 'weight';
   submittedBy?: string;
+  // Idempotency key (blueprint v4 §38).
+  requestId?: string;
 };
 
 export type TransferLineInput = {
