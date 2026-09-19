@@ -5,6 +5,7 @@ exports.startOrderScheduler = startOrderScheduler;
 const tenant_scope_js_1 = require("./saas/tenant-scope.js");
 const event_bus_js_1 = require("./event-bus.js");
 const orders_js_1 = require("./orders.js");
+const distributed_lock_js_1 = require("./distributed-lock.js");
 // Blueprint v4 §23: "Reservation expiry/backorder retry should be automatic
 // and visible." Until now both ran only when somebody listed orders, so an
 // abandoned reservation kept holding stock (and a backorder kept waiting for
@@ -25,8 +26,10 @@ async function orderSweepTick(deps = defaults) {
         return null;
     running = true;
     try {
-        const expired = await deps.expire();
-        const filled = await deps.retry();
+        const outcome = await (0, distributed_lock_js_1.withDistributedLock)('order-reservation-sweep', async () => ({ expired: await deps.expire(), filled: await deps.retry() }));
+        if (outcome === null)
+            return null;
+        const { expired, filled } = outcome;
         if (expired || filled) {
             console.log(`[orders] sweep expired ${expired} reservation(s), filled ${filled} backorder(s)`);
             deps.announce();

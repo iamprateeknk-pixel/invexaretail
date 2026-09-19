@@ -3,17 +3,43 @@ services:
     name: invexaretail-api
     env: node
     region: oregon
-    plan: free
+    plan: starter
     buildCommand: cd api && npm install && npm run build
+    preDeployCommand: cd api && npm run db:migrate && npm run db:verify
     startCommand: cd api && npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: REQUIRE_DATABASE
+        value: "true"
+      - key: RUN_SCHEDULERS
+        value: "false"
       - key: PORT
         value: 4000
+      - key: DATABASE_URL
+        sync: false
       - key: ALLOWED_ORIGINS
         value: https://invexaretail.com,https://www.invexaretail.com
       - key: JWT_SECRET
         generateValue: true
       - key: SEED_PASSWORD
-        value: ChangeMe123!
+        sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+
+  - type: worker
+    name: invexaretail-worker
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: cd api && npm install && npm run build
+    startCommand: cd api && npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REQUIRE_DATABASE
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false

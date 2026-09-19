@@ -160,13 +160,37 @@ export function useWorkspaceCounts({
       setSubmitLoading(false);
     }
   }
+  async function deleteCountAssignments(assignmentIds) {
+    const uniqueIds = [...new Set(assignmentIds)].filter(Boolean);
+    if (!uniqueIds.length) return;
+    try {
+      setSubmitLoading(true);
+      const response = await apiRequest('/api/v1/count-assignments/bulk', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ assignmentIds: uniqueIds }),
+      });
+      await loadAppData(authToken, role);
+      const deletedCount = response.deletedCount ?? uniqueIds.length;
+      showToast(`${deletedCount} count task${deletedCount === 1 ? '' : 's'} deleted.`, 'success');
+      addNotification('Count tasks deleted', `${deletedCount} assignments were removed; submitted count history was preserved.`, 'info');
+      setSelectedCountTask(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to delete count tasks.', 'error');
+      throw error;
+    } finally {
+      setSubmitLoading(false);
+    }
+  }
+
   async function reviewCount(countId, status) {
     if (!countReviewNoteIsValid(reviewReason)) {
       showToast('Enter a review note of at least 5 characters.', 'error');
       return;
     }
-    try {
+
       setSubmitLoading(true);
+    try {
       const response = await apiRequest(`/api/v1/stock-counts/${countId}/review`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${authToken}` },
@@ -255,6 +279,7 @@ export function useWorkspaceCounts({
     updateCountAssignment,
     deleteCountAssignment,
     reviewCount,
+    deleteCountAssignments,
     previewBulkCount,
     assignBulkCount,
   };

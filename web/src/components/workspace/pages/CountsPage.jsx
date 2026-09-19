@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { CycleCountPlanner } from '../../counts/CycleCountPlanner';
 import { ItemSearchSelect } from '../../ItemSearchSelect';
 import { StockTakeCampaigns } from '../../counts/StockTakeCampaigns';
@@ -12,7 +12,9 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AlertTriangle, CheckCircle2, Clock3, ListChecks, TriangleAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, ListChecks, Trash2, TriangleAlert } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { OpsMetricCard, OpsPageHeader, OpsSyncStatus, OpsWorkflowStepper } from '../../ops/OpsKit';
 
 export function CountsPage() {
@@ -24,8 +26,10 @@ export function CountsPage() {
     authToken, loading, setSelectedCountTask, assignments, items, locations, campaignRevision,
     toleranceRules, toleranceRuleForm, setToleranceRuleForm, createToleranceRule, toggleToleranceRule,
     approvalRequests, approvalRules, approvalRuleForm, setApprovalRuleForm, decideApprovalRequest, createApprovalRule, toggleApprovalRule,
-    evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule,
+    evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule, deleteCountAssignments,
   } = useWorkspace();
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   // A store user may only submit a blind count against an item that was
   // actually assigned to them at this location - a free-text item field let
   // them type any item ID, so the field is locked to their assigned items.
@@ -44,6 +48,22 @@ export function CountsPage() {
   const queue = activeSection === 'approvals' && countStatusFilter === 'all'
     ? countTaskRows.filter((task) => String(task.status).toLowerCase().includes('pending'))
     : countTaskRows;
+  const canDeleteSelected = ['ADMIN', 'ADMIN_USER'].includes(role) && selectedTaskIds.length > 0;
+  const allVisibleSelected = queue.length > 0 && queue.every((task) => selectedTaskIds.includes(task.id));
+  const someVisibleSelected = queue.some((task) => selectedTaskIds.includes(task.id));
+
+  function toggleTaskSelection(taskId, checked) {
+    setSelectedTaskIds((current) => checked ? [...new Set([...current, taskId])] : current.filter((id) => id !== taskId));
+  }
+  function toggleAllVisible(checked) {
+    const visibleIds = queue.map((task) => task.id);
+    setSelectedTaskIds((current) => checked ? [...new Set([...current, ...visibleIds])] : current.filter((id) => !visibleIds.includes(id)));
+  }
+  async function confirmDeleteSelected() {
+    await deleteCountAssignments(selectedTaskIds);
+    setSelectedTaskIds([]);
+    setDeleteDialogOpen(false);
+  }
   const countMetrics = useMemo(() => {
     const rows = countTaskRows ?? [];
     const pending = rows.filter((task) => String(task.status).toLowerCase().includes('pending')).length;
@@ -90,7 +110,11 @@ export function CountsPage() {
         <Tabs value={countStatusFilter} onValueChange={setCountStatusFilter}>
           <TabsList><TabsTrigger value="all">All</TabsTrigger><TabsTrigger value="pending">Pending</TabsTrigger><TabsTrigger value="overdue">Overdue</TabsTrigger><TabsTrigger value="approved">Approved</TabsTrigger></TabsList>
         </Tabs>
-        {activeSection === 'approvals' && <div className="px-2 text-xs text-muted-foreground">Approval and evidence governance</div>}
+        <div className="flex items-center gap-2">
+          {selectedTaskIds.length > 0 && <span className="px-2 text-sm font-medium" aria-live="polite">{selectedTaskIds.length} selected</span>}
+          {canDeleteSelected && <Button variant="destructive" size="sm" onClick={() => setDeleteDialogOpen(true)}><Trash2 />Delete selected</Button>}
+          {activeSection === 'approvals' && <div className="px-2 text-xs text-muted-foreground">Approval and evidence governance</div>}
+        </div>
       </div>
 
       {canManageCounts && activeSection === 'counts' && (
@@ -141,11 +165,12 @@ export function CountsPage() {
       <Card>
         <CardContent className="p-0">
           <Table>
-            <TableHeader><TableRow><TableHead>Task</TableHead><TableHead>Location</TableHead><TableHead>Assigned to</TableHead><TableHead>Created</TableHead><TableHead>Due</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Progress</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow>{canManageCounts && <TableHead className="w-12"><Checkbox checked={allVisibleSelected || (someVisibleSelected && 'indeterminate')} onCheckedChange={toggleAllVisible} aria-label="Select all visible tasks" /></TableHead>}<TableHead>Task</TableHead><TableHead>Location</TableHead><TableHead>Assigned to</TableHead><TableHead>Created</TableHead><TableHead>Due</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Progress</TableHead></TableRow></TableHeader>
             <TableBody>
               {queue.length ? queue.map((task) => (
                 <TableRow key={task.id} className="cursor-pointer" onClick={() => setSelectedCountTask(task)}>
                   <TableCell><p className="font-medium">{task.item ?? task.itemId}</p><p className="text-xs text-muted-foreground">{task.id} · {task.lot}</p></TableCell>
+                  {canManageCounts && <TableCell onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedTaskIds.includes(task.id)} onCheckedChange={(checked) => toggleTaskSelection(task.id, checked === true)} aria-label={`Select ${task.item ?? task.itemId}`} /></TableCell>}
                   <TableCell>{task.locationName}</TableCell><TableCell>{task.assignedToName}</TableCell>
                   <TableCell>{formatDateTime(task.createdAt)}</TableCell><TableCell className={task.overdue ? 'font-medium text-destructive' : ''}>{formatDateTime(task.dueAt)}</TableCell>
                   <TableCell><Badge variant={task.priority === 'Urgent' ? 'destructive' : 'outline'}>{task.priority}</Badge></TableCell>
@@ -160,11 +185,24 @@ export function CountsPage() {
                   </TableCell>
                   <TableCell className="text-right font-medium">{task.progress}%</TableCell>
                 </TableRow>
-              )) : <TableRow><TableCell colSpan={8} className="h-40 text-center text-muted-foreground">No tasks match this view.</TableCell></TableRow>}
+              )) : <TableRow><TableCell colSpan={canManageCounts ? 9 : 8} className="h-40 text-center text-muted-foreground">No tasks match this view.</TableCell></TableRow>}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete selected count tasks?</DialogTitle>
+            <DialogDescription>{selectedTaskIds.length} assignment{selectedTaskIds.length === 1 ? '' : 's'} will be removed. Submitted count history remains available for review and reporting. This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={submitLoading} onClick={confirmDeleteSelected}>Delete {selectedTaskIds.length} selected</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {canManageCounts && activeSection === 'approvals' && (
         <Card>

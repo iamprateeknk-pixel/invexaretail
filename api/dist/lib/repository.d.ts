@@ -258,6 +258,8 @@ export declare function createRecountAssignment(count: CountRecord, reviewedBy: 
     cancelled?: CountAssignmentRecord;
 };
 export declare function updateCountAssignment(id: string, patch: Partial<Pick<CountAssignmentRecord, 'assignedToId' | 'countDate' | 'dueDate' | 'priority' | 'instructions' | 'status'>>): CountAssignmentRecord;
+/** Removes an assignment while preserving any StockCount it may have created. */
+export declare function deleteCountAssignment(id: string): CountAssignmentRecord;
 export declare function listCountAssignments(): CountAssignmentRecord[];
 export declare function listCountAssignmentsFor(userId: string): CountAssignmentRecord[];
 /** The one open (ASSIGNED) assignment matching this user/item/location, if any. */

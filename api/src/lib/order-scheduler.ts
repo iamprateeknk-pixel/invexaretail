@@ -1,6 +1,7 @@
 import { DEFAULT_COMPANY_ID } from './saas/tenant-scope.js';
 import { publishEvent } from './event-bus.js';
 import { expireStaleReservations, retryBackorderedOrders } from './orders.js';
+import { withDistributedLock } from './distributed-lock.js';
 
 // Blueprint v4 §23: "Reservation expiry/backorder retry should be automatic
 // and visible." Until now both ran only when somebody listed orders, so an
@@ -30,8 +31,9 @@ export async function orderSweepTick(deps: OrderSweepDeps = defaults): Promise<{
   if (running) return null;
   running = true;
   try {
-    const expired = await deps.expire();
-    const filled = await deps.retry();
+    const outcome = await withDistributedLock('order-reservation-sweep', async () => ({ expired: await deps.expire(), filled: await deps.retry() }));
+    if (outcome === null) return null;
+    const { expired, filled } = outcome;
     if (expired || filled) {
       console.log(`[orders] sweep expired ${expired} reservation(s), filled ${filled} backorder(s)`);
       deps.announce();

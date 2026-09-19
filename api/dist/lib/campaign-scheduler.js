@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.campaignSchedulerTick = campaignSchedulerTick;
 exports.startCampaignScheduler = startCampaignScheduler;
 const campaign_service_js_1 = require("./campaign-service.js");
+const distributed_lock_js_1 = require("./distributed-lock.js");
 const INTERVAL_MS = 10 * 60 * 1000;
 let running = false;
 /** One pass; a pass that overlaps a slower previous one is skipped, never stacked. */
@@ -11,7 +12,9 @@ async function campaignSchedulerTick(now = new Date()) {
         return;
     running = true;
     try {
-        const results = await (0, campaign_service_js_1.runDueCampaigns)(now);
+        const results = await (0, distributed_lock_js_1.withDistributedLock)('campaign-allocation', () => (0, campaign_service_js_1.runDueCampaigns)(now));
+        if (results === null)
+            return;
         const assigned = results.reduce((sum, row) => sum + (row.result?.assigned ?? 0), 0);
         if (assigned)
             console.log(`[campaigns] daily allocation assigned ${assigned} item(s) across ${results.length} campaign(s)`);

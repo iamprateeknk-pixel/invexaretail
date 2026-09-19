@@ -7,32 +7,14 @@ exports.subscribe = subscribe;
 exports.subscriberCount = subscriberCount;
 exports.latestEventId = latestEventId;
 exports.eventsSince = eventsSince;
+exports.durableEventsSince = durableEventsSince;
+exports.durableLatestEventId = durableLatestEventId;
 exports.resetEventBusForTests = resetEventBusForTests;
 const node_crypto_1 = require("node:crypto");
-// Blueprint v4 §11 / Appendix B: successful mutations publish a domain event;
-// authorized web/mobile sessions receive it over an authenticated SSE stream
-// and refetch only what changed instead of relying on manual refresh.
-exports.EVENT_TOPICS = [
-    'stock.changed',
-    'item.changed',
-    'lot.changed',
-    'count.changed',
-    'assignment.changed',
-    'campaign.changed',
-    'transfer.changed',
-    'pick.changed',
-    'receipt.changed',
-    'putaway.changed',
-    'import.committed',
-    'exception.changed',
-    'approval.changed',
-    'permission.changed',
-    'config.changed',
-    'connector.changed',
-];
+const persistence_js_1 = require("./persistence.js");
+const db_js_1 = require("./db.js");
+exports.EVENT_TOPICS = ['stock.changed', 'item.changed', 'lot.changed', 'count.changed', 'assignment.changed', 'campaign.changed', 'transfer.changed', 'pick.changed', 'receipt.changed', 'putaway.changed', 'import.committed', 'exception.changed', 'approval.changed', 'permission.changed', 'config.changed', 'connector.changed'];
 const BUFFER_MAX = 1000;
-// Changes on every process start, so a client holding a cursor from before a
-// restart knows the numeric ids no longer line up and must do a full resync.
 exports.SERVER_EPOCH = (0, node_crypto_1.randomUUID)();
 let sequence = 0;
 const buffer = [];
@@ -44,11 +26,21 @@ function canReceive(subscriber, event) {
         return true;
     return event.locationIds.some((locationId) => subscriber.locationIds.includes(locationId));
 }
+async function persistEvent(event) {
+    if (!persistence_js_1.databaseEnabled)
+        return;
+    await db_js_1.prisma.$executeRawUnsafe('INSERT INTO `DomainEventOutbox` (`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt`) VALUES (?, ?, ?, ?, ?, ?)', event.topic, event.companyId, event.locationIds?.length ? JSON.stringify(event.locationIds) : null, event.actorId ?? null, event.requestId ?? null, new Date(event.at));
+}
+/** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 function publishEvent(input) {
     const event = { ...input, id: ++sequence, at: new Date().toISOString() };
     buffer.push(event);
     if (buffer.length > BUFFER_MAX)
         buffer.splice(0, buffer.length - BUFFER_MAX);
+    if (persistence_js_1.databaseEnabled) {
+        void persistEvent(event).catch((error) => console.error('[events] durable outbox write failed', error));
+        return event;
+    }
     for (const subscriber of subscribers.values()) {
         if (!canReceive(subscriber, event))
             continue;
@@ -56,7 +48,6 @@ function publishEvent(input) {
             subscriber.send(event);
         }
         catch {
-            // A dead socket must never break the request that produced the event.
             subscribers.delete(subscriber.id);
         }
     }
@@ -67,12 +58,8 @@ function subscribe(subscriber) {
     subscribers.set(id, { ...subscriber, id });
     return { id, unsubscribe: () => { subscribers.delete(id); } };
 }
-function subscriberCount() {
-    return subscribers.size;
-}
-function latestEventId() {
-    return sequence;
-}
+function subscriberCount() { return subscribers.size; }
+function latestEventId() { return sequence; }
 function eventsSince(lastEventId, subscriber, clientEpoch) {
     if (clientEpoch && clientEpoch !== exports.SERVER_EPOCH)
         return { kind: 'reset' };
@@ -83,8 +70,29 @@ function eventsSince(lastEventId, subscriber, clientEpoch) {
         return { kind: 'reset' };
     return { kind: 'replay', events: buffer.filter((event) => event.id > lastEventId && canReceive(subscriber, event)) };
 }
-function resetEventBusForTests() {
-    sequence = 0;
-    buffer.length = 0;
-    subscribers.clear();
+function locations(value) {
+    if (Array.isArray(value))
+        return value.filter((id) => typeof id === 'string');
+    if (typeof value !== 'string')
+        return undefined;
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
+async function durableEventsSince(lastEventId, subscriber) {
+    if (!persistence_js_1.databaseEnabled)
+        return eventsSince(lastEventId, subscriber).kind === 'replay' ? eventsSince(lastEventId, subscriber).events : [];
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT `id`,`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt` FROM `DomainEventOutbox` WHERE `id` > ? AND `companyId` = ? ORDER BY `id` ASC LIMIT 500', lastEventId, subscriber.companyId);
+    return rows.map((row) => ({ id: Number(row.id), topic: row.topic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
+}
+async function durableLatestEventId() {
+    if (!persistence_js_1.databaseEnabled)
+        return latestEventId();
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT MAX(`id`) AS `id` FROM `DomainEventOutbox`');
+    return Number(rows[0]?.id ?? 0);
+}
+function resetEventBusForTests() { sequence = 0; buffer.length = 0; subscribers.clear(); }

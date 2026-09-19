@@ -18,6 +18,7 @@ exports.persistCountReconciliation = persistCountReconciliation;
 exports.persistCountReview = persistCountReview;
 exports.persistCountAssignment = persistCountAssignment;
 exports.persistCountAssignmentUpdate = persistCountAssignmentUpdate;
+exports.persistCountAssignmentDelete = persistCountAssignmentDelete;
 exports.persistAssignmentSubmitted = persistAssignmentSubmitted;
 exports.persistTransfer = persistTransfer;
 exports.persistTransferCarton = persistTransferCarton;
@@ -792,6 +793,12 @@ async function persistCountAssignmentUpdate(assignment) {
             parentCountId: assignment.parentCountId ?? null,
         },
     });
+}
+async function persistCountAssignmentDelete(assignmentId) {
+    if (!exports.databaseEnabled)
+        return;
+    requireDatabase();
+    await db_js_1.prisma.countAssignment.delete({ where: { id: assignmentId } });
 }
 async function persistAssignmentSubmitted(assignmentId, countId) {
     if (!exports.databaseEnabled)

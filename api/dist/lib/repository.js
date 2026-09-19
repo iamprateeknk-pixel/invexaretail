@@ -33,6 +33,7 @@ exports.findAssignmentForCount = findAssignmentForCount;
 exports.createCountAssignment = createCountAssignment;
 exports.createRecountAssignment = createRecountAssignment;
 exports.updateCountAssignment = updateCountAssignment;
+exports.deleteCountAssignment = deleteCountAssignment;
 exports.listCountAssignments = listCountAssignments;
 exports.listCountAssignmentsFor = listCountAssignmentsFor;
 exports.findActiveAssignment = findActiveAssignment;
@@ -341,6 +342,14 @@ function updateCountAssignment(id, patch) {
         throw new Error('Count assignment was not found.');
     Object.assign(assignment, patch);
     return { ...assignment };
+}
+/** Removes an assignment while preserving any StockCount it may have created. */
+function deleteCountAssignment(id) {
+    const index = exports.countAssignments.findIndex((row) => row.id === id);
+    if (index === -1)
+        throw new Error('Count assignment was not found.');
+    const [removed] = exports.countAssignments.splice(index, 1);
+    return { ...removed };
 }
 function listCountAssignments() {
     return [...exports.countAssignments];

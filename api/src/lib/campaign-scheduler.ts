@@ -1,4 +1,5 @@
 import { runDueCampaigns } from './campaign-service.js';
+import { withDistributedLock } from './distributed-lock.js';
 
 const INTERVAL_MS = 10 * 60 * 1000;
 let running = false;
@@ -8,7 +9,8 @@ export async function campaignSchedulerTick(now = new Date()): Promise<void> {
   if (running) return;
   running = true;
   try {
-    const results = await runDueCampaigns(now);
+    const results = await withDistributedLock('campaign-allocation', () => runDueCampaigns(now));
+    if (results === null) return;
     const assigned = results.reduce((sum, row) => sum + (row.result?.assigned ?? 0), 0);
     if (assigned) console.log(`[campaigns] daily allocation assigned ${assigned} item(s) across ${results.length} campaign(s)`);
   } catch (error) {

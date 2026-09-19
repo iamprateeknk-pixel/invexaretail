@@ -66,6 +66,10 @@ const tenant_scope_js_1 = require("./lib/saas/tenant-scope.js");
 const kill_switch_js_1 = require("./lib/saas/kill-switch.js");
 const company_access_js_1 = require("./lib/saas/company-access.js");
 const entitlements_js_1 = require("./lib/saas/entitlements.js");
+const db_js_1 = require("./lib/db.js");
+if (process.env.REQUIRE_DATABASE === 'true' && !(0, db_js_1.resolveDatabaseUrl)()) {
+    throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
+}
 const app = (0, express_1.default)();
 exports.app = app;
 const port = Number(process.env.PORT ?? 4000);
@@ -443,10 +447,12 @@ const startServer = () => {
         await authHydration;
         await hydrateRepository();
         repositoryHydrationState = 'ready';
-        const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
-        startCampaignScheduler();
-        const { startOrderScheduler } = await import('./lib/order-scheduler.js');
-        startOrderScheduler();
+        if (process.env.RUN_SCHEDULERS !== 'false') {
+            const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
+            startCampaignScheduler();
+            const { startOrderScheduler } = await import('./lib/order-scheduler.js');
+            startOrderScheduler();
+        }
     })();
     startupHydration.catch((error) => {
         repositoryHydrationState = 'failed';

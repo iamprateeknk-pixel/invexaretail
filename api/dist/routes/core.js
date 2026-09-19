@@ -1119,6 +1119,7 @@ router.post('/count-assignments', async (req, res) => {
 router.patch('/count-assignments/:assignmentId', async (req, res) => {
     if (!(0, count_lifecycle_js_1.canManageCountWork)(req.user.role))
         return res.status(403).json({ message: 'Admin access required.' });
+    const isAdmin = req.user.role === 'ADMIN' || req.user.role === 'ADMIN_USER';
     const assignmentId = firstParam(req.params.assignmentId);
     const current = (0, repository_js_1.listCountAssignments)().find((candidate) => candidate.id === assignmentId);
     if (!current)
@@ -1129,8 +1130,8 @@ router.patch('/count-assignments/:assignmentId', async (req, res) => {
     catch {
         return res.status(403).json({ message: 'This user cannot update assignments at the selected location.' });
     }
-    if (current.status === 'SUBMITTED')
-        return res.status(409).json({ message: 'Submitted work is immutable; create a corrective assignment instead.' });
+    if (current.status === 'SUBMITTED' && !isAdmin)
+        return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
     const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
     const assignee = (0, repository_js_1.findUserById)(assignedToId);
     if (!assignee || assignee.role !== 'STORE_USER' || !assignee.assignedLocationIds.includes(current.locationId)) {
@@ -1151,8 +1152,10 @@ router.patch('/count-assignments/:assignmentId', async (req, res) => {
         return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid assignment payload.' });
     }
     const status = req.body.status === undefined ? current.status : String(req.body.status).toUpperCase();
-    if (!['ASSIGNED', 'CANCELLED'].includes(status))
-        return res.status(400).json({ message: 'Open assignments can be ASSIGNED or CANCELLED.' });
+    if (!['ASSIGNED', 'CANCELLED', 'SUBMITTED'].includes(status))
+        return res.status(400).json({ message: 'Assignments can be ASSIGNED, SUBMITTED or CANCELLED.' });
+    if (current.status === 'SUBMITTED' && status !== 'SUBMITTED')
+        return res.status(409).json({ message: 'An approved/submitted task cannot be reopened; create a recount instead.' });
     const updated = (0, repository_js_1.updateCountAssignment)(assignmentId, {
         assignedToId,
         countDate: countDate.toISOString(),
@@ -1164,6 +1167,73 @@ router.patch('/count-assignments/:assignmentId', async (req, res) => {
     await (0, persistence_js_1.persistCountAssignmentUpdate)(updated);
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'COUNT_ASSIGNMENT_UPDATED', entityType: 'CountAssignment', entityId: updated.id, metadata: { assignedToId: updated.assignedToId, countDate: updated.countDate, status: updated.status } }));
     return res.json({ assignment: updated });
+});
+router.delete('/count-assignments/bulk', async (req, res) => {
+    if (!['ADMIN', 'ADMIN_USER'].includes(req.user.role))
+        return res.status(403).json({ message: 'Only admins can delete count tasks.' });
+    const assignmentIds = Array.isArray(req.body.assignmentIds)
+        ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim()))]
+        : [];
+    if (!assignmentIds.length)
+        return res.status(400).json({ message: 'Select at least one count task to delete.' });
+    const byId = new Map((0, repository_js_1.listCountAssignments)().map((assignment) => [assignment.id, assignment]));
+    const missingIds = assignmentIds.filter((assignmentId) => !byId.has(assignmentId));
+    if (missingIds.length)
+        return res.status(404).json({ message: 'One or more count tasks were not found.', missingIds });
+    const selected = assignmentIds.map((assignmentId) => byId.get(assignmentId));
+    try {
+        selected.forEach((assignment) => (0, count_lifecycle_js_1.assertCountLocationAccess)(accessContext(req.user), assignment.locationId));
+    }
+    catch {
+        return res.status(403).json({ message: 'This admin cannot delete one or more selected tasks.' });
+    }
+    const removed = [];
+    try {
+        for (const assignment of selected) {
+            const deleted = (0, repository_js_1.deleteCountAssignment)(assignment.id);
+            removed.push(deleted);
+            await (0, persistence_js_1.persistCountAssignmentDelete)(assignment.id);
+        }
+    }
+    catch (error) {
+        removed.forEach((assignment) => (0, repository_js_1.createCountAssignment)(assignment));
+        throw error;
+    }
+    await Promise.all(selected.map((assignment) => (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        action: 'COUNT_ASSIGNMENT_DELETED',
+        entityType: 'CountAssignment',
+        entityId: assignment.id,
+        metadata: { status: assignment.status, countId: assignment.countId, bulk: true },
+    }))));
+    (0, event_bus_js_1.publishEvent)({ topic: 'assignment.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [...new Set(selected.map((assignment) => assignment.locationId))] });
+    return res.json({ success: true, deletedCount: selected.length, assignmentIds, preservedCountIds: selected.map((assignment) => assignment.countId ?? null) });
+});
+router.delete('/count-assignments/:assignmentId', async (req, res) => {
+    if (!['ADMIN', 'ADMIN_USER'].includes(req.user.role))
+        return res.status(403).json({ message: 'Only admins can delete count tasks.' });
+    const assignmentId = firstParam(req.params.assignmentId);
+    const current = (0, repository_js_1.listCountAssignments)().find((candidate) => candidate.id === assignmentId);
+    if (!current)
+        return res.status(404).json({ message: 'Count assignment was not found.' });
+    try {
+        (0, count_lifecycle_js_1.assertCountLocationAccess)(accessContext(req.user), current.locationId);
+    }
+    catch {
+        return res.status(403).json({ message: 'This admin cannot delete a task at the selected location.' });
+    }
+    const removed = (0, repository_js_1.deleteCountAssignment)(assignmentId);
+    try {
+        await (0, persistence_js_1.persistCountAssignmentDelete)(assignmentId);
+    }
+    catch (error) {
+        (0, repository_js_1.createCountAssignment)(removed);
+        throw error;
+    }
+    await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'COUNT_ASSIGNMENT_DELETED', entityType: 'CountAssignment', entityId: assignmentId, metadata: { status: current.status, countId: current.countId } }));
+    (0, event_bus_js_1.publishEvent)({ topic: 'assignment.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [current.locationId] });
+    return res.json({ success: true, assignmentId, preservedCountId: current.countId ?? null });
 });
 router.get('/count-assignments/mine', (req, res) => {
     if (req.user.role !== 'STORE_USER') {

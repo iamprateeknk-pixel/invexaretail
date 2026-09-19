@@ -1322,6 +1322,47 @@ router.patch('/count-assignments/:assignmentId', async (req: Request, res: Respo
   return res.json({ assignment: updated });
 });
 
+router.delete('/count-assignments/bulk', async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can delete count tasks.' });
+  const assignmentIds: string[] = Array.isArray(req.body.assignmentIds)
+    ? [...new Set((req.body.assignmentIds as unknown[]).filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim()))]
+    : [];
+  if (!assignmentIds.length) return res.status(400).json({ message: 'Select at least one count task to delete.' });
+
+  const byId = new Map(listCountAssignments().map((assignment) => [assignment.id, assignment]));
+  const missingIds = assignmentIds.filter((assignmentId) => !byId.has(assignmentId));
+  if (missingIds.length) return res.status(404).json({ message: 'One or more count tasks were not found.', missingIds });
+  const selected = assignmentIds.map((assignmentId) => byId.get(assignmentId)!);
+  try {
+    selected.forEach((assignment) => assertCountLocationAccess(accessContext(req.user!), assignment.locationId));
+  } catch {
+    return res.status(403).json({ message: 'This admin cannot delete one or more selected tasks.' });
+  }
+
+  const removed = [];
+  try {
+    for (const assignment of selected) {
+      const deleted = deleteCountAssignment(assignment.id);
+      removed.push(deleted);
+      await persistCountAssignmentDelete(assignment.id);
+    }
+  } catch (error) {
+    removed.forEach((assignment) => createCountAssignment(assignment));
+    throw error;
+  }
+
+  await Promise.all(selected.map((assignment) => persistAudit(recordAudit({
+    actorId: req.user!.id,
+    actorRole: req.user!.role,
+    action: 'COUNT_ASSIGNMENT_DELETED',
+    entityType: 'CountAssignment',
+    entityId: assignment.id,
+    metadata: { status: assignment.status, countId: assignment.countId, bulk: true },
+  }))));
+  publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [...new Set(selected.map((assignment) => assignment.locationId))] });
+  return res.json({ success: true, deletedCount: selected.length, assignmentIds, preservedCountIds: selected.map((assignment) => assignment.countId ?? null) });
+});
+
 router.delete('/count-assignments/:assignmentId', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can delete count tasks.' });
   const assignmentId = firstParam(req.params.assignmentId);

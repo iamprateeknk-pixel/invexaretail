@@ -11,8 +11,10 @@
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
+    "db:verify": "node scripts/verify-production-db.cjs",
     "db:push": "prisma db push",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "worker": "tsx src/worker.ts"
   },
   "keywords": [],
   "author": "",

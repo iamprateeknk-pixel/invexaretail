@@ -1,55 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { databaseEnabled } from './persistence.js';
+import { prisma } from './db.js';
 
-// Blueprint v4 §11 / Appendix B: successful mutations publish a domain event;
-// authorized web/mobile sessions receive it over an authenticated SSE stream
-// and refetch only what changed instead of relying on manual refresh.
-
-export const EVENT_TOPICS = [
-  'stock.changed',
-  'item.changed',
-  'lot.changed',
-  'count.changed',
-  'assignment.changed',
-  'campaign.changed',
-  'transfer.changed',
-  'pick.changed',
-  'receipt.changed',
-  'putaway.changed',
-  'import.committed',
-  'exception.changed',
-  'approval.changed',
-  'permission.changed',
-  'config.changed',
-  'connector.changed',
-] as const;
-
+export const EVENT_TOPICS = ['stock.changed','item.changed','lot.changed','count.changed','assignment.changed','campaign.changed','transfer.changed','pick.changed','receipt.changed','putaway.changed','import.committed','exception.changed','approval.changed','permission.changed','config.changed','connector.changed'] as const;
 export type EventTopic = (typeof EVENT_TOPICS)[number];
-
-export type DomainEvent = {
-  id: number;
-  topic: EventTopic;
-  companyId: string;
-  // Locations the change touched. Omitted = company-wide (every location).
-  locationIds?: string[];
-  actorId?: string;
-  requestId?: string;
-  at: string;
-};
-
-export type EventSubscriber = {
-  id: string;
-  companyId: string;
-  userId: string;
-  // null = the user can see every location in the company (admin roles).
-  locationIds: string[] | null;
-  send: (event: DomainEvent) => void;
-};
+export type DomainEvent = { id: number; topic: EventTopic; companyId: string; locationIds?: string[]; actorId?: string; requestId?: string; at: string };
+export type EventSubscriber = { id: string; companyId: string; userId: string; locationIds: string[] | null; send: (event: DomainEvent) => void };
 
 const BUFFER_MAX = 1000;
-// Changes on every process start, so a client holding a cursor from before a
-// restart knows the numeric ids no longer line up and must do a full resync.
 export const SERVER_EPOCH = randomUUID();
-
 let sequence = 0;
 const buffer: DomainEvent[] = [];
 const subscribers = new Map<string, EventSubscriber>();
@@ -60,18 +19,26 @@ export function canReceive(subscriber: Pick<EventSubscriber, 'companyId' | 'loca
   return event.locationIds.some((locationId) => subscriber.locationIds!.includes(locationId));
 }
 
+async function persistEvent(event: DomainEvent): Promise<void> {
+  if (!databaseEnabled) return;
+  await prisma.$executeRawUnsafe(
+    'INSERT INTO `DomainEventOutbox` (`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt`) VALUES (?, ?, ?, ?, ?, ?)',
+    event.topic, event.companyId, event.locationIds?.length ? JSON.stringify(event.locationIds) : null, event.actorId ?? null, event.requestId ?? null, new Date(event.at),
+  );
+}
+
+/** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 export function publishEvent(input: Omit<DomainEvent, 'id' | 'at'>): DomainEvent {
   const event: DomainEvent = { ...input, id: ++sequence, at: new Date().toISOString() };
   buffer.push(event);
   if (buffer.length > BUFFER_MAX) buffer.splice(0, buffer.length - BUFFER_MAX);
+  if (databaseEnabled) {
+    void persistEvent(event).catch((error) => console.error('[events] durable outbox write failed', error));
+    return event;
+  }
   for (const subscriber of subscribers.values()) {
     if (!canReceive(subscriber, event)) continue;
-    try {
-      subscriber.send(event);
-    } catch {
-      // A dead socket must never break the request that produced the event.
-      subscribers.delete(subscriber.id);
-    }
+    try { subscriber.send(event); } catch { subscribers.delete(subscriber.id); }
   }
   return event;
 }
@@ -81,26 +48,10 @@ export function subscribe(subscriber: Omit<EventSubscriber, 'id'>): { id: string
   subscribers.set(id, { ...subscriber, id });
   return { id, unsubscribe: () => { subscribers.delete(id); } };
 }
-
-export function subscriberCount(): number {
-  return subscribers.size;
-}
-
-export function latestEventId(): number {
-  return sequence;
-}
-
-export type ReplayResult =
-  | { kind: 'replay'; events: DomainEvent[] }
-  // The cursor is unusable (older than the buffer, or from before a restart):
-  // the client must refetch everything rather than trust a partial replay.
-  | { kind: 'reset' };
-
-export function eventsSince(
-  lastEventId: number,
-  subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>,
-  clientEpoch?: string,
-): ReplayResult {
+export function subscriberCount(): number { return subscribers.size; }
+export function latestEventId(): number { return sequence; }
+export type ReplayResult = { kind: 'replay'; events: DomainEvent[] } | { kind: 'reset' };
+export function eventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>, clientEpoch?: string): ReplayResult {
   if (clientEpoch && clientEpoch !== SERVER_EPOCH) return { kind: 'reset' };
   if (lastEventId > sequence) return { kind: 'reset' };
   const oldest = buffer[0]?.id ?? sequence + 1;
@@ -108,8 +59,20 @@ export function eventsSince(
   return { kind: 'replay', events: buffer.filter((event) => event.id > lastEventId && canReceive(subscriber, event)) };
 }
 
-export function resetEventBusForTests(): void {
-  sequence = 0;
-  buffer.length = 0;
-  subscribers.clear();
+type DurableRow = { id: bigint | number; topic: EventTopic; companyId: string; locationIds: unknown; actorId: string | null; requestId: string | null; occurredAt: Date };
+function locations(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) return value.filter((id): id is string => typeof id === 'string');
+  if (typeof value !== 'string') return undefined;
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : undefined; } catch { return undefined; }
 }
+export async function durableEventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>): Promise<DomainEvent[]> {
+  if (!databaseEnabled) return eventsSince(lastEventId, subscriber).kind === 'replay' ? (eventsSince(lastEventId, subscriber) as { events: DomainEvent[] }).events : [];
+  const rows = await prisma.$queryRawUnsafe<DurableRow[]>('SELECT `id`,`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt` FROM `DomainEventOutbox` WHERE `id` > ? AND `companyId` = ? ORDER BY `id` ASC LIMIT 500', lastEventId, subscriber.companyId);
+  return rows.map((row) => ({ id: Number(row.id), topic: row.topic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
+}
+export async function durableLatestEventId(): Promise<number> {
+  if (!databaseEnabled) return latestEventId();
+  const rows = await prisma.$queryRawUnsafe<Array<{ id: bigint | number | null }>>('SELECT MAX(`id`) AS `id` FROM `DomainEventOutbox`');
+  return Number(rows[0]?.id ?? 0);
+}
+export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }

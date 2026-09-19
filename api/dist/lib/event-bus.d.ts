@@ -18,6 +18,7 @@ export type EventSubscriber = {
 };
 export declare const SERVER_EPOCH: `${string}-${string}-${string}-${string}-${string}`;
 export declare function canReceive(subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>, event: DomainEvent): boolean;
+/** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 export declare function publishEvent(input: Omit<DomainEvent, 'id' | 'at'>): DomainEvent;
 export declare function subscribe(subscriber: Omit<EventSubscriber, 'id'>): {
     id: string;
@@ -32,4 +33,6 @@ export type ReplayResult = {
     kind: 'reset';
 };
 export declare function eventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>, clientEpoch?: string): ReplayResult;
+export declare function durableEventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>): Promise<DomainEvent[]>;
+export declare function durableLatestEventId(): Promise<number>;
 export declare function resetEventBusForTests(): void;
