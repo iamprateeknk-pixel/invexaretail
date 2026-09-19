@@ -26,10 +26,8 @@ const _home = MobileDestination(id: 'home', label: 'Home', icon: Icons.dashboard
 const _stock = MobileDestination(id: 'stock', label: 'Stock', icon: Icons.inventory_2_outlined);
 const _count = MobileDestination(id: 'count', label: 'Count', icon: Icons.fact_check_outlined);
 const _transfers = MobileDestination(id: 'transfers', label: 'Transfers', icon: Icons.local_shipping_outlined);
-const _receive = MobileDestination(id: 'receive', label: 'Receive', icon: Icons.move_to_inbox_outlined);
-const _pick = MobileDestination(id: 'pick', label: 'Pick', icon: Icons.playlist_add_check_outlined);
-const _putaway = MobileDestination(id: 'putaway', label: 'Putaway', icon: Icons.inventory_outlined);
 const _scan = MobileDestination(id: 'scan', label: 'Scan', icon: Icons.qr_code_scanner_outlined);
+const _work = MobileDestination(id: 'work', label: 'Work', icon: Icons.task_alt_outlined);
 const _orders = MobileDestination(id: 'orders', label: 'Orders', icon: Icons.shopping_bag_outlined);
 
 MobileRoleHome mobileHomeForRole(String role) {
@@ -38,15 +36,15 @@ MobileRoleHome mobileHomeForRole(String role) {
       return const MobileRoleHome(
         title: 'Pick & putaway',
         subtitle: 'Scan-first warehouse work. Walk bins in order; wrong scans are blocked.',
-        defaultDestination: 'pick',
-        destinations: [_home, _pick, _putaway, _scan],
+        defaultDestination: 'work',
+        destinations: [_home, _work, _scan],
       );
     case 'STORE_USER':
       return const MobileRoleHome(
         title: 'Store floor',
         subtitle: 'Blind counts and inbound receiving for your branch.',
-        defaultDestination: 'count',
-        destinations: [_home, _count, _receive, _stock],
+        defaultDestination: 'work',
+        destinations: [_home, _work, _stock],
       );
     case 'AUDITOR':
       return const MobileRoleHome(

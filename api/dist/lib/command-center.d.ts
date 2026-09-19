@@ -120,6 +120,7 @@ export declare function buildCommandCenter(input: CommandCenterInput): {
         recount: number;
         receipts: number;
         cartons: number;
+        picks: number;
         userId: string;
         name: string;
     }[];

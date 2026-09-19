@@ -120,7 +120,7 @@ function buildCommandCenter(input) {
     const since = nowMs - 7 * DAY;
     const perUser = new Map();
     const bump = (userId) => {
-        const row = perUser.get(userId) ?? { counts: 0, approved: 0, recount: 0, receipts: 0, cartons: 0 };
+        const row = perUser.get(userId) ?? { counts: 0, approved: 0, recount: 0, receipts: 0, cartons: 0, picks: 0 };
         perUser.set(userId, row);
         return row;
     };
@@ -141,11 +141,13 @@ function buildCommandCenter(input) {
             bump(event.actorId).receipts += 1;
         if (event.action === 'TRANSFER_CARTON_SEALED')
             bump(event.actorId).cartons += 1;
+        if (event.action === 'PICK_SLIP_SAVED')
+            bump(event.actorId).picks += 1;
     }
     const team = [...perUser.entries()].map(([userId, row]) => ({
         userId, name: input.userNames.get(userId) ?? userId, ...row,
         recountRate: row.counts ? round1((row.recount / row.counts) * 100) : 0,
-    })).sort((a, b) => (b.counts + b.receipts + b.cartons) - (a.counts + a.receipts + a.cartons));
+    })).sort((a, b) => (b.counts + b.receipts + b.cartons + b.picks) - (a.counts + a.receipts + a.cartons + a.picks));
     // ---- Campaign heatmap: how much of each branch's count work is done, per day ----
     const heatmap = input.locations.map((location) => ({
         locationId: location.id, name: location.name,

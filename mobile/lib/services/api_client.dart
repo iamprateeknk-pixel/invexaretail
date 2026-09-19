@@ -268,6 +268,15 @@ class InvexaApi {
     return _send('GET', '/api/v1/mobile/home');
   }
 
+  /// The server's view of a pick: what is left, per line. Reopening a task starts from this.
+  Future<Map<String, dynamic>> pickerTransfer(String transferId) => _send('GET', '/api/v1/picker/transfers/$transferId');
+
+  /// Which lots a KG pick would take (FIFO/FEFO, chosen by the server).
+  Future<List<Map<String, dynamic>>> allocationPreview(String transferId, String itemId, double quantity) async {
+    final payload = await _send('POST', '/api/v1/picker/transfers/$transferId/allocation-preview', body: {'itemId': itemId, 'quantity': quantity});
+    return asList(payload['allocations']).map(asMap).toList();
+  }
+
   Future<List<Map<String, dynamic>>> putawayTasks(String locationId) async {
     final payload = await _send('GET', '/api/v1/putaway-tasks?locationId=$locationId');
     return asList(payload['tasks']).map(asMap).toList();

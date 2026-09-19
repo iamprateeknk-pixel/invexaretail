@@ -19,12 +19,15 @@ What was checked, what was found, what changed, and what is still open.
 | CSV export of the audit trail could carry spreadsheet formulas (`=`, `+`, `-`, `@`). | Cells starting with those characters are prefixed with an apostrophe. |
 
 ## Open (not fixed here)
-- **Audit trail is not company-scoped.** The in-memory audit list carries no company id. Fine for the single-tenant deployment; a multi-tenant rollout must add `companyId` to `AuditEvent` and filter the command center and export by it.
-- **Order-ingest lock is per process.** Several API instances need a unique index on `(channel, externalReference)`.
+- **Audit events carry no company id.** The command center and the export now show only the actions of the company's own users (plus system/connector actions), but a proper `companyId` on `AuditEvent` is the durable fix for a multi-tenant rollout.
 - **PO and returns routes were verified by typecheck and pure-logic tests only**, because they need MySQL. Exercise them once on staging.
 - **Metrics are in-process.** They reset on restart and are per instance. Ship them to a metrics backend before scaling out.
-- **Dependency audit** (`npm audit`) was not part of this pass.
+- **`npm audit` (API, production deps): 6 findings, all inside Prisma's own bundled tooling** (`mysql2`, `mariadb`, `deepmerge-ts` under `node_modules/prisma`). The fix is a breaking Prisma major upgrade (`npm audit fix --force` would install prisma 6.x), so it was not forced. Plan it as its own change with a staging run. Web: 0 findings.
 
 ## Failure and load tests added
 - Ten simultaneous identical requests for a count, a weight count and a transfer receipt each produce exactly one effect.
 - `scale.test.ts`: 60 branches, 50,000 counts / audit events and 5,000 transfers through the command center and reports; 5,000-item purchase plan; a 2,000-lot KG allocation. All finish well inside their limits.
+
+## Added after the first pass
+- `(channel, externalReference)` is now a unique index on `Order` (migration + self-heal; skipped with a warning if old data already holds duplicates), on top of the per-key in-process lock.
+- A pick slip is retry-safe (`requestId`), never takes a blocked, expired or empty lot, and KG picks are allocated by the server.

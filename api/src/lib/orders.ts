@@ -468,15 +468,15 @@ export function normalizedExternalReference(value: string | null | undefined): s
   return trimmed ? trimmed : null;
 }
 
-/** The order already created for this channel + external reference, if any (an expired reservation may be ingested again). */
+/** The order already created for this channel + external reference, if any - whatever its status, since the database allows one per pair. */
 export async function findOrderByExternalReference(channel: string, externalReference: string) {
   const ref = normalizedExternalReference(externalReference);
   if (!ref) return null;
   if (!databaseEnabled) {
-    return listMemoryOrders().find((order) => order.channel === channel && order.externalReference === ref && order.status !== 'EXPIRED') ?? null;
+    return listMemoryOrders().find((order) => order.channel === channel && order.externalReference === ref) ?? null;
   }
   return prisma.order.findFirst({
-    where: { channel, externalReference: ref, status: { not: 'EXPIRED' } },
+    where: { channel, externalReference: ref },
     include: ORDER_INCLUDE,
     orderBy: { createdAt: 'asc' },
   });

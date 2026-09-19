@@ -156,7 +156,7 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
             {data.team.length ? data.team.map((person) => (
               <div key={person.userId} className="flex flex-wrap items-center justify-between gap-2 px-6 py-2 text-sm">
                 <span className="font-medium">{person.name}</span>
-                <span className="text-xs text-muted-foreground">{person.counts} counts · {person.recountRate}% recount · {person.receipts} receipts · {person.cartons} cartons</span>
+                <span className="text-xs text-muted-foreground">{person.counts} counts · {person.recountRate}% recount · {person.receipts} receipts · {person.cartons} cartons · {person.picks ?? 0} pick slips</span>
               </div>
             )) : <p className="px-6 py-4 text-sm text-muted-foreground">No activity this week.</p>}
           </CardContent>

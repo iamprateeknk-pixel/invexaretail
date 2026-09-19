@@ -155,6 +155,7 @@ import {
   persistUserUpdate,
 } from '../lib/persistence.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
+import { allocatePick, isPickableLot, isPooledPick } from '../lib/kg-pick.js';
 import { allocateLots, parseTransferImport, PICK_EXCEPTION_REASONS, validatePickInput } from '../lib/warehouse-workflow.js';
 import {
   applyIndustryPack,
@@ -2884,7 +2885,7 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
     const pickedQty = picked.get(`${line.itemId}|${line.lotId}`) ?? 0;
     return {
       lineId: `${transfer.id}:${index}`, itemId: line.itemId, itemCode: item?.code, itemName: item?.name,
-      unit: item?.unit ?? 'PCS', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
+      unit: item?.unit ?? 'PCS', pickMethod: item?.pickMethod ?? 'LOT_SCAN', lotStatus: lot?.status ?? 'AVAILABLE', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
       lotId: line.lotId, lotNo: lot?.lotNo, expiryDate: lot?.expiryDate,
       lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,
     };
@@ -2892,47 +2893,126 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
   return res.json({ transfer: { ...transfer, lines }, pickSlips: slips.map((event) => event.metadata) });
 });
 
+// Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
+async function pooledPickState(transfer: TransferRecord, itemId: string) {
+  const item = listItems().find((candidate) => candidate.id === itemId);
+  if (!item) throw new Error('Item was not found.');
+  if (!isPooledPick(item)) throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
+  const requestedTotal = transfer.lines.filter((line) => line.itemId === itemId).reduce((sum, line) => sum + line.quantity, 0);
+  if (!(requestedTotal > 0)) throw new Error('This item is not part of the transfer.');
+  const priorSlips = await savedPickSlips(transfer.id);
+  const pickedByLot = new Map<string, number>();
+  for (const slip of priorSlips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
+    if (line.itemId === itemId) pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
+  }
+  const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
+  const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
+  const lots = item.lots.map((lot) => ({
+    lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
+    available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
+  }));
+  return { item, remaining: Math.max(0, Math.round((requestedTotal - pickedTotal) * 1000) / 1000), lots };
+}
+
+router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
+  const transfer = listTransfers().find((entry) => entry.id === firstParam(req.params.transferId));
+  const context = accessContext(req.user!);
+  if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  try {
+    const quantity = Number(req.body?.quantity);
+    const state = await pooledPickState(transfer, String(req.body?.itemId ?? ''));
+    if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8) throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
+    const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
+    return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to preview this pick.' });
+  }
+});
+
 router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
   const transfer = listTransfers().find((entry) => entry.id === transferId);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  const prior = await savedPickSlips(transferId);
+  // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
+  const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  if (requestId) {
+    const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
+    if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
+  }
   if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return res.status(400).json({ message: `Transfer cannot be picked while ${transfer.status}.` });
-  const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
   if (!lines.length && !exceptions.length) return res.status(400).json({ message: 'At least one picked line or exception is required.' });
   const itemMap = new Map(listItems().map((item) => [item.id, item]));
   const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
-  const prior = await savedPickSlips(transferId);
   const priorPicked = new Map<string, number>();
   for (const slip of prior) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`; priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
   }
   try {
+    // A KG line carries only item + weight: the server chooses the lots (FIFO/FEFO), the picker never splits them.
+    const expanded: any[] = [];
+    for (const line of lines) {
+      const item = itemMap.get(line.itemId);
+      if (item && isPooledPick(item) && !line.lotId) {
+        const state = await pooledPickState(transfer, line.itemId);
+        const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
+        const { allocations, shortfall } = allocatePick({
+          requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
+          lots: state.lots.map((lot) => ({ ...lot, available: Math.max(0, lot.available - expanded.filter((row) => row.lotId === lot.lotId).reduce((sum, row) => sum + row.quantity, 0)) })),
+        });
+        if (shortfall > 0) throw new Error(`Only ${Math.round((Number(line.quantity) - shortfall) * 1000) / 1000} of ${item.code} is available in pickable lots. Report it as No Stock or pick less.`);
+        if (pending + Number(line.quantity) > state.remaining + 1e-8) throw new Error(`${item.code} exceeds remaining requested quantity.`);
+        for (const allocation of allocations) expanded.push({ itemId: line.itemId, lotId: allocation.lotId, quantity: allocation.quantity, inputMethod: 'MANUAL', allocated: true });
+      } else {
+        expanded.push(line);
+      }
+    }
+    lines = expanded;
+
+    const runningLot = new Map(priorPicked);
+    const runningItem = new Map<string, number>();
+    for (const [key, quantity] of priorPicked) runningItem.set(key.split('|')[0], (runningItem.get(key.split('|')[0]) ?? 0) + quantity);
     for (const line of lines) {
       const requested = transfer.lines.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId);
       const item = itemMap.get(line.itemId);
       const lot = item?.lots.find((entry) => entry.id === line.lotId);
-      if (!requested || !item || !lot) throw new Error('Picked item/lot is not part of this transfer.');
+      const pooled = Boolean(item && isPooledPick(item));
+      if (!item || !lot || (!requested && !pooled)) throw new Error('Picked item/lot is not part of this transfer.');
       const quantity = Number(line.quantity);
       validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, lotNo: lot.lotNo });
-      const already = priorPicked.get(`${line.itemId}|${line.lotId}`) ?? 0;
-      if (already + quantity > requested.quantity) throw new Error(`${item.code}/${lot.lotNo} exceeds remaining requested quantity.`);
-      const available = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
-      if (quantity > available) throw new Error(`${item.code}/${lot.lotNo} exceeds available stock.`);
+      const lotKey = `${line.itemId}|${line.lotId}`;
+      const alreadyLot = runningLot.get(lotKey) ?? 0;
+      if (pooled) {
+        const total = transfer.lines.filter((entry) => entry.itemId === line.itemId).reduce((sum, entry) => sum + entry.quantity, 0);
+        if ((runningItem.get(line.itemId) ?? 0) + quantity > total + 1e-8) throw new Error(`${item.code} exceeds remaining requested quantity.`);
+      } else if (alreadyLot + quantity > requested!.quantity + 1e-8) {
+        throw new Error(`${item.code}/${lot.lotNo} exceeds remaining requested quantity.`);
+      }
+      const onHand = ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0;
+      // Blueprint §15: never a zero, blocked or expired lot - and stock already picked on this transfer is spoken for.
+      if (!isPickableLot({ status: lot.status, available: onHand - alreadyLot, expiryDate: lot.expiryDate })) {
+        throw new Error(`${item.code}/${lot.lotNo} cannot be picked: it is blocked, expired or has no stock left.`);
+      }
+      if (quantity > onHand - alreadyLot + 1e-8) throw new Error(`${item.code}/${lot.lotNo} exceeds available stock.`);
+      runningLot.set(lotKey, alreadyLot + quantity);
+      runningItem.set(line.itemId, (runningItem.get(line.itemId) ?? 0) + quantity);
     }
     for (const exception of exceptions) {
       if (!PICK_EXCEPTION_REASONS.includes(exception.reason)) throw new Error('Exception reason must be No Stock, Wrong Item or Damaged Item.');
       if (!Number.isFinite(Number(exception.quantity)) || Number(exception.quantity) <= 0) throw new Error('Exception quantity must be greater than zero.');
     }
     const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
-    const metadata = { id: slipId, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
+    const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata }));
 
     // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
     // Wrong Item or Damaged Item exception opens an owned Exception Inbox
     // case for supervisor resolution instead of silently dropping the line.
     const PICK_EXCEPTION_TYPE: Record<string, 'MISSING_STOCK' | 'WRONG_ITEM' | 'DAMAGE'> = {
+      NO_STOCK: 'MISSING_STOCK', WRONG_ITEM: 'WRONG_ITEM', DAMAGED_ITEM: 'DAMAGE',
       'No Stock': 'MISSING_STOCK', 'Wrong Item': 'WRONG_ITEM', 'Damaged Item': 'DAMAGE',
     };
     for (const exception of exceptions) {
@@ -2940,7 +3020,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       const itemLabel = item ? `${item.code} - ${item.name}` : exception.itemId ?? 'item';
       void createExceptionCase({
         type: PICK_EXCEPTION_TYPE[exception.reason] ?? 'TRANSFER_DISCREPANCY',
-        title: `${exception.reason}: ${itemLabel}`,
+        title: `${String(exception.reason).replaceAll('_', ' ').toLowerCase()}: ${itemLabel}`,
         description: `Reported while picking transfer ${transfer.id}.`,
         itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
         quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,

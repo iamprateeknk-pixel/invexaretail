@@ -284,7 +284,7 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
     estimatedDeliveryAt: Date | null;
 }>;
 export declare function normalizedExternalReference(value: string | null | undefined): string | null;
-/** The order already created for this channel + external reference, if any (an expired reservation may be ingested again). */
+/** The order already created for this channel + external reference, if any - whatever its status, since the database allows one per pair. */
 export declare function findOrderByExternalReference(channel: string, externalReference: string): Promise<({
     lines: ({
         item: {

@@ -419,6 +419,7 @@ model Order {
 
 
   @@index([status, createdAt])
+  @@unique([channel, externalReference])
   @@index([channel, status])
   @@index([fulfillmentLocationId, status])
   @@index([status, reservationExpiresAt])

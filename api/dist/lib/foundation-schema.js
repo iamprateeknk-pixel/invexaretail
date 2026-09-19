@@ -17,6 +17,12 @@ async function ensureColumnIfTable(table, column, definition) {
         return;
     await ensureColumn(table, column, definition);
 }
+async function ensureIndexUnique(table, name, columns) {
+    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?', table, name);
+    if (Number(rows[0]?.count ?? 0) > 0)
+        return;
+    await db_js_1.prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX \`${name}\` ON \`${table}\` (${columns})`);
+}
 exports.OPERATIONAL_TENANT_TABLES = [
     'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine',
     'TransferReceipt', 'TransferReceiptLine', 'TransferCarton', 'InventoryMovement',
@@ -120,6 +126,18 @@ async function ensureFoundationSchema() {
     await ensureColumnIfTable('PurchaseOrder', 'sentAt', 'DATETIME(3) NULL');
     await ensureColumnIfTable('PurchaseOrder', 'closedAt', 'DATETIME(3) NULL');
     await ensureColumnIfTable('PurchaseOrder', 'closeNote', 'TEXT NULL');
+    // One order per platform + external id (blueprint v4 §23). Skipped, loudly, if old data already
+    // holds duplicates: the in-process lock still protects a single instance.
+    try {
+        const dup = await db_js_1.prisma.$queryRawUnsafe('SELECT COUNT(*) AS count FROM (SELECT 1 FROM `Order` WHERE externalReference IS NOT NULL GROUP BY channel, externalReference HAVING COUNT(*) > 1) d');
+        if (Number(dup[0]?.count ?? 0) === 0)
+            await ensureIndexUnique('Order', 'Order_channel_externalReference_key', '`channel`, `externalReference`');
+        else
+            console.warn('[schema] Order has duplicate (channel, externalReference) rows; unique index not created.');
+    }
+    catch (error) {
+        console.warn('[schema] order external-reference index not created:', error instanceof Error ? error.message : error);
+    }
     await ensureColumnIfTable('ReturnRequest', 'refundStatus', "VARCHAR(191) NOT NULL DEFAULT 'PENDING'");
     await ensureColumnIfTable('ReturnRequest', 'refundNote', 'TEXT NULL');
     await ensureColumnIfTable('ReturnRequest', 'refundedAt', 'DATETIME(3) NULL');

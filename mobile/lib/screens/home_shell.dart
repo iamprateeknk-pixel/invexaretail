@@ -13,6 +13,7 @@ import 'receive_screen.dart';
 import 'scan_screen.dart';
 import 'stock_screen.dart';
 import 'transfers_screen.dart';
+import 'work_screen.dart';
 import 'workspace_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -94,6 +95,11 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _pageFor(String id, SessionController controller) {
     switch (id) {
+      case 'work':
+        return WorkScreen(
+          controller: controller,
+          tabs: controller.user?.role == 'WAREHOUSE_PICKER' ? const ['pick', 'putaway'] : const ['count', 'receive'],
+        );
       case 'stock':
         return StockScreen(controller: controller);
       case 'count':

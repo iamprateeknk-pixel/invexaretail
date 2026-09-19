@@ -24,6 +24,12 @@ function scope(req) {
     const allowed = (locationId) => (0, tenant_scope_js_1.companyOwnsLocation)(companyId, locationId) && (all || (user.locationIds ?? []).includes(locationId));
     return { companyId, allowed };
 }
+// The audit list carries no company id, so a company sees the actions of its own users
+// (plus system/connector actions, which belong to no user) and never another company's.
+function companyAudit(companyId) {
+    const own = new Set((0, enterprise_repository_js_1.listUsersByCompany)(companyId).map((user) => user.id));
+    return (0, audit_js_1.listAuditEvents)().filter((event) => own.has(event.actorId) || ['system', 'connector', 'SYSTEM'].includes(event.actorId));
+}
 function deny(res) {
     return res.status(403).json({ message: 'The command center is for admins, branch managers and auditors.' });
 }
@@ -60,7 +66,7 @@ router.get('/command-center', ...guard, async (req, res) => {
         assignments: (0, repository_js_1.listCountAssignments)().filter((row) => locationIds.has(row.locationId)),
         transfers: (0, repository_js_1.listTransfers)().filter((transfer) => locationIds.has(transfer.sourceLocationId) || locationIds.has(transfer.destinationLocationId)),
         checkpoints: (0, repository_js_1.listSyncCheckpoints)().filter((row) => locationIds.has(row.locationId)),
-        audit: (0, audit_js_1.listAuditEvents)(),
+        audit: companyAudit(companyId),
         userNames: users,
         live: { clients: (0, event_bus_js_1.subscriberCount)(), lastEventId: (0, event_bus_js_1.latestEventId)() },
         extras: await databaseExtras(),
@@ -70,11 +76,11 @@ router.get('/command-center', ...guard, async (req, res) => {
 router.get('/reports/transfer-cycle', ...guard, (req, res) => {
     if (!MANAGEMENT.includes(req.user.role))
         return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
-    const { allowed } = scope(req);
+    const { companyId, allowed } = scope(req);
     const transfers = (0, repository_js_1.listTransfers)().filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
     const from = typeof req.query.from === 'string' ? req.query.from : undefined;
     const to = typeof req.query.to === 'string' ? req.query.to : undefined;
-    return res.json({ report: (0, report_builders_js_1.transferCycleReport)(transfers, (0, audit_js_1.listAuditEvents)(), { from, to }) });
+    return res.json({ report: (0, report_builders_js_1.transferCycleReport)(transfers, companyAudit(companyId), { from, to }) });
 });
 router.get('/reports/count-accuracy', ...guard, (req, res) => {
     if (!MANAGEMENT.includes(req.user.role))
@@ -98,7 +104,7 @@ router.get('/reports/audit-export', ...guard, (req, res) => {
         return res.status(403).json({ message: 'The audit export requires Admin or Auditor access.' });
     const { companyId } = scope(req);
     const text = (key) => (typeof req.query[key] === 'string' && req.query[key] ? String(req.query[key]) : undefined);
-    const events = (0, report_builders_js_1.filterAudit)((0, audit_js_1.listAuditEvents)(), {
+    const events = (0, report_builders_js_1.filterAudit)(companyAudit(companyId), {
         actorId: text('actorId'), action: text('action'), entityType: text('entityType'), entityId: text('entityId'), from: text('from'), to: text('to'),
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50_000);
     const names = new Map((0, enterprise_repository_js_1.listUsersByCompany)(companyId).map((user) => [user.id, user.name]));

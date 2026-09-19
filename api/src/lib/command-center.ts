@@ -139,9 +139,9 @@ export function buildCommandCenter(input: CommandCenterInput) {
 
   // ---- How is the team performing? ------------------------------------------
   const since = nowMs - 7 * DAY;
-  const perUser = new Map<string, { counts: number; approved: number; recount: number; receipts: number; cartons: number }>();
+  const perUser = new Map<string, { counts: number; approved: number; recount: number; receipts: number; cartons: number; picks: number }>();
   const bump = (userId: string) => {
-    const row = perUser.get(userId) ?? { counts: 0, approved: 0, recount: 0, receipts: 0, cartons: 0 };
+    const row = perUser.get(userId) ?? { counts: 0, approved: 0, recount: 0, receipts: 0, cartons: 0, picks: 0 };
     perUser.set(userId, row);
     return row;
   };
@@ -156,11 +156,12 @@ export function buildCommandCenter(input: CommandCenterInput) {
     if (Date.parse(event.createdAt) < since) continue;
     if (event.action === 'TRANSFER_RECEIVED' || event.action === 'TRANSFER_PARTIALLY_RECEIVED') bump(event.actorId).receipts += 1;
     if (event.action === 'TRANSFER_CARTON_SEALED') bump(event.actorId).cartons += 1;
+    if (event.action === 'PICK_SLIP_SAVED') bump(event.actorId).picks += 1;
   }
   const team = [...perUser.entries()].map(([userId, row]) => ({
     userId, name: input.userNames.get(userId) ?? userId, ...row,
     recountRate: row.counts ? round1((row.recount / row.counts) * 100) : 0,
-  })).sort((a, b) => (b.counts + b.receipts + b.cartons) - (a.counts + a.receipts + a.cartons));
+  })).sort((a, b) => (b.counts + b.receipts + b.cartons + b.picks) - (a.counts + a.receipts + a.cartons + a.picks));
 
   // ---- Campaign heatmap: how much of each branch's count work is done, per day ----
   const heatmap = input.locations.map((location) => ({
