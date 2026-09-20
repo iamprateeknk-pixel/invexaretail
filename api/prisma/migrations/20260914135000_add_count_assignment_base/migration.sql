@@ -10,20 +10,15 @@ CREATE TABLE `CountAssignment` (
     `assignedToId` VARCHAR(191) NOT NULL,
     `assignedById` VARCHAR(191) NOT NULL,
     `countDate` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `dueDate` DATETIME(3) NULL,
-    `priority` VARCHAR(191) NOT NULL DEFAULT 'NORMAL',
     `instructions` TEXT NULL,
     `status` ENUM('ASSIGNED', 'SUBMITTED', 'CANCELLED') NOT NULL DEFAULT 'ASSIGNED',
     `countId` VARCHAR(191) NULL,
-    `parentCountId` VARCHAR(191) NULL,
-    `campaignId` VARCHAR(191) NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     `tenantId` VARCHAR(191) NOT NULL DEFAULT 'tenant-invexa',
 
     UNIQUE INDEX `CountAssignment_countId_key`(`countId`),
     INDEX `CountAssignment_tenantId_idx`(`tenantId`),
-    INDEX `CountAssignment_campaignId_idx`(`campaignId`),
     INDEX `CountAssignment_assignedToId_status_idx`(`assignedToId`, `status`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
