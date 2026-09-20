@@ -7,6 +7,7 @@ export const LIVE_STATUS = {
   connecting: 'connecting',
   live: 'live',
   reconnecting: 'reconnecting',
+  polling: 'polling',
   stale: 'stale',
   offline: 'offline',
   unauthorized: 'unauthorized',

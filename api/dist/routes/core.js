@@ -873,6 +873,9 @@ router.post('/stock-counts', async (req, res) => {
             userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId: validated.locationId,
             physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
         });
+        (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
+        if (assignment)
+            (0, event_bus_js_1.publishEvent)({ topic: 'assignment.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
         return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
     }
     catch (error) {
@@ -964,6 +967,9 @@ router.post('/stock-counts/weight', async (req, res) => {
             (0, repository_js_1.markAssignmentSubmitted)(assignment.id, saved[0].saved.id);
             await Promise.all([(0, persistence_js_1.persistAssignmentSubmitted)(assignment.id, saved[0].saved.id), (0, campaign_service_js_1.reconcileCampaignQuietly)(assignment.campaignId)]);
         }
+        (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [locationId] });
+        if (assignment)
+            (0, event_bus_js_1.publishEvent)({ topic: 'assignment.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [locationId] });
         if (context.role === 'STORE_USER')
             return res.status(201).json({ success: true, lots: saved.length });
         return res.status(201).json({
@@ -1044,6 +1050,8 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         });
         if (status === 'APPROVED')
             (0, webhook_dispatcher_js_1.maybeEmitStockLow)(updated.itemId, updated.locationId, updated.bookQty);
+        (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
+        (0, event_bus_js_1.publishEvent)({ topic: 'assignment.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
         await (0, campaign_service_js_1.reconcileCampaignQuietly)(reviewedCampaignId);
         return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
     }

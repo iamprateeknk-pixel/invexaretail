@@ -1032,6 +1032,8 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
     });
+    publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
+    if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
@@ -1120,6 +1122,8 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       await Promise.all([persistAssignmentSubmitted(assignment.id, saved[0].saved.id), reconcileCampaignQuietly(assignment.campaignId)]);
     }
 
+    publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [locationId] });
+    if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [locationId] });
     if (context.role === 'STORE_USER') return res.status(201).json({ success: true, lots: saved.length });
     return res.status(201).json({
       success: true,
@@ -1195,6 +1199,8 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       },
     });
     if (status === 'APPROVED') maybeEmitStockLow(updated.itemId, updated.locationId, updated.bookQty);
+    publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
+    publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
     await reconcileCampaignQuietly(reviewedCampaignId);
     return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
   } catch (error) {
