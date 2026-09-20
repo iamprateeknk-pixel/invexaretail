@@ -88,6 +88,9 @@ test('campaign creation validates its input and allows one open campaign per bra
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, timezone: 'Mars/Base' })).status, 400);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, priorityOrder: ['LUCKY'] })).status, 400);
 
+    const warehouseCampaign = await call('POST', '/campaigns', admin, { ...campaignBody, name: 'Warehouse full count', locationId: 'wh-1', userIds: ['user-picker-1'] });
+    assert.equal(warehouseCampaign.status, 201);
+
     const created = await call('POST', '/campaigns', admin, campaignBody);
     assert.equal(created.status, 201);
     assert.equal(created.body.campaign.status, 'DRAFT');

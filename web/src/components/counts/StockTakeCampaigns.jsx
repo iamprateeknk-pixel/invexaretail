@@ -120,7 +120,7 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
               <div className="grid gap-1.5"><Label>End date (optional)</Label><Input type="date" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} /></div>
             </div>
             <div className="grid gap-1.5">
-              <Label>Store users who will count</Label>
+              <Label>Count workers who will count</Label>
               {eligibleUsers.length ? (
                 <div className="flex flex-wrap gap-2">
                   {eligibleUsers.map((user) => (
@@ -130,7 +130,7 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
                     </label>
                   ))}
                 </div>
-              ) : <p className="text-sm text-muted-foreground">No store users are assigned to this location.</p>}
+              ) : <p className="text-sm text-muted-foreground">No store users or warehouse pickers are assigned to this location.</p>}
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.includeNewStock} onChange={(event) => setForm({ ...form, includeNewStock: event.target.checked })} />

@@ -86,6 +86,8 @@ const campaignBody = { name: 'September full count', locationId: 'loc-1', dailyI
         strict_1.default.equal((await call('POST', '/campaigns', admin, { ...campaignBody, locationId: 'nowhere' })).status, 400);
         strict_1.default.equal((await call('POST', '/campaigns', admin, { ...campaignBody, timezone: 'Mars/Base' })).status, 400);
         strict_1.default.equal((await call('POST', '/campaigns', admin, { ...campaignBody, priorityOrder: ['LUCKY'] })).status, 400);
+        const warehouseCampaign = await call('POST', '/campaigns', admin, { ...campaignBody, name: 'Warehouse full count', locationId: 'wh-1', userIds: ['user-picker-1'] });
+        strict_1.default.equal(warehouseCampaign.status, 201);
         const created = await call('POST', '/campaigns', admin, campaignBody);
         strict_1.default.equal(created.status, 201);
         strict_1.default.equal(created.body.campaign.status, 'DRAFT');

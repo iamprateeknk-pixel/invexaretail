@@ -310,7 +310,7 @@ router.get('/users', (req: Request, res: Response) => {
     }
     if (roleFilter && user.role !== roleFilter) return false;
     if (context.role !== 'BRANCH_MANAGER') return true;
-    return user.role === 'STORE_USER'
+    return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)
       && user.assignedLocationIds.some((locationId) => canAccessLocation(context, locationId));
   });
   return res.json({

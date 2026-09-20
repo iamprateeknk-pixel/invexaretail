@@ -33,7 +33,7 @@ export function campaignStatusMeta(status) {
   return CAMPAIGN_STATUS[status] ?? { label: String(status ?? 'Unknown'), variant: 'outline', actions: [] };
 }
 
-/** Store users who can be given work at this location (the server enforces the same rule). */
+/** Count workers who can be given work at this location (the server enforces the same rule). */
 export function storeUsersForLocation(storeUsers, locationId) {
   return (storeUsers ?? []).filter((user) => (user.assignedLocationIds ?? []).includes(locationId));
 }
@@ -52,7 +52,7 @@ export function validateCampaignForm(form, locationId) {
   if (name.length < 2) errors.push('Enter a campaign name.');
   const quota = Number(form.dailyItemsPerUser);
   if (!Number.isInteger(quota) || quota < 1 || quota > 500) errors.push('Daily items per user must be a whole number from 1 to 500.');
-  if (!form.userIds?.length) errors.push('Select at least one store user.');
+  if (!form.userIds?.length) errors.push('Select at least one count worker.');
   if (form.startDate && form.endDate && form.endDate < form.startDate) errors.push('End date must be on or after the start date.');
   if (!locationId) errors.push('Select a location first.');
   if (errors.length) return { ok: false, errors };
@@ -84,7 +84,7 @@ export function describeRunResult(result) {
     NOT_STARTED: 'The campaign has not started yet.',
     ENDED: 'The campaign end date has passed.',
     ALREADY_RAN: "Today's work was already assigned.",
-    NO_ACTIVE_USERS: 'No active store users are left on this campaign.',
+    NO_ACTIVE_USERS: 'No active count workers are left on this campaign.',
   };
   return reasons[result.skipped] ?? 'Nothing to run.';
 }

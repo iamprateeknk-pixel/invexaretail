@@ -51,11 +51,11 @@ async function audit(actor, action, campaign, metadata = {}) {
     }));
 }
 // ---- validation -----------------------------------------------------------
-/** A Store User who can be given campaign work at this location, or an explanation of why not. */
+/** A count worker who can be given campaign work at this location, or an explanation of why not. */
 function checkCampaignUser(userId, locationId, companyId) {
     const user = (0, repository_js_1.findUserById)(userId);
-    if (!user || user.role !== 'STORE_USER')
-        return `${userId} is not a Store User.`;
+    if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role))
+        return `${userId} is not an eligible count worker.`;
     if (!user.assignedLocationIds.includes(locationId))
         return `${user.name} is not assigned to this location.`;
     const enterprise = (0, enterprise_repository_js_1.findUserById)(userId);
@@ -65,7 +65,7 @@ function checkCampaignUser(userId, locationId, companyId) {
 }
 function parseUserIds(value, locationId, companyId) {
     if (!Array.isArray(value) || value.length === 0)
-        throw new CampaignError('Select at least one Store User for the campaign.');
+        throw new CampaignError('Select at least one count worker for the campaign.');
     const userIds = [...new Set(value.map(String))];
     for (const userId of userIds) {
         const problem = checkCampaignUser(userId, locationId, companyId);

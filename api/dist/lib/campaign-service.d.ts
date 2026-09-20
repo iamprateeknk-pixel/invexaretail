@@ -7,7 +7,7 @@ export declare class CampaignError extends Error {
     readonly status: number;
     constructor(message: string, status?: number);
 }
-/** A Store User who can be given campaign work at this location, or an explanation of why not. */
+/** A count worker who can be given campaign work at this location, or an explanation of why not. */
 export declare function checkCampaignUser(userId: string, locationId: string, companyId: string): string | null;
 /**
  * Brings every campaign item (and the campaign's own status) in line with the

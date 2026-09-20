@@ -209,7 +209,7 @@ router.get('/users', (req, res) => {
             return false;
         if (context.role !== 'BRANCH_MANAGER')
             return true;
-        return user.role === 'STORE_USER'
+        return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)
             && user.assignedLocationIds.some((locationId) => (0, inventory_js_1.canAccessLocation)(context, locationId));
     });
     return res.json({

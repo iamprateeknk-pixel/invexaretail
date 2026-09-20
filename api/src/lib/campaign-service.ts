@@ -69,10 +69,10 @@ async function audit(actor: CampaignActor, action: string, campaign: CampaignRec
 
 // ---- validation -----------------------------------------------------------
 
-/** A Store User who can be given campaign work at this location, or an explanation of why not. */
+/** A count worker who can be given campaign work at this location, or an explanation of why not. */
 export function checkCampaignUser(userId: string, locationId: string, companyId: string): string | null {
   const user = findUserById(userId);
-  if (!user || user.role !== 'STORE_USER') return `${userId} is not a Store User.`;
+  if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)) return `${userId} is not an eligible count worker.`;
   if (!user.assignedLocationIds.includes(locationId)) return `${user.name} is not assigned to this location.`;
   const enterprise = findEnterpriseUserById(userId);
   if (enterprise && (enterprise.status !== 'active' || enterprise.companyId !== companyId)) return `${user.name} is not an active user of this company.`;
@@ -80,7 +80,7 @@ export function checkCampaignUser(userId: string, locationId: string, companyId:
 }
 
 function parseUserIds(value: unknown, locationId: string, companyId: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) throw new CampaignError('Select at least one Store User for the campaign.');
+  if (!Array.isArray(value) || value.length === 0) throw new CampaignError('Select at least one count worker for the campaign.');
   const userIds = [...new Set(value.map(String))];
   for (const userId of userIds) {
     const problem = checkCampaignUser(userId, locationId, companyId);
