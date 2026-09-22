@@ -23,7 +23,7 @@ function asJsonPayload(snapshot: ControlPlaneSnapshot): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue;
 }
 
-// ADR-003: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
+// ADR-004: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
 // its schema. No-op kept so existing call sites do not need to change.
 export async function ensureControlPlaneSchema(): Promise<void> {}
 

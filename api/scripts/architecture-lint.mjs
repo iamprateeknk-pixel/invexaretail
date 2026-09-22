@@ -43,7 +43,7 @@ const STOCK_WRITE_ALLOWLIST = new Set([
 const RULES = [
   {
     id: 'runtime-ddl',
-    description: 'CREATE/ALTER/DROP TABLE outside prisma/migrations (AGENTS.md #4, ADR-003)',
+    description: 'CREATE/ALTER/DROP TABLE outside prisma/migrations (AGENTS.md #4, ADR-004)',
     test(file, line) {
       return /\b(CREATE|ALTER|DROP)\s+TABLE\b/i.test(line);
     },

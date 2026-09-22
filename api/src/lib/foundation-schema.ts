@@ -10,7 +10,7 @@ export const OPERATIONAL_TENANT_TABLES = [
 ] as const;
 
 /**
- * ADR-003: every table this constant lists is a Prisma model. Schema
+ * ADR-004: every table this constant lists is a Prisma model. Schema
  * evolution runs exclusively through `prisma migrate deploy` (see
  * render.yaml's preDeployCommand and docker-compose's api entrypoint);
  * runtime ALTER/CREATE DDL is a prohibited pattern (AGENTS.md). This used to

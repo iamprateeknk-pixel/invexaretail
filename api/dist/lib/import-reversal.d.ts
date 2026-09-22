@@ -22,11 +22,10 @@ export declare function buildOpeningSnapshotReversalPlan(snapshots: Array<{
     locationId: string;
     qty: number;
 }>): ReversalPlanLine[];
-export declare function listImportBatches(limit?: number): Promise<Pick<import("./import-batch-store.js").ImportBatchRecord, "id" | "type" | "status" | "branchId" | "fileName" | "importedAt" | "totalRows" | "validRows" | "invalidRows" | "duplicateRows" | "metadata">[] | {
+export declare function listImportBatches(limit?: number): Promise<Pick<import("./import-batch-store.js").ImportBatchRecord, "id" | "status" | "type" | "fileName" | "importedAt" | "totalRows" | "validRows" | "invalidRows" | "duplicateRows" | "metadata" | "branchId">[] | {
     id: string;
-    type: string;
     status: string;
-    branchId: string;
+    type: string;
     fileName: string;
     importedAt: Date;
     totalRows: number;
@@ -34,6 +33,7 @@ export declare function listImportBatches(limit?: number): Promise<Pick<import("
     invalidRows: number;
     duplicateRows: number;
     metadata: Prisma.JsonValue;
+    branchId: string;
 }[]>;
 export declare function reverseImportBatch(input: {
     batchId: string;

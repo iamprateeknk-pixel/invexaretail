@@ -66,6 +66,12 @@ jobs:
         run: npx tsx --test src/lib/postgres.integration.test.ts
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run refresh-session/OTP coverage against real Postgres (ADR-003)
+        run: npx tsx --test src/lib/session-store.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 

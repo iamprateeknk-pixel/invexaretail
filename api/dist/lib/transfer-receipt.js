@@ -9,7 +9,7 @@ const node_crypto_1 = require("node:crypto");
 const db_js_1 = require("./db.js");
 const persistence_js_1 = require("./persistence.js");
 const receipt_validation_js_1 = require("./receipt-validation.js");
-// ADR-003: TransferLine, TransferReceipt and TransferReceiptLine (including
+// ADR-004: TransferLine, TransferReceipt and TransferReceiptLine (including
 // shortageQty/excessQty) are Prisma models; `prisma migrate deploy` owns
 // their schema, so no runtime DDL self-heal is needed here any more.
 async function ensureReceiptSchema() { }

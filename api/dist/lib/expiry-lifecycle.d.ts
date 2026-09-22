@@ -24,7 +24,7 @@ export declare function listLocationExpiryAlerts(locationId: string, now?: Date)
     };
     lot: {
         lotNo: string;
-        status: "AVAILABLE" | "EXPIRED" | "BLOCKED" | "QUARANTINE";
+        status: "EXPIRED" | "QUARANTINE" | "AVAILABLE" | "BLOCKED";
     };
     severity: import("./expiry-alerts.js").ExpirySeverity;
 }[];

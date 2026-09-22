@@ -64,16 +64,6 @@ export type EnhancedUserRecord = {
   updatedAt: string;
 };
 
-export type OtpSessionRecord = {
-  id: string;
-  email: string;
-  otpCode: string;
-  expiresAt: string;
-  attempts: number;
-  verified: boolean;
-  createdAt: string;
-};
-
 export type BiometricCredentialRecord = {
   id: string;
   userId: string;
@@ -306,7 +296,6 @@ export function seedEnhancedUsersForMemoryMode(
     });
   }
 }
-export const otpSessions: OtpSessionRecord[] = [];
 export const biometricCredentials: BiometricCredentialRecord[] = [];
 export const locations: LocationRecord[] = [];
 export const items: ItemRecord[] = [];
@@ -404,52 +393,6 @@ export function updateUserLastLogin(userId: string): EnhancedUserRecord {
   user.lastLogin = new Date().toISOString();
   user.updatedAt = new Date().toISOString();
   return { ...user };
-}
-
-// ============================================
-// OTP SESSION MANAGEMENT
-// ============================================
-
-export function createOtpSession(email: string, otpCode: string): OtpSessionRecord {
-  const normalized = email.trim().toLowerCase();
-  clearOtpSession(normalized);
-  const session: OtpSessionRecord = {
-    id: `otp-${Math.random().toString(36).slice(2, 9)}`,
-    email: normalized,
-    otpCode,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    attempts: 0,
-    verified: false,
-    createdAt: new Date().toISOString(),
-  };
-  otpSessions.push(session);
-  return { ...session };
-}
-
-export function findOtpSession(email: string): OtpSessionRecord | undefined {
-  const normalized = email.trim().toLowerCase();
-  return otpSessions.find((o) => o.email === normalized && new Date(o.expiresAt) > new Date());
-}
-
-export function verifyOtpSession(email: string, otpCode: string): boolean {
-  const session = findOtpSession(email);
-  if (!session) return false;
-  if (session.attempts >= 3) return false;
-  if (session.otpCode !== otpCode) {
-    session.attempts += 1;
-    return false;
-  }
-  session.verified = true;
-  return true;
-}
-
-export function clearOtpSession(email: string): void {
-  const normalized = email.trim().toLowerCase();
-  for (let index = otpSessions.length - 1; index >= 0; index -= 1) {
-    if (otpSessions[index].email === normalized) {
-      otpSessions.splice(index, 1);
-    }
-  }
 }
 
 // ============================================
@@ -750,51 +693,9 @@ export function userHasPermission(userId: string, permission: string): boolean {
   return permissions.includes(permission);
 }
 
-// ============================================
-// REFRESH TOKEN MANAGEMENT
-// ============================================
-
-interface RefreshTokenData {
-  userId: string;
-  companyId: string;
-  issuedAt: number;
-  expiresAt: number;
-}
-
-const refreshTokens = new Map<string, RefreshTokenData>();
-const revokedRefreshTokens = new Set<string>();
-
-export function storeRefreshToken(token: string, userId: string, companyId: string, expiresIn: number = 10 * 365 * 24 * 60 * 60 * 1000): void {
-  const now = Date.now();
-  revokedRefreshTokens.delete(token);
-  refreshTokens.set(token, {
-    userId,
-    companyId,
-    issuedAt: now,
-    expiresAt: now + expiresIn,
-  });
-}
-
-export function validateRefreshToken(token: string): RefreshTokenData | null {
-  if (revokedRefreshTokens.has(token)) return null;
-  const tokenData = refreshTokens.get(token);
-  if (!tokenData) return null;
-  if (Date.now() > tokenData.expiresAt) {
-    refreshTokens.delete(token);
-    return null;
-  }
-  return tokenData;
-}
-
-export function isRefreshTokenRevoked(token: string): boolean {
-  return revokedRefreshTokens.has(token);
-}
-
-export function revokeRefreshToken(token: string): void {
-  if (!token) return;
-  refreshTokens.delete(token);
-  revokedRefreshTokens.add(token);
-}
+// Refresh-token session families now live in lib/session-store.ts (ADR-003):
+// persisted, hashed, rotating, with reuse detection - not an in-process Map
+// keyed by the raw token value.
 
 // ============================================
 // COUNT APPROVAL WORKFLOW

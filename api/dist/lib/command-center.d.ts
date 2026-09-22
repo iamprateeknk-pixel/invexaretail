@@ -44,7 +44,7 @@ export declare function stageSince(transfer: TransferRecord): string;
 export declare function stuckTransfers(transfers: TransferRecord[], now: Date): {
     rows: {
         transferId: string;
-        stage: "SUBMITTED" | "REJECTED" | "CANCELLED" | "REQUESTED" | "PICKING" | "PICKED" | "IN_TRANSIT" | "DISPATCHED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CLOSED" | "PARTIAL_RECEIVED" | "DRAFT" | "PENDING_PICK" | "PARTIAL" | "READY_FOR_ADMIN" | "CONFIRMED";
+        stage: "DRAFT" | "PENDING_PICK" | "REQUESTED" | "PICKING" | "PARTIAL" | "PICKED" | "READY_FOR_ADMIN" | "CONFIRMED" | "DISPATCHED" | "IN_TRANSIT" | "RECEIVED" | "PARTIAL_RECEIVED" | "CLOSED" | "REJECTED" | "CANCELLED" | "SUBMITTED" | "PARTIALLY_RECEIVED";
         ageHours: number;
         limitHours: number;
         from: string;
@@ -104,7 +104,7 @@ export declare function buildCommandCenter(input: CommandCenterInput): {
     stuckTransfers: {
         rows: {
             transferId: string;
-            stage: "SUBMITTED" | "REJECTED" | "CANCELLED" | "REQUESTED" | "PICKING" | "PICKED" | "IN_TRANSIT" | "DISPATCHED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CLOSED" | "PARTIAL_RECEIVED" | "DRAFT" | "PENDING_PICK" | "PARTIAL" | "READY_FOR_ADMIN" | "CONFIRMED";
+            stage: "DRAFT" | "PENDING_PICK" | "REQUESTED" | "PICKING" | "PARTIAL" | "PICKED" | "READY_FOR_ADMIN" | "CONFIRMED" | "DISPATCHED" | "IN_TRANSIT" | "RECEIVED" | "PARTIAL_RECEIVED" | "CLOSED" | "REJECTED" | "CANCELLED" | "SUBMITTED" | "PARTIALLY_RECEIVED";
             ageHours: number;
             limitHours: number;
             from: string;

@@ -24,7 +24,7 @@ export declare function buildReplenishmentIntelligence(locationId: string): {
         minQty: number;
         targetQty: number;
         suggestedOrderQty: number;
-        suggestedAction: "PURCHASE" | "NONE" | "TRANSFER";
+        suggestedAction: "NONE" | "PURCHASE" | "TRANSFER";
         sourceLocationId: string;
         sourceLocationName: string;
         suggestedTransferQty: number;

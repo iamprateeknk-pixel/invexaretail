@@ -5,40 +5,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const strict_1 = __importDefault(require("node:assert/strict"));
 const node_test_1 = __importDefault(require("node:test"));
-const enterprise_repository_js_1 = require("./enterprise-repository.js");
 const otp_auth_js_1 = require("./otp-auth.js");
 function decodePayload(token) {
     return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
 }
-(0, node_test_1.default)('access tokens cannot be used as refresh tokens', () => {
+(0, node_test_1.default)('access tokens verify and carry userId/companyId', () => {
     const access = (0, otp_auth_js_1.generateJWT)('user-1', 'company-1');
     strict_1.default.deepEqual((0, otp_auth_js_1.verifyJWT)(access, 'access'), { userId: 'user-1', companyId: 'company-1' });
-    strict_1.default.equal((0, otp_auth_js_1.verifyJWT)(access, 'refresh'), null);
-});
-(0, node_test_1.default)('refresh tokens cannot be used as access tokens', () => {
-    const refresh = (0, otp_auth_js_1.generateRefreshToken)('user-1', 'company-1');
-    strict_1.default.deepEqual((0, otp_auth_js_1.verifyJWT)(refresh, 'refresh'), { userId: 'user-1', companyId: 'company-1' });
-    strict_1.default.equal((0, otp_auth_js_1.verifyJWT)(refresh, 'access'), null);
 });
 (0, node_test_1.default)('tampered tokens are rejected', () => {
     const token = (0, otp_auth_js_1.generateJWT)('user-1', 'company-1');
     strict_1.default.equal((0, otp_auth_js_1.verifyJWT)(`${token}x`, 'access'), null);
 });
-(0, node_test_1.default)('refresh tokens issued in the same second are unique so logout can revoke one of them', () => {
-    const first = (0, otp_auth_js_1.generateRefreshToken)('user-1', 'company-1');
-    const second = (0, otp_auth_js_1.generateRefreshToken)('user-1', 'company-1');
-    strict_1.default.notEqual(first, second);
-});
-(0, node_test_1.default)('expired access tokens are rejected while refresh tokens outlive a workday', () => {
+(0, node_test_1.default)('expired access tokens are rejected', () => {
     const expired = (0, otp_auth_js_1.generateJWT)('user-1', 'company-1', -10, 'access');
     strict_1.default.equal((0, otp_auth_js_1.verifyJWT)(expired, 'access'), null);
+});
+(0, node_test_1.default)('access tokens are short lived', () => {
     const access = (0, otp_auth_js_1.generateJWT)('user-1', 'company-1');
-    const refresh = (0, otp_auth_js_1.generateRefreshToken)('user-1', 'company-1');
     const accessExp = decodePayload(access).exp;
-    const refreshExp = decodePayload(refresh).exp;
     strict_1.default.ok(accessExp - Math.floor(Date.now() / 1000) <= otp_auth_js_1.ACCESS_TOKEN_TTL_SECONDS);
-    strict_1.default.ok(refreshExp - accessExp >= otp_auth_js_1.REFRESH_TOKEN_TTL_SECONDS - otp_auth_js_1.ACCESS_TOKEN_TTL_SECONDS - 5);
-    strict_1.default.equal(decodePayload(refresh).tokenType, 'refresh');
+    strict_1.default.ok(otp_auth_js_1.ACCESS_TOKEN_TTL_SECONDS <= 15 * 60, 'ADR-003: access tokens must be short lived');
 });
 function withOtpEnv(overrides, run) {
     const previous = {};
@@ -100,13 +87,6 @@ function withOtpEnv(overrides, run) {
         });
         strict_1.default.equal(await (0, otp_auth_js_1.sendOtpEmail)('admin@retail.local', '111222'), false);
     });
-});
-(0, node_test_1.default)('a new OTP replaces the previous unused code for the same email', () => {
-    (0, enterprise_repository_js_1.createOtpSession)('Admin@retail.local', '111111');
-    (0, enterprise_repository_js_1.createOtpSession)('admin@retail.local', '222222');
-    strict_1.default.equal((0, enterprise_repository_js_1.verifyOtpSession)('admin@retail.local', '111111'), false);
-    strict_1.default.equal((0, enterprise_repository_js_1.verifyOtpSession)('admin@retail.local', '222222'), true);
-    (0, enterprise_repository_js_1.clearOtpSession)('admin@retail.local');
 });
 (0, node_test_1.default)('production token generation requires an explicit JWT secret', () => {
     const previousNodeEnv = process.env.NODE_ENV;

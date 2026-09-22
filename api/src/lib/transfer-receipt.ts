@@ -19,7 +19,7 @@ export type PersistedReceiptResult = {
   lines: DbTransferLine[];
 };
 
-// ADR-003: TransferLine, TransferReceipt and TransferReceiptLine (including
+// ADR-004: TransferLine, TransferReceipt and TransferReceiptLine (including
 // shortageQty/excessQty) are Prisma models; `prisma migrate deploy` owns
 // their schema, so no runtime DDL self-heal is needed here any more.
 async function ensureReceiptSchema(): Promise<void> {}

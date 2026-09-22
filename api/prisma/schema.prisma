@@ -1609,19 +1609,46 @@ model UserPermission {
 }
 
 // User Sessions & Login History
+// ADR-003: one row per issued refresh token, chained by familyId. Rotating a
+// token marks the old row ROTATED and inserts a new row in the same family;
+// presenting an already-ROTATED or REVOKED tokenHash is reuse and revokes the
+// whole family. Only a hash of the token is ever stored (lib/session-store.ts).
 model UserSession {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token           String   @unique
-  deviceInfo      String?
-  ipAddress       String?
-  userAgent       String?  @db.Text
-  createdAt       DateTime @default(now())
-  lastActivityAt  DateTime @updatedAt
-  revokedAt       DateTime?
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId            String
+  tokenHash           String    @unique
+  status              String    @default("ACTIVE")
+  rotationCounter     Int       @default(0)
+  replacedByTokenHash String?
+  deviceInfo          String?
+  ipAddress           String?
+  userAgent           String?   @db.Text
+  createdAt           DateTime  @default(now())
+  lastActivityAt      DateTime  @updatedAt
+  expiresAt           DateTime
+  revokedAt           DateTime?
 
-  @@index([userId, revokedAt])
+  @@index([userId, status])
+  @@index([familyId])
+}
+
+// ADR-003: OTP codes are never stored in plaintext. codeHash is an HMAC of
+// the code under a server-side pepper; verification is a single atomic
+// conditional update (lib/session-store.ts) so a code cannot be consumed twice.
+model OtpChallenge {
+  id          String    @id @default(cuid())
+  email       String
+  purpose     String    @default("LOGIN")
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([email, purpose, consumedAt])
 }
 
 model LoginHistory {

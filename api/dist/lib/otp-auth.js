@@ -36,8 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.REFRESH_TOKEN_TTL_SECONDS = exports.ACCESS_TOKEN_TTL_SECONDS = void 0;
-exports.generateOTP = generateOTP;
+exports.ACCESS_TOKEN_TTL_SECONDS = void 0;
 exports.hashPassword = hashPassword;
 exports.verifyPassword = verifyPassword;
 exports.hashPin = hashPin;
@@ -50,7 +49,6 @@ exports.setOtpSmtpSender = setOtpSmtpSender;
 exports.sendOtpEmail = sendOtpEmail;
 exports.generateJWT = generateJWT;
 exports.verifyJWT = verifyJWT;
-exports.generateRefreshToken = generateRefreshToken;
 exports.validateEmail = validateEmail;
 exports.validatePassword = validatePassword;
 exports.validateCompanyName = validateCompanyName;
@@ -60,10 +58,6 @@ exports.resetOtpRateLimit = resetOtpRateLimit;
 // OTP and Biometric Authentication Service
 const crypto = __importStar(require("crypto"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
-// Generate 6-digit OTP
-function generateOTP() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-}
 // Must stay bcrypt: prisma/seed.ts writes bcrypt hashes, so any other
 // algorithm here makes every seeded account fail to log in.
 function hashPassword(password) {
@@ -160,6 +154,12 @@ async function sendOtpEmail(email, otpCode) {
     console.warn(`OTP delivery is not configured for ${maskedEmail(email)}.`);
     return false;
 }
+// ADR-003: access tokens only - jsonwebtoken (already a dependency),
+// not a hand-rolled HMAC encoder. AGENTS.md prohibits custom crypto for
+// tokens; this used to implement its own JWT sign/verify, which is exactly
+// that pattern. Refresh tokens are no longer JWTs at all - see
+// lib/session-store.ts for the persisted, hashed, rotating session model.
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 function getJwtSecret() {
     const configuredSecret = process.env.JWT_SECRET?.trim();
     if (configuredSecret)
@@ -169,78 +169,27 @@ function getJwtSecret() {
     }
     return 'dev-secret-key-change-in-production';
 }
-exports.ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
-exports.REFRESH_TOKEN_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
+// Week 3: access tokens must be short lived - a compromised access token
+// self-expires quickly; session-store.ts's refresh rotation is what carries
+// a signed-in session across that window.
+exports.ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 function generateJWT(userId, companyId, expiresIn = exports.ACCESS_TOKEN_TTL_SECONDS, tokenType = 'access') {
-    const header = {
-        alg: 'HS256',
-        typ: 'JWT',
-    };
-    const payload = {
-        userId,
-        companyId,
-        tokenType,
-        jti: crypto.randomBytes(8).toString('hex'),
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + expiresIn,
-    };
-    const secret = getJwtSecret();
-    // Simple JWT encoding (in production, use jsonwebtoken library)
-    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64').replace(/[=]+$/, '');
-    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64').replace(/[=]+$/, '');
-    const signature = crypto
-        .createHmac('sha256', secret)
-        .update(`${encodedHeader}.${encodedPayload}`)
-        .digest('base64')
-        .replace(/[=]+$/, '');
-    return `${encodedHeader}.${encodedPayload}.${signature}`;
+    return jsonwebtoken_1.default.sign({ userId, companyId, tokenType, jti: crypto.randomBytes(8).toString('hex') }, getJwtSecret(), { algorithm: 'HS256', expiresIn });
 }
-// Verify JWT token
-function verifyJWT(token, expectedType) {
+function verifyJWT(token, expectedType = 'access') {
     try {
-        const secret = getJwtSecret();
-        const parts = token.split('.');
-        if (parts.length !== 3)
+        const payload = jsonwebtoken_1.default.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
+        if (typeof payload.userId !== 'string' || typeof payload.companyId !== 'string')
             return null;
-        const [encodedHeader, encodedPayload, signature] = parts;
-        if (!encodedHeader || !encodedPayload || !signature)
-            return null;
-        const header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8'));
-        if (header.alg !== 'HS256' || header.typ !== 'JWT')
-            return null;
-        // Verify signature
-        const expectedSignature = crypto
-            .createHmac('sha256', secret)
-            .update(`${encodedHeader}.${encodedPayload}`)
-            .digest('base64')
-            .replace(/[=]+$/, '');
-        const actual = Buffer.from(signature);
-        const expected = Buffer.from(expectedSignature);
-        if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-            return null;
-        }
-        // Decode payload
-        const payloadJson = Buffer.from(encodedPayload, 'base64url').toString('utf-8');
-        const payload = JSON.parse(payloadJson);
-        // Check expiration
-        if (typeof payload.userId !== 'string' || typeof payload.companyId !== 'string' || typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) {
-            return null;
-        }
         // Tokens issued before this hardening update have no tokenType. They can
         // remain valid only as access tokens until their short normal expiry.
-        if (expectedType && (payload.tokenType ?? 'access') !== expectedType)
+        if ((payload.tokenType ?? 'access') !== expectedType)
             return null;
-        return {
-            userId: payload.userId,
-            companyId: payload.companyId,
-        };
+        return { userId: payload.userId, companyId: payload.companyId };
     }
     catch {
         return null;
     }
-}
-function generateRefreshToken(userId, companyId) {
-    return generateJWT(userId, companyId, exports.REFRESH_TOKEN_TTL_SECONDS, 'refresh');
 }
 // Validation utilities
 function validateEmail(email) {

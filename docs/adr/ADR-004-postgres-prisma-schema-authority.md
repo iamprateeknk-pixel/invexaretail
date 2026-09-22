@@ -1,4 +1,4 @@
-# ADR-003: Postgres is the database; Prisma migrations are the only way schema changes
+# ADR-004: Postgres is the database; Prisma migrations are the only way schema changes; startup only verifies schema version
 
 ## Context
 The API ran on MySQL/MariaDB (`mysql2`, `@prisma/adapter-mariadb`,
@@ -26,7 +26,14 @@ document's AGENTS.md now prohibits.
    all but three - `DomainEventOutbox`, `TransferEvidence`, `ItemPhoto` -
    already existed in `schema.prisma`; those three were added as real Prisma
    models in this change, closing the last MySQL-workaround gap).
-4. Raw SQL that cannot be expressed as a Prisma Client call (row locks via
+4. Startup verifies schema version, it does not change it: `scripts/verify-production-db.cjs`
+   (`npm run db:verify`, run by `render.yaml`'s deploy pipeline after
+   `db:migrate`) checks that `_prisma_migrations` exists and the database
+   answers a basic health query. It never runs DDL - the boot path is
+   read-only with respect to schema, matching "startup only verifies schema
+   version" rather than "startup can also fix schema version" (which is
+   exactly the runtime-DDL pattern this ADR retires).
+5. Raw SQL that cannot be expressed as a Prisma Client call (row locks via
    `FOR UPDATE`, the multi-row `StockLedger` upsert on receipt, the
    `pg_try_advisory_lock` worker/timer lock, the bulk `UPDATE ... FROM
    (VALUES ...)` import reversal) keeps using `$queryRaw`/`$executeRaw`, but

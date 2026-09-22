@@ -21,7 +21,7 @@ read those first if a rule below seems arbitrary.
 - `npm run build` - `prisma generate && tsc`.
 - `npm test` - full test suite (`tsx --test`), in-memory mode by default.
 - `npm run db:migrate` - `prisma migrate deploy` (the only way schema changes
-  reach a real database - see ADR-003).
+  reach a real database - see ADR-004).
 - `npm run db:seed` - seeds demo data (`prisma/seed.ts`).
 - `npm run db:verify` - `scripts/verify-production-db.cjs`, checks the
   target Postgres is reachable and migrated.
@@ -35,20 +35,24 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 |---|---|---|
 | Inventory posting | `api/src/lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `routes/foundation.ts` (`postStockMovement`) | Target: one `InventoryPostingService` (ADR-001). Baseline call sites tracked in `scripts/architecture-lint-baseline.json`. |
 | Tenant scope | `api/src/lib/saas/tenant-scope.ts` | `enforceOperationalCompanyScope` must be mounted on every router touching `OPERATIONAL_TENANT_TABLES` (ADR-002). |
-| Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/` | Only path to schema change (ADR-003). |
-| Auth | `api/src/lib/otp-auth.ts`, `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt only; no custom crypto (ADR-004). |
-| Event bus / outbox | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
+| Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/` | Only path to schema change (ADR-004). |
+| Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
+| Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
 | `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005) | |
 
 ## Required tests
 
 - Any change to `api/src/lib/persistence.ts`, `transfer-receipt.ts`,
-  `import-reversal.ts`, or `prisma/schema.prisma` must be exercised against a
-  real Postgres instance, not only the default in-memory test mode - set
-  `DATABASE_URL`/`TEST_DATABASE_URL` and run the relevant test file directly
-  (running the *whole* HTTP test suite against a live database will produce
-  false failures from state sharing between unrelated tests - this is a test
-  harness limitation, not a signal).
+  `import-reversal.ts`, `session-store.ts`, or `prisma/schema.prisma` must be
+  exercised against a real Postgres instance, not only the default in-memory
+  test mode - set `DATABASE_URL`/`TEST_DATABASE_URL` and run the relevant
+  test file directly (running the *whole* HTTP test suite against a live
+  database will produce false failures from state sharing between unrelated
+  tests - this is a test harness limitation, not a signal).
+- Anything touching refresh-token rotation must have a reuse/replay test:
+  present an already-rotated token and confirm the whole session family is
+  revoked, not just the one token (`lib/session-store.postgres.test.ts` is
+  the reference).
 - New raw SQL (`$queryRaw`/`$executeRaw`) must use Postgres syntax: double-
   quoted exact-case identifiers, `$n` placeholders (or the `queryRaw`/
   `executeRaw` helpers in `lib/db.ts` which translate `?` placeholders for
@@ -75,7 +79,7 @@ of whether the linter catches a given instance:
    drive-by; see the lint output for the current count.)
 4. **Runtime DDL.** No `CREATE TABLE`/`ALTER TABLE`/`DROP TABLE` outside
    `prisma/migrations/`. This includes `$executeRaw(Unsafe)` calls - see
-   ADR-003 for why the old MySQL self-healing DDL was retired.
+   ADR-004 for why the old MySQL self-healing DDL was retired.
 5. **Custom crypto.** No hand-rolled hashing/encryption (XOR, custom
    base64 "encryption", `createCipher` without an IV). Passwords: bcrypt via
    `lib/otp-auth.ts` only. Tokens: `jsonwebtoken` only.
@@ -87,11 +91,16 @@ of whether the linter catches a given instance:
 
 ## Architecture decisions
 
-See `docs/adr/`. Six frozen for this week:
+See `docs/adr/`. Six frozen in Week 2, one (ADR-003) implemented in Week 3:
 
-- ADR-001: Inventory posting ownership
-- ADR-002: Tenant scope (column + middleware, not RLS)
-- ADR-003: Database is Postgres; Prisma migrations own schema
-- ADR-004: Auth stays JWT + DB-backed RBAC/permissions
-- ADR-005: Route composition (no new domains in the two mega-files)
-- ADR-006: Event bus/outbox (durable Postgres outbox, not SSE-only)
+- ADR-001: immutable StockMovement journal + StockBalance projection is the
+  target stock model; StockLedger is the legacy system being reconciled into it
+- ADR-002: tenant scope (column + middleware, not RLS)
+- ADR-003: short-lived access tokens + persisted, hashed, rotating refresh
+  session families (implemented; see `lib/session-store.ts`)
+- ADR-004: database is Postgres; Prisma migrations own schema; startup only
+  verifies schema version
+- ADR-005: bounded contexts named (Identity, Catalog, Inventory, Warehouse,
+  Procurement, Orders, Reporting); no new domains in the two mega-files
+- ADR-006: target API contract (versioned OpenAPI, idempotency keys, stable
+  error envelope) frozen; the durable Postgres outbox is already real

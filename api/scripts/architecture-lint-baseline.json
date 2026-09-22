@@ -92,13 +92,13 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1729,
+    "line": 1756,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1852,
+    "line": 1879,
     "snippet": "value           Float?"
   }
 ]

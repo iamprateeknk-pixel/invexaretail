@@ -43,11 +43,11 @@ export declare function decideApprovalRequest(requestId: string, deciderId: stri
     createdAt: Date;
     updatedAt: Date;
     status: string;
-    entityType: string;
-    entityId: string;
     requestedById: string;
     triggerType: string;
     ruleId: string;
+    entityType: string;
+    entityId: string;
     valueAtStake: number;
     decidedById: string | null;
     decidedAt: Date | null;
