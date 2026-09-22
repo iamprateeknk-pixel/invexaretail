@@ -22,9 +22,9 @@ Docker Desktop initially crashed while initializing the optional inference manag
 
 ## Canonical staging decision
 
-**Decision status: blocked pending platform confirmation and provisioning.** Prateek Choudhary is the staging decision owner. The repository currently describes multiple deployment paths (local Docker Compose, Hostinger shared hosting, Render, and Vercel web configuration), while GitHub has no configured Environment or deployment history that identifies a live staging target.
+**Decision status: Render approved as the canonical staging platform, with PostgreSQL required; provisioning is blocked until the application migration is complete.** Prateek Choudhary approved Render on 22 September 2026, then directed that MySQL be removed in favor of PostgreSQL. The repository currently uses Prisma/MySQL and MySQL-specific runtime SQL, so a staging database must not be provisioned until a separate reviewed migration converts the schema, queries, tests, recovery tooling and deployment configuration.
 
-**Recommended candidate: a dedicated Render staging blueprint in Oregon.** This is a recommendation, not an approved deployment. `render.yaml` already models the API and worker processes and supplies an explicit region, whereas Hostinger documentation describes the production path and Vercel configuration covers the web artifact without the database and worker topology. The existing Render service names, `NODE_ENV=production`, and production CORS origins must not be reused as-is for staging. A staging blueprint must use separate service names, a separate database, staging-only origins and credentials, and a protected GitHub `staging` Environment before any restore rehearsal.
+**Approved target design: a dedicated Render web, API, worker and managed PostgreSQL staging topology.** Service names, credentials, data and URLs must remain separate from production. Automatic deploys remain disabled for the recovery proof so the owner chooses the reviewed artifact deliberately. The final Blueprint and cost must be reviewed after the PostgreSQL migration passes fresh, upgrade, restore and rollback tests.
 
 Production remains unchanged. No staging service or database was created during discovery.
 
@@ -33,18 +33,14 @@ When confirmed, record:
 | Field | Required value |
 | --- | --- |
 | Staging owner | Prateek Choudhary (`iamprateeknk-pixel`); GitHub issue [#17](https://github.com/iamprateeknk-pixel/invexaretail/issues/17) |
-| Host/runtime | Pending approval; recommended dedicated Render staging services in Oregon |
-| Artifact source | Pending; reviewed commit/tag only, never an unreviewed working tree |
-| Database | Isolated staging database identifier, no credentials |
-| Queue/worker | Pending; separate staging worker required if Render is approved |
-| Public endpoint | Pending; must not use production domains |
-| Deploy command/runbook | Pending platform approval and staging-only configuration |
+| Host/runtime | Approved: dedicated Render staging services in Oregon; provisioning pending PostgreSQL migration |
+| Artifact source | Reviewed PostgreSQL migration commit/tag only |
+| Database | Dedicated Render PostgreSQL staging database; identifier pending migration and provisioning |
+| Queue/worker | Separate staging worker; schedulers disabled for the recovery proof |
+| Public endpoint | Render-assigned staging URLs after provisioning; production domains are not used |
+| Deploy command/runbook | Pending PostgreSQL-compatible Blueprint; manual deploy only |
 | Rollback artifact | Prior signed/tagged release |
 
 ## Owner decision required
 
-Approve one of these before the real restore rehearsal:
-
-1. Provision a dedicated Render staging API, worker and isolated database using staging-only configuration.
-2. Provide an existing isolated Hostinger staging application and database that are demonstrably separate from production.
-3. Name another controlled platform and provide its non-secret identifiers and access path.
+Complete the PostgreSQL migration in a separate PR. Then confirm the Render dashboard's paid monthly total immediately before resource creation. After provisioning, record the generated non-secret service identifiers and URLs, then execute the isolated restore and smoke-check runbook.
