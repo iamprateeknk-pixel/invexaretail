@@ -20,17 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
-      mysql:
-        image: mysql:8.4
+      postgres:
+        image: postgres:16-alpine
         env:
-          MYSQL_DATABASE: invexa_ci
-          MYSQL_USER: ci
-          MYSQL_PASSWORD: ci
-          MYSQL_ROOT_PASSWORD: root
+          POSTGRES_DB: invexa_ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-cmd="pg_isready -U ci -d invexa_ci"
           --health-interval=10s --health-timeout=5s --health-retries=10
     defaults:
       run:
@@ -50,20 +49,23 @@ jobs:
       - name: Validate Prisma schema
         run: npx prisma validate
         env:
-          DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/invexa_ci
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Build API exactly as production does
         run: npm run build
 
-      - name: Deploy migrations to real MySQL
+      - name: Check architecture rules (AGENTS.md / ADR-001..006)
+        run: npm run lint:arch
+
+      - name: Deploy migrations to real Postgres
         run: npm run db:migrate
         env:
-          DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/invexa_ci
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
-      - name: Run MySQL integration coverage
-        run: npx tsx --test src/lib/mysql.integration.test.ts
+      - name: Run Postgres integration coverage
+        run: npx tsx --test src/lib/postgres.integration.test.ts
         env:
-          TEST_DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 
@@ -109,19 +111,6 @@ jobs:
     name: Web lint and production build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: invexa_ci
-          MYSQL_USER: ci
-          MYSQL_PASSWORD: ci
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
-          --health-interval=10s --health-timeout=5s --health-retries=10
     defaults:
       run:
         working-directory: web
@@ -150,19 +139,6 @@ jobs:
     name: Admin panel Control Plane build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: invexa_ci
-          MYSQL_USER: ci
-          MYSQL_PASSWORD: ci
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
-          --health-interval=10s --health-timeout=5s --health-retries=10
     defaults:
       run:
         working-directory: admin-panel

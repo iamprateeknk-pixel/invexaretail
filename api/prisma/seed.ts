@@ -1,7 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { PrismaClient, Role, TransferStatus } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
 const locations = [
   { id: 'loc-1', code: 'MAIN-STORE', name: 'Main Store', type: 'store' },

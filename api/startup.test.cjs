@@ -35,11 +35,11 @@ test('missing compiled entry keeps the process listening', () => {
   assert.match(r.logs, /FALLBACK_LISTEN/);
 });
 test('reports missing dependency without printing credential-bearing exception', () => {
-  const e = Object.assign(new Error("Cannot find module 'sharp' mysql://user:SECRET@host/db"), { code: 'MODULE_NOT_FOUND' });
+  const e = Object.assign(new Error("Cannot find module 'sharp' postgresql://user:SECRET@host/db"), { code: 'MODULE_NOT_FOUND' });
   const r = boot({ failure: e });
   assert.match(r.logs, /STARTUP_FAILED.*MODULE_NOT_FOUND module=sharp/);
   assert.equal(r.fallback, 1);
-  assert.doesNotMatch(r.logs + String(r.caught ?? ''), /SECRET|mysql:/);
+  assert.doesNotMatch(r.logs + String(r.caught ?? ''), /SECRET|postgresql:/);
 });
 test('native module errors and arbitrary thrown values fail closed', () => {
   for (const failure of [Object.assign(new Error('SECRET'), { code: 'ERR_DLOPEN_FAILED' }), 'SECRET']) {

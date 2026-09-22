@@ -26,7 +26,7 @@ function step(n, title) {
   if (!url) {
     fail('DATABASE_URL is not set. The API cannot load any user without it.');
   } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
-    fail('DATABASE_URL has no scheme. It must look like mysql://user:pass@host:3306/dbname');
+    fail('DATABASE_URL has no scheme. It must look like postgresql://user:pass@host:5432/dbname');
   } else {
     const safe = url.replace(/:\/\/([^:]+):[^@]*@/, '://$1:***@');
     ok(`DATABASE_URL = ${safe}`);
@@ -73,16 +73,17 @@ function step(n, title) {
   } else {
     try {
       const { PrismaClient } = require('@prisma/client');
-      const { PrismaMariaDb } = require('@prisma/adapter-mariadb');
-      const prisma = new PrismaClient({ adapter: new PrismaMariaDb(url) });
+      const { PrismaPg } = require('@prisma/adapter-pg');
+      const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
       await prisma.$queryRaw`SELECT 1`;
       ok('connected');
 
       // The repo also ships database/schema.sql and backend/src/database/schema.sql,
-      // which build a lowercase `users` table. Prisma queries `User`, and MySQL on
-      // Linux is case-sensitive, so importing the wrong one gives a bare 401.
+      // which build a lowercase `users` table under a different design. Prisma
+      // queries the exact-case "User" table, so importing the wrong one gives a
+      // bare 401.
       const expected = ['User', 'Location', 'Item', 'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine', 'AuditLog'];
-      const rows = await prisma.$queryRaw`SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()`;
+      const rows = await prisma.$queryRaw`SELECT table_name AS t FROM information_schema.tables WHERE table_schema = current_schema()`;
       const present = rows.map((r) => r.t ?? r.TABLE_NAME);
       const missing = expected.filter((t) => !present.includes(t));
       if (missing.length === 0) {

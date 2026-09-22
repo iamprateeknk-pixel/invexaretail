@@ -9,12 +9,6 @@ exports.flushControlPlanePersist = flushControlPlanePersist;
 const db_js_1 = require("../db.js");
 const control_plane_js_1 = require("./control-plane.js");
 const snapshot_js_1 = require("./snapshot.js");
-const CREATE_CONTROL_PLANE_STATE_SQL = `CREATE TABLE IF NOT EXISTS \`ControlPlaneState\` (
-    \`id\` VARCHAR(191) NOT NULL,
-    \`payload\` JSON NOT NULL,
-    \`updatedAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    PRIMARY KEY (\`id\`)
-  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`;
 function databaseEnabled() {
     if (process.env.NODE_TEST_CONTEXT && process.env.CONTROL_PLANE_PERSIST_IN_TESTS !== '1') {
         return false;
@@ -26,12 +20,9 @@ let persistInFlight;
 function asJsonPayload(snapshot) {
     return JSON.parse(JSON.stringify(snapshot));
 }
-async function ensureControlPlaneSchema() {
-    if (!databaseEnabled())
-        return;
-    const { prisma } = await import('../db.js');
-    await prisma.$executeRawUnsafe(CREATE_CONTROL_PLANE_STATE_SQL);
-}
+// ADR-003: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
+// its schema. No-op kept so existing call sites do not need to change.
+async function ensureControlPlaneSchema() { }
 async function loadControlPlaneSnapshot() {
     if (!databaseEnabled())
         return null;

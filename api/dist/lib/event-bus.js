@@ -29,7 +29,16 @@ function canReceive(subscriber, event) {
 async function persistEvent(event) {
     if (!persistence_js_1.databaseEnabled)
         return;
-    await db_js_1.prisma.$executeRawUnsafe('INSERT INTO `DomainEventOutbox` (`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt`) VALUES (?, ?, ?, ?, ?, ?)', event.topic, event.companyId, event.locationIds?.length ? JSON.stringify(event.locationIds) : null, event.actorId ?? null, event.requestId ?? null, new Date(event.at));
+    await db_js_1.prisma.domainEventOutbox.create({
+        data: {
+            topic: event.topic,
+            companyId: event.companyId,
+            locationIds: event.locationIds?.length ? event.locationIds : undefined,
+            actorId: event.actorId ?? null,
+            requestId: event.requestId ?? null,
+            occurredAt: new Date(event.at),
+        },
+    });
 }
 /** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 function publishEvent(input) {
@@ -86,13 +95,17 @@ function locations(value) {
 async function durableEventsSince(lastEventId, subscriber) {
     if (!persistence_js_1.databaseEnabled)
         return eventsSince(lastEventId, subscriber).kind === 'replay' ? eventsSince(lastEventId, subscriber).events : [];
-    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT `id`,`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt` FROM `DomainEventOutbox` WHERE `id` > ? AND `companyId` = ? ORDER BY `id` ASC LIMIT 500', lastEventId, subscriber.companyId);
+    const rows = await db_js_1.prisma.domainEventOutbox.findMany({
+        where: { id: { gt: BigInt(lastEventId) }, companyId: subscriber.companyId },
+        orderBy: { id: 'asc' },
+        take: 500,
+    });
     return rows.map((row) => ({ id: Number(row.id), topic: row.topic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
 }
 async function durableLatestEventId() {
     if (!persistence_js_1.databaseEnabled)
         return latestEventId();
-    const rows = await db_js_1.prisma.$queryRawUnsafe('SELECT MAX(`id`) AS `id` FROM `DomainEventOutbox`');
-    return Number(rows[0]?.id ?? 0);
+    const row = await db_js_1.prisma.domainEventOutbox.aggregate({ _max: { id: true } });
+    return Number(row._max.id ?? 0);
 }
 function resetEventBusForTests() { sequence = 0; buffer.length = 0; subscribers.clear(); }

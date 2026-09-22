@@ -195,7 +195,7 @@ app.get('/ready', async (_req: Request, res: Response) => {
 // ENTERPRISE ROUTES
 // ============================================
 // Shared hosting requires listen() almost immediately after startup. Requests
-// still wait for durable MySQL hydration, so the browser never receives seed
+// still wait for durable database hydration, so the browser never receives seed
 // branches or seed items during a restart.
 app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -206,7 +206,7 @@ app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
     } else {
       await startupHydration;
       // Operational routes serve an in-memory snapshot. Refresh it before
-      // stale GETs so direct MySQL imports appear without an API restart.
+      // stale GETs so direct database imports appear without an API restart.
       // Parallel browser requests share one database refresh job.
       if (req.method === 'GET' && req.path !== '/events') await refreshRepositoryIfStale();
     }
@@ -361,8 +361,8 @@ const hydrateDatabase = async () => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // The repo carries two older schemas that create a lowercase `users`
-    // table. Prisma queries `User`, and MySQL on Linux is case-sensitive, so
-    // importing one of those leaves logins failing with a bare 401.
+    // table under a different design. Prisma queries the exact-case `User`
+    // table, so importing one of those leaves logins failing with a bare 401.
     if (/doesn't exist|Unknown table|no such table/i.test(message)) {
       console.error('⚠️  The database is missing the tables this API expects.');
       console.error('    Prisma needs `User`, `Location`, `Item`, `Lot`, `StockLedger`,');
@@ -382,7 +382,7 @@ const hydrateDatabase = async () => {
 const hydrateRepository = async () => {
   const { databaseEnabled, hydrateRepositoryFromDatabase, hydrateAuditFromDatabase, hydrateCompanyProfile } = await import('./lib/persistence.js');
   if (!databaseEnabled) {
-    console.log('DATABASE_URL is not set; serving inventory from seed data instead of Hostinger MySQL.');
+    console.log('DATABASE_URL is not set; serving inventory from seed data instead of Postgres.');
     const { seedEnhancedUsersForMemoryMode } = await import('./lib/enterprise-repository.js');
     const { seedUsers } = await import('./lib/seed.js');
     const { hashPassword } = await import('./lib/otp-auth.js');
@@ -450,7 +450,7 @@ const refreshRepositoryIfStale = async (): Promise<void> => {
 };
 
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind
-// the hydration promise until MySQL branches, users and stock are available.
+// the hydration promise until database branches, users and stock are available.
 const startServer = () => {
   authHydration = hydrateDatabase();
   startupHydration = (async () => {
