@@ -14,6 +14,7 @@ Week 2 must not begin until an isolated staging restore succeeds, every P0 risk 
 - Current checkout at Week 1 start: `e42eee3529d49c6ca41ec07ff5b52583a2513e3f`
 - Baseline relationship: the audited commit is an ancestor of the current checkout; the later checkout changes are listed in `baseline-reproduction.md` and are not represented as audited-baseline evidence.
 - Remote deployment discovery: GitHub has no configured Environment, deployment history, Actions secret names or Actions variables. A dedicated Render staging topology is recommended but not approved or provisioned.
+- CI confirmation: pull request #19 passed all six jobs across both active workflows on commit `816605c`, including isolated-MySQL migration/integration coverage and API health smoke checks.
 
 ## Evidence contents
 

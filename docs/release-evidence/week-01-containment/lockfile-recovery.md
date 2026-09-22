@@ -12,7 +12,7 @@ Preserve audited source commit `57eb95044cf98cde505eb0c4702e94b61643cd04` and ad
 - Command: `npm install --package-lock-only --ignore-scripts --no-audit --no-fund`
 - Source: detached worktree at the exact audited commit
 
-The repository CI currently declares Node 22. Before final approval, CI should confirm these npm lockfile v3 files install under its pinned Node/npm toolchain. The clean install and tests below used the recorded generation environment.
+The repository CI declares Node 22. Pull request #19 confirmed that both npm lockfile v3 files install and pass their jobs under the repository-pinned toolchain. The clean local installation and exact-baseline tests below used the recorded generation environment.
 
 ## Reviewed lockfiles
 
@@ -43,7 +43,7 @@ Result: 102 tests passed, lint exited successfully with existing warnings, and t
 
 ## Remaining gate
 
-The lockfile blocker is resolved locally for API and web. The local disposable-MySQL rehearsal is complete and P0 ownership is recorded. Week 1 still requires a restore in the real isolated staging environment, a confirmed canonical staging path, and CI confirmation under the repository's pinned Node version.
+The lockfile blocker is resolved for API and web locally and in CI. The local disposable-MySQL rehearsal is complete and P0 ownership is recorded. Week 1 still requires a restore in the real isolated staging environment and an approved canonical staging path.
 
 ## CI enforcement
 
@@ -55,3 +55,5 @@ The Week 1 branch now:
 - uses `npm ci --prefix api` in the root production build command.
 
 The updated root production build completed successfully on 22 September 2026.
+
+Pull request #19 then passed both active workflows on commit `816605c`: four jobs in [CI run 35719052402](https://github.com/iamprateeknk-pixel/invexaretail/actions/runs/35719052402) and two jobs in [verification run 35719052438](https://github.com/iamprateeknk-pixel/invexaretail/actions/runs/35719052438).
