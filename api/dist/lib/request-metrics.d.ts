@@ -8,6 +8,20 @@ export declare function metricsSnapshot(limit?: number): {
     uptimeSeconds: number;
     totalRequests: number;
     serverErrors: number;
+    slowThresholdMs: number;
+    slowRoutes: {
+        method: string;
+        route: string;
+        count: number;
+        errorRatePercent: number;
+        serverErrors: number;
+        clientErrors: number;
+        avgMs: number;
+        p50Ms: number;
+        p95Ms: number;
+        p99Ms: number;
+        lastAt: string;
+    }[];
     slowest: {
         method: string;
         route: string;
@@ -18,6 +32,7 @@ export declare function metricsSnapshot(limit?: number): {
         avgMs: number;
         p50Ms: number;
         p95Ms: number;
+        p99Ms: number;
         lastAt: string;
     }[];
     failing: {
@@ -30,6 +45,7 @@ export declare function metricsSnapshot(limit?: number): {
         avgMs: number;
         p50Ms: number;
         p95Ms: number;
+        p99Ms: number;
         lastAt: string;
     }[];
     busiest: {
@@ -42,6 +58,7 @@ export declare function metricsSnapshot(limit?: number): {
         avgMs: number;
         p50Ms: number;
         p95Ms: number;
+        p99Ms: number;
         lastAt: string;
     }[];
 };

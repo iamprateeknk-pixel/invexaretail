@@ -425,8 +425,9 @@ const hydrateRepository = async () => {
 };
 
 const refreshRepositoryIfStale = async (): Promise<void> => {
-  const configuredInterval = Number(process.env.DATABASE_REFRESH_INTERVAL_MS ?? 10_000);
-  const refreshIntervalMs = Number.isFinite(configuredInterval) ? Math.max(5_000, configuredInterval) : 10_000;
+  const configuredInterval = Number(process.env.DATABASE_REFRESH_INTERVAL_MS ?? 30_000);
+  // Committed domain events keep normal screens current. This broader refresh is only a reconciliation path for direct database imports or missed events.
+  const refreshIntervalMs = Number.isFinite(configuredInterval) ? Math.max(5_000, configuredInterval) : 30_000;
   if (Date.now() - repositoryRefreshedAt < refreshIntervalMs) return;
 
   if (!repositoryRefreshInFlight) {

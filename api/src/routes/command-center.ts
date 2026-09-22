@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
-import { prisma } from '../lib/db.js';
+import { databaseProbe, prisma } from '../lib/db.js';
 import { listAuditEvents } from '../lib/audit.js';
 import { latestEventId, subscriberCount } from '../lib/event-bus.js';
 import { listUsersByCompany } from '../lib/enterprise-repository.js';
@@ -117,16 +117,19 @@ router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
 });
 
 // Blueprint v4 §40 Observability: request latency/error by route, sync health, stuck transfers.
-router.get('/ops/metrics', ...guard, (req: Request, res: Response) => {
+router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Operational metrics are for admins.' });
   const memory = process.memoryUsage();
+  const database = databaseEnabled
+    ? await databaseProbe().catch((error) => ({ ok: false as const, code: error instanceof Error ? error.name : 'DATABASE_PROBE_FAILED' }))
+    : { ok: true as const, mode: 'memory' as const };
   return res.json({
     generatedAt: new Date().toISOString(),
     api: metricsSnapshot(),
     sync: { liveClients: subscriberCount(), lastEventId: latestEventId() },
     warehouse: { stuckTransfers: stuckTransfers(listTransfers(), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
-    database: { connected: databaseEnabled },
+    database: { connected: databaseEnabled, ...database },
   });
 });
 

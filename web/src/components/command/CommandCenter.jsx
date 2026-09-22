@@ -178,12 +178,20 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
         <Card>
           <CardHeader className="flex-row flex-wrap items-center justify-between space-y-0">
             <CardTitle className="text-base">System health</CardTitle>
-            <span className="text-xs text-muted-foreground">up {Math.round(health.api.uptimeSeconds / 60)} min · {health.api.totalRequests} requests · {health.api.serverErrors} server errors · {health.process.rssMb} MB · {health.database.connected ? 'database connected' : 'memory mode'}</span>
+            <span className="text-xs text-muted-foreground">up {Math.round(health.api.uptimeSeconds / 60)} min · {health.api.totalRequests} requests · {health.api.serverErrors} server errors · {health.process.rssMb} MB · {health.database.connected ? `database ${health.database.ok ? 'connected' : 'unavailable'}` : 'memory mode'}</span>
           </CardHeader>
-          <CardContent className="grid gap-6 lg:grid-cols-2">
+          <CardContent className="grid gap-4 lg:grid-cols-3">
             <div>
-              <p className="mb-2 text-sm font-medium">Slowest routes (95th percentile)</p>
-              {health.api.slowest.slice(0, 5).map((row) => <div key={`${row.method} ${row.route}`} className="flex justify-between border-b py-1.5 text-xs last:border-0"><span className="truncate">{row.method} {row.route}</span><span className="text-muted-foreground">{row.p95Ms} ms · {row.count} calls</span></div>)}
+              <p className="mb-2 text-sm font-medium">Database and sync</p>
+              <dl className="space-y-2 text-xs">
+                <div className="flex items-center justify-between border-b pb-2"><dt className="text-muted-foreground">Database latency</dt><dd className={health.database.ok ? 'font-medium text-emerald-600 dark:text-emerald-400' : 'font-medium text-destructive'}>{health.database.ok ? `${health.database.latencyMs ?? '-'} ms` : 'Probe failed'}</dd></div>
+                <div className="flex items-center justify-between border-b pb-2"><dt className="text-muted-foreground">Live connections</dt><dd className="font-medium">{health.sync.liveClients}</dd></div>
+                <div className="flex items-center justify-between"><dt className="text-muted-foreground">Slow-route threshold</dt><dd className="font-medium">{health.api.slowThresholdMs ?? 500} ms</dd></div>
+              </dl>
+            </div>
+            <div>
+              <p className="mb-2 text-sm font-medium">Slow routes (95th / 99th percentile)</p>
+              {(health.api.slowRoutes?.length ? health.api.slowRoutes : health.api.slowest).slice(0, 5).map((row) => <div key={`${row.method} ${row.route}`} className="flex justify-between border-b py-1.5 text-xs last:border-0"><span className="truncate">{row.method} {row.route}</span><span className="text-muted-foreground">{row.p95Ms}/{row.p99Ms ?? row.p95Ms} ms</span></div>)}
               {!health.api.slowest.length && <p className="text-xs text-muted-foreground">No traffic recorded yet.</p>}
             </div>
             <div>

@@ -7,6 +7,7 @@ exports.resolveDatabaseUrl = resolveDatabaseUrl;
 exports.parseMysqlUrl = parseMysqlUrl;
 exports.mysqlPoolConfig = mysqlPoolConfig;
 exports.safeDatabaseError = safeDatabaseError;
+exports.databaseProbe = databaseProbe;
 const client_1 = require("@prisma/client");
 const adapter_mariadb_1 = require("@prisma/adapter-mariadb");
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -121,3 +122,9 @@ exports.prisma = new Proxy({}, {
         return typeof value === 'function' ? value.bind(active) : value;
     },
 });
+/** A cheap, real database round trip for readiness and admin diagnostics. */
+async function databaseProbe() {
+    const startedAt = process.hrtime.bigint();
+    await exports.prisma.$queryRawUnsafe('SELECT 1');
+    return { ok: true, latencyMs: Math.round((Number(process.hrtime.bigint() - startedAt) / 1e6) * 10) / 10 };
+}

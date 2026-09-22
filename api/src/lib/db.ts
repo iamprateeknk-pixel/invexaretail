@@ -129,3 +129,10 @@ export const prisma = new Proxy({} as PrismaClient, {
     return typeof value === 'function' ? value.bind(active) : value;
   },
 });
+
+/** A cheap, real database round trip for readiness and admin diagnostics. */
+export async function databaseProbe(): Promise<{ ok: true; latencyMs: number }> {
+  const startedAt = process.hrtime.bigint();
+  await prisma.$queryRawUnsafe('SELECT 1');
+  return { ok: true, latencyMs: Math.round((Number(process.hrtime.bigint() - startedAt) / 1e6) * 10) / 10 };
+}

@@ -115,17 +115,20 @@ router.get('/reports/audit-export', ...guard, (req, res) => {
     return res.send((0, report_builders_js_1.auditCsv)(events, names));
 });
 // Blueprint v4 §40 Observability: request latency/error by route, sync health, stuck transfers.
-router.get('/ops/metrics', ...guard, (req, res) => {
+router.get('/ops/metrics', ...guard, async (req, res) => {
     if (!['ADMIN', 'ADMIN_USER'].includes(req.user.role))
         return res.status(403).json({ message: 'Operational metrics are for admins.' });
     const memory = process.memoryUsage();
+    const database = persistence_js_1.databaseEnabled
+        ? await (0, db_js_1.databaseProbe)().catch((error) => ({ ok: false, code: error instanceof Error ? error.name : 'DATABASE_PROBE_FAILED' }))
+        : { ok: true, mode: 'memory' };
     return res.json({
         generatedAt: new Date().toISOString(),
         api: (0, request_metrics_js_1.metricsSnapshot)(),
         sync: { liveClients: (0, event_bus_js_1.subscriberCount)(), lastEventId: (0, event_bus_js_1.latestEventId)() },
         warehouse: { stuckTransfers: (0, command_center_js_2.stuckTransfers)((0, repository_js_1.listTransfers)(), new Date()).rows.length },
         process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
-        database: { connected: persistence_js_1.databaseEnabled },
+        database: { connected: persistence_js_1.databaseEnabled, ...database },
     });
 });
 exports.default = router;

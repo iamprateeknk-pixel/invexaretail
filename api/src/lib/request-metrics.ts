@@ -7,6 +7,7 @@ import type { NextFunction, Request, Response } from 'express';
 
 const SAMPLE_LIMIT = 200;
 const ROUTE_LIMIT = 500;
+const DEFAULT_SLOW_REQUEST_MS = 500;
 
 type RouteStats = { method: string; route: string; count: number; clientErrors: number; serverErrors: number; totalMs: number; samples: number[]; lastAt: string };
 
@@ -66,12 +67,16 @@ export function metricsSnapshot(limit = 25) {
     errorRatePercent: Math.round(((row.serverErrors / row.count) * 100) * 10) / 10,
     serverErrors: row.serverErrors, clientErrors: row.clientErrors,
     avgMs: Math.round((row.totalMs / row.count) * 10) / 10,
-    p50Ms: percentile(row.samples, 50), p95Ms: percentile(row.samples, 95), lastAt: row.lastAt,
+    p50Ms: percentile(row.samples, 50), p95Ms: percentile(row.samples, 95), p99Ms: percentile(row.samples, 99), lastAt: row.lastAt,
   }));
+  const configuredSlowThreshold = Number(process.env.SLOW_REQUEST_THRESHOLD_MS ?? DEFAULT_SLOW_REQUEST_MS);
+  const slowThresholdMs = Number.isFinite(configuredSlowThreshold) ? Math.max(1, configuredSlowThreshold) : DEFAULT_SLOW_REQUEST_MS;
   return {
     uptimeSeconds: Math.round((Date.now() - started) / 1000),
     totalRequests: total,
     serverErrors: failedTotal,
+    slowThresholdMs,
+    slowRoutes: rows.filter((row) => (row.p95Ms ?? 0) >= slowThresholdMs).sort((a, b) => (b.p95Ms ?? 0) - (a.p95Ms ?? 0)).slice(0, limit),
     slowest: [...rows].sort((a, b) => (b.p95Ms ?? 0) - (a.p95Ms ?? 0)).slice(0, limit),
     failing: rows.filter((row) => row.serverErrors > 0).sort((a, b) => b.serverErrors - a.serverErrors).slice(0, limit),
     busiest: [...rows].sort((a, b) => b.count - a.count).slice(0, limit),
