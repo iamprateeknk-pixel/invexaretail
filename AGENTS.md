@@ -35,7 +35,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 |---|---|---|
 | Inventory posting | `api/src/lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `routes/foundation.ts` (`postStockMovement`) | Target: one `InventoryPostingService` (ADR-001). Baseline call sites tracked in `scripts/architecture-lint-baseline.json`. |
 | Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
-| Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/` | Only path to schema change (ADR-004). |
+| Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
 | Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
 | `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005) | |
@@ -59,6 +59,10 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   the same way a missing row would, and confirm the identical call succeeds
   for Tenant A (proves the rejection is the tenant check, not an unrelated
   bug) - `lib/repositories/item-repository.postgres.test.ts` is the reference.
+- Any change to `lib/schema-version.ts` must be exercised against real
+  Postgres and include a test proving it never mutates schema (assert the
+  database's table set is identical before and after) -
+  `lib/schema-version.postgres.test.ts` is the reference.
 - New raw SQL (`$queryRaw`/`$executeRaw`) must use Postgres syntax: double-
   quoted exact-case identifiers, `$n` placeholders (or the `queryRaw`/
   `executeRaw` helpers in `lib/db.ts` which translate `?` placeholders for
@@ -114,7 +118,9 @@ tracks how much of it):
 - ADR-003: short-lived access tokens + persisted, hashed, rotating refresh
   session families (implemented; see `lib/session-store.ts`)
 - ADR-004: database is Postgres; Prisma migrations own schema; startup only
-  verifies schema version
+  verifies schema version (implemented Week 5 - `lib/schema-version.ts`,
+  `docs/schema-drift-report.md`; Float->Decimal conversion prepared but not
+  executed - `docs/decimal-migration-plan.md`)
 - ADR-005: bounded contexts named (Identity, Catalog, Inventory, Warehouse,
   Procurement, Orders, Reporting); no new domains in the two mega-files
 - ADR-006: target API contract (versioned OpenAPI, idempotency keys, stable

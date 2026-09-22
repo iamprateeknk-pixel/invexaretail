@@ -80,6 +80,33 @@ redeploy the previous commit's `api/` build, which still ships the
 MySQL-dialect migrations under version control (moved, not deleted, to
 `prisma/migrations_mysql_archive/`).
 
+## Week 5 addendum: schema drift report and startup verification
+
+Week 5 asked for the drift report and runtime-DDL retirement plan this ADR
+already implied but had not produced evidence for, plus the one piece
+genuinely missing: startup verifying schema version instead of the retired
+runtime DDL doing so implicitly by running it. Delivered:
+
+- `docs/schema-drift-report.md`: a clean `prisma migrate deploy` build and a
+  restored-staging copy (older schema + real seeded data, upgraded through
+  the same migration path) both converge to zero drift against
+  `schema.prisma` - commands and output captured verbatim, not just claimed.
+- `lib/schema-version.ts`'s `verifySchemaVersion()`: a read-only check
+  (one `SELECT` against `_prisma_migrations`) wired into `GET /ready`,
+  returning `503 SCHEMA_VERSION_MISMATCH` with a specific, actionable
+  message if the database's applied migrations don't exactly match what
+  this build ships - "startup may verify and fail with a clear message but
+  must not mutate schema," per the guide. Its own test suite
+  (`lib/schema-version.postgres.test.ts`) asserts the database's table set
+  is byte-identical before and after calling it.
+- `docs/decimal-migration-plan.md`: the Float -> Decimal dictionary (all 80
+  Float fields in `schema.prisma`, categorized and assigned a precision/
+  scale/rounding policy) plus an *executed* rehearsal against a disposable
+  Postgres copy - real before/after checksums, a genuinely-flagged exception
+  row, and the reconciliation math, not a hypothetical plan. `schema.prisma`
+  itself is unchanged this week - the guide is explicit that this week
+  prepares the conversion "without changing stock truth yet."
+
 ## Consequences (measurable)
 - Runtime DDL surface: ~250 hand-written `ALTER`/`CREATE` statements across
   `foundation-schema.ts` + `runtime-schema.ts` -> 0 (both files are now

@@ -162,6 +162,17 @@ app.get('/ready', async (_req: Request, res: Response) => {
     const { enhancedUsers } = await import('./lib/enterprise-repository.js');
     await prisma.$queryRaw`SELECT 1`;
 
+    const { verifySchemaVersion } = await import('./lib/schema-version.js');
+    const schemaVersion = await verifySchemaVersion();
+    if (schemaVersion.ok === false) {
+      return res.status(503).json({
+        ok: false,
+        persistence: 'database',
+        code: 'SCHEMA_VERSION_MISMATCH',
+        hint: schemaVersion.reason,
+      });
+    }
+
     if (enhancedUsers.length === 0) {
       return res.status(503).json({
         ok: false,
