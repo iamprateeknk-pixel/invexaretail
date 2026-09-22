@@ -13,6 +13,8 @@ import { databaseEnabled, persistAudit, persistItem } from './persistence.js';
 import { listMemoryOrders } from './orders.js';
 import { listMemoryQcInspections } from './qc-inspection.js';
 import { countAssignments, counts, dailyMovements, items, stockLedger, stockMovements, transfers } from './repository.js';
+import { assertItemOwnedByTenant } from './repositories/item-repository.js';
+import type { TenantContext } from './tenant-context.js';
 
 export class ItemMasterError extends Error {
   constructor(message: string, readonly status = 400, readonly blockers?: Array<{ key: string; label: string; count: number }>) {
@@ -69,15 +71,27 @@ export async function referenceCounts(itemId: string): Promise<ItemReferenceCoun
   };
 }
 
-function requireItem(itemId: string) {
+/**
+ * Fails closed on tenant ownership before looking the item up in the
+ * in-memory mirror - a wrong-tenant call gets the same "not found" a
+ * genuinely missing item would, whether or not the caller's route already
+ * checked ownership. This is the fix for the structural gap ADR-002 calls
+ * out: relying only on route middleware (`itemIdOf` in
+ * routes/item-master.ts) meant any *other* future caller of this service
+ * would have had no ownership check at all.
+ */
+async function requireItem(ctx: TenantContext, itemId: string) {
+  await assertItemOwnedByTenant(ctx, itemId);
   const item = items.find((candidate) => candidate.id === itemId);
   if (!item) throw new ItemMasterError('Item was not found.', 404);
   return item;
 }
 
 /** Archive / deactivate / reactivate. History is untouched; the item just leaves operational use. */
-export async function changeItemStatus(itemId: string, change: { status: ItemStatus; reason?: string }, actor: Actor, companyId: string) {
-  const item = requireItem(itemId);
+export async function changeItemStatus(ctx: TenantContext, itemId: string, change: { status: ItemStatus; reason?: string }) {
+  const actor: Actor = { id: ctx.userId, role: ctx.role };
+  const companyId = ctx.companyId;
+  const item = await requireItem(ctx, itemId);
   const before = itemStatusOf(item);
   if (before === change.status) return { item, changed: false };
   const now = new Date().toISOString();
@@ -111,8 +125,10 @@ export async function changeItemStatus(itemId: string, change: { status: ItemSta
  * With any history the item must be archived instead, so reports can still
  * explain what happened.
  */
-export async function deleteItemPermanently(itemId: string, actor: Actor, companyId: string): Promise<void> {
-  const item = requireItem(itemId);
+export async function deleteItemPermanently(ctx: TenantContext, itemId: string): Promise<void> {
+  const actor: Actor = { id: ctx.userId, role: ctx.role };
+  const companyId = ctx.companyId;
+  const item = await requireItem(ctx, itemId);
   const blockers = deleteBlockers(await referenceCounts(itemId));
   if (blockers.length) {
     throw new ItemMasterError(`"${item.code}" has history (${describeBlockers(blockers)}) and cannot be deleted. Archive it instead.`, 409, blockers);

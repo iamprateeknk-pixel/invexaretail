@@ -34,7 +34,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 | Area | Owning files | Notes |
 |---|---|---|
 | Inventory posting | `api/src/lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `routes/foundation.ts` (`postStockMovement`) | Target: one `InventoryPostingService` (ADR-001). Baseline call sites tracked in `scripts/architecture-lint-baseline.json`. |
-| Tenant scope | `api/src/lib/saas/tenant-scope.ts` | `enforceOperationalCompanyScope` must be mounted on every router touching `OPERATIONAL_TENANT_TABLES` (ADR-002). |
+| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/` | Only path to schema change (ADR-004). |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
 | Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
@@ -53,6 +53,12 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   present an already-rotated token and confirm the whole session family is
   revoked, not just the one token (`lib/session-store.postgres.test.ts` is
   the reference).
+- A new or changed tenant-scoped repository function must have a negative
+  cross-tenant test: create the row under Tenant A, attempt the operation as
+  Tenant B with the *real* id (not a guessed one), confirm it fails closed
+  the same way a missing row would, and confirm the identical call succeeds
+  for Tenant A (proves the rejection is the tenant check, not an unrelated
+  bug) - `lib/repositories/item-repository.postgres.test.ts` is the reference.
 - New raw SQL (`$queryRaw`/`$executeRaw`) must use Postgres syntax: double-
   quoted exact-case identifiers, `$n` placeholders (or the `queryRaw`/
   `executeRaw` helpers in `lib/db.ts` which translate `?` placeholders for
@@ -72,7 +78,12 @@ of whether the linter catches a given instance:
    `StockLedger` outside the files in the Module ownership table above.
 2. **Unscoped tenant queries.** Any query against a table in
    `OPERATIONAL_TENANT_TABLES` (`api/src/lib/foundation-schema.ts`) whose
-   filter does not include `companyId`/`tenantId`.
+   filter does not include `companyId`/`tenantId`. New code for a model that
+   already has a scoped repository (`Item` - `lib/repositories/item-repository.ts`)
+   must go through it, not add another direct `prisma.item.*` call next to
+   the 16 pre-existing ones tracked in `docs/tenant-scope-coverage.md`.
+   `scripts/architecture-lint.mjs`'s `unscoped-tenant-query` rule checks this
+   for `Item` today; extending it to other models is a standing follow-up.
 3. **Float for money or quantity.** New schema fields for price, cost,
    amount, tax, or similar must not be `Float`. (Existing `Float` quantity/
    money fields are a large pre-existing baseline, not to be "fixed" as a
@@ -91,11 +102,15 @@ of whether the linter catches a given instance:
 
 ## Architecture decisions
 
-See `docs/adr/`. Six frozen in Week 2, one (ADR-003) implemented in Week 3:
+See `docs/adr/`. Six frozen in Week 2; ADR-003 implemented in Week 3;
+ADR-002's repository layer started in Week 4 (`docs/tenant-scope-coverage.md`
+tracks how much of it):
 
 - ADR-001: immutable StockMovement journal + StockBalance projection is the
   target stock model; StockLedger is the legacy system being reconciled into it
-- ADR-002: tenant scope (column + middleware, not RLS)
+- ADR-002: tenant scope is column + `TenantContext`-typed repositories, not
+  middleware alone (Catalog/`Item` is the reference implementation; Identity
+  and Organization are not migrated yet)
 - ADR-003: short-lived access tokens + persisted, hashed, rotating refresh
   session families (implemented; see `lib/session-store.ts`)
 - ADR-004: database is Postgres; Prisma migrations own schema; startup only

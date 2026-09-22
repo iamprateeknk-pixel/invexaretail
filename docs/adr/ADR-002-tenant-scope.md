@@ -14,8 +14,45 @@ isolation depends entirely on every query remembering to filter by
 middleware.
 
 ## Decision
-Tenant scope stays column-based and middleware-enforced (not Postgres RLS)
-for this stack, because:
+Tenant scope stays column-based, but middleware is no longer trusted as the
+*only* enforcement point - Week 4 added mandatory `TenantContext`-typed
+repositories as the second, structural layer:
+
+- `lib/tenant-context.ts` defines `TenantContext` (`companyId`, `tenantId`,
+  `userId`, `role`, optional audited `elevation`) and `requireTenantContext()`,
+  which throws rather than returning a context with an empty `companyId` -
+  "missing scope must fail closed" is enforced by the type system refusing
+  to construct an invalid context, not by every caller remembering to check.
+- `lib/repositories/item-repository.ts` is the reference implementation for
+  Catalog: every exported function takes a `TenantContext` as its first
+  parameter and every query is scoped by `ctx.companyId` in the same
+  statement as the lookup (`findFirst({ where: { id, companyId } })`, not
+  "check ownership, then query again").
+- **Concrete defect this closed**: `lib/item-master-service.ts`'s
+  `changeItemStatus`/`deleteItemPermanently` looked an item up by `id`
+  alone, with **no ownership check at all** - the only thing preventing
+  Tenant B from archiving or permanently deleting Tenant A's item was
+  `routes/item-master.ts`'s route-level `itemIdOf()` guard. Any second
+  caller of those service functions (there is only one today, but nothing
+  stopped a second one) would have inherited the gap silently. Fixed by
+  routing the lookup through `assertItemOwnedByTenant()` inside the service
+  itself - defense lives at the layer that can't be bypassed by a new route
+  forgetting to duplicate the check.
+- Verified with real cross-tenant negative tests against Postgres
+  (`lib/repositories/item-repository.postgres.test.ts`): Tenant B is
+  rejected on read, status-change and delete against a real Tenant A item id
+  (not a guessed one - a genuinely valid id, proving id-as-secret is not
+  the security boundary), and the identical call succeeds for Tenant A,
+  proving the rejection is the tenant check and not an unrelated bug.
+- The rest of Catalog (16 other `prisma.item.*` call sites), all of
+  Identity, and all of Organization are **not** migrated this week - see
+  `docs/tenant-scope-coverage.md` for the full route-to-repository matrix.
+  This is the "no large refactor yet" scope discipline applied to a task
+  whose full scope is genuinely large; the repository pattern and its lint
+  enforcement exist now so each remaining call site is a small, independent
+  follow-up instead of a second big-bang migration.
+
+Column-based scope (not Postgres RLS) stays the underlying mechanism, because:
 - The app already computes company scope from the JWT once per request
   (`req.user.companyId`) and most queries need it in application logic
   anyway (joins across tenant-scoped and global tables).
@@ -41,19 +78,37 @@ for this stack, because:
 ## Migration impact
 None from the Postgres switch itself - `companyId`/`tenantId` columns and
 their indexes carried over unchanged in the Postgres baseline migration
-(`api/prisma/migrations/20260922123350_init_postgres`).
+(`api/prisma/migrations/20260922123350_init_postgres`). No schema change
+this week for the repository work either - `Item.companyId` already existed;
+`docs/tenant-scope-coverage.md` flags `Item.code`'s globally-unique
+constraint (should likely be `@@unique([companyId, code])`) as an identified
+but not-yet-executed follow-up, since fixing it correctly also requires
+updating `lib/persistence.ts`'s code-keyed ERP-import upsert in the same
+change.
 
 ## Compatibility
-No API change. No data migration.
+No API response shape change. `changeItemStatus`/`deleteItemPermanently`
+changed their TypeScript signatures (`(ctx: TenantContext, itemId, ...)`
+instead of `(itemId, change, actor, companyId)`) - internal refactor, their
+one caller (`routes/item-master.ts`) was updated in the same change.
 
 ## Rollback
-N/A - no code changes shipped with this ADR.
+Revert this ADR's commit. `lib/tenant-context.ts` and
+`lib/repositories/item-repository.ts` are additive (new files); the
+`item-master-service.ts`/`routes/item-master.ts` signature changes revert
+cleanly together.
 
 ## Consequences (measurable)
-- `scripts/architecture-lint.mjs --rule unscoped-tenant-query` flags any new
-  `prisma.<model>.findMany/findFirst/update/delete` call whose `where` clause
-  has no `companyId`/`tenantId` key, for models listed in
-  `OPERATIONAL_TENANT_TABLES`. Existing call sites are the baseline; the
-  count must not increase.
-- Revisit this ADR if the connection layer changes (e.g. moving to PgBouncer
-  transaction pooling, which would make `SET LOCAL`-based RLS viable).
+- `scripts/architecture-lint.mjs --rule unscoped-tenant-query` (pilot: Item
+  model only) flags any new `prisma.item.*` call with no `companyId`/
+  `tenantId` within an 8-line window. Baseline: 16 pre-existing unscoped call
+  sites (measured for the first time this week, not introduced by it) -
+  tracked in `scripts/architecture-lint-baseline.json` and
+  `docs/tenant-scope-coverage.md`. The count must not increase; extending
+  the rule beyond the `Item` model is a follow-up.
+- Two service functions (`changeItemStatus`, `deleteItemPermanently`) moved
+  from zero ownership enforcement to fail-closed enforcement, verified by
+  4 passing negative cross-tenant integration tests against real Postgres.
+- Revisit the RLS-vs-column-scope part of this ADR if the connection layer
+  changes (e.g. moving to PgBouncer transaction pooling, which would make
+  `SET LOCAL`-based RLS viable).

@@ -1,4 +1,5 @@
 import { type ItemReferenceCounts, type ItemStatus } from './item-master.js';
+import type { TenantContext } from './tenant-context.js';
 export declare class ItemMasterError extends Error {
     readonly status: number;
     readonly blockers?: Array<{
@@ -12,10 +13,6 @@ export declare class ItemMasterError extends Error {
         count: number;
     }>);
 }
-type Actor = {
-    id: string;
-    role: string;
-};
 /**
  * How much history an item has. In database mode the database is the source
  * of truth (the in-memory movement list is capped); in memory mode the
@@ -23,10 +20,10 @@ type Actor = {
  */
 export declare function referenceCounts(itemId: string): Promise<ItemReferenceCounts>;
 /** Archive / deactivate / reactivate. History is untouched; the item just leaves operational use. */
-export declare function changeItemStatus(itemId: string, change: {
+export declare function changeItemStatus(ctx: TenantContext, itemId: string, change: {
     status: ItemStatus;
     reason?: string;
-}, actor: Actor, companyId: string): Promise<{
+}): Promise<{
     item: import("./repository.js").ItemRecord;
     changed: boolean;
 }>;
@@ -35,5 +32,4 @@ export declare function changeItemStatus(itemId: string, change: {
  * With any history the item must be archived instead, so reports can still
  * explain what happened.
  */
-export declare function deleteItemPermanently(itemId: string, actor: Actor, companyId: string): Promise<void>;
-export {};
+export declare function deleteItemPermanently(ctx: TenantContext, itemId: string): Promise<void>;

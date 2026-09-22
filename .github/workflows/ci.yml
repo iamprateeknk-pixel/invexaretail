@@ -72,6 +72,11 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      - name: Run cross-tenant isolation coverage against real Postgres (ADR-002)
+        run: npx tsx --test src/lib/repositories/item-repository.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 

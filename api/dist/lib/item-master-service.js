@@ -13,6 +13,7 @@ const persistence_js_1 = require("./persistence.js");
 const orders_js_1 = require("./orders.js");
 const qc_inspection_js_1 = require("./qc-inspection.js");
 const repository_js_1 = require("./repository.js");
+const item_repository_js_1 = require("./repositories/item-repository.js");
 class ItemMasterError extends Error {
     status;
     blockers;
@@ -69,15 +70,27 @@ async function referenceCounts(itemId) {
         campaigns,
     };
 }
-function requireItem(itemId) {
+/**
+ * Fails closed on tenant ownership before looking the item up in the
+ * in-memory mirror - a wrong-tenant call gets the same "not found" a
+ * genuinely missing item would, whether or not the caller's route already
+ * checked ownership. This is the fix for the structural gap ADR-002 calls
+ * out: relying only on route middleware (`itemIdOf` in
+ * routes/item-master.ts) meant any *other* future caller of this service
+ * would have had no ownership check at all.
+ */
+async function requireItem(ctx, itemId) {
+    await (0, item_repository_js_1.assertItemOwnedByTenant)(ctx, itemId);
     const item = repository_js_1.items.find((candidate) => candidate.id === itemId);
     if (!item)
         throw new ItemMasterError('Item was not found.', 404);
     return item;
 }
 /** Archive / deactivate / reactivate. History is untouched; the item just leaves operational use. */
-async function changeItemStatus(itemId, change, actor, companyId) {
-    const item = requireItem(itemId);
+async function changeItemStatus(ctx, itemId, change) {
+    const actor = { id: ctx.userId, role: ctx.role };
+    const companyId = ctx.companyId;
+    const item = await requireItem(ctx, itemId);
     const before = (0, item_master_js_1.itemStatusOf)(item);
     if (before === change.status)
         return { item, changed: false };
@@ -112,8 +125,10 @@ async function changeItemStatus(itemId, change, actor, companyId) {
  * With any history the item must be archived instead, so reports can still
  * explain what happened.
  */
-async function deleteItemPermanently(itemId, actor, companyId) {
-    const item = requireItem(itemId);
+async function deleteItemPermanently(ctx, itemId) {
+    const actor = { id: ctx.userId, role: ctx.role };
+    const companyId = ctx.companyId;
+    const item = await requireItem(ctx, itemId);
     const blockers = (0, item_master_js_1.deleteBlockers)(await referenceCounts(itemId));
     if (blockers.length) {
         throw new ItemMasterError(`"${item.code}" has history (${(0, item_master_js_1.describeBlockers)(blockers)}) and cannot be deleted. Archive it instead.`, 409, blockers);

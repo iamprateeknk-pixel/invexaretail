@@ -72,7 +72,33 @@ const RULES = [
       return false;
     },
   },
+  {
+    id: 'unscoped-tenant-query',
+    description: 'prisma.item.* call with no companyId/tenantId nearby (AGENTS.md #2, ADR-002) - pilot rule, Item model only',
+    // Checked separately in run() with a multi-line window, not per-single-line.
+    test() {
+      return false;
+    },
+  },
 ];
+
+// ADR-002 pilot: only prisma.item.* is checked for now (the model this
+// week's tenant-scoping work covers - see lib/repositories/item-repository.ts).
+// Extending this to every OPERATIONAL_TENANT_TABLES model is future work;
+// a naive multi-line window check gets noisier the more models it covers.
+const UNSCOPED_QUERY_PATTERN = /prisma\.item\.(findMany|findFirst|findUnique|update|updateMany|delete|deleteMany|upsert|create|createMany)\(/;
+const UNSCOPED_QUERY_WINDOW = 8; // lines to look ahead for a companyId/tenantId mention
+
+function findUnscopedTenantQueries(file, lines) {
+  const violations = [];
+  lines.forEach((line, idx) => {
+    if (!UNSCOPED_QUERY_PATTERN.test(line)) return;
+    const window = lines.slice(idx, idx + UNSCOPED_QUERY_WINDOW).join('\n');
+    if (/companyId|tenantId/.test(window)) return;
+    violations.push({ rule: 'unscoped-tenant-query', file, line: idx + 1, snippet: line.trim().slice(0, 160) });
+  });
+  return violations;
+}
 
 const MONEY_FIELD_NAME = /^\s*\w*(price|cost|amount|total|tax|discount|freight|landedCost|mrp|value|refund)\w*\s+Float\b/i;
 
@@ -89,6 +115,7 @@ function run() {
         }
       }
     });
+    violations.push(...findUnscopedTenantQueries(file, lines));
   }
   const schemaPath = join(ROOT, 'prisma', 'schema.prisma');
   if (existsSync(schemaPath)) {
