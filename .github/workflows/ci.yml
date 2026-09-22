@@ -45,7 +45,7 @@ jobs:
           node-version: 22
 
       - name: Install API dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Validate Prisma schema
         run: npx prisma validate
@@ -135,7 +135,7 @@ jobs:
           node-version: 22
 
       - name: Install web dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test web utilities
         run: npm test

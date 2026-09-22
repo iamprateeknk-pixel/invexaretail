@@ -10,6 +10,10 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
+# Week 1 reproducibility: npm lockfiles are authoritative for active apps.
+!api/package-lock.json
+!web/package-lock.json
+
 # Build outputs
 dist/
 !api/dist/
