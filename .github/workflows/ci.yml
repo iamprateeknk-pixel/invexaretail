@@ -59,6 +59,12 @@ jobs:
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      - name: Seed PostgreSQL for readiness smoke
+        run: npm run db:seed
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          SEED_PASSWORD: InvexaCiOnly123
+
       - name: Run PostgreSQL integration coverage
         run: npx tsx --test src/lib/postgresql.integration.test.ts
         env:
