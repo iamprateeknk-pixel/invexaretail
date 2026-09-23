@@ -66,6 +66,18 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, purchaseBatch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, purchaseBatch.id);
     await (0, import_commit_service_js_1.commitImportBatchToCompletion)(purchaseBatch.id, 500);
+    // Purchases always post at HO, not the branch (business rule) - seed the
+    // branch itself via an opening-stock import (which, like sales, routes by
+    // the row's own branchName) so the golden sales file has real stock to
+    // deduct from instead of tripping the negative-stock policy.
+    const openingRows = [salesRow(itemId, 'GOLD-LOT', 5000, branch.name, '2025-12-31T00:00:00.000Z')];
+    const openingBatch = await (0, import_commit_service_js_1.createImportBatch)(tenant, {
+        type: 'OPENING_STOCK', fileName: 'golden-opening.json', sourceFormat: 'json',
+        fileChecksum: (0, import_checksum_js_1.computeFileChecksum)(JSON.stringify(openingRows)), rows: openingRows, importedById: tenant.userId,
+    });
+    await (0, import_commit_service_js_1.validateImportBatch)(tenant, openingBatch.id);
+    await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, openingBatch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(openingBatch.id, 500);
     const salesRows = Array.from({ length: 5000 }, () => salesRow(itemId, 'GOLD-LOT', 1, branch.name));
     const salesBatch = await (0, import_commit_service_js_1.createImportBatch)(tenant, {
         type: 'SALES', fileName: 'golden-sales.json', sourceFormat: 'json',
@@ -82,7 +94,7 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
     const hoLedger = await db_js_1.prisma.stockLedger.findFirstOrThrow({ where: { itemId, lotId: lot.id, location: { name: import_business_rules_js_1.HO_LOCATION_NAME, companyId: tenant.companyId } } });
     const branchLedger = await db_js_1.prisma.stockLedger.findUniqueOrThrow({ where: { itemId_lotId_locationId: { itemId, lotId: lot.id, locationId: branch.id } } });
     strict_1.default.equal(hoLedger.onHand, 10000, '5000 rows x 2 units purchased at HO');
-    strict_1.default.equal(branchLedger.onHand, -5000, '5000 rows x 1 unit sold from the branch');
+    strict_1.default.equal(branchLedger.onHand, 0, '5000 units seeded at the branch minus 5000 rows x 1 unit sold');
 });
 integration('a byte-identical re-upload is rejected as a duplicate file and returns the existing batch', async () => {
     const { tenant, itemId } = await makeFixture();
@@ -134,6 +146,14 @@ integration('a wrong branch name, missing lot number and malformed quantity are 
 });
 integration('a row dated before the location sync checkpoint still posts, is flagged LATE_MOVEMENT, and never regresses the checkpoint', async () => {
     const { tenant, branchLocationId, itemId } = await makeFixture();
+    const openingRows = [salesRow(itemId, 'LOT-LATE', 10, 'Test Branch', '2025-12-01T00:00:00.000Z')];
+    const openingBatch = await (0, import_commit_service_js_1.createImportBatch)(tenant, {
+        type: 'OPENING_STOCK', fileName: 'late-seed.json', sourceFormat: 'json',
+        fileChecksum: (0, import_checksum_js_1.computeFileChecksum)(JSON.stringify(openingRows)), rows: openingRows, importedById: tenant.userId,
+    });
+    await (0, import_commit_service_js_1.validateImportBatch)(tenant, openingBatch.id);
+    await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, openingBatch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(openingBatch.id);
     await db_js_1.prisma.syncCheckpoint.create({
         data: { locationId: branchLocationId, sourceType: 'SALES', syncedThroughAt: new Date('2026-02-01T00:00:00.000Z'), lastImportBatchId: 'seed' },
     });

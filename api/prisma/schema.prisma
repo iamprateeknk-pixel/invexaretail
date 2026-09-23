@@ -1800,7 +1800,14 @@ model ExceptionCase {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Week 12: this model had no real per-company scoping at all before this
+  // week (locationId is optional, so a location-join can't safely stand in
+  // for it the way Week 12's reporting-repository.ts does for the other
+  // queue models) - a genuine cross-tenant leak for any case with no
+  // location. companyId closes it directly.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, priority, dueAt])

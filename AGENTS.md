@@ -68,6 +68,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | Item search / stock detail | `api/src/routes/items.ts`, `lib/repositories/item-repository.ts` (`searchItems`, cursor pagination), `lib/stock-detail-service.ts` (`getStockDetail`) | Week 10. Additive to `core.ts`'s existing unpaginated `GET /items` - not a replacement. All mutation (`/adjust`, `/reverse`) goes through `lib/inventory-posting-service.ts` with a required idempotency key. See `docs/week10-item-search-stock-detail.md` for what's shipped vs backlog (the exception-first Dashboard is not built yet). |
 | Item search / stock detail (web) | `web/src/hooks/useItemSearch.js`, `useStockDetail.js`, `useInventoryAdjustment.js`, `web/src/components/inventory/*.jsx`, `web/src/components/workspace/pages/ItemStockDetailPage.jsx` | Week 10. Per-screen queries, not wired into `useWorkspaceHydration`'s whole-workspace poll. Registered as the `item-search` `NAVIGATION` entry - goes through `lib/permissions.js` like every other section. |
 | Staged import lifecycle | `api/src/routes/imports.ts` (thin route), `lib/import-commit-service.ts` (the state machine - `createImportBatch`, `validateImportBatch`, `queueImportBatchForCommit`, `commitImportBatchChunk`/`commitImportBatchToCompletion`, `reverseImportBatch`, `exportFailedRows`), `lib/import-row-validation.ts` (per-row validation, read-only), `lib/import-business-rules.ts` (HO Basni / branch routing / lot find-or-create / late-movement checkpoint policy), `lib/import-checksum.ts` (file-level dedupe), `lib/import-worker.ts` (`startImportWorker`/`drainImportCommitsOnce`, wired into `worker.ts`'s boot sweep and poll loop) | Week 11. `ImportBatch`/`ImportRow` states: DRAFT -> VALIDATED -> QUEUED_FOR_COMMIT -> COMMITTING -> COMMITTED/PARTIALLY_COMMITTED/FAILED -> REVERSING -> REVERSED. Commit posts exclusively through `lib/inventory-posting-service.ts` (never touches `StockLedger`/`StockMovement` directly), one idempotency key per row (`import:${batchId}:${rowNumber}`), and only ever advances past `ImportBatch.checkpointRowNumber` - a crash/restart resumes from the checkpoint without double-posting. Commit policy is PARTIAL_SUCCESS for PURCHASE/SALES/SALES_RETURN, ALL_OR_NOTHING for OPENING_STOCK (`IMPORT_TYPE_POLICY`). Fixed a real tenant-scoping gap this week: `ImportBatch`/`ImportRow` had only a constant `tenantId` before Week 11, no `companyId` at all - both models now carry `companyId` (migration `20261001090000_import_lifecycle_tenant_scope`). This path is separate from, and does not touch, the older `InventoryMovement`-journal import path in `lib/persistence.ts`/`lib/import-reversal.ts` (still baseline, unmigrated). Known gap discovered while wiring `worker.ts`: `lib/outbox-worker.ts`'s `startOutboxWorker` (Week 7) is still never called from any production entrypoint - out of this week's scope to fix (needs a real delivery-handler decision, not a one-line addition). Accepted, documented gap: `routes/imports.ts` accepts already-parsed JSON rows, not raw file/CSV upload with column mapping - no import-wizard UI was built this week. See `docs/week11-import-staging-commit-reverse.md`. |
+| Reporting / exception dashboard | `api/src/routes/reports.ts` (thin route - `GET /reports/dashboard`, `GET /reports/exceptions`), `lib/reporting-repository.ts` (`getDashboardSummary`, `getExceptionQueueSummary`, `listOpenExceptions`, `getStockRiskSummary`, `getQueueBacklogSummary`) | Week 12 - **inferred scope**, not from a verbatim guide task block (the guide document is not checked into this repo and could not be located; this week fills ADR-005's named-but-unbuilt "Reporting" bounded context and Week 10's explicitly-deferred exception-first Dashboard). Defines "at risk"/"SLA" per queue as an explicit, documented decision (`TRANSFER_SLA_HOURS`, `RETURN_SLA_HOURS`, `STOCK_COUNT_REVIEW_SLA_HOURS` constants in `reporting-repository.ts`) rather than leaving it implicit. Every query is real-tenant-scoped: `ExceptionCase` got a genuine `companyId` column this week (it had none at all before - not even the usual constant `tenantId` scoping was safe to rely on for a case with no location); `Transfer`/`PurchaseOrder`/`Order`/`StockCount`/`ExpiryAlert` still only carry the pre-ADR-002 constant `tenantId`, so this module scopes them by joining through each row's `Location` (which does carry a real `companyId`) via `companyLocationIds`. Additive - the pre-existing `/reports/transfer-cycle`, `/reports/count-accuracy`, `/reports/audit-export` (`routes/command-center.ts`) and `/companies/:companyId/dashboard/summary` (`routes/enterprise-analytics.ts`) are untouched. See `docs/week12-reporting-exception-dashboard.md`. |
 
 ## Required tests
 
@@ -166,6 +167,15 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
   and being safe to call twice; and tenant isolation (a batch created under
   one company must be unreadable, uncommittable and unreversible from
   another) - `import-commit-service.postgres.test.ts` is the reference.
+- A change to `lib/reporting-repository.ts` must be exercised against real
+  Postgres and cover: exception counts grouped correctly by status and
+  priority with a closed/resolved case never counted as breached even past
+  its `dueAt`; cursor pagination of open exceptions ordered soonest-due
+  first; stock-risk counts (stockout, quarantine, active expiry alert) only
+  counting the intended rows; each of the five queue backlogs' pending and
+  SLA-breached counts; and tenant isolation across the whole dashboard
+  summary (a second company must see zero of the first company's data) -
+  `reporting-repository.postgres.test.ts` is the reference.
 
 ## Prohibited patterns
 
@@ -290,3 +300,30 @@ tracks how much of it):
   mapping (no import-wizard UI this week), and Week 7's `startOutboxWorker`
   is still never called from a production entrypoint - discovered while
   wiring this week's own worker into `worker.ts`, out of scope to fix here.
+- Week 12 (`api/src/lib/reporting-repository.ts`, `routes/reports.ts`, no
+  dedicated ADR - see `docs/week12-reporting-exception-dashboard.md`):
+  **inferred scope**, not implementation of a verbatim guide task block -
+  the guide document itself is not checked into this repo and a full
+  git-history search could not locate it, so this week instead builds what
+  ADR-005 already names but leaves unbuilt ("Reporting" bounded context)
+  and what Week 10 explicitly deferred (the exception-first Dashboard,
+  because "at risk"/"SLA" per queue needed a product decision this repo had
+  not made). That decision is made explicitly this week and documented as a
+  decision, not a fact: exception breach = past `dueAt` and still open;
+  stock risk = stockout, unresolved quarantine, or an active expiry alert
+  (no reorder-point/min-stock field exists anywhere in the schema yet, so a
+  "will stock out soon" projection is not attempted); queue SLA = each
+  domain-policy queue's own due-date field where one exists (Purchase
+  Order's `expectedAt`, Order's `estimatedDispatchAt`), or a fixed
+  age-since-created threshold where none does (Transfer, ReturnRequest).
+  Found and fixed a genuine, complete tenant-isolation gap while building
+  this: `ExceptionCase` (the existing cross-module exception inbox) had no
+  scoping column at all - not even the usual constant `tenantId` - so any
+  existing code querying it already had zero tenant isolation; it now
+  carries a real `companyId`. The other queue models this week reads
+  (`Transfer`/`PurchaseOrder`/`Order`/`StockCount`/`ExpiryAlert`) still only
+  carry the constant `tenantId`, unchanged from before - scoped for this
+  week's own queries only, via a join through each row's `Location` (which
+  does carry a real `companyId`), not by migrating those five models'
+  schemas (out of this week's scope; the same honest gap ADR-002's row
+  already names for Identity/Organization).

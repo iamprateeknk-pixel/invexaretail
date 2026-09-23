@@ -26,6 +26,7 @@ export declare function estimateValueAtRisk(itemId: string | null | undefined, q
  * underlying stock transaction just because the case log is unavailable.
  */
 export declare function createExceptionCase(input: CreateExceptionCaseInput): Promise<{
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;

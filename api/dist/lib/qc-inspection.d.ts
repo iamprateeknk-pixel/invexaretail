@@ -93,6 +93,7 @@ export declare function recordQcInspection(input: RecordQcInspectionInput): Prom
         inspectedById: string;
     };
     exceptionCase: {
+        companyId: string;
         id: string;
         createdAt: Date;
         updatedAt: Date;
