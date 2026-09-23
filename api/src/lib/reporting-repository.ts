@@ -7,18 +7,18 @@
 // the whole point of naming it as a decision, not a fact.
 //
 // Every export takes a required TenantContext (ADR-002) and scopes its
-// query to ctx.companyId. Transfer/Order/StockCount/ExpiryAlert still only
-// carry the pre-ADR-002 constant `tenantId` field, not a real `companyId`
-// column (the same baseline gap AGENTS.md's Tenant scope row already
-// documents for Identity/Organization) - this module closes that gap for
-// its own queries the same way Week 10/11 did for their own new code: by
-// scoping through each row's Location, which does carry a real companyId,
-// via `companyLocationIds`. ExceptionCase (Week 12) and PurchaseOrder
-// (Week 17) got real `companyId` columns instead - ExceptionCase because
-// its `locationId` is optional (a case with no location would fall outside
-// any location-based scope entirely); PurchaseOrder as the first slice of
-// actually migrating the remaining tenantId-only models named above,
-// rather than perpetually working around them.
+// query to ctx.companyId. Transfer/StockCount/ExpiryAlert still only carry
+// the pre-ADR-002 constant `tenantId` field, not a real `companyId` column
+// (the same baseline gap AGENTS.md's Tenant scope row already documents
+// for Identity/Organization) - this module closes that gap for its own
+// queries the same way Week 10/11 did for their own new code: by scoping
+// through each row's Location, which does carry a real companyId, via
+// `companyLocationIds`. ExceptionCase (Week 12), PurchaseOrder (Week 17)
+// and Order (Week 19) got real `companyId` columns instead - ExceptionCase
+// because its `locationId` is optional (a case with no location would fall
+// outside any location-based scope entirely); PurchaseOrder and Order as
+// successive slices of actually migrating the remaining tenantId-only
+// models named above, rather than perpetually working around them.
 import { prisma } from './db.js';
 import type { TenantContext } from './tenant-context.js';
 
@@ -189,9 +189,9 @@ export async function getQueueBacklogSummary(ctx: TenantContext): Promise<QueueB
     prisma.purchaseOrder.count({
       where: { companyId: ctx.companyId, status: { in: [...OPEN_PO_STATUSES] }, expectedAt: { lt: new Date() } },
     }),
-    prisma.order.count({ where: { fulfillmentLocationId: inCompanyLocations, status: { in: [...OPEN_ORDER_STATUSES] } } }),
+    prisma.order.count({ where: { companyId: ctx.companyId, status: { in: [...OPEN_ORDER_STATUSES] } } }),
     prisma.order.count({
-      where: { fulfillmentLocationId: inCompanyLocations, status: { in: [...OPEN_ORDER_STATUSES] }, estimatedDispatchAt: { lt: new Date() } },
+      where: { companyId: ctx.companyId, status: { in: [...OPEN_ORDER_STATUSES] }, estimatedDispatchAt: { lt: new Date() } },
     }),
     prisma.returnRequest.count({ where: { companyId: ctx.companyId, status: { in: [...OPEN_RETURN_STATUSES] } } }),
     prisma.returnRequest.count({

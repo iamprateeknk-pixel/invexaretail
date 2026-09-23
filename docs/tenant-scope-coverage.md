@@ -66,8 +66,27 @@ The read/write call sites in `routes/catalog-procurement.ts` that look an
 order up by bare id (`findUnique`/`update` at lines 309, 489, 509, 643) are
 **not yet migrated to filter on it** - they're still counted in the
 `unscoped-tenant-query` lint baseline below, unchanged by adding the
-column. `Transfer`, `Order`, `StockCount`, `ExpiryAlert` remain
-`tenantId`-only; migrating each is the same one-model-at-a-time follow-up.
+column. `Transfer`, `StockCount`, `ExpiryAlert` remain `tenantId`-only;
+migrating each is the same one-model-at-a-time follow-up. `Order` got the
+same treatment the next week - see below.
+
+## Order - real companyId added (Week 19)
+
+Migration `20261022090000_order_company_scope` added a real `companyId`
+column, backfilled from each order's `fulfillmentLocation.companyId`. All
+three production creation call sites (`index.ts`'s marketplace-connector
+webhook, and two in `routes/operations-extension.ts`) now set it;
+`lib/reporting-repository.ts`'s order queue-backlog counts filter on it
+directly. The many bare-id `findUnique`/`update` call sites elsewhere in
+`operations-extension.ts` are **not yet migrated** - still in the
+`unscoped-tenant-query` lint baseline, unchanged.
+
+`Transfer`'s creation path was investigated as the natural next slice and
+found more tangled than PurchaseOrder's or Order's: `lib/repository.ts`'s
+`createTransferRecord` is purely in-memory (`transfers.push(input)`, no
+Prisma call at all), so how a transfer actually reaches `StockLedger` in
+database mode needs its own investigation before a companyId migration
+there is safe - deferred to its own week rather than rushed.
 
 ## Control-plane elevation
 

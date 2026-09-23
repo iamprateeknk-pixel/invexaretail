@@ -7,6 +7,7 @@ import { databaseEnabled, persistAudit } from './persistence.js';
 import { listItems, listLocations, listStockLedger } from './repository.js';
 import { estimateDispatchAndDelivery } from './promise-engine.js';
 import { assertValidOrderTransition } from './domain-policies.js';
+import { DEFAULT_COMPANY_ID } from './saas/tenant-scope.js';
 
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
@@ -302,6 +303,7 @@ async function createOrderInner(input: {
   customerLatitude?: number | null;
   customerLongitude?: number | null;
   lines: OrderLineInput[];
+  companyId?: string;
 }) {
   if (!databaseEnabled) return createMemoryReservedOrder(input);
   await expireStaleReservations();
@@ -366,6 +368,7 @@ async function createOrderInner(input: {
         customerName: input.customerName ?? null,
         notes: input.notes ?? null,
         createdById: input.createdById,
+        companyId: input.companyId ?? DEFAULT_COMPANY_ID,
         reservedAt,
         reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000),
         estimatedDispatchAt: new Date(promise.estimatedDispatchAt),

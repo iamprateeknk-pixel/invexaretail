@@ -415,7 +415,12 @@ model Order {
   shipments    Shipment[]
   returnRequests ReturnRequest[]
   tenantId    String   @default("tenant-invexa")
+  // Week 19: real per-company scoping, the second slice of the migration
+  // Week 17 started for PurchaseOrder. Backfilled from the order's own
+  // fulfillmentLocation.companyId.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, createdAt])

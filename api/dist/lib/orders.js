@@ -21,6 +21,7 @@ const persistence_js_1 = require("./persistence.js");
 const repository_js_1 = require("./repository.js");
 const promise_engine_js_1 = require("./promise-engine.js");
 const domain_policies_js_1 = require("./domain-policies.js");
+const tenant_scope_js_1 = require("./saas/tenant-scope.js");
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
 // by website, marketplace and store simultaneously." An order line names
@@ -359,6 +360,7 @@ async function createOrderInner(input) {
                 customerName: input.customerName ?? null,
                 notes: input.notes ?? null,
                 createdById: input.createdById,
+                companyId: input.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 reservedAt,
                 reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000),
                 estimatedDispatchAt: new Date(promise.estimatedDispatchAt),

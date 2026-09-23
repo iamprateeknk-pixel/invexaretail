@@ -357,6 +357,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
             customerName: mapped.customerName,
             notes: mapped.notes,
             createdById: 'connector',
+            companyId: connector.tenantId,
             allowSplit: true,
             candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
             lines,

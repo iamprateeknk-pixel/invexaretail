@@ -133,11 +133,11 @@ integration('queue backlog summary counts pending and SLA-breached items across 
 
   // Order: open and past its own estimatedDispatchAt.
   await prisma.order.create({
-    data: { channel: 'web', fulfillmentLocationId: locationId, createdById: userId, status: 'RESERVED', estimatedDispatchAt: hoursAgo(1) },
+    data: { channel: 'web', fulfillmentLocationId: locationId, createdById: userId, companyId: tenant.companyId, status: 'RESERVED', estimatedDispatchAt: hoursAgo(1) },
   });
 
   // Return request: open, created long enough ago to breach the fixed SLA window.
-  const order = await prisma.order.create({ data: { channel: 'web', fulfillmentLocationId: locationId, createdById: userId, status: 'FULFILLED' } });
+  const order = await prisma.order.create({ data: { channel: 'web', fulfillmentLocationId: locationId, createdById: userId, companyId: tenant.companyId, status: 'FULFILLED' } });
   await prisma.returnRequest.create({
     data: { orderId: order.id, status: 'REQUESTED', createdById: userId, companyId: tenant.companyId, createdAt: hoursAgo(RETURN_SLA_HOURS + 1) },
   });
@@ -189,4 +189,19 @@ integration('PurchaseOrder queue backlog is scoped by its real companyId column 
   const otherSummary = await getQueueBacklogSummary(other.tenant);
   assert.equal(ownSummary.purchaseOrders.pending, 0, 'a purchase order whose companyId belongs to another tenant must not count here, even sharing the same location');
   assert.equal(otherSummary.purchaseOrders.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+
+integration('Order queue backlog is scoped by its real companyId column (Week 19), not by location join', async () => {
+  const { tenant, locationId, userId } = await makeFixture();
+  const other = await makeFixture();
+  // Same real Location.companyId (tenant.companyId), but the Order's own
+  // companyId column belongs to a different company.
+  await prisma.order.create({
+    data: { channel: 'web', fulfillmentLocationId: locationId, createdById: userId, companyId: other.tenant.companyId, status: 'RESERVED' },
+  });
+
+  const ownSummary = await getQueueBacklogSummary(tenant);
+  const otherSummary = await getQueueBacklogSummary(other.tenant);
+  assert.equal(ownSummary.orders.pending, 0, 'an order whose companyId belongs to another tenant must not count here, even sharing the same fulfillment location');
+  assert.equal(otherSummary.orders.pending, 1, 'the identical row must count for the tenant its own companyId names');
 });

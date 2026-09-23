@@ -55,7 +55,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | Area | Owning files | Notes |
 |---|---|---|
 | Inventory posting | `api/src/lib/inventory-posting-service.ts` (canonical - `postInventoryMovement`, `reverseInventoryMovement`), `scripts/reconcile-stock-journal.mjs` (drift check); baseline: `lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `lib/reservation.ts`, `lib/orders.ts`, `lib/exceptions.ts`, `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, `routes/foundation.ts` (dead code, unmounted) | `InventoryPostingService` shipped Week 6 (ADR-001), targets `StockLedger` (the live projection - `StockBalance` has no real readers, see ADR-001 addendum). Baseline files not yet migrated - see `docs/inventory-posting-coverage.md` for the per-file reason. New direct `StockLedger`/`StockMovement`/`StockBalance` writes outside this table fail `architecture-lint.mjs`. |
-| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. `PurchaseOrder` got a real `companyId` column in Week 17 (see that row's note below); `Transfer`/`Order`/`StockCount`/`ExpiryAlert` are still `tenantId`-only. |
+| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. `PurchaseOrder` (Week 17) and `Order` (Week 19) got a real `companyId` column; `Transfer`/`StockCount`/`ExpiryAlert` are still `tenantId`-only. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
 | Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts`, `lib/outbox-worker.ts` (idempotent delivery worker - shipped Week 7, deliberately still not wired to any handler - see Week 14 note below), `lib/outbox-retention.ts` (`startOutboxRetention`/`pruneOutboxOnce`, Week 14, wired into `worker.ts`) | Durable outbox is the source of truth in database mode (ADR-006). A business write that needs its outbox row atomic with itself uses `recordOutboxEventInTransaction`, not `publishEvent`. `DomainEventOutbox` rows are pruned after `OUTBOX_RETENTION_DAYS` (7) - see `docs/week14-outbox-retention.md`. |
@@ -437,3 +437,18 @@ tracks how much of it):
   for every one of its routes. Moved via `git mv` (history preserved) to
   `docs/archive/legacy-backend-prototype/backend/`, with a README recording
   the parity check.
+- Week 19 (`api/prisma/schema.prisma`, `lib/orders.ts`, `lib/reporting-
+  repository.ts`, no dedicated ADR - see `docs/week19-order-tenant-scope.md`):
+  the second slice of the tenant-scope migration Week 17 started. `Order`
+  next - its creation path (`lib/orders.ts`'s `createOrderInner`) is a
+  single choke point with exactly three call sites, making it similarly
+  bounded. Real `companyId` column, backfilled from each order's own
+  `fulfillmentLocation` (migration `20261022090000_order_company_scope`);
+  all three call sites (the marketplace-connector webhook in `index.ts`,
+  two in `routes/operations-extension.ts`) now set it;
+  `reporting-repository.ts`'s order queue-backlog counts filter on it
+  directly. Investigated `Transfer` as the natural next slice and found it
+  more tangled - its in-memory `createTransferRecord` in `lib/repository.ts`
+  never calls Prisma at all, so how a transfer actually reaches
+  `StockLedger` in database mode needs its own investigation before a
+  companyId migration there is safe - deferred rather than rushed.
