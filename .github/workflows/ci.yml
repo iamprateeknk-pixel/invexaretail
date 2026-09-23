@@ -204,6 +204,12 @@ jobs:
       - name: Build web
         run: npm run build
 
+      - name: Install browser for Week 9-10 E2E gate
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser accessibility and item-stock-detail journey
+        run: npm run test:e2e
+
   admin-panel:
     name: Admin panel Control Plane build
     runs-on: ubuntu-latest

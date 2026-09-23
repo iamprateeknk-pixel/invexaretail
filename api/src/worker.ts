@@ -2,6 +2,8 @@ import { startCampaignScheduler, campaignSchedulerTick } from './lib/campaign-sc
 import { startOrderScheduler, orderSweepTick } from './lib/order-scheduler.js';
 import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
+import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
+import { deliverPersistedEvent } from './lib/event-bus.js';
 
 async function main() {
   if (process.env.REQUIRE_DATABASE === 'true' && !process.env.DATABASE_URL) {
@@ -11,14 +13,11 @@ async function main() {
     await campaignSchedulerTick();
     await orderSweepTick();
     await drainImportCommitsOnce();
+    await drainOutboxOnce(deliverPersistedEvent);
   });
   startCampaignScheduler();
   startOrderScheduler();
-  // Week 11: the durable import-commit worker. Note: lib/outbox-worker.ts's
-  // startOutboxWorker (Week 7) is still never called from any production
-  // entrypoint - a pre-existing gap discovered while wiring this one in,
-  // out of this week's scope to fix (it needs a real delivery handler
-  // decision, not a one-line addition) - see AGENTS.md's Week 11 note.
+  startOutboxWorker(deliverPersistedEvent);
   startImportWorker();
   console.log('Invexa durable worker is running.');
 }
@@ -26,4 +25,4 @@ async function main() {
 void main().catch((error) => {
   console.error('Worker failed to start', error);
   process.exitCode = 1;
-});
+});

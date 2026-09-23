@@ -39,7 +39,7 @@ test('hydrate keeps the session unless refresh already failed with 401', () => {
   assert.equal(shouldClearSessionOnHydrateFailure(new Error('offline'), false), false);
 });
 
-test('persisted sessions keep the refresh token until logout', () => {
+test('browser persistence strips refresh tokens because the API owns them in an HttpOnly cookie', () => {
   const mem = new Map();
   globalThis.localStorage = {
     getItem: (key) => (mem.has(key) ? mem.get(key) : null),
@@ -48,7 +48,7 @@ test('persisted sessions keep the refresh token until logout', () => {
   };
 
   writePersistedSession({ token: 'access', refreshToken: 'refresh', user: { id: 'u1' } });
-  assert.equal(JSON.parse(mem.get(SESSION_STORAGE_KEY)).refreshToken, 'refresh');
+  assert.equal(JSON.parse(mem.get(SESSION_STORAGE_KEY)).refreshToken, undefined);
   assert.equal(readPersistedSession().token, 'access');
   clearPersistedSession();
   assert.equal(readPersistedSession(), null);

@@ -81,6 +81,12 @@ export function subscribe(subscriber: Omit<EventSubscriber, 'id'>): { id: string
   subscribers.set(id, { ...subscriber, id });
   return { id, unsubscribe: () => { subscribers.delete(id); } };
 }
+export function deliverPersistedEvent(event: DomainEvent): void {
+  for (const subscriber of subscribers.values()) {
+    if (!canReceive(subscriber, event)) continue;
+    try { subscriber.send(event); } catch { subscribers.delete(subscriber.id); }
+  }
+}
 export function subscriberCount(): number { return subscribers.size; }
 export function latestEventId(): number { return sequence; }
 export type ReplayResult = { kind: 'replay'; events: DomainEvent[] } | { kind: 'reset' };
@@ -111,4 +117,4 @@ export async function durableLatestEventId(): Promise<number> {
   const row = await prisma.domainEventOutbox.aggregate({ _max: { id: true } });
   return Number(row._max.id ?? 0);
 }
-export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }
+export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }

@@ -5,6 +5,7 @@ import 'app.dart';
 import 'config/theme.dart';
 import 'services/api_client.dart';
 import 'services/drift_store.dart';
+import 'services/secure_store.dart';
 import 'state/session_controller.dart';
 
 Future<void> main() async {
@@ -18,7 +19,7 @@ Future<void> main() async {
 
   final controller = SessionController(
     api: InvexaApi(),
-    store: await DriftStore.open(),
+    store: SecureLocalStore(await DriftStore.open(), PlatformSessionVault()),
   );
   await controller.restore();
   runApp(InvexaRetailApp(controller: controller));

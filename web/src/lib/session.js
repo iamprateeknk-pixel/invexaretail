@@ -41,9 +41,11 @@ export function readPersistedSession() {
 }
 
 export function writePersistedSession(session) {
-  storage()?.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  emitPersistedSession(session);
-  return session;
+  const safeSession = session ? { ...session } : session;
+  if (safeSession && typeof safeSession === 'object') delete safeSession.refreshToken;
+  storage()?.setItem(SESSION_STORAGE_KEY, JSON.stringify(safeSession));
+  emitPersistedSession(safeSession);
+  return safeSession;
 }
 
 export function clearPersistedSession() {
