@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // api/
 const spec = join(ROOT, 'contracts', 'openapi.json');
 const out = join(ROOT, 'contracts', 'generated', 'types.ts');
+const openapiCli = join(ROOT, 'node_modules', 'openapi-typescript', 'bin', 'cli.js');
 
-execFileSync('npx', ['openapi-typescript', spec, '-o', out], { cwd: ROOT, stdio: 'inherit' });
+execFileSync(process.execPath, [openapiCli, spec, '-o', out], { cwd: ROOT, stdio: 'inherit' });
 console.log(`Regenerated ${out} from ${spec}`);

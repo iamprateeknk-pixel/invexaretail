@@ -1,0 +1,73 @@
+name: Audit risk
+description: Track an Invexa Retail engineering-audit risk through evidence and recovery approval.
+title: "[RISK] R__ - "
+labels:
+  - risk
+body:
+  - type: input
+    id: risk_id
+    attributes:
+      label: Risk ID
+      placeholder: R1
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Accountable owner
+      description: Use a named person, not a team placeholder.
+    validations:
+      required: true
+  - type: input
+    id: target_week
+    attributes:
+      label: Target week
+      placeholder: Week 6
+    validations:
+      required: true
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Invariant and failure mode
+      description: State what must remain true and what can fail today.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: List tests, traces, reconciliation, screenshots, or migration output required to close the risk.
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback or compensating recovery
+      description: Explain how a failed change or corrupted state is recovered and tested.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+  - type: checkboxes
+    id: closure
+    attributes:
+      label: Closure gates
+      options:
+        - label: Independent reviewer approved the evidence.
+          required: true
+        - label: Product owner accepted the residual risk or confirmed none remains.
+          required: true
+        - label: Evidence links contain no credentials or customer data.
+          required: true
