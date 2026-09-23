@@ -17,8 +17,9 @@ const committed = join(ROOT, 'contracts', 'generated', 'types.ts');
 
 const scratch = mkdtempSync(join(tmpdir(), 'contract-drift-'));
 const fresh = join(scratch, 'types.ts');
+const openapiCli = join(ROOT, 'node_modules', 'openapi-typescript', 'bin', 'cli.js');
 try {
-  execFileSync('npx', ['openapi-typescript', spec, '-o', fresh], { cwd: ROOT, stdio: 'pipe' });
+  execFileSync(process.execPath, [openapiCli, spec, '-o', fresh], { cwd: ROOT, stdio: 'pipe' });
   const committedText = readFileSync(committed, 'utf8');
   const freshText = readFileSync(fresh, 'utf8');
   if (committedText !== freshText) {

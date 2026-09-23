@@ -19,10 +19,6 @@ jobs:
     name: API build tests and startup smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-      TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-      SEED_PASSWORD: InvexaCiOnly123
     services:
       postgres:
         image: postgres:17
@@ -72,53 +68,67 @@ jobs:
 
       - name: Deploy migrations to real Postgres
         run: npm run db:migrate
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Seed Postgres for readiness smoke
         run: npm run db:seed
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          SEED_PASSWORD: InvexaCiOnly123
 
       - name: Run Postgres integration coverage
         run: npx tsx --test src/lib/postgres.integration.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run refresh-session/OTP coverage against real Postgres (ADR-003)
         run: npx tsx --test src/lib/session-store.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run cross-tenant isolation coverage against real Postgres (ADR-002)
         run: npx tsx --test src/lib/repositories/item-repository.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run schema-version verification coverage against real Postgres (ADR-004 / Week 5)
         run: npx tsx --test src/lib/schema-version.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run canonical inventory posting coverage against real Postgres (ADR-001 / Week 6)
         run: npx tsx --test src/lib/inventory-posting-service.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run atomic reservation coverage against real Postgres (Week 7)
         run: npx tsx --test src/lib/reservation.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run outbox worker delivery/retry/poison coverage against real Postgres (ADR-006 / Week 7)
         run: npx tsx --test src/lib/outbox-worker.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run Branch management coverage against real Postgres (Week 8)
         run: npx tsx --test src/routes/branches.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Run item search/stock detail/adjustment/reversal coverage against real Postgres (Week 10)
         run: npx tsx --test src/routes/items.postgres.test.ts
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Test dependency-free startup diagnostics
@@ -129,6 +139,7 @@ jobs:
 
       - name: Start API and verify health endpoint
         env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           SEED_PASSWORD: InvexaCiOnly123
           PORT: 4100
         run: |
