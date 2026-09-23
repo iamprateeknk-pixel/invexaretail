@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SERVER_EPOCH = exports.EVENT_TOPICS = void 0;
+exports.OUTBOX_RETENTION_DAYS = exports.SERVER_EPOCH = exports.EVENT_TOPICS = void 0;
 exports.canReceive = canReceive;
 exports.recordOutboxEventInTransaction = recordOutboxEventInTransaction;
 exports.publishEvent = publishEvent;
@@ -11,6 +11,7 @@ exports.eventsSince = eventsSince;
 exports.durableEventsSince = durableEventsSince;
 exports.durableLatestEventId = durableLatestEventId;
 exports.resetEventBusForTests = resetEventBusForTests;
+exports.pruneDomainEventOutbox = pruneDomainEventOutbox;
 const node_crypto_1 = require("node:crypto");
 const persistence_js_1 = require("./persistence.js");
 const db_js_1 = require("./db.js");
@@ -123,3 +124,28 @@ async function durableLatestEventId() {
     return Number(row._max.id ?? 0);
 }
 function resetEventBusForTests() { sequence = 0; buffer.length = 0; subscribers.clear(); }
+// Week 14: `DomainEventOutbox` rows are written by every business mutation
+// (`publishEvent`/`recordOutboxEventInTransaction`) and, before this week,
+// were never deleted by anything - a genuine unbounded-growth bug found
+// while investigating why `lib/outbox-worker.ts`'s `startOutboxWorker`
+// (Week 7) had never been wired into a production entrypoint. That
+// investigation's conclusion (see docs/week14-outbox-retention.md): the
+// worker's DELIVERED/POISON/retry machinery has no real consumer to wire
+// it to. `routes/events.ts`'s SSE stream reads this table directly via
+// `durableEventsSince` (a plain "since cursor X" poll, independent of
+// delivery status), and the existing webhook system
+// (`lib/webhook-dispatcher.ts`) is a separate, already-working mechanism
+// with its own entity payloads - these bare topic/companyId rows carry no
+// entity data a webhook could deliver. So the worker itself stays
+// deliberately unwired (there is nothing honest to wire it to), and this
+// retention window is the actual fix: enough runway for a disconnected SSE
+// client to reconnect and replay, not "forever".
+exports.OUTBOX_RETENTION_DAYS = 7;
+/** Deletes DomainEventOutbox rows older than the retention window. Returns the number of rows removed. */
+async function pruneDomainEventOutbox(olderThanDays = exports.OUTBOX_RETENTION_DAYS) {
+    if (!persistence_js_1.databaseEnabled)
+        return 0;
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+    const result = await db_js_1.prisma.domainEventOutbox.deleteMany({ where: { occurredAt: { lt: cutoff } } });
+    return result.count;
+}

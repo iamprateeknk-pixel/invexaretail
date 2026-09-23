@@ -2,6 +2,7 @@ import { startCampaignScheduler, campaignSchedulerTick } from './lib/campaign-sc
 import { startOrderScheduler, orderSweepTick } from './lib/order-scheduler.js';
 import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
+import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
 
 async function main() {
   if (process.env.REQUIRE_DATABASE === 'true' && !process.env.DATABASE_URL) {
@@ -11,15 +12,22 @@ async function main() {
     await campaignSchedulerTick();
     await orderSweepTick();
     await drainImportCommitsOnce();
+    await pruneOutboxOnce();
   });
   startCampaignScheduler();
   startOrderScheduler();
-  // Week 11: the durable import-commit worker. Note: lib/outbox-worker.ts's
-  // startOutboxWorker (Week 7) is still never called from any production
-  // entrypoint - a pre-existing gap discovered while wiring this one in,
-  // out of this week's scope to fix (it needs a real delivery handler
-  // decision, not a one-line addition) - see AGENTS.md's Week 11 note.
+  // Week 11: the durable import-commit worker.
   startImportWorker();
+  // Week 14: retention sweep for DomainEventOutbox (see
+  // lib/outbox-retention.ts and docs/week14-outbox-retention.md). Note:
+  // lib/outbox-worker.ts's startOutboxWorker (Week 7) is deliberately still
+  // not called here - investigated this week and found there is no real
+  // consumer to wire its delivery semantics to (SSE reads this table
+  // directly via durableEventsSince, independent of delivery status; the
+  // separate webhook system carries entity payloads this bare table
+  // doesn't have). The actual bug - the table growing forever with nothing
+  // ever pruning it - is what this week's retention sweep fixes instead.
+  startOutboxRetention();
   console.log('Invexa durable worker is running.');
 }
 
