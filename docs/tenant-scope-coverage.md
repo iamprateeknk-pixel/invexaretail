@@ -54,6 +54,21 @@ defense-in-depth middleware layer) but are no longer the *only* check for
 Catalog - see the scoped repository above. Location/Branch scoping is not
 migrated this week; tracked as a follow-up alongside Identity.
 
+## PurchaseOrder - real companyId added (Week 17)
+
+Previously `tenantId`-only (the constant, shared-across-the-app field), like
+`Transfer`/`Order`/`StockCount`/`ExpiryAlert` still are. Migration
+`20261015090000_purchase_order_company_scope` added a real `companyId`
+column, backfilled from each order's `Location.companyId`. Both create call
+sites (`routes/catalog-procurement.ts`) now set it; `lib/reporting-
+repository.ts`'s purchase-order queue-backlog counts filter on it directly.
+The read/write call sites in `routes/catalog-procurement.ts` that look an
+order up by bare id (`findUnique`/`update` at lines 309, 489, 509, 643) are
+**not yet migrated to filter on it** - they're still counted in the
+`unscoped-tenant-query` lint baseline below, unchanged by adding the
+column. `Transfer`, `Order`, `StockCount`, `ExpiryAlert` remain
+`tenantId`-only; migrating each is the same one-model-at-a-time follow-up.
+
 ## Control-plane elevation
 
 No generic bypass flag exists in `TenantContext` (`lib/tenant-context.ts`) -

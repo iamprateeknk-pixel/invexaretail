@@ -362,73 +362,61 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 273,
-    "snippet": "const purchaseOrder = await prisma.purchaseOrder.create({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 308,
+    "line": 309,
     "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 320,
+    "line": 321,
     "snippet": "const itemRows = await prisma.item.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 488,
+    "line": 489,
     "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 508,
+    "line": 509,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 537,
+    "line": 538,
     "snippet": "prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 543,
+    "line": 544,
     "snippet": "prisma.transfer.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 602,
-    "snippet": "const purchaseOrder = await prisma.purchaseOrder.create({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 641,
+    "line": 643,
     "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 718,
+    "line": 720,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 843,
+    "line": 845,
     "snippet": "const items = await prisma.item.findMany({ include: { tags: true } });"
   },
   {
     "rule": "bare-status-write",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 508,
+    "line": 509,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
@@ -716,37 +704,37 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1124,
+    "line": 1128,
     "snippet": "unitCost        Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1146,
+    "line": 1150,
     "snippet": "totalAmount     Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1166,
+    "line": 1170,
     "snippet": "unitCost          Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1184,
+    "line": 1188,
     "snippet": "price         Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1787,
+    "line": 1791,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1917,
+    "line": 1921,
     "snippet": "value           Float?"
   }
 ]

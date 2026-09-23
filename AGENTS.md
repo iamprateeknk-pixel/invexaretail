@@ -50,7 +50,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | Area | Owning files | Notes |
 |---|---|---|
 | Inventory posting | `api/src/lib/inventory-posting-service.ts` (canonical - `postInventoryMovement`, `reverseInventoryMovement`), `scripts/reconcile-stock-journal.mjs` (drift check); baseline: `lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `lib/reservation.ts`, `lib/orders.ts`, `lib/exceptions.ts`, `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, `routes/foundation.ts` (dead code, unmounted) | `InventoryPostingService` shipped Week 6 (ADR-001), targets `StockLedger` (the live projection - `StockBalance` has no real readers, see ADR-001 addendum). Baseline files not yet migrated - see `docs/inventory-posting-coverage.md` for the per-file reason. New direct `StockLedger`/`StockMovement`/`StockBalance` writes outside this table fail `architecture-lint.mjs`. |
-| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
+| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. `PurchaseOrder` got a real `companyId` column in Week 17 (see that row's note below); `Transfer`/`Order`/`StockCount`/`ExpiryAlert` are still `tenantId`-only. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
 | Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts`, `lib/outbox-worker.ts` (idempotent delivery worker - shipped Week 7, deliberately still not wired to any handler - see Week 14 note below), `lib/outbox-retention.ts` (`startOutboxRetention`/`pruneOutboxOnce`, Week 14, wired into `worker.ts`) | Durable outbox is the source of truth in database mode (ADR-006). A business write that needs its outbox row atomic with itself uses `recordOutboxEventInTransaction`, not `publishEvent`. `DomainEventOutbox` rows are pruned after `OUTBOX_RETENTION_DAYS` (7) - see `docs/week14-outbox-retention.md`. |
@@ -402,3 +402,20 @@ tracks how much of it):
   mechanical fix - tracked in the lint baseline instead. Rules #2 and #7,
   AGENTS.md's only two named-but-unbuilt lint follow-ups, are both
   machine-checked as of this week.
+- Week 17 (`api/prisma/schema.prisma`, `routes/catalog-procurement.ts`,
+  `lib/reporting-repository.ts`, no dedicated ADR - see
+  `docs/week17-purchase-order-tenant-scope.md`): starts actually migrating
+  the `tenantId`-only baseline models Weeks 12/15 named as backlog, one
+  model at a time - the same extraction-slice discipline used for
+  `core.ts`/`operations-extension.ts` since Week 8. `PurchaseOrder` first
+  (smallest safe slice: both create call sites live in one file). Real
+  `companyId` column, backfilled from each order's own `Location`
+  (migration `20261015090000_purchase_order_company_scope`); both create
+  sites now set it; `reporting-repository.ts`'s purchase-order queue-
+  backlog counts filter on it directly instead of the `Location`-join
+  workaround. Proven with a negative test: a PurchaseOrder whose location
+  belongs to tenant A but whose own `companyId` names tenant B counts for
+  B, not A. Explicitly not done: the column alone doesn't scope
+  `catalog-procurement.ts`'s several bare-id `findUnique`/`update` call
+  sites (still tracked in the Week 15 lint baseline, unchanged); `Transfer`/
+  `Order`/`StockCount`/`ExpiryAlert` remain `tenantId`-only.

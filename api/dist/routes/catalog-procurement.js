@@ -277,6 +277,7 @@ router.post('/purchase-orders', async (req, res) => {
             supplierId: req.body.supplierId,
             locationId: req.body.locationId,
             createdById: req.user.id,
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             // Promise date: what the buyer said, else today plus the supplier's lead time.
             expectedAt: req.body.expectedAt ? new Date(req.body.expectedAt) : leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
             notes: req.body.notes || null,
@@ -611,6 +612,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
             data: {
                 number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
                 supplierId: supplier.id, locationId, createdById: req.user.id,
+                companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
                 notes: 'Drafted from the purchase plan.',
                 totalAmount: lines.reduce((sum, line) => sum + line.quantity * line.unitCost, 0),

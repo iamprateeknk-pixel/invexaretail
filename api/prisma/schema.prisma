@@ -1106,8 +1106,12 @@ model PurchaseOrder {
   lines       PurchaseOrderLine[]
   supplierInvoices SupplierInvoice[]
   tenantId    String   @default("tenant-invexa")
+  // Week 17: real per-company scoping, added alongside ImportBatch (Week
+  // 11) and ExceptionCase (Week 12) - the same class of fix, this time for
+  // PurchaseOrder. Backfilled from the order's own Location.companyId.
+  companyId   String   @default("default-company")
   @@index([tenantId])
-
+  @@index([companyId])
 
   @@index([locationId, status])
   @@index([supplierId])

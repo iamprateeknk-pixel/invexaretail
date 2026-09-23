@@ -128,7 +128,7 @@ integration('queue backlog summary counts pending and SLA-breached items across 
   // Purchase order: open and past its own expectedAt due date.
   const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier' } });
   await prisma.purchaseOrder.create({
-    data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: supplier.id, locationId, createdById: userId, status: 'APPROVED', expectedAt: hoursAgo(1) },
+    data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: supplier.id, locationId, createdById: userId, companyId: tenant.companyId, status: 'APPROVED', expectedAt: hoursAgo(1) },
   });
 
   // Order: open and past its own estimatedDispatchAt.
@@ -171,4 +171,22 @@ integration('the dashboard summary is tenant-scoped: another company sees none o
   const otherSummary = await getDashboardSummary(other.tenant);
   assert.equal(ownSummary.exceptions.open, 1);
   assert.equal(otherSummary.exceptions.open, 0, 'another company must not see the first company\'s exception');
+});
+
+integration('PurchaseOrder queue backlog is scoped by its real companyId column (Week 17), not by location join', async () => {
+  const { tenant, locationId, userId } = await makeFixture();
+  const other = await makeFixture();
+  const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier' } });
+  // Same real Location.companyId (tenant.companyId), but the PurchaseOrder's
+  // own companyId column - the field the query now filters on directly -
+  // belongs to a different company. If the query still relied on the old
+  // location-join workaround this row would incorrectly count for `tenant`.
+  await prisma.purchaseOrder.create({
+    data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: supplier.id, locationId, createdById: userId, companyId: other.tenant.companyId, status: 'APPROVED' },
+  });
+
+  const ownSummary = await getQueueBacklogSummary(tenant);
+  const otherSummary = await getQueueBacklogSummary(other.tenant);
+  assert.equal(ownSummary.purchaseOrders.pending, 0, 'a purchase order whose companyId belongs to another tenant must not count here, even sharing the same location');
+  assert.equal(otherSummary.purchaseOrders.pending, 1, 'the identical row must count for the tenant its own companyId names');
 });
