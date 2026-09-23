@@ -452,3 +452,22 @@ tracks how much of it):
   never calls Prisma at all, so how a transfer actually reaches
   `StockLedger` in database mode needs its own investigation before a
   companyId migration there is safe - deferred rather than rushed.
+- Week 20 (no new code, no dedicated ADR - see
+  `docs/week20-program-retrospective.md`): the last week of the 20-week
+  program. Same guide-unavailable situation as every week since 12; rather
+  than invent a final feature under that uncertainty, this week verifies
+  the whole repository is actually in the state every prior week's commit
+  claimed (`api/` build, full memory-mode test suite, `architecture-lint`,
+  contract validate/drift-check, `web/` test suite, and every real-Postgres
+  integration suite added since Week 11 - all re-run this week, all green)
+  and consolidates 20 weeks of shipped-versus-backlog into one retrospective
+  rather than leaving it scattered across 20 per-week docs. Honest
+  headline gaps it names: the tenant-scope migration is 2 of 5 models done
+  (`Transfer` needs its own investigation first - Week 19 found its
+  creation path never calls Prisma at all); `unscoped-tenant-query`'s 99
+  and `bare-status-write`'s 6 tracked violations are visible, not fixed;
+  `lib/outbox-worker.ts`'s fully-tested retry/POISON machinery has no
+  consumer and is effectively dead code; the Float->Decimal migration
+  prepared since Week 5 has never been executed; and the execution guide
+  document itself was never recovered, so every inferred week from 12
+  onward should be checked against the real guide if it's ever found.
