@@ -806,8 +806,9 @@ model StockLedger {
   version        Int      @default(0)
   lastUpdatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  companyId      String   @default("default-company")
   @@index([tenantId])
-
+  @@index([companyId])
 
   @@unique([itemId, lotId, locationId])
 }
@@ -1510,7 +1511,16 @@ model StockMovement {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // ADR-001/ADR-002/Week 6: companyId is the real tenant boundary
+  // (tenantId is the broader SaaS platform concept); idempotencyKey lets
+  // InventoryPostingService detect a retried command and return the
+  // original result instead of posting twice. Null for legacy rows and for
+  // callers that predate the idempotency requirement.
+  companyId       String   @default("default-company")
+  idempotencyKey  String?
   @@index([tenantId])
+  @@index([companyId])
+  @@unique([companyId, idempotencyKey])
 
 
   @@index([itemId, locationId, timestamp])
@@ -1534,7 +1544,9 @@ model StockBalance {
   version         Int      @default(0)
   lastPostedAt    DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  companyId       String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@unique([itemId, lotId, locationId])

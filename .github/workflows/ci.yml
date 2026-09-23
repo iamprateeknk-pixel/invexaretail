@@ -82,6 +82,11 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      - name: Run canonical inventory posting coverage against real Postgres (ADR-001 / Week 6)
+        run: npx tsx --test src/lib/inventory-posting-service.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 

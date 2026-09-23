@@ -36,6 +36,12 @@
     "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, select: { category: true } });"
   },
   {
+    "rule": "runtime-ddl",
+    "file": "src/lib/schema-version.ts",
+    "line": 2,
+    "snippet": "// Runtime DDL (CREATE/ALTER TABLE at boot) was retired in Week 2 - this is"
+  },
+  {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
     "line": 269,
@@ -134,67 +140,67 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1094,
+    "line": 1095,
     "snippet": "totalAmount Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1098,
+    "line": 1099,
     "snippet": "freightCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1099,
+    "line": 1100,
     "snippet": "customsCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1100,
+    "line": 1101,
     "snippet": "insuranceCost Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1101,
+    "line": 1102,
     "snippet": "handlingCost  Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1123,
+    "line": 1124,
     "snippet": "unitCost        Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1145,
+    "line": 1146,
     "snippet": "totalAmount     Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1165,
+    "line": 1166,
     "snippet": "unitCost          Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1183,
+    "line": 1184,
     "snippet": "price         Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1756,
+    "line": 1768,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1879,
+    "line": 1891,
     "snippet": "value           Float?"
   }
 ]

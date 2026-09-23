@@ -26,8 +26,16 @@ function listFiles() {
   return out.split('\n').filter(Boolean).filter((f) => !f.endsWith('.test.ts'));
 }
 
-// Files allowed to write StockLedger directly (ADR-001 baseline + designated
-// posting entry points). Anything else touching StockLedger is a new violation.
+// Files allowed to write StockLedger/StockMovement/StockBalance directly
+// (ADR-001 baseline + the canonical posting service). Anything else touching
+// these tables is a new violation. The baseline files are not yet routed
+// through InventoryPostingService (see docs/inventory-posting-coverage.md
+// for why each one's field shape - onHand+quarantine transitions, reserved-
+// only changes - does not map onto the service's current onHand-delta
+// command shape) - they stay allowlisted, not because direct writes are
+// fine there, but because the guide's own scope for this week is "block
+// NEW direct writes," not "silently break the existing ones by revoking
+// their access before they have anywhere else to go."
 const STOCK_WRITE_ALLOWLIST = new Set([
   'src/lib/reservation.ts',
   'src/lib/transfer-receipt.ts',
@@ -38,6 +46,8 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   'src/routes/catalog-procurement.ts',
   'src/routes/operations-extension.ts',
   'src/routes/foundation.ts',
+  // The canonical service itself, and its reconciliation tooling.
+  'src/lib/inventory-posting-service.ts',
 ]);
 
 const RULES = [
@@ -50,11 +60,11 @@ const RULES = [
   },
   {
     id: 'direct-stock-write',
-    description: 'StockLedger write outside the ADR-001 posting-service allowlist',
+    description: 'StockLedger/StockMovement/StockBalance write outside the ADR-001 posting-service allowlist',
     test(file, line) {
       if (STOCK_WRITE_ALLOWLIST.has(file)) return false;
-      return /prisma\.stockLedger\.(create|update|upsert|createMany|updateMany)\(/.test(line)
-        || /"StockLedger"/.test(line);
+      return /prisma\.(stockLedger|stockMovement|stockBalance)\.(create|update|upsert|createMany|updateMany)\(/.test(line)
+        || /"(StockLedger|StockMovement|StockBalance)"/.test(line);
     },
   },
   {

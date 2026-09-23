@@ -33,7 +33,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 
 | Area | Owning files | Notes |
 |---|---|---|
-| Inventory posting | `api/src/lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `routes/foundation.ts` (`postStockMovement`) | Target: one `InventoryPostingService` (ADR-001). Baseline call sites tracked in `scripts/architecture-lint-baseline.json`. |
+| Inventory posting | `api/src/lib/inventory-posting-service.ts` (canonical - `postInventoryMovement`, `reverseInventoryMovement`), `scripts/reconcile-stock-journal.mjs` (drift check); baseline: `lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `lib/reservation.ts`, `lib/orders.ts`, `lib/exceptions.ts`, `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, `routes/foundation.ts` (dead code, unmounted) | `InventoryPostingService` shipped Week 6 (ADR-001), targets `StockLedger` (the live projection - `StockBalance` has no real readers, see ADR-001 addendum). Baseline files not yet migrated - see `docs/inventory-posting-coverage.md` for the per-file reason. New direct `StockLedger`/`StockMovement`/`StockBalance` writes outside this table fail `architecture-lint.mjs`. |
 | Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
@@ -69,6 +69,12 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   you), `ON CONFLICT ... DO UPDATE` not `ON DUPLICATE KEY UPDATE`.
 - A migration touching a table that already has data needs an additive-only
   check: no destructive column drops without a documented backfill plan.
+- A change to `lib/inventory-posting-service.ts` must be exercised against
+  real Postgres and cover: idempotent duplicate posting, concurrent posting
+  to the same item/lot/location (sums correctly, no lost update), negative-
+  stock policy enforcement, and reversal (equal-and-opposite movement,
+  original row never edited, reversal itself idempotent) -
+  `inventory-posting-service.postgres.test.ts` is the reference.
 
 ## Prohibited patterns
 
@@ -78,8 +84,12 @@ violations (fails CI). All of these are prohibited going forward regardless
 of whether the linter catches a given instance:
 
 1. **Direct stock writes outside inventory posting.** Any new
-   `prisma.stockLedger.{create,update,upsert,updateMany}` or raw SQL touching
-   `StockLedger` outside the files in the Module ownership table above.
+   `prisma.{stockLedger,stockMovement,stockBalance}.{create,update,upsert,updateMany}`
+   or raw SQL touching `StockLedger`/`StockMovement`/`StockBalance` outside
+   the files in the Module ownership table above. New code should go through
+   `lib/inventory-posting-service.ts` where its command shape fits (a single
+   `onHand` delta); see `docs/inventory-posting-coverage.md` for call sites
+   whose shape does not fit yet.
 2. **Unscoped tenant queries.** Any query against a table in
    `OPERATIONAL_TENANT_TABLES` (`api/src/lib/foundation-schema.ts`) whose
    filter does not include `companyId`/`tenantId`. New code for a model that
@@ -110,8 +120,11 @@ See `docs/adr/`. Six frozen in Week 2; ADR-003 implemented in Week 3;
 ADR-002's repository layer started in Week 4 (`docs/tenant-scope-coverage.md`
 tracks how much of it):
 
-- ADR-001: immutable StockMovement journal + StockBalance projection is the
-  target stock model; StockLedger is the legacy system being reconciled into it
+- ADR-001: immutable StockMovement journal, now paired with the actually-live
+  StockLedger projection (Week 6 correction - StockBalance turned out to be
+  unread dead code via unmounted `routes/foundation.ts`); canonical service
+  `lib/inventory-posting-service.ts` shipped and tested against real
+  Postgres, baseline call sites not yet migrated (`docs/inventory-posting-coverage.md`)
 - ADR-002: tenant scope is column + `TenantContext`-typed repositories, not
   middleware alone (Catalog/`Item` is the reference implementation; Identity
   and Organization are not migrated yet)

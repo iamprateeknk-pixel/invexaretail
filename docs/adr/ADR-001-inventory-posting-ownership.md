@@ -77,3 +77,43 @@ Nothing to roll back - this is a naming/ownership decision, not a code change.
   shrink the baseline; the lint script and this ADR are updated together
   (baseline count must only ever go down, never up, without an ADR
   amendment).
+
+## Addendum (Week 6): correction, and the canonical service shipped
+
+**Correction to the Context/Decision above:** `routes/foundation.ts`'s
+`postStockMovement` is not live code. Verified this week: its own file
+header calls it an unmounted "Phase 1 Prisma blueprint," `grep -n
+"foundation" src/index.ts` returns no mount, and no other file imports from
+it. `StockBalance` is therefore written by nothing except that dead file -
+it has zero real readers or writers in production. The table actually read
+by every on-hand-quantity screen, and written by the eight call sites listed
+above, is `StockLedger`.
+
+This flips this ADR's decision in one respect: **the canonical journal
+target is `StockMovement` (append-only, unchanged) but the canonical
+*projection* target is now `StockLedger`, not `StockBalance`.** A posting
+service that writes an unread table has no value; `StockBalance` is left in
+place (deleting dead code is out of scope for this addendum) but is no
+longer treated as the target projection.
+
+**Shipped this week:** `lib/inventory-posting-service.ts`
+(`postInventoryMovement`, `reverseInventoryMovement`), writing `StockMovement`
++ `StockLedger` together in one transaction with optimistic-lock retry,
+per-company idempotency-key deduplication, a configurable negative-stock
+policy, an audit-log entry and a `DomainEventOutbox` row. 8 tests against
+real Postgres in `inventory-posting-service.postgres.test.ts` cover
+journal/projection consistency, idempotent duplicates, concurrent posting,
+negative-stock blocking, non-destructive reversal, idempotent reversal
+retries, and both lot/location and tenant isolation.
+`scripts/reconcile-stock-journal.mjs` measures how much of `StockLedger` the
+journal currently explains.
+
+**Honest state of migration:** none of the eight existing call sites has
+been moved onto the new service yet - each writes a different piece of
+state (`reserved`, quarantine/damaged buckets, multi-leg transfer legs, or
+many rows per call) that the service's current single-`onHand`-delta command
+shape does not model. They remain allowlisted in
+`scripts/architecture-lint.mjs`'s `direct-stock-write` rule, which this week
+was also extended to block *new* direct writes to `StockMovement` and
+`StockBalance`, not just `StockLedger`. Full detail and a per-call-site
+table: `docs/inventory-posting-coverage.md`.
