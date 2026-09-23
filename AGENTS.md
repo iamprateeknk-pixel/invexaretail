@@ -65,6 +65,8 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | Shared feedback components (web) | `web/src/components/ui/feedback-states.jsx` (`LoadingState`, `EmptyState`, `ErrorState`, `PermissionDeniedState`, `OfflineState`) | Week 9. New loading/empty/error/permission/offline UI in `web/` uses these, not a new one-off card. |
 | Web design tokens | `web/src/index.css` | Single source (Week 9) - color, radius, focus, density (defined, not yet adopted) tokens. Spec: `docs/web/token-specification.md`. `admin-panel/` is not yet consolidated onto this token set (documented gap). |
 | Web component test toolchain | `web/test/jsx-loader.mjs`, `web/test/register.mjs` | Week 9 - the first JSX-capable test loader in this repo (esbuild-based), enabling `@testing-library/react` + `jsdom` component tests via `npm run test:components`. |
+| Item search / stock detail | `api/src/routes/items.ts`, `lib/repositories/item-repository.ts` (`searchItems`, cursor pagination), `lib/stock-detail-service.ts` (`getStockDetail`) | Week 10. Additive to `core.ts`'s existing unpaginated `GET /items` - not a replacement. All mutation (`/adjust`, `/reverse`) goes through `lib/inventory-posting-service.ts` with a required idempotency key. See `docs/week10-item-search-stock-detail.md` for what's shipped vs backlog (the exception-first Dashboard is not built yet). |
+| Item search / stock detail (web) | `web/src/hooks/useItemSearch.js`, `useStockDetail.js`, `useInventoryAdjustment.js`, `web/src/components/inventory/*.jsx`, `web/src/components/workspace/pages/ItemStockDetailPage.jsx` | Week 10. Per-screen queries, not wired into `useWorkspaceHydration`'s whole-workspace poll. Registered as the `item-search` `NAVIGATION` entry - goes through `lib/permissions.js` like every other section. |
 
 ## Required tests
 
@@ -136,6 +138,17 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
   `@testing-library/react` test (via `npm run test:components`) proving it
   is keyboard-focusable and exposes its state as accessible text/roles, not
   only visually (color/icon alone) - `feedback-states.test.jsx` is the
+  reference.
+- A new server-paginated list endpoint must have a real Postgres test
+  seeding enough rows to exercise more than one page (thousands, not tens),
+  proving every row is returned exactly once across pages, in a stable
+  order, with no cross-tenant leakage - `item-repository.postgres.test.ts`'s
+  5,200-item suite is the reference.
+- A new mutating endpoint that posts through
+  `lib/inventory-posting-service.ts` must require a caller-supplied
+  idempotency key (not derive one server-side from other fields) and have a
+  test proving a retried request with the same key returns the original
+  result instead of posting again - `items.postgres.test.ts` is the
   reference.
 
 ## Prohibited patterns
@@ -232,3 +245,16 @@ tracks how much of it):
   `SmartDataTable`/`FilterBar`/`Drawer`/`Stepper`/`FormField`/`AppShell` and
   the `admin-panel` token consolidation are explicit backlog, not silently
   dropped - see `docs/web/component-catalog.md`.
+- Week 10 (`api/routes/items.ts` + `web/src/components/inventory/`, no
+  dedicated ADR - see `docs/week10-item-search-stock-detail.md`): the first
+  full-stack vertical slice on the new contract/design-system/canonical-
+  stock foundation. Server cursor pagination for item search (proven to
+  5,200 items, real Postgres); a stock-detail read model from the canonical
+  StockLedger/StockMovement journal; a guided adjustment/reversal wizard
+  where every post requires a client-supplied idempotency key and goes
+  through `InventoryPostingService` exclusively; per-screen queries (not
+  the whole-workspace poll) on the frontend. The exception-first Dashboard
+  (SLA/backlog/stock-risk read model) is explicit backlog, not a shallow
+  hard-coded stand-in - building one honestly needs a product decision on
+  what "at risk" and "SLA" mean per queue, which this week did not make
+  unilaterally.

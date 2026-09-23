@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.8.0",
-    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module."
+    "version": "2026.10.0",
+    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items."
   },
   "servers": [
     { "url": "https://invexaretail-h1ps.onrender.com/api/v1", "description": "production" },
@@ -131,6 +131,103 @@
             }
           }
         }
+      },
+      "ItemSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "code": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "type": "string" },
+          "unit": { "type": "string" }
+        }
+      },
+      "ItemSearchPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ItemSummary" } },
+          "nextCursor": { "type": "string", "nullable": true, "description": "Opaque cursor (the last item's id). Pass back verbatim as `cursor` to fetch the next page; null means no more pages." }
+        }
+      },
+      "Movement": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "movementType": { "type": "string", "enum": ["OPENING_STOCK", "PURCHASE_RECEIPT", "SALES_DEDUCTION", "SALES_RETURN", "TRANSFER_OUT", "TRANSFER_IN", "COUNT_VARIANCE", "ADJUSTMENT", "WASTE", "DAMAGE", "EXPIRY_WRITE_OFF"] },
+          "qtyDelta": { "type": "number" },
+          "beforeBalance": { "type": "number" },
+          "afterBalance": { "type": "number" },
+          "locationId": { "type": "string" },
+          "lotId": { "type": "string", "nullable": true },
+          "reason": { "type": "string", "nullable": true },
+          "sourceDocument": { "type": "string", "nullable": true },
+          "actor": { "type": "string", "nullable": true },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "reversalOf": { "type": "string", "nullable": true, "description": "The id of the movement this one reverses, if any." }
+        }
+      },
+      "BranchBalance": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "locationName": { "type": "string" },
+          "onHand": { "type": "number" },
+          "reserved": { "type": "number" },
+          "quarantine": { "type": "number" },
+          "damaged": { "type": "number" },
+          "available": { "type": "number" }
+        }
+      },
+      "LotDetail": {
+        "type": "object",
+        "properties": {
+          "lotId": { "type": "string" },
+          "lotNo": { "type": "string" },
+          "expiryDate": { "type": "string", "format": "date-time", "nullable": true },
+          "status": { "type": "string", "enum": ["AVAILABLE", "EXPIRED", "BLOCKED", "QUARANTINE"] },
+          "totalOnHand": { "type": "number" }
+        }
+      },
+      "ReconciliationStatus": {
+        "type": "object",
+        "description": "Whether StockLedger.onHand for one (lot, location) agrees with the sum of every StockMovement journal row for it - computed live from the canonical journal/projection (ADR-001), the same way scripts/reconcile-stock-journal.mjs does.",
+        "properties": {
+          "explained": { "type": "boolean" },
+          "journalSum": { "type": "number" },
+          "onHand": { "type": "number" },
+          "delta": { "type": "number" }
+        }
+      },
+      "StockDetail": {
+        "type": "object",
+        "properties": {
+          "itemId": { "type": "string" },
+          "itemCode": { "type": "string" },
+          "itemName": { "type": "string" },
+          "branches": { "type": "array", "items": { "$ref": "#/components/schemas/BranchBalance" } },
+          "lots": { "type": "array", "items": { "$ref": "#/components/schemas/LotDetail" } },
+          "movements": { "type": "array", "items": { "$ref": "#/components/schemas/Movement" } },
+          "reconciliation": { "type": "array", "items": { "$ref": "#/components/schemas/ReconciliationStatus" } }
+        }
+      },
+      "AdjustRequest": {
+        "type": "object",
+        "required": ["locationId", "lotId", "qtyDelta", "reason", "idempotencyKey"],
+        "properties": {
+          "locationId": { "type": "string" },
+          "lotId": { "type": "string" },
+          "qtyDelta": { "type": "number", "description": "Positive to add stock, negative to remove. Never zero." },
+          "reason": { "type": "string" },
+          "idempotencyKey": { "type": "string", "description": "Client-generated (e.g. a UUID). Retrying with the same key returns the original result instead of posting again." }
+        }
+      },
+      "PostMovementResult": {
+        "type": "object",
+        "properties": {
+          "duplicate": { "type": "boolean", "description": "True if this idempotency key had already been posted - the movement/balance below are the ORIGINAL result, not a new post." },
+          "movement": { "$ref": "#/components/schemas/Movement" },
+          "balance": { "type": "object", "properties": { "onHand": { "type": "number" } } }
+        }
       }
     }
   },
@@ -221,6 +318,71 @@
           "403": { "description": "Non-admin caller.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
           "404": { "description": "Branch not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
           "409": { "description": "Branch has active stock, open transfers, or pending work.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BranchArchiveBlockers" } } } }
+        }
+      }
+    },
+    "/items/search": {
+      "get": {
+        "operationId": "searchItems",
+        "summary": "Server-paginated item search (cursor-based). Tested to 5,000+ items (Week 10).",
+        "tags": ["Items"],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" }, "description": "Free-text match against item name or code." },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "The previous page's `nextCursor` - never construct this client-side." },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 } }
+        ],
+        "responses": {
+          "200": { "description": "OK.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemSearchPage" } } } },
+          "400": { "description": "Invalid limit.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } }
+        }
+      }
+    },
+    "/items/{itemId}/stock-detail": {
+      "get": {
+        "operationId": "getStockDetail",
+        "summary": "Branch balances, lots, movement history and reconciliation status for one item, from the canonical journal/projection.",
+        "tags": ["Items"],
+        "parameters": [{ "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "OK.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StockDetail" } } } },
+          "403": { "description": "The item belongs to a different tenant (caught by enforceOperationalCompanyScope before this handler runs)." },
+          "404": { "description": "Item not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } }
+        }
+      }
+    },
+    "/items/{itemId}/adjust": {
+      "post": {
+        "operationId": "adjustItemStock",
+        "summary": "Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice.",
+        "tags": ["Items"],
+        "parameters": [{ "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdjustRequest" } } } },
+        "responses": {
+          "201": { "description": "Posted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PostMovementResult" } } } },
+          "200": { "description": "Duplicate of an already-posted idempotency key - the original result, not a new post.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PostMovementResult" } } } },
+          "400": { "description": "Missing/invalid locationId, lotId, qtyDelta, reason or idempotencyKey.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "403": { "description": "The item/location belongs to a different tenant." },
+          "404": { "description": "Item, location or lot not found for this tenant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "422": { "description": "Negative-stock policy blocked the adjustment.", "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" }, "code": { "const": "INSUFFICIENT_STOCK" } } } } } }
+        }
+      }
+    },
+    "/items/{itemId}/movements/{movementId}/reverse": {
+      "post": {
+        "operationId": "reverseItemMovement",
+        "summary": "Posts an equal-and-opposite movement. The original movement row is never edited. Reversing an already-reversed movement fails (409), and retrying a reversal request is itself idempotent via a derived key.",
+        "tags": ["Items"],
+        "parameters": [
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "movementId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "reason": { "type": "string" } } } } } },
+        "responses": {
+          "201": { "description": "Reversed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PostMovementResult" } } } },
+          "200": { "description": "Duplicate reversal request - the original reversal result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PostMovementResult" } } } },
+          "404": { "description": "Movement not found for this tenant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "409": { "description": "This movement has already been reversed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } }
         }
       }
     }

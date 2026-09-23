@@ -90,6 +90,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Server-paginated item search (cursor-based). Tested to 5,000+ items (Week 10). */
+        get: operations["searchItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/stock-detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Branch balances, lots, movement history and reconciliation status for one item, from the canonical journal/projection. */
+        get: operations["getStockDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice. */
+        post: operations["adjustItemStock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/movements/{movementId}/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Posts an equal-and-opposite movement. The original movement row is never edited. Reversing an already-reversed movement fails (409), and retrying a reversal request is itself idempotent via a derived key. */
+        post: operations["reverseItemMovement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -173,6 +241,86 @@ export interface components {
                 activeStock?: number;
                 openTransfers?: number;
                 pendingWork?: number;
+            };
+        };
+        ItemSummary: {
+            id?: string;
+            code?: string;
+            name?: string;
+            status?: string;
+            unit?: string;
+        };
+        ItemSearchPage: {
+            items?: components["schemas"]["ItemSummary"][];
+            /** @description Opaque cursor (the last item's id). Pass back verbatim as `cursor` to fetch the next page; null means no more pages. */
+            nextCursor?: string | null;
+        };
+        Movement: {
+            id?: string;
+            /** @enum {string} */
+            movementType?: "OPENING_STOCK" | "PURCHASE_RECEIPT" | "SALES_DEDUCTION" | "SALES_RETURN" | "TRANSFER_OUT" | "TRANSFER_IN" | "COUNT_VARIANCE" | "ADJUSTMENT" | "WASTE" | "DAMAGE" | "EXPIRY_WRITE_OFF";
+            qtyDelta?: number;
+            beforeBalance?: number;
+            afterBalance?: number;
+            locationId?: string;
+            lotId?: string | null;
+            reason?: string | null;
+            sourceDocument?: string | null;
+            actor?: string | null;
+            /** Format: date-time */
+            timestamp?: string;
+            /** @description The id of the movement this one reverses, if any. */
+            reversalOf?: string | null;
+        };
+        BranchBalance: {
+            locationId?: string;
+            locationName?: string;
+            onHand?: number;
+            reserved?: number;
+            quarantine?: number;
+            damaged?: number;
+            available?: number;
+        };
+        LotDetail: {
+            lotId?: string;
+            lotNo?: string;
+            /** Format: date-time */
+            expiryDate?: string | null;
+            /** @enum {string} */
+            status?: "AVAILABLE" | "EXPIRED" | "BLOCKED" | "QUARANTINE";
+            totalOnHand?: number;
+        };
+        /** @description Whether StockLedger.onHand for one (lot, location) agrees with the sum of every StockMovement journal row for it - computed live from the canonical journal/projection (ADR-001), the same way scripts/reconcile-stock-journal.mjs does. */
+        ReconciliationStatus: {
+            explained?: boolean;
+            journalSum?: number;
+            onHand?: number;
+            delta?: number;
+        };
+        StockDetail: {
+            itemId?: string;
+            itemCode?: string;
+            itemName?: string;
+            branches?: components["schemas"]["BranchBalance"][];
+            lots?: components["schemas"]["LotDetail"][];
+            movements?: components["schemas"]["Movement"][];
+            reconciliation?: components["schemas"]["ReconciliationStatus"][];
+        };
+        AdjustRequest: {
+            locationId: string;
+            lotId: string;
+            /** @description Positive to add stock, negative to remove. Never zero. */
+            qtyDelta: number;
+            reason: string;
+            /** @description Client-generated (e.g. a UUID). Retrying with the same key returns the original result instead of posting again. */
+            idempotencyKey: string;
+        };
+        PostMovementResult: {
+            /** @description True if this idempotency key had already been posted - the movement/balance below are the ORIGINAL result, not a new post. */
+            duplicate?: boolean;
+            movement?: components["schemas"]["Movement"];
+            balance?: {
+                onHand?: number;
             };
         };
     };
@@ -447,6 +595,209 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BranchArchiveBlockers"];
+                };
+            };
+        };
+    };
+    searchItems: {
+        parameters: {
+            query?: {
+                /** @description Free-text match against item name or code. */
+                q?: string;
+                status?: string;
+                /** @description The previous page's `nextCursor` - never construct this client-side. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemSearchPage"];
+                };
+            };
+            /** @description Invalid limit. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    getStockDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockDetail"];
+                };
+            };
+            /** @description The item belongs to a different tenant (caught by enforceOperationalCompanyScope before this handler runs). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    adjustItemStock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustRequest"];
+            };
+        };
+        responses: {
+            /** @description Duplicate of an already-posted idempotency key - the original result, not a new post. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostMovementResult"];
+                };
+            };
+            /** @description Posted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostMovementResult"];
+                };
+            };
+            /** @description Missing/invalid locationId, lotId, qtyDelta, reason or idempotencyKey. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The item/location belongs to a different tenant. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item, location or lot not found for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Negative-stock policy blocked the adjustment. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        message?: string;
+                        /** @constant */
+                        code?: "INSUFFICIENT_STOCK";
+                    };
+                };
+            };
+        };
+    };
+    reverseItemMovement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+                movementId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Duplicate reversal request - the original reversal result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostMovementResult"];
+                };
+            };
+            /** @description Reversed. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostMovementResult"];
+                };
+            };
+            /** @description Movement not found for this tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description This movement has already been reversed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
         };

@@ -50,6 +50,7 @@ const enterprise_analytics_js_1 = __importDefault(require("./routes/enterprise-a
 const core_js_1 = __importDefault(require("./routes/core.js"));
 const transfers_js_1 = __importDefault(require("./routes/transfers.js"));
 const branches_js_1 = __importDefault(require("./routes/branches.js"));
+const items_js_1 = __importDefault(require("./routes/items.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
@@ -303,6 +304,7 @@ app.use('/api/v1', command_center_js_1.default);
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', transfers_js_1.default);
 app.use('/api/v1', branches_js_1.default);
+app.use('/api/v1', items_js_1.default);
 app.use('/api/v1', core_js_1.default);
 app.use('/api/v1', catalog_procurement_js_1.default);
 app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {

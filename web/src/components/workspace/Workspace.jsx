@@ -3,6 +3,7 @@ import { canAccessSection } from '../../lib/permissions';
 import { DashboardPage } from './pages/DashboardPage';
 import { StockUpdatePage } from './pages/StockUpdatePage';
 import { InventoryPage } from './pages/InventoryPage';
+import { ItemStockDetailPage } from './pages/ItemStockDetailPage';
 import { CatalogPage } from './pages/CatalogPage';
 import { ExpiryPage } from './pages/ExpiryPage';
 import { CountsPage } from './pages/CountsPage';
@@ -30,6 +31,7 @@ const SECTION_PAGES = {
   dashboard: DashboardPage,
   'stock-update': StockUpdatePage,
   inventory: InventoryPage,
+  'item-search': ItemStockDetailPage,
   catalog: CatalogPage,
   expiry: ExpiryPage,
   counts: CountsPage,

@@ -42,5 +42,24 @@ export function createInvexaContractClient(config: ClientConfig) {
       archive: (id: string) =>
         request<JsonOf<paths['/branches/{id}/archive']['post']['responses']['200']>>(config, 'POST', `/branches/${id}/archive`),
     },
+    items: {
+      search: (params: { q?: string; status?: string; cursor?: string; limit?: number } = {}) => {
+        const query = new URLSearchParams();
+        if (params.q) query.set('q', params.q);
+        if (params.status) query.set('status', params.status);
+        if (params.cursor) query.set('cursor', params.cursor);
+        if (params.limit) query.set('limit', String(params.limit));
+        const qs = query.toString();
+        return request<JsonOf<paths['/items/search']['get']['responses']['200']>>(config, 'GET', `/items/search${qs ? `?${qs}` : ''}`);
+      },
+      stockDetail: (itemId: string) =>
+        request<JsonOf<paths['/items/{itemId}/stock-detail']['get']['responses']['200']>>(config, 'GET', `/items/${itemId}/stock-detail`),
+      adjust: (itemId: string, body: paths['/items/{itemId}/adjust']['post']['requestBody']['content']['application/json']) =>
+        request<JsonOf<paths['/items/{itemId}/adjust']['post']['responses']['201']>>(config, 'POST', `/items/${itemId}/adjust`, body),
+      reverseMovement: (itemId: string, movementId: string, reason?: string) =>
+        request<JsonOf<paths['/items/{itemId}/movements/{movementId}/reverse']['post']['responses']['201']>>(
+          config, 'POST', `/items/${itemId}/movements/${movementId}/reverse`, reason ? { reason } : undefined,
+        ),
+    },
   };
 }

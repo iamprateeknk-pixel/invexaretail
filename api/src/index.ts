@@ -11,6 +11,7 @@ import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
 import transfersRouter from './routes/transfers.js';
 import branchesRouter from './routes/branches.js';
+import itemsRouter from './routes/items.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
@@ -282,6 +283,7 @@ app.use('/api/v1', commandCenterRouter);
 // Mounted last so the prefixed routers above keep priority over its paths.
 app.use('/api/v1', transfersRouter);
 app.use('/api/v1', branchesRouter);
+app.use('/api/v1', itemsRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 
