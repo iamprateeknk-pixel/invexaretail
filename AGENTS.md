@@ -227,10 +227,13 @@ of whether the linter catches a given instance:
    `lib/po-lifecycle.ts`, `lib/returns-rma.ts`, or `lib/domain-policies.ts`
    for `StockCount`/`Order`), not a bare
    `prisma.transfer.update({ data: { status: ... } })` scattered in a route.
-   Not machine-checked yet (Week 7 added the modules and wired every known
-   write site; a lint rule to catch a *new* bare status write is a standing
-   follow-up, the same honest gap as the `unscoped-tenant-query` rule only
-   covering `Item` today).
+   Machine-checked since Week 16: `scripts/architecture-lint.mjs`'s
+   `bare-status-write` rule catches a *new* bare status write for these
+   five models outside their lifecycle module. It found six pre-existing
+   ones on introduction (`lib/orders.ts` x3, `lib/persistence.ts`,
+   `routes/catalog-procurement.ts`, `routes/operations-extension.ts`) -
+   tracked in the lint baseline, not fixed yet - see
+   `docs/week16-state-transition-lint.md`.
 
 ## Architecture decisions
 
@@ -384,3 +387,18 @@ tracks how much of it):
   baseline (101 total for this rule) instead of hidden inside a narrower
   rule, per this repo's own "make the gap visible, not silently patched or
   silently ignored" convention for `float-money` and `direct-stock-write`.
+- Week 16 (`api/scripts/architecture-lint.mjs`, no dedicated ADR - see
+  `docs/week16-state-transition-lint.md`): closes the other named standing
+  follow-up from Week 7's prohibited-pattern #7 - a lint rule for bare
+  status writes outside the four lifecycle modules
+  (`transfer-lifecycle.ts`, `po-lifecycle.ts`, `returns-rma.ts`,
+  `domain-policies.ts`). Found six pre-existing bare writes (`lib/orders.ts`
+  x3, `lib/persistence.ts` - the latter's `status as any` a visible sign it
+  bypasses the lifecycle module's typed checking entirely -
+  `routes/catalog-procurement.ts`, `routes/operations-extension.ts`), a
+  smaller and more contained finding than Week 15's. Not fixed this week -
+  migrating each safely means confirming it doesn't already duplicate
+  validation `domain-policies.ts` now provides, a real review, not a
+  mechanical fix - tracked in the lint baseline instead. Rules #2 and #7,
+  AGENTS.md's only two named-but-unbuilt lint follow-ups, are both
+  machine-checked as of this week.

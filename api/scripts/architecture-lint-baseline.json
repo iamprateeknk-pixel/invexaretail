@@ -252,6 +252,24 @@
     "snippet": "return prisma.order.findFirst({"
   },
   {
+    "rule": "bare-status-write",
+    "file": "src/lib/orders.ts",
+    "line": 190,
+    "snippet": "await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });"
+  },
+  {
+    "rule": "bare-status-write",
+    "file": "src/lib/orders.ts",
+    "line": 243,
+    "snippet": "await prisma.order.update({"
+  },
+  {
+    "rule": "bare-status-write",
+    "file": "src/lib/orders.ts",
+    "line": 457,
+    "snippet": "const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });"
+  },
+  {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/persistence.ts",
     "line": 97,
@@ -301,6 +319,12 @@
   },
   {
     "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 951,
+    "snippet": "await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });"
+  },
+  {
+    "rule": "bare-status-write",
     "file": "src/lib/persistence.ts",
     "line": 951,
     "snippet": "await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });"
@@ -400,6 +424,12 @@
     "file": "src/routes/catalog-procurement.ts",
     "line": 843,
     "snippet": "const items = await prisma.item.findMany({ include: { tags: true } });"
+  },
+  {
+    "rule": "bare-status-write",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 508,
+    "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -610,6 +640,12 @@
     "file": "src/routes/operations-extension.ts",
     "line": 2427,
     "snippet": ": await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;"
+  },
+  {
+    "rule": "bare-status-write",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1732,
+    "snippet": "const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });"
   },
   {
     "rule": "float-money",

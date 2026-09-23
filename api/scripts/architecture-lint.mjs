@@ -92,7 +92,48 @@ const RULES = [
       return false;
     },
   },
+  {
+    id: 'bare-status-write',
+    description: 'Transfer/Order/PurchaseOrder/StockCount/ReturnRequest status change outside its lifecycle module (AGENTS.md #7)',
+    // Checked separately in run() with a multi-line window, not per-single-line.
+    test() {
+      return false;
+    },
+  },
 ];
+
+// Week 16: AGENTS.md prohibited pattern #7's "standing follow-up" - a lint
+// rule to catch a *new* bare status write outside the four lifecycle
+// modules (transfer-lifecycle.ts, po-lifecycle.ts, returns-rma.ts,
+// domain-policies.ts handles StockCount/Order itself). Same window-based
+// approach as unscoped-tenant-query: flag `prisma.<model>.update(` whose
+// nearby `data: { ... }` mentions `status`, unless the file is one of the
+// lifecycle modules (or the model's own repository/command-service layer,
+// where the lifecycle module's own transition function is what's calling
+// through) or InventoryPostingService/reservation.ts's status column reads.
+const STATUS_WRITE_MODELS = ['transfer', 'order', 'purchaseOrder', 'stockCount', 'returnRequest'];
+const STATUS_WRITE_ALLOWLIST = new Set([
+  'src/lib/transfer-lifecycle.ts',
+  'src/lib/po-lifecycle.ts',
+  'src/lib/returns-rma.ts',
+  'src/lib/domain-policies.ts',
+]);
+const STATUS_WRITE_WINDOW = 6; // lines to look ahead for a `status` field in the update's data
+
+function findBareStatusWrites(file, lines) {
+  if (STATUS_WRITE_ALLOWLIST.has(file)) return [];
+  const violations = [];
+  lines.forEach((line, idx) => {
+    for (const model of STATUS_WRITE_MODELS) {
+      const pattern = new RegExp(`prisma\\.${model}\\.(update|updateMany)\\(`);
+      if (!pattern.test(line)) continue;
+      const window = lines.slice(idx, idx + STATUS_WRITE_WINDOW).join('\n');
+      if (!/\bstatus\s*:/.test(window)) continue;
+      violations.push({ rule: 'bare-status-write', file, line: idx + 1, snippet: line.trim().slice(0, 160) });
+    }
+  });
+  return violations;
+}
 
 // Week 15: widened from the original Item-only pilot. Still not the full
 // OPERATIONAL_TENANT_TABLES list (a naive multi-line window check gets
@@ -138,6 +179,7 @@ function run() {
       }
     });
     violations.push(...findUnscopedTenantQueries(file, lines));
+    violations.push(...findBareStatusWrites(file, lines));
   }
   const schemaPath = join(ROOT, 'prisma', 'schema.prisma');
   if (existsSync(schemaPath)) {
