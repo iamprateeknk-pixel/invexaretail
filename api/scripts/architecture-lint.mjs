@@ -86,7 +86,7 @@ const RULES = [
   },
   {
     id: 'unscoped-tenant-query',
-    description: 'prisma.item.* call with no companyId/tenantId nearby (AGENTS.md #2, ADR-002) - pilot rule, Item model only',
+    description: `prisma.<model>.* call with no companyId/tenantId nearby (AGENTS.md #2, ADR-002) - covers ${'`'}TENANT_SCOPED_MODELS${'`'} below, not the full OPERATIONAL_TENANT_TABLES list yet`,
     // Checked separately in run() with a multi-line window, not per-single-line.
     test() {
       return false;
@@ -94,20 +94,30 @@ const RULES = [
   },
 ];
 
-// ADR-002 pilot: only prisma.item.* is checked for now (the model this
-// week's tenant-scoping work covers - see lib/repositories/item-repository.ts).
-// Extending this to every OPERATIONAL_TENANT_TABLES model is future work;
-// a naive multi-line window check gets noisier the more models it covers.
-const UNSCOPED_QUERY_PATTERN = /prisma\.item\.(findMany|findFirst|findUnique|update|updateMany|delete|deleteMany|upsert|create|createMany)\(/;
+// Week 15: widened from the original Item-only pilot. Still not the full
+// OPERATIONAL_TENANT_TABLES list (a naive multi-line window check gets
+// noisier the more models it covers, and some of that list - Bin, Job,
+// AuditLog, etc. - has not been reviewed for whether tenantId/companyId is
+// even the right nearby signal) - this covers the models this repo's own
+// weeks of work have actually touched and reasoned about the scoping story
+// for (see AGENTS.md's Tenant scope row and each model's own module-
+// ownership row). Extending further is still standing follow-up.
+const TENANT_SCOPED_MODELS = [
+  'item', 'transfer', 'purchaseOrder', 'order', 'stockCount', 'returnRequest',
+  'exceptionCase', 'importBatch', 'importRow', 'expiryAlert',
+];
 const UNSCOPED_QUERY_WINDOW = 8; // lines to look ahead for a companyId/tenantId mention
 
 function findUnscopedTenantQueries(file, lines) {
   const violations = [];
   lines.forEach((line, idx) => {
-    if (!UNSCOPED_QUERY_PATTERN.test(line)) return;
-    const window = lines.slice(idx, idx + UNSCOPED_QUERY_WINDOW).join('\n');
-    if (/companyId|tenantId/.test(window)) return;
-    violations.push({ rule: 'unscoped-tenant-query', file, line: idx + 1, snippet: line.trim().slice(0, 160) });
+    for (const model of TENANT_SCOPED_MODELS) {
+      const pattern = new RegExp(`prisma\\.${model}\\.(findMany|findFirst|findUnique|update|updateMany|delete|deleteMany|upsert|create|createMany)\\(`);
+      if (!pattern.test(line)) continue;
+      const window = lines.slice(idx, idx + UNSCOPED_QUERY_WINDOW).join('\n');
+      if (/companyId|tenantId/.test(window)) continue;
+      violations.push({ rule: 'unscoped-tenant-query', file, line: idx + 1, snippet: line.trim().slice(0, 160) });
+    }
   });
   return violations;
 }

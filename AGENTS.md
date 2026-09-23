@@ -204,7 +204,12 @@ of whether the linter catches a given instance:
    must go through it, not add another direct `prisma.item.*` call next to
    the 16 pre-existing ones tracked in `docs/tenant-scope-coverage.md`.
    `scripts/architecture-lint.mjs`'s `unscoped-tenant-query` rule checks this
-   for `Item` today; extending it to other models is a standing follow-up.
+   for `TENANT_SCOPED_MODELS` (Week 15 widened this past the original
+   Item-only pilot to `item`/`transfer`/`purchaseOrder`/`order`/
+   `stockCount`/`returnRequest`/`exceptionCase`/`importBatch`/`importRow`/
+   `expiryAlert` - see `docs/week15-tenant-scope-lint-coverage.md`); the
+   full `OPERATIONAL_TENANT_TABLES` list is still wider than what's
+   checked, a standing follow-up.
 3. **Float for money or quantity.** New schema fields for price, cost,
    amount, tax, or similar must not be `Float`. (Existing `Float` quantity/
    money fields are a large pre-existing baseline, not to be "fixed" as a
@@ -364,3 +369,18 @@ tracks how much of it):
   `worker.ts`. `lib/outbox-worker.ts` itself is untouched and still
   correctly unwired - the fully-tested retry/POISON machinery stays ready
   for a real consumer if one appears later.
+- Week 15 (`api/scripts/architecture-lint.mjs`, no dedicated ADR - see
+  `docs/week15-tenant-scope-lint-coverage.md`): widens the
+  `unscoped-tenant-query` lint rule from its Item-only pilot (standing
+  follow-up named since Week 4/10) to ten models. Mechanical and
+  deliberately small, but its output was not: it surfaced 85 new
+  violations, almost all in `routes/operations-extension.ts`, many a
+  genuine pattern of trusting a bare `req.params.id` lookup
+  (`prisma.order.findUnique({ where: { id } })` and similar) with no
+  tenant check anywhere nearby - the same class of gap Week 12 fixed for
+  `ExceptionCase`, far more widespread. Not fixed this week (a real
+  multi-week remediation, most naturally paired with future
+  `operations-extension.ts` extraction slices) - tracked in the lint
+  baseline (101 total for this rule) instead of hidden inside a narrower
+  rule, per this repo's own "make the gap visible, not silently patched or
+  silently ignored" convention for `float-money` and `direct-stock-write`.

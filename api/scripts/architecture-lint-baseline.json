@@ -7,9 +7,165 @@
   },
   {
     "rule": "unscoped-tenant-query",
+    "file": "src/lib/count-tolerance.ts",
+    "line": 80,
+    "snippet": "prisma.stockCount.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
     "file": "src/lib/evidence-rules.ts",
     "line": 65,
     "snippet": "prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/exceptions.ts",
+    "line": 80,
+    "snippet": "const exceptionCase = await prisma.exceptionCase.create({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-batch-store.ts",
+    "line": 222,
+    "snippet": "const row = await prisma.importBatch.findUnique({ where: { id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-batch-store.ts",
+    "line": 231,
+    "snippet": "const rows = await prisma.importRow.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-batch-store.ts",
+    "line": 275,
+    "snippet": "const updated = await prisma.importBatch.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-batch-store.ts",
+    "line": 306,
+    "snippet": "const row = await prisma.importBatch.findFirst({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 139,
+    "snippet": "const rows = await prisma.importRow.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 150,
+    "snippet": "await prisma.importRow.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 156,
+    "snippet": "await prisma.importRow.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 165,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { validRows: validCount, invalidRows: invalidCount, status: 'VALIDATED' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 180,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { status: 'FAILED' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 183,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { status: 'QUEUED_FOR_COMMIT' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 208,
+    "snippet": "const rows = await prisma.importRow.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 217,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { status: finalStatus, invalidRows: remainingInvalid } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 241,
+    "snippet": "await prisma.importRow.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 259,
+    "snippet": "await prisma.importRow.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 264,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { checkpointRowNumber: row.rowNumber } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 288,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { status: 'REVERSING' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 291,
+    "snippet": "const rows = await prisma.importRow.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 299,
+    "snippet": "await prisma.importRow.update({ where: { id: row.id }, data: { status: 'REVERSED' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 302,
+    "snippet": "await prisma.importRow.update({ where: { id: row.id }, data: { status: 'REVERSED' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 309,
+    "snippet": "await prisma.importBatch.update({ where: { id: batchId }, data: { status: 'REVERSED', reversedAt: new Date() } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-commit-service.ts",
+    "line": 317,
+    "snippet": "const rows = await prisma.importRow.findMany({ where: { importBatchId: batchId, status: 'INVALID' }, orderBy: { rowNumber: 'asc' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-reversal.ts",
+    "line": 58,
+    "snippet": "return prisma.importBatch.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/import-worker.ts",
+    "line": 21,
+    "snippet": "const pending = await prisma.importBatch.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/item-master-service.ts",
+    "line": 143,
+    "snippet": "prisma.expiryAlert.deleteMany({ where: { itemId } }),"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -25,9 +181,129 @@
   },
   {
     "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 180,
+    "snippet": "const stale = await prisma.order.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 190,
+    "snippet": "await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 218,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 243,
+    "snippet": "await prisma.order.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 254,
+    "snippet": "return prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 267,
+    "snippet": "const backordered = await prisma.order.findMany({ where: { status: 'BACKORDERED' }, orderBy: { createdAt: 'asc' }, select: { id: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 360,
+    "snippet": "const order = await prisma.order.create({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 407,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 443,
+    "snippet": "return prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 449,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 457,
+    "snippet": "const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/orders.ts",
+    "line": 481,
+    "snippet": "return prisma.order.findFirst({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
     "file": "src/lib/persistence.ts",
     "line": 97,
     "snippet": "prisma.item.findMany({ include: { lots: true } }),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 98,
+    "snippet": "prisma.stockCount.findMany(),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 99,
+    "snippet": "prisma.transfer.findMany({ include: { lines: true } }),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 650,
+    "snippet": "await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 656,
+    "snippet": "await prisma.stockCount.upsert({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 707,
+    "snippet": "await prisma.stockCount.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 843,
+    "snippet": "await prisma.transfer.upsert({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 941,
+    "snippet": "await prisma.transfer.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/persistence.ts",
+    "line": 951,
+    "snippet": "await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -44,8 +320,32 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
+    "line": 198,
+    "snippet": "const orders = await prisma.purchaseOrder.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 246,
+    "snippet": "const purchaseOrders = await prisma.purchaseOrder.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
     "line": 269,
     "snippet": "const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 273,
+    "snippet": "const purchaseOrder = await prisma.purchaseOrder.create({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 308,
+    "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -56,8 +356,38 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
+    "line": 488,
+    "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 508,
+    "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
     "line": 537,
     "snippet": "prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 543,
+    "snippet": "prisma.transfer.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 602,
+    "snippet": "const purchaseOrder = await prisma.purchaseOrder.create({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/catalog-procurement.ts",
+    "line": 641,
+    "snippet": "const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -73,9 +403,45 @@
   },
   {
     "rule": "unscoped-tenant-query",
+    "file": "src/routes/imports.ts",
+    "line": 71,
+    "snippet": "const existing = await prisma.importBatch.findUnique({ where: { id: error.existingBatchId } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 386,
+    "snippet": "await prisma.expiryAlert.upsert({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 401,
+    "snippet": "await prisma.expiryAlert.updateMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 576,
+    "snippet": "const current = await prisma.expiryAlert.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 579,
+    "snippet": "const alert = await prisma.expiryAlert.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
     "line": 678,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 780,
+    "snippet": "prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since } }, include: { item: true }, orderBy: { countDate: 'desc' }, t"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -86,14 +452,158 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
+    "line": 1291,
+    "snippet": "const orders = await prisma.order.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1407,
+    "snippet": "prisma.order.findUnique({ where: { id: orderId }, include: { lines: true } }),"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1431,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1445,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1459,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1490,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1532,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1546,
+    "snippet": "if (!canAccessLocation(req, (await prisma.order.findUnique({ where: { id: shipment.orderId } }))?.fulfillmentLocationId ?? '')) {"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1569,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1622,
+    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1625,
+    "snippet": "const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id }, include: { lines: true }, orderBy: { createdAt: 'desc' } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
     "line": 1640,
     "snippet": "for (const row of await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, category: true } })) categories.set(row.id, row.category ?? n"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
+    "line": 1667,
+    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1732,
+    "snippet": "const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1743,
+    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1783,
+    "snippet": "await prisma.exceptionCase.updateMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1791,
+    "snippet": "const refreshed = await prisma.returnRequest.findUnique({ where: { id: returnRequest.id }, include: { lines: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1800,
+    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 1803,
+    "snippet": "const updated = await prisma.returnRequest.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
     "line": 2098,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2147,
+    "snippet": "const cases = await prisma.exceptionCase.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2204,
+    "snippet": "const existing = await prisma.exceptionCase.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2225,
+    "snippet": "const updated = await prisma.exceptionCase.update({ where: { id: existing.id }, data });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2234,
+    "snippet": "const existing = await prisma.exceptionCase.findUnique({ where: { id: req.params.id } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2246,
+    "snippet": "const updated = await prisma.exceptionCase.update({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/routes/operations-extension.ts",
+    "line": 2303,
+    "snippet": "const transfer = await prisma.transfer.findUnique({ where: { id: transferId }, include: { lines: true } }).catch(() => null);"
   },
   {
     "rule": "unscoped-tenant-query",
