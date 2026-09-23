@@ -1,16 +1,17 @@
 services:
-  mysql:
-    image: mysql:8.4
+  postgres:
+    image: postgres:17
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
-      MYSQL_DATABASE: retail_inventory
-      MYSQL_USER: retail
-      MYSQL_PASSWORD: retail_password
-      MYSQL_ROOT_PASSWORD: root_password
+      POSTGRES_DB: retail_inventory
+      POSTGRES_USER: retail
+      POSTGRES_PASSWORD: retail_password
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      test: ["CMD-SHELL", "pg_isready -U retail -d retail_inventory"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -19,7 +20,7 @@ services:
     build: ./api
     restart: unless-stopped
     environment:
-      DATABASE_URL: mysql://retail:retail_password@mysql:3306/retail_inventory
+      DATABASE_URL: postgresql://retail:retail_password@postgres:5432/retail_inventory
       JWT_SECRET: change-this-in-production
       SEED_PASSWORD: ChangeMe123!
       PORT: 4000
@@ -27,7 +28,7 @@ services:
     volumes:
       - uploads:/app/uploads
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
     ports:
       - "4000:4000"
@@ -41,5 +42,5 @@ services:
       - "5173:80"
 
 volumes:
-  mysql_data:
+  postgres_data:
   uploads:

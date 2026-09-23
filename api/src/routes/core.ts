@@ -1161,7 +1161,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       return res.status(403).json({ message: 'This user cannot review counts at the selected location.' });
     }
     const reviewedAt = new Date().toISOString();
-    // Claim and post the variance in MySQL before mutating the in-memory mirror.
+    // Claim and post the variance in PostgreSQL before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
     await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason });
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason);

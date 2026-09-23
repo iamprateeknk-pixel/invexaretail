@@ -6,8 +6,15 @@ export declare function saveTransferEvidence(transferId: string, uploadedBy: str
     mimeType: string;
     size: number;
 }>;
-export declare function listTransferEvidence(transferId: string): Promise<unknown>;
-export declare function readTransferEvidence(transferId: string, id: string): Promise<{
+export declare function listTransferEvidence(transferId: string): Promise<{
+    size: number;
+    id: string;
+    createdAt: Date;
+    fileName: string;
+    transferId: string;
     mimeType: string;
-    contents: Uint8Array;
+}[]>;
+export declare function readTransferEvidence(transferId: string, id: string): Promise<{
+    contents: Uint8Array<ArrayBuffer>;
+    mimeType: string;
 }>;

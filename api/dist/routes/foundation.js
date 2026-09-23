@@ -259,7 +259,7 @@ router.post('/stock-movements/:id/reverse', async (req, res) => {
     const original = await db_js_1.prisma.stockMovement.findUnique({ where: { id: req.params.id } });
     if (!original)
         return res.status(404).json({ message: 'Movement not found.' });
-    const alreadyReversed = await db_js_1.prisma.stockMovement.findFirst({ where: { metadata: { path: '$.reversalOf', equals: original.id } } }).catch(() => null);
+    const alreadyReversed = await db_js_1.prisma.stockMovement.findFirst({ where: { metadata: { path: ['reversalOf'], equals: original.id } } }).catch(() => null);
     if (alreadyReversed)
         return res.status(409).json({ message: 'This movement has already been reversed.' });
     const reason = typeof req.body.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'Manual reversal';

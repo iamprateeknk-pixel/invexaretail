@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { databaseEnabled } from './persistence.js';
 import { prisma } from './db.js';
 
@@ -21,10 +22,16 @@ export function canReceive(subscriber: Pick<EventSubscriber, 'companyId' | 'loca
 
 async function persistEvent(event: DomainEvent): Promise<void> {
   if (!databaseEnabled) return;
-  await prisma.$executeRawUnsafe(
-    'INSERT INTO `DomainEventOutbox` (`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt`) VALUES (?, ?, ?, ?, ?, ?)',
-    event.topic, event.companyId, event.locationIds?.length ? JSON.stringify(event.locationIds) : null, event.actorId ?? null, event.requestId ?? null, new Date(event.at),
-  );
+  await prisma.domainEventOutbox.create({
+    data: {
+      topic: event.topic,
+      companyId: event.companyId,
+      locationIds: event.locationIds?.length ? event.locationIds : Prisma.JsonNull,
+      actorId: event.actorId ?? null,
+      requestId: event.requestId ?? null,
+      occurredAt: new Date(event.at),
+    },
+  });
 }
 
 /** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
@@ -67,12 +74,16 @@ function locations(value: unknown): string[] | undefined {
 }
 export async function durableEventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>): Promise<DomainEvent[]> {
   if (!databaseEnabled) return eventsSince(lastEventId, subscriber).kind === 'replay' ? (eventsSince(lastEventId, subscriber) as { events: DomainEvent[] }).events : [];
-  const rows = await prisma.$queryRawUnsafe<DurableRow[]>('SELECT `id`,`topic`,`companyId`,`locationIds`,`actorId`,`requestId`,`occurredAt` FROM `DomainEventOutbox` WHERE `id` > ? AND `companyId` = ? ORDER BY `id` ASC LIMIT 500', lastEventId, subscriber.companyId);
-  return rows.map((row) => ({ id: Number(row.id), topic: row.topic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
+  const rows = await prisma.domainEventOutbox.findMany({
+    where: { id: { gt: BigInt(lastEventId) }, companyId: subscriber.companyId },
+    orderBy: { id: 'asc' },
+    take: 500,
+  }) as DurableRow[];
+  return rows.map((row) => ({ id: Number(row.id), topic: row.topic as EventTopic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
 }
 export async function durableLatestEventId(): Promise<number> {
   if (!databaseEnabled) return latestEventId();
-  const rows = await prisma.$queryRawUnsafe<Array<{ id: bigint | number | null }>>('SELECT MAX(`id`) AS `id` FROM `DomainEventOutbox`');
-  return Number(rows[0]?.id ?? 0);
+  const result = await prisma.domainEventOutbox.aggregate({ _max: { id: true } });
+  return Number(result._max.id ?? 0);
 }
-export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }
+export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }

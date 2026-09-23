@@ -6,9 +6,17 @@ export declare function saveItemPhoto(itemId: string, uploadedBy: string, fileNa
     size: number;
     isPrimary: boolean;
 }>;
-export declare function listItemPhotos(itemId: string): Promise<unknown>;
-export declare function readItemPhoto(itemId: string, id: string): Promise<{
+export declare function listItemPhotos(itemId: string): Promise<{
+    size: number;
+    id: string;
+    createdAt: Date;
+    itemId: string;
+    fileName: string;
     mimeType: string;
-    contents: Uint8Array;
+    isPrimary: boolean;
+}[]>;
+export declare function readItemPhoto(itemId: string, id: string): Promise<{
+    contents: Uint8Array<ArrayBuffer>;
+    mimeType: string;
 }>;
 export declare function deleteItemPhoto(itemId: string, id: string): Promise<void>;

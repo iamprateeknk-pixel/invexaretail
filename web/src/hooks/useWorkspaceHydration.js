@@ -237,7 +237,7 @@ export function useWorkspaceHydration({
 
   useEffect(() => {
     // SSE covers writes made through this API. A slower reconciliation pass
-    // also picks up changes written directly to MySQL by imports or admin
+    // also picks up changes written directly to PostgreSQL by imports or admin
     // tools, even while the live stream itself is healthy.
     if (!session || !authToken) return undefined;
 

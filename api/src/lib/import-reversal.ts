@@ -148,11 +148,14 @@ export async function reverseImportBatch(input: {
         skipDuplicates: true,
       });
       await tx.$executeRaw(Prisma.sql`
-        UPDATE StockLedger sl
-        JOIN (
-          ${Prisma.join(chunk.map((line) => Prisma.sql`SELECT ${line.itemId} AS itemId, ${line.lotId} AS lotId, ${line.locationId} AS locationId, ${line.qtyDelta} AS qtyDelta`), ' UNION ALL ')}
-        ) d ON sl.itemId = d.itemId AND sl.lotId = d.lotId AND sl.locationId = d.locationId
-        SET sl.onHand = GREATEST(0, sl.onHand + d.qtyDelta), sl.version = sl.version + 1, sl.lastUpdatedAt = NOW()
+        UPDATE "StockLedger" AS sl
+        SET "onHand" = GREATEST(0, sl."onHand" + d."qtyDelta"),
+            "version" = sl."version" + 1,
+            "lastUpdatedAt" = NOW()
+        FROM (VALUES
+          ${Prisma.join(chunk.map((line) => Prisma.sql`(${line.itemId}, ${line.lotId}, ${line.locationId}, ${line.qtyDelta})`))}
+        ) AS d("itemId", "lotId", "locationId", "qtyDelta")
+        WHERE sl."itemId" = d."itemId" AND sl."lotId" = d."lotId" AND sl."locationId" = d."locationId"
       `);
     }
     await tx.importBatch.update({
