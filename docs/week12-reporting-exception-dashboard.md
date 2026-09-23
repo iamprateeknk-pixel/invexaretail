@@ -98,6 +98,6 @@ judgment call, changeable without touching query logic.
   ordering needs a raw-SQL `CASE` (Prisma can't express the
   CRITICAL > HIGH > MEDIUM > LOW severity order via a plain enum sort,
   since it isn't alphabetical) - deferred rather than silently wrong.
-- **`contracts/openapi.json` has not been extended** with the two new
-  `/reports/*` paths - same immediate-follow-up gap Week 11 left for its
-  own new routes, not yet closed for either.
+- ~~`contracts/openapi.json` has not been extended with the two new
+  `/reports/*` paths~~ - done in Week 13
+  (`docs/week13-contract-catchup.md`).

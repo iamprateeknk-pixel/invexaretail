@@ -60,7 +60,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005); god-router extraction started Week 8 | 5 routes extracted so far (`routes/transfers.ts`, `routes/branches.ts`) - full accounting and backlog in `docs/route-ownership-matrix.md`. New routes for an already-extracted domain go in its own router, not back into `core.ts`/`operations-extension.ts`. |
 | Transfers (extracted) | `api/src/routes/transfers.ts` (thin route), `lib/transfer-command-service.ts` (command service), `lib/repositories/transfer-repository.ts` (`AccessContext`-typed read repository) | First bounded-context extraction (Week 8). Any test harness that mounts `coreRouter` directly and exercises `/transfers` routes must also mount `transfersRouter` (see `transfer-logistics.http.test.ts`, `item-master.http.test.ts`, `route-auth-coverage.test.ts` for the pattern) - those two routes no longer live on `coreRouter`. |
 | Branches | `api/src/routes/branches.ts`, `lib/branch-service.ts` | Migrated from the retired `routes/foundation.ts` (Week 8) - DB-only, no in-memory mirror. |
-| OpenAPI contract | `api/contracts/openapi.json`, `contracts/generated/` | Covers only extracted routes (Week 8, ADR-006 addendum); grows as each future module is extracted. |
+| OpenAPI contract | `api/contracts/openapi.json`, `contracts/generated/` | Covers only extracted routes (Week 8, ADR-006 addendum); grows as each future module is extracted. As of Week 13, includes the Week 11 `/imports/staged/*` and Week 12 `/reports/*` endpoints (added a version late, closing a gap both weeks' own docs flagged as immediate follow-up). |
 | Route/nav permission gate (web) | `web/src/lib/permissions.js` (`canAccessSection`), consumed by `web/src/lib/workspace.js` (nav visibility) and `web/src/components/workspace/Workspace.jsx` (route render gate) | One source of truth (Week 9) - both the nav and the route guard call the same function. Do not add a second per-page or per-route role table; add the restriction to `NAVIGATION`'s `roles`/`adminOnly` field instead, and both callers pick it up. |
 | Shared feedback components (web) | `web/src/components/ui/feedback-states.jsx` (`LoadingState`, `EmptyState`, `ErrorState`, `PermissionDeniedState`, `OfflineState`) | Week 9. New loading/empty/error/permission/offline UI in `web/` uses these, not a new one-off card. |
 | Web design tokens | `web/src/index.css` | Single source (Week 9) - color, radius, focus, density (defined, not yet adopted) tokens. Spec: `docs/web/token-specification.md`. `admin-panel/` is not yet consolidated onto this token set (documented gap). |
@@ -327,3 +327,15 @@ tracks how much of it):
   does carry a real `companyId`), not by migrating those five models'
   schemas (out of this week's scope; the same honest gap ADR-002's row
   already names for Identity/Organization).
+- Week 13 (`api/contracts/openapi.json`, `contracts/generated/`, no
+  dedicated ADR - see `docs/week13-contract-catchup.md`): another inferred-
+  scope week (same guide-unavailable situation as Week 12), deliberately
+  small - closes the one gap both Week 11 and Week 12 explicitly flagged as
+  "immediate follow-up" and left open, rather than adding new speculative
+  scope. Adds the six `/imports/staged/*` and two `/reports/*` paths (plus
+  their schemas) to the contract, bumped to `2026.13.0`; regenerates
+  `contracts/generated/types.ts`; extends `contracts/generated/client.ts`'s
+  typed wrapper with `imports.*`/`reports.*`. Every other standing gap named
+  in Weeks 11-12 (no import-wizard or dashboard UI, `startOutboxWorker`
+  still unwired, the `tenantId`-only baseline on five domain models) is
+  untouched, not silently resolved.

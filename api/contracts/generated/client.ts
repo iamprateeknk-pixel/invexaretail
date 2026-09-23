@@ -61,5 +61,32 @@ export function createInvexaContractClient(config: ClientConfig) {
           config, 'POST', `/items/${itemId}/movements/${movementId}/reverse`, reason ? { reason } : undefined,
         ),
     },
+    imports: {
+      createBatch: (body: paths['/imports/staged/batches']['post']['requestBody']['content']['application/json']) =>
+        request<JsonOf<paths['/imports/staged/batches']['post']['responses']['201']>>(config, 'POST', '/imports/staged/batches', body),
+      get: (id: string) =>
+        request<JsonOf<paths['/imports/staged/batches/{id}']['get']['responses']['200']>>(config, 'GET', `/imports/staged/batches/${id}`),
+      validate: (id: string) =>
+        request<JsonOf<paths['/imports/staged/batches/{id}/validate']['post']['responses']['200']>>(config, 'POST', `/imports/staged/batches/${id}/validate`),
+      commit: (id: string) =>
+        request<JsonOf<paths['/imports/staged/batches/{id}/commit']['post']['responses']['202']>>(config, 'POST', `/imports/staged/batches/${id}/commit`),
+      failures: (id: string) =>
+        request<JsonOf<paths['/imports/staged/batches/{id}/failures']['get']['responses']['200']>>(config, 'GET', `/imports/staged/batches/${id}/failures`),
+      reverse: (id: string, reason?: string) =>
+        request<JsonOf<paths['/imports/staged/batches/{id}/reverse']['post']['responses']['200']>>(
+          config, 'POST', `/imports/staged/batches/${id}/reverse`, reason ? { reason } : undefined,
+        ),
+    },
+    reports: {
+      dashboard: () =>
+        request<JsonOf<paths['/reports/dashboard']['get']['responses']['200']>>(config, 'GET', '/reports/dashboard'),
+      exceptions: (params: { cursor?: string; limit?: number } = {}) => {
+        const query = new URLSearchParams();
+        if (params.cursor) query.set('cursor', params.cursor);
+        if (params.limit) query.set('limit', String(params.limit));
+        const qs = query.toString();
+        return request<JsonOf<paths['/reports/exceptions']['get']['responses']['200']>>(config, 'GET', `/reports/exceptions${qs ? `?${qs}` : ''}`);
+      },
+    },
   };
 }

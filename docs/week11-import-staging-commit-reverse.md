@@ -162,6 +162,6 @@ route rejects a request with no credentials.
   attempted this week - this is a new path for new uploads, not a
   replacement, mirroring how Week 6 left baseline `StockLedger` writers
   documented rather than force-migrated (`docs/inventory-posting-coverage.md`).
-- **`contracts/openapi.json` has not yet been extended** with the six new
-  `/imports/staged/*` paths - tracked as immediate follow-up, not silently
-  dropped.
+- ~~`contracts/openapi.json` has not yet been extended with the six new
+  `/imports/staged/*` paths~~ - done in Week 13
+  (`docs/week13-contract-catchup.md`).

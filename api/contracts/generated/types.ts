@@ -158,6 +158,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/imports/staged/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stage a new import batch (Week 11). Rejects a byte-identical re-upload as a duplicate rather than creating a second batch. */
+        post: operations["createImportBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/staged/batches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tenant-scoped batch status lookup. */
+        get: operations["getImportBatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/staged/batches/{id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read-only per-row validation (item/lot/branch resolution, quantity/date parsing) - no stock is touched. */
+        post: operations["validateImportBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/staged/batches/{id}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queues the batch for commit and returns immediately (202) - the background worker (lib/import-worker.ts) does the actual posting through InventoryPostingService, so a 5,000+ row file never holds the request open. */
+        post: operations["commitImportBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/staged/batches/{id}/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Downloadable, spreadsheet-operator-safe failure export - one {rowNumber, field, code, message} record per row error. */
+        get: operations["getImportBatchFailures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/staged/batches/{id}/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reverses every committed row's movement (equal-and-opposite post via InventoryPostingService). Safe to call twice - an already-reversed row is tolerated, not double-reversed. */
+        post: operations["reverseImportBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Week 12's exception-first dashboard: exception queue summary, stock-risk summary, and per-queue SLA backlog, all tenant-scoped. See docs/week12-reporting-exception-dashboard.md for the 'at risk'/SLA definitions. */
+        get: operations["getReportingDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/exceptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cursor-paginated open ExceptionCase rows, soonest-due first. */
+        get: operations["listOpenExceptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -322,6 +458,113 @@ export interface components {
             balance?: {
                 onHand?: number;
             };
+        };
+        /** @description Week 11's staged import lifecycle state machine row. */
+        ImportBatch: {
+            id?: string;
+            /** @enum {string} */
+            type?: "PURCHASE" | "SALES" | "SALES_RETURN" | "OPENING_STOCK";
+            /** @enum {string} */
+            status?: "DRAFT" | "VALIDATED" | "QUEUED_FOR_COMMIT" | "COMMITTING" | "COMMITTED" | "PARTIALLY_COMMITTED" | "FAILED" | "REVERSING" | "REVERSED";
+            fileName?: string;
+            sourceFormat?: string;
+            fileHash?: string;
+            totalRows?: number;
+            validRows?: number;
+            invalidRows?: number;
+            /** @description Highest row number committed so far - a crash/restart resumes past this, never before it. */
+            checkpointRowNumber?: number;
+            /** @enum {string} */
+            commitPolicy?: "ALL_OR_NOTHING" | "PARTIAL_SUCCESS";
+            companyId?: string;
+            importedById?: string;
+            /** Format: date-time */
+            reversedAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /** @description One staged row before validation - already-parsed JSON, not a raw CSV/file upload (see docs/week11-import-staging-commit-reverse.md's 'Not done'). */
+        ImportRawRow: {
+            itemCode?: string;
+            lotNo?: string;
+            quantity?: number | string;
+            /** @description Required for SALES/SALES_RETURN/OPENING_STOCK - ignored for PURCHASE, which always posts at Head Office. */
+            branchName?: string;
+            /** Format: date-time */
+            transactionAt?: string;
+        };
+        ImportBatchCreateRequest: {
+            /** @enum {string} */
+            type: "PURCHASE" | "SALES" | "SALES_RETURN" | "OPENING_STOCK";
+            fileName: string;
+            /** @default json */
+            sourceFormat: string;
+            rows: components["schemas"]["ImportRawRow"][];
+        };
+        ImportBatchCreateResponse: {
+            batch?: components["schemas"]["ImportBatch"];
+            /** @description true if this file's checksum matched an existing batch - the returned batch is that existing one, not a new one. */
+            duplicate?: boolean;
+        };
+        ImportValidationSummary: {
+            validRows?: number;
+            invalidRows?: number;
+        };
+        ImportFailedRow: {
+            rowNumber?: number;
+            field?: string;
+            code?: string;
+            message?: string;
+        };
+        ExceptionQueueSummary: {
+            open?: number;
+            byStatus?: {
+                [key: string]: number;
+            };
+            byPriority?: {
+                [key: string]: number;
+            };
+            /** @description Open cases whose dueAt has passed. */
+            breached?: number;
+        };
+        ExceptionListItem: {
+            id?: string;
+            type?: string;
+            status?: string;
+            priority?: string;
+            title?: string;
+            /** Format: date-time */
+            dueAt?: string | null;
+            itemId?: string | null;
+            locationId?: string | null;
+            valueAtRisk?: number | null;
+        };
+        ExceptionListPage: {
+            items?: components["schemas"]["ExceptionListItem"][];
+            nextCursor?: string | null;
+        };
+        StockRiskSummary: {
+            stockouts?: number;
+            quarantined?: number;
+            activeExpiryAlerts?: number;
+        };
+        QueueBacklog: {
+            pending?: number;
+            breached?: number;
+        };
+        QueueBacklogSummary: {
+            transfers?: components["schemas"]["QueueBacklog"];
+            purchaseOrders?: components["schemas"]["QueueBacklog"];
+            orders?: components["schemas"]["QueueBacklog"];
+            returns?: components["schemas"]["QueueBacklog"];
+            stockCounts?: components["schemas"]["QueueBacklog"];
+        };
+        DashboardSummary: {
+            exceptions?: components["schemas"]["ExceptionQueueSummary"];
+            stockRisk?: components["schemas"]["StockRiskSummary"];
+            queues?: components["schemas"]["QueueBacklogSummary"];
         };
     };
     responses: never;
@@ -798,6 +1041,288 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    createImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportBatchCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Duplicate file - returns the existing batch instead of creating a new one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportBatchCreateResponse"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportBatchCreateResponse"];
+                };
+            };
+            /** @description Missing/invalid type, fileName, or rows. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    getImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        batch?: components["schemas"]["ImportBatch"];
+                    };
+                };
+            };
+            /** @description Not found or belongs to another company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    validateImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportValidationSummary"];
+                };
+            };
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Batch is not in a state that can be validated. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    commitImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        queued?: boolean;
+                    };
+                };
+            };
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Batch is not VALIDATED (or was an ALL_OR_NOTHING batch with invalid rows, and has already moved straight to FAILED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    getImportBatchFailures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        rows?: components["schemas"]["ImportFailedRow"][];
+                    };
+                };
+            };
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    reverseImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reversed?: boolean;
+                    };
+                };
+            };
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Batch has nothing committed to reverse, or is already REVERSED. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    getReportingDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardSummary"];
+                };
+            };
+        };
+    };
+    listOpenExceptions: {
+        parameters: {
+            query?: {
+                /** @description The previous page's nextCursor - never construct this client-side. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExceptionListPage"];
                 };
             };
         };
