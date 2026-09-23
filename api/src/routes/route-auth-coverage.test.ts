@@ -10,6 +10,7 @@ import coreRouter from './core.js';
 import transfersRouter from './transfers.js';
 import branchesRouter from './branches.js';
 import itemsRouter from './items.js';
+import importsRouter from './imports.js';
 import catalogProcurementRouter from './catalog-procurement.js';
 import operationsExtensionRouter from './operations-extension.js';
 import campaignsRouter from './campaigns.js';
@@ -44,7 +45,7 @@ const fill = (path: string) => path.replace(/:[A-Za-z]+\??/g, 'probe').replace(/
 test('no route on the operational routers answers a request that carries no credentials', async () => {
   seedEnhancedUsersForMemoryMode(seedUsers, hashPassword('x'));
   const routers: Array<[string, Router]> = [
-    ['core', coreRouter], ['transfers', transfersRouter], ['branches', branchesRouter], ['items', itemsRouter], ['catalog-procurement', catalogProcurementRouter], ['operations-extension', operationsExtensionRouter],
+    ['core', coreRouter], ['transfers', transfersRouter], ['branches', branchesRouter], ['items', itemsRouter], ['imports', importsRouter], ['catalog-procurement', catalogProcurementRouter], ['operations-extension', operationsExtensionRouter],
     ['campaigns', campaignsRouter], ['item-master', itemMasterRouter], ['import-control-center', importControlCenterRouter],
     ['transfer-logistics', transferLogisticsRouter], ['command-center', commandCenterRouter],
   ];
