@@ -10,10 +10,15 @@ read those first if a rule below seems arbitrary.
   only backend Render deploys (see `render.yaml`); it owns the database.
 - `web/` - the deployed frontend (Vite).
 - `admin-panel/`, `mobile/` - separate deployables, own package.json each.
-- `backend/`, `database/` - legacy/unused (pre-`api/` design, MySQL/Sequelize).
-  Not deployed by anything in `render.yaml` or `docker-compose.yml`. Do not
-  add features here; see Week 18 of the execution guide for the
-  archive-after-parity-check plan.
+- `database/` was the pre-`api/` MySQL/Sequelize schema/migrations half of
+  the legacy prototype - already removed (an earlier commit, "Migrate
+  Invexa Retail to PostgreSQL and complete Week 1 controls"). `backend/`
+  was the other half (an in-memory-only route scaffold, never actually
+  wired to Sequelize/MySQL despite the dependency in its `package.json`)
+  and is archived as of Week 18 at
+  `docs/archive/legacy-backend-prototype/` after a full parity check found
+  `api/` has a real, tested, Postgres-backed equivalent for every one of
+  its routes - see that directory's `README.md`.
 - `api/contracts/` - the versioned OpenAPI contract (Week 8), covering only
   the routes that have been extracted out of the god routers so far (see
   `docs/route-ownership-matrix.md`). `contracts/generated/` is regenerated
@@ -419,3 +424,16 @@ tracks how much of it):
   `catalog-procurement.ts`'s several bare-id `findUnique`/`update` call
   sites (still tracked in the Week 15 lint baseline, unchanged); `Transfer`/
   `Order`/`StockCount`/`ExpiryAlert` remain `tenantId`-only.
+- Week 18 (`docs/archive/legacy-backend-prototype/`, no dedicated ADR - see
+  `docs/week18-legacy-backend-archive.md`): unlike Weeks 12-17, directly
+  named in this repo's own text - the Repository layout section has said
+  since before this session began "see Week 18 of the execution guide for
+  the archive-after-parity-check plan." `database/` (the MySQL/Sequelize
+  half) was already removed by an earlier commit; this archives `backend/`
+  (the other half) after confirming it was never actually wired to a
+  database at all (an in-memory-only scaffold - `sequelize` was a listed
+  dependency but no migration/seed/model file it referenced actually
+  existed) and that `api/` has a real, tested, Postgres-backed equivalent
+  for every one of its routes. Moved via `git mv` (history preserved) to
+  `docs/archive/legacy-backend-prototype/backend/`, with a README recording
+  the parity check.
