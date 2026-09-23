@@ -4,7 +4,7 @@ What was checked, what was found, what changed, and what is still open.
 
 ## Checked and found sound
 - **Authentication coverage.** `api/src/routes/route-auth-coverage.test.ts` enumerates every route on the operational routers and calls it with no credentials. None answers. The test fails if a new route is added without a guard.
-- **Injection.** No raw SQL is built from request data (`$queryRawUnsafe` calls use `?` parameters; the only interpolated SQL is schema DDL from constants). No `eval`, `child_process` or redirects.
+- **Injection.** Request data is passed through Prisma or parameterized PostgreSQL queries. No `eval`, `child_process` or unsafe redirects.
 - **Transport and abuse.** Helmet, CORS allow-list, a 240/min API rate limit and separate login / OTP limiters are in place. `JWT_SECRET` is mandatory in production.
 - **Role checks on new surfaces.** Command center and reports: admin, branch manager, auditor (branch managers see only their branches). Audit export: admin and auditor. Operational metrics: admin only. Covered by `chaos-authz.http.test.ts`.
 
@@ -20,9 +20,9 @@ What was checked, what was found, what changed, and what is still open.
 
 ## Open (not fixed here)
 - **Audit events carry no company id.** The command center and the export now show only the actions of the company's own users (plus system/connector actions), but a proper `companyId` on `AuditEvent` is the durable fix for a multi-tenant rollout.
-- **PO and returns routes were verified by typecheck and pure-logic tests only**, because they need MySQL. Exercise them once on staging.
+- **PO and returns routes were verified by typecheck and pure-logic tests only.** Exercise them against the managed PostgreSQL staging database before production promotion.
 - **Metrics are in-process.** They reset on restart and are per instance. Ship them to a metrics backend before scaling out.
-- **`npm audit` (API, production deps): 6 findings, all inside Prisma's own bundled tooling** (`mysql2`, `mariadb`, `deepmerge-ts` under `node_modules/prisma`). The fix is a breaking Prisma major upgrade (`npm audit fix --force` would install prisma 6.x), so it was not forced. Plan it as its own change with a staging run. Web: 0 findings.
+- **Dependency audit evidence must be refreshed before release.** Prisma CLI may carry database-driver packages as transitive tooling dependencies even though Invexa's runtime and direct dependencies are PostgreSQL-only; assess findings by reachable production impact and upgrade Prisma separately when required.
 
 ## Failure and load tests added
 - Ten simultaneous identical requests for a count, a weight count and a transfer receipt each produce exactly one effect.

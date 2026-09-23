@@ -19,9 +19,13 @@ jobs:
     name: API build tests and startup smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+      TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+      SEED_PASSWORD: InvexaCiOnly123
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17
         env:
           POSTGRES_DB: invexa_ci
           POSTGRES_USER: ci
@@ -44,7 +48,7 @@ jobs:
           node-version: 22
 
       - name: Install API dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Validate Prisma schema
         run: npx prisma validate
@@ -59,8 +63,9 @@ jobs:
 
       - name: Deploy migrations to real Postgres
         run: npm run db:migrate
-        env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Seed Postgres for readiness smoke
+        run: npm run db:seed
 
       - name: Run Postgres integration coverage
         run: npx tsx --test src/lib/postgres.integration.test.ts
@@ -145,7 +150,7 @@ jobs:
           node-version: 22
 
       - name: Install web dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test web utilities
         run: npm test

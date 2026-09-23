@@ -1,7 +1,16 @@
+databases:
+  - name: invexaretail-postgres
+    region: oregon
+    plan: free
+    postgresMajorVersion: "17"
+    connectionPool: none
+    databaseName: invexaretail
+    user: invexaretail
+
 services:
   - type: web
     name: invexaretail-api
-    env: node
+    runtime: node
     region: oregon
     plan: starter
     buildCommand: cd api && npm install && npm run build
@@ -17,7 +26,9 @@ services:
       - key: PORT
         value: 4000
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: invexaretail-postgres
+          property: connectionString
       - key: ALLOWED_ORIGINS
         value: https://invexaretail.com,https://www.invexaretail.com
       - key: JWT_SECRET
@@ -29,7 +40,7 @@ services:
 
   - type: worker
     name: invexaretail-worker
-    env: node
+    runtime: node
     region: oregon
     plan: starter
     buildCommand: cd api && npm install && npm run build
@@ -40,6 +51,8 @@ services:
       - key: REQUIRE_DATABASE
         value: "true"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: invexaretail-postgres
+          property: connectionString
       - key: ALERT_WEBHOOK_URL
         sync: false

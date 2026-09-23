@@ -65,7 +65,7 @@
 
 ### Data Integrity
 - ✅ Optimistic locking (version control)
-- ✅ Transaction consistency (MySQL)
+- ✅ Transaction consistency (PostgreSQL)
 - ✅ Comprehensive audit logging
 - ✅ Data validation at every step
 - ✅ Backup & disaster recovery
@@ -78,8 +78,8 @@
 - **Runtime**: Node.js 22 (LTS)
 - **Framework**: Express.js 5.x
 - **Language**: TypeScript
-- **ORM**: Prisma (MySQL)
-- **Database**: MySQL 8.4
+- **ORM**: Prisma (PostgreSQL)
+- **Database**: PostgreSQL 17
 - **Authentication**: JWT (jsonwebtoken)
 - **Security**: bcrypt, helmet, cors
 - **API Rate Limiting**: express-rate-limit
@@ -97,7 +97,7 @@
 - **Containerization**: Docker & Docker Compose
 - **Server**: Nginx (web) + Node (API)
 - **SSL/TLS**: Let's Encrypt (certbot)
-- **Database**: MySQL 8.4 in Docker
+- **Database**: PostgreSQL 17 in Docker
 - **Hosting**: Hostinger Cloud / VPS
 
 ### Testing
@@ -112,7 +112,7 @@
 ### Prerequisites
 - Docker & Docker Compose
 - Node.js 20+ (for local development)
-- MySQL 8.0+ (if not using Docker)
+- PostgreSQL 17+ (if not using Docker)
 - Git
 
 ### 1. Clone Repository
@@ -135,7 +135,7 @@ nano api/.env
 ### 3. Start with Docker Compose
 
 ```bash
-# Start all services (MySQL, API, Web)
+# Start all services (PostgreSQL, API, Web)
 docker-compose up -d
 
 # View logs
@@ -196,7 +196,7 @@ Demo accounts (seeded automatically):
         ┌────────────┬───────────┴────────────┬──────────┐
         │            │                        │          │
 ┌───────▼──────┐ ┌──▼──────────┐ ┌──────────▼──┐  Local
-│   MySQL      │ │  File Store │ │  Memory     │  Cache
+│ PostgreSQL   │ │  File Store │ │  Memory     │  Cache
 │   Database   │ │  (uploads)  │ │  Cache      │
 └──────────────┘ └─────────────┘ └─────────────┘
 ```
@@ -500,8 +500,8 @@ docker-compose up
 
 ### Database connection failed
 ```bash
-# Verify MySQL is healthy
-docker-compose exec mysql mysqladmin ping
+# Verify PostgreSQL is healthy
+docker compose exec postgres pg_isready -U retail -d retail_inventory
 
 # Check environment variables
 docker-compose exec api env | grep DATABASE
@@ -581,4 +581,3 @@ ISC License - See [LICENSE](LICENSE) file
 **Made with ❤️ for retail & warehouse management**
 
 © 2026 Retail Inventory Team. All rights reserved.
-
