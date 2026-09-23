@@ -74,6 +74,7 @@ const qc_receive_js_1 = require("../lib/qc-receive.js");
 const bin_stock_js_1 = require("../lib/bin-stock.js");
 const pick_wave_js_1 = require("../lib/pick-wave.js");
 const reservation_js_1 = require("../lib/reservation.js");
+const errors_js_1 = require("../lib/errors.js");
 const picker_js_1 = require("../lib/picker.js");
 const thermal_pdf_js_1 = require("../lib/thermal-pdf.js");
 const audit_js_1 = require("../lib/audit.js");
@@ -1056,6 +1057,9 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
         return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
     }
     catch (error) {
+        if ((0, errors_js_1.isDomainError)(error)) {
+            return res.status((0, errors_js_1.statusForErrorCode)(error.code)).json(error.toEnvelope());
+        }
         const message = error instanceof Error ? error.message : 'Stock count was not found.';
         return res.status(message.includes('not found') ? 404 : 400).json({ message });
     }
@@ -1478,11 +1482,11 @@ router.post('/transfers', async (req, res) => {
         try {
             await (0, reservation_js_1.reserveStockForTransfer)(validated.lines.map((line) => ({
                 itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-            })));
+            })), { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, actorId: req.user.id, requestId: res.locals.requestId, traceId: res.locals.requestId });
         }
         catch (error) {
             if (error instanceof reservation_js_1.InsufficientStockError)
-                return res.status(409).json({ message: error.message });
+                return res.status((0, errors_js_1.statusForErrorCode)(error.code)).json(error.toEnvelope());
             throw error;
         }
         try {

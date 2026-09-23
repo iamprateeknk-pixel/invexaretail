@@ -6,6 +6,7 @@ import { recordAudit } from './audit.js';
 import { databaseEnabled, persistAudit } from './persistence.js';
 import { listItems, listLocations, listStockLedger } from './repository.js';
 import { estimateDispatchAndDelivery } from './promise-engine.js';
+import { assertValidOrderTransition } from './domain-policies.js';
 
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
@@ -182,6 +183,7 @@ export async function expireStaleReservations(): Promise<number> {
     });
     for (const order of stale) {
       try {
+        await assertValidOrderTransition(order.status as never, 'EXPIRED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed' });
         await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
           itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
         })));
@@ -237,6 +239,7 @@ export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEF
 
     const remaining = await prisma.orderLine.count({ where: { orderId: order.id, lotId: null, requestedQty: { gt: 0 } } });
     if (remaining === 0) {
+      await assertValidOrderTransition(order.status as never, 'RESERVED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated' });
       await prisma.order.update({
         where: { id: order.id },
         data: { status: 'RESERVED', reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) },
@@ -403,7 +406,7 @@ export async function fulfillOrder(orderId: string, actorId: string) {
   await expireStaleReservations();
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
-  if (order.status !== 'RESERVED') throw new Error(`Order cannot be fulfilled while ${order.status}.`);
+  await assertValidOrderTransition(order.status as never, 'FULFILLED', order.id, { actorId, actorRole: 'SYSTEM' });
 
   await prisma.$transaction(async (tx) => {
     for (const line of order.lines) {
@@ -445,8 +448,8 @@ export async function cancelOrder(orderId: string, actorId: string) {
   await expireStaleReservations();
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
-  if (order.status === 'FULFILLED') throw new Error('A fulfilled order cannot be cancelled; use a return instead.');
   if (order.status === 'CANCELLED' || order.status === 'EXPIRED') return order;
+  await assertValidOrderTransition(order.status as never, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
 
   await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
     itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,

@@ -11,6 +11,8 @@ import { aggregateOpeningStock, type StockImportPreview } from './stock-import.j
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { hydrateActiveWorkflow } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
+import { assertValidCountReviewTransition, type CountReviewStatus } from './domain-policies.js';
+import { DomainError } from './errors.js';
 
 export const databaseEnabled = Boolean(resolveDatabaseUrl());
 
@@ -720,6 +722,19 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
 
+  // Week 7: name the legal moves centrally instead of relying only on the
+  // `WHERE reviewStatus = 'PENDING_REVIEW'` claim below to reject a bad
+  // target status. The claim still does the concurrency-safe part (two
+  // simultaneous reviews of the same count can't both win); this rejects an
+  // illegal *target* (e.g. something other than APPROVED/REJECTED/RECOUNT)
+  // before the transaction opens, with a stable error code and an audit row.
+  await assertValidCountReviewTransition(
+    'PENDING_REVIEW',
+    (count.status ?? 'PENDING_REVIEW') as CountReviewStatus,
+    count.id,
+    { actorId: count.reviewedBy ?? 'system', actorRole: count.role ?? 'UNKNOWN', reason: count.reviewReason },
+  );
+
   await prisma.$transaction(async (tx) => {
     const claimed = await tx.stockCount.updateMany({
       where: { id: count.id, reviewStatus: 'PENDING_REVIEW' },
@@ -732,7 +747,9 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
         reviewReason: count.reviewReason ?? null,
       },
     });
-    if (claimed.count !== 1) throw new Error('Stock count was already reviewed; variance was not posted again.');
+    if (claimed.count !== 1) {
+      throw new DomainError('CONCURRENT_UPDATE_CONFLICT', 'Stock count was already reviewed; variance was not posted again.');
+    }
 
     if (count.status === 'APPROVED') {
       const variance = count.physicalQuantity - count.bookQty;

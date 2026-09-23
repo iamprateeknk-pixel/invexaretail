@@ -87,6 +87,16 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      - name: Run atomic reservation coverage against real Postgres (Week 7)
+        run: npx tsx --test src/lib/reservation.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run outbox worker delivery/retry/poison coverage against real Postgres (ADR-006 / Week 7)
+        run: npx tsx --test src/lib/outbox-worker.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 

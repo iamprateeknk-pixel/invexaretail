@@ -2234,6 +2234,21 @@ model DomainEventOutbox {
   requestId   String?
   occurredAt  DateTime @default(now())
 
+  // Week 7: worker delivery state. `status` starts PENDING; the worker moves
+  // it to DELIVERED on success or, after MAX_DELIVERY_ATTEMPTS failures, to
+  // POISON (a visible, queryable exception - never silently dropped).
+  // `availableAt` is the retry/backoff gate: a failed attempt pushes it
+  // forward instead of retrying immediately. The status column itself is
+  // this worker's durable cursor - `SELECT ... WHERE status = 'PENDING'
+  // FOR UPDATE SKIP LOCKED` needs no separate offset table and is safe for
+  // more than one worker process to poll concurrently.
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  lastError   String?
+  deliveredAt DateTime?
+
   @@index([companyId, id])
   @@index([occurredAt])
+  @@index([status, availableAt])
 }

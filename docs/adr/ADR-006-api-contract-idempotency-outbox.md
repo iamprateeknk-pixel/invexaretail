@@ -92,3 +92,49 @@ the outbox model change rolls back with ADR-004.
   without false positives across 34 routers); a future week can add a
   route-response-shape test once enough routes have adopted it to set a
   meaningful baseline.
+
+## Addendum (Week 7): the outbox worker, and the stable error envelope shipped
+
+The gap named above - "Worker/idempotent-consumer semantics for this outbox
+... remain a Week 7 task" - is closed this week:
+
+- **`lib/outbox-worker.ts`**: `drainOutboxOnce(handler, batchSize)` claims a
+  batch of `PENDING` rows with `SELECT ... FOR UPDATE SKIP LOCKED` (safe for
+  more than one worker process to poll concurrently), hands each to a
+  delivery handler, and durably records the outcome on the row itself -
+  `status` (`PENDING`/`DELIVERED`/`POISON`), `attempts`, `availableAt`
+  (retry/backoff gate) and `lastError`. This *is* the durable cursor: no
+  separate offset table, because the row's own status is authoritative and
+  cannot drift from what was actually delivered the way a separate cursor
+  table could.
+- **Crash safety**: a claimed row's `availableAt` is pushed forward (a
+  30-second lease) but its `status` stays `PENDING` until the handler
+  succeeds. A worker that crashes mid-delivery leaves the row `PENDING`; once
+  the lease expires, the next drain reclaims it. An event can therefore be
+  redelivered at least once after a crash, never lost - callers are expected
+  to tolerate that the same idempotency-key discipline used everywhere else
+  in this codebase already requires.
+- **Poison events**: after `MAX_DELIVERY_ATTEMPTS` (5) failed attempts with
+  exponential backoff (2s/4s/8s/16s/32s), a row moves to `status = 'POISON'`
+  with `lastError` populated - a visible, queryable exception
+  (`listPoisonEvents()`), never a silently dropped event. `requeuePoisonEvent`
+  is the operator recovery path.
+- **Reservation writes its outbox row transactionally now**: the
+  `recordOutboxEventInTransaction` helper in `event-bus.ts` lets a caller
+  pass the same `tx` it used for its business write, so the outbox row
+  commits or rolls back with the business state instead of the old
+  publish-then-persist-separately sequence that could lose an event in the
+  gap between them. Only the reservation primitive (this week's other
+  deliverable) has been switched to it; the many existing `publishEvent()`
+  call sites elsewhere in the codebase keep their existing post-commit,
+  fire-and-forget persist - migrating those is future work, not silently
+  broken by this addition (both paths write to the same table; a handler
+  never needs to know which path an event arrived through).
+- **Stable error envelope, now enforced for the new code**: `lib/errors.ts`'s
+  `DomainError` (`{ error, code, traceId }`) is thrown by the reservation
+  primitive and the new `lib/domain-policies.ts` transition guards, and
+  `src/index.ts`'s last-resort error handler now recognizes it and returns
+  the envelope with the matching HTTP status instead of collapsing it into a
+  generic 500. This is adoption for the new Week 7 code, not the full
+  retrofit this ADR already scoped as future work in its original text
+  above.

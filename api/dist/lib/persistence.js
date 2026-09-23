@@ -47,6 +47,8 @@ const enterprise_repository_js_1 = require("./enterprise-repository.js");
 const stock_import_js_1 = require("./stock-import.js");
 const industry_packs_js_1 = require("./industry-packs.js");
 const tenant_scope_js_1 = require("./saas/tenant-scope.js");
+const domain_policies_js_1 = require("./domain-policies.js");
+const errors_js_1 = require("./errors.js");
 exports.databaseEnabled = Boolean((0, db_js_1.resolveDatabaseUrl)());
 const demoUsers = {
     'admin@retail.local': { id: 'user-admin-1', email: 'admin@retail.local', role: 'ADMIN', assignedLocationIds: ['loc-1', 'loc-2', 'wh-1'] },
@@ -710,6 +712,13 @@ async function persistCountReview(count) {
     if (!exports.databaseEnabled)
         return;
     requireDatabase();
+    // Week 7: name the legal moves centrally instead of relying only on the
+    // `WHERE reviewStatus = 'PENDING_REVIEW'` claim below to reject a bad
+    // target status. The claim still does the concurrency-safe part (two
+    // simultaneous reviews of the same count can't both win); this rejects an
+    // illegal *target* (e.g. something other than APPROVED/REJECTED/RECOUNT)
+    // before the transaction opens, with a stable error code and an audit row.
+    await (0, domain_policies_js_1.assertValidCountReviewTransition)('PENDING_REVIEW', (count.status ?? 'PENDING_REVIEW'), count.id, { actorId: count.reviewedBy ?? 'system', actorRole: count.role ?? 'UNKNOWN', reason: count.reviewReason });
     await db_js_1.prisma.$transaction(async (tx) => {
         const claimed = await tx.stockCount.updateMany({
             where: { id: count.id, reviewStatus: 'PENDING_REVIEW' },
@@ -722,8 +731,9 @@ async function persistCountReview(count) {
                 reviewReason: count.reviewReason ?? null,
             },
         });
-        if (claimed.count !== 1)
-            throw new Error('Stock count was already reviewed; variance was not posted again.');
+        if (claimed.count !== 1) {
+            throw new errors_js_1.DomainError('CONCURRENT_UPDATE_CONFLICT', 'Stock count was already reviewed; variance was not posted again.');
+        }
         if (count.status === 'APPROVED') {
             const variance = count.physicalQuantity - count.bookQty;
             const ledger = await tx.stockLedger.findUnique({

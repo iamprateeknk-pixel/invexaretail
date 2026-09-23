@@ -33,6 +33,33 @@ async function persistEvent(event: DomainEvent): Promise<void> {
   });
 }
 
+// ADR-006 / Week 7: `publishEvent` above persists the outbox row *after*
+// business state has already committed - a crash in that gap loses the
+// event silently. Callers that need the outbox row to be atomic with their
+// own business write (the reservation primitive, the six transition maps)
+// use this instead, passing the same `tx` they used for the business
+// mutation, so the outbox row and the mutation commit or roll back together.
+// Minimal client typing kept local: `domainEventOutbox.create` is all this
+// needs, and importing Prisma.TransactionClient would tie this file to a
+// generated type that varies by Prisma version.
+type OutboxTxClient = { domainEventOutbox: { create: (args: { data: Record<string, unknown> }) => Promise<unknown> } };
+
+export async function recordOutboxEventInTransaction(
+  tx: OutboxTxClient,
+  input: Omit<DomainEvent, 'id' | 'at'>,
+): Promise<void> {
+  if (!databaseEnabled) return;
+  await tx.domainEventOutbox.create({
+    data: {
+      topic: input.topic,
+      companyId: input.companyId,
+      locationIds: input.locationIds?.length ? input.locationIds : undefined,
+      actorId: input.actorId ?? null,
+      requestId: input.requestId ?? null,
+    },
+  });
+}
+
 /** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 export function publishEvent(input: Omit<DomainEvent, 'id' | 'at'>): DomainEvent {
   const event: DomainEvent = { ...input, id: ++sequence, at: new Date().toISOString() };

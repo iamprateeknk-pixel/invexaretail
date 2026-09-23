@@ -28,6 +28,7 @@ import { enforceOperationalKillSwitches } from './lib/saas/kill-switch.js';
 import { enforcePlanLimits, enforceSuspendedCompany, enforceApiUsage } from './lib/saas/company-access.js';
 import { enforcePlanEntitlements } from './lib/saas/entitlements.js';
 import { resolveDatabaseUrl } from './lib/db.js';
+import { isDomainError, statusForErrorCode } from './lib/errors.js';
 
 if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
   throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
@@ -350,6 +351,14 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     error: error instanceof Error ? error.message : String(error),
   });
   if (res.headersSent) return;
+  // ADR-006 / Week 7: reservation, transition and outbox rejections carry a
+  // stable machine-readable code plus a trace ID - surface both rather than
+  // collapsing everything into a generic 500, so a client or dashboard can
+  // branch on `code` without parsing `error` text.
+  if (isDomainError(error)) {
+    res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    return;
+  }
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_ERROR',

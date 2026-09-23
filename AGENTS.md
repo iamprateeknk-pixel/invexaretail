@@ -37,7 +37,10 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 | Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
-| Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
+| Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts`, `lib/outbox-worker.ts` (idempotent delivery worker - shipped Week 7) | Durable outbox is the source of truth in database mode (ADR-006). A business write that needs its outbox row atomic with itself uses `recordOutboxEventInTransaction`, not `publishEvent`. |
+| Reservation | `api/src/lib/reservation.ts` (`reserveStockForTransfer`, `releaseReservedStock`) | Atomic conditional-`UPDATE` reservation (Week 7) - no read-then-write gap; see `docs/transition-policy-coverage.md`. |
+| State transitions / domain policy | `api/src/lib/domain-policies.ts` (central `DomainError`-shaped rejection + audit log), plus the three pre-existing per-entity modules: `lib/transfer-lifecycle.ts`, `lib/po-lifecycle.ts`, `lib/returns-rma.ts` | Six entities named in Week 7 scope (Transfer, StockCount, PurchaseOrder, Order, ReturnRequest, QcInspection); coverage and honest gaps in `docs/transition-policy-coverage.md`. |
+| Error catalog | `api/src/lib/errors.ts` (`DomainError`, `ERROR_CODES`, stable `{error, code, traceId}` envelope) | Surfaced uniformly by `src/index.ts`'s last-resort error handler for any `DomainError`, wherever it was thrown (ADR-006 Week 7 addendum). |
 | `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005) | |
 
 ## Required tests
@@ -75,6 +78,22 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   stock policy enforcement, and reversal (equal-and-opposite movement,
   original row never edited, reversal itself idempotent) -
   `inventory-posting-service.postgres.test.ts` is the reference.
+- A change to `lib/reservation.ts` must be exercised against real Postgres
+  with a genuine concurrent-request test (`Promise.allSettled` on two or
+  more real overlapping calls, not a sequential simulation) proving reserved
+  quantity never exceeds on-hand quantity - `reservation.postgres.test.ts`
+  is the reference.
+- A change to `lib/outbox-worker.ts` must be exercised against real Postgres
+  and cover: a simulated crash between claim and delivery does not lose the
+  event (it becomes available again once its lease expires), redelivering an
+  already-`DELIVERED` row is never attempted, and a handler that always
+  fails eventually becomes a visible `POISON` row without blocking other
+  pending events in the same batch - `outbox-worker.postgres.test.ts` is the
+  reference.
+- A new or changed state-transition rule for one of the six domain-policy
+  entities must reject its illegal-transition case with a `DomainError`
+  carrying a stable `code` and a `traceId`, not a bare `Error` -
+  `domain-policies.test.ts` is the reference.
 
 ## Prohibited patterns
 
@@ -110,9 +129,15 @@ of whether the linter catches a given instance:
    `lib/otp-auth.ts` only. Tokens: `jsonwebtoken` only.
 6. **Direct push to `main`.** All changes land through a reviewed PR.
 7. **State transitions outside the domain policy.** `Transfer`, `Order`,
-   `PurchaseOrder`, `StockCount` status changes must go through their
-   lifecycle module (e.g. `lib/transfer-lifecycle.ts`), not a bare
+   `PurchaseOrder`, `StockCount`, `ReturnRequest` status changes must go
+   through their lifecycle module (`lib/transfer-lifecycle.ts`,
+   `lib/po-lifecycle.ts`, `lib/returns-rma.ts`, or `lib/domain-policies.ts`
+   for `StockCount`/`Order`), not a bare
    `prisma.transfer.update({ data: { status: ... } })` scattered in a route.
+   Not machine-checked yet (Week 7 added the modules and wired every known
+   write site; a lint rule to catch a *new* bare status write is a standing
+   follow-up, the same honest gap as the `unscoped-tenant-query` rule only
+   covering `Item` today).
 
 ## Architecture decisions
 
@@ -137,4 +162,7 @@ tracks how much of it):
 - ADR-005: bounded contexts named (Identity, Catalog, Inventory, Warehouse,
   Procurement, Orders, Reporting); no new domains in the two mega-files
 - ADR-006: target API contract (versioned OpenAPI, idempotency keys, stable
-  error envelope) frozen; the durable Postgres outbox is already real
+  error envelope) frozen; the durable Postgres outbox is already real; Week 7
+  addendum ships the idempotent delivery worker (retry/backoff, poison
+  events, durable cursor via row status) and the `DomainError` envelope for
+  the reservation/transition code (`lib/outbox-worker.ts`, `lib/errors.ts`)

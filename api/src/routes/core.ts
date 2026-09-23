@@ -123,6 +123,7 @@ import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { persistBinStockDelta, STAGING_BIN_ID } from '../lib/bin-stock.js';
 import { lastKnownBin, sequenceKeyForBin } from '../lib/pick-wave.js';
 import { reserveStockForTransfer, releaseReservedStock, InsufficientStockError, TERMINAL_TRANSFER_STATUSES } from '../lib/reservation.js';
+import { isDomainError, statusForErrorCode } from '../lib/errors.js';
 import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { generateThermalTransferLabel, getReprintAudit, recordReprint } from '../lib/thermal-pdf.js';
 import { listAuditEvents, recordAudit } from '../lib/audit.js';
@@ -1204,6 +1205,9 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     await reconcileCampaignQuietly(reviewedCampaignId);
     return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
   } catch (error) {
+    if (isDomainError(error)) {
+      return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    }
     const message = error instanceof Error ? error.message : 'Stock count was not found.';
     return res.status(message.includes('not found') ? 404 : 400).json({ message });
   }
@@ -1646,9 +1650,9 @@ router.post('/transfers', async (req: Request, res: Response) => {
     try {
       await reserveStockForTransfer(validated.lines.map((line) => ({
         itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-      })));
+      })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID, actorId: req.user!.id, requestId: res.locals.requestId, traceId: res.locals.requestId });
     } catch (error) {
-      if (error instanceof InsufficientStockError) return res.status(409).json({ message: error.message });
+      if (error instanceof InsufficientStockError) return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
       throw error;
     }
 
