@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { prisma, resolveDatabaseUrl } from './db.js';
 
 export function evidenceMime(bytes: Buffer): string {
@@ -9,32 +8,26 @@ export function evidenceMime(bytes: Buffer): string {
   throw new Error('Only JPEG, PNG and WebP photos are supported.');
 }
 
-function requireDatabase(): void {
-  if (!resolveDatabaseUrl()) throw new Error('Durable evidence requires a connected PostgreSQL database.');
-}
-
 export async function saveTransferEvidence(transferId: string, uploadedBy: string, fileName: string, bytes: Buffer) {
-  requireDatabase();
-  const id = randomUUID();
+  if (!resolveDatabaseUrl()) throw new Error('Durable evidence requires a connected database.');
   const mimeType = evidenceMime(bytes);
   const safeName = fileName.replace(/[\\/\r\n\x00-\x1f]/g, '_').slice(0, 191) || 'photo';
-  await prisma.transferEvidence.create({
-    data: { id, transferId, uploadedBy, fileName: safeName, mimeType, byteSize: bytes.length, contents: new Uint8Array(bytes) },
+  const row = await prisma.transferEvidence.create({
+    data: { transferId, uploadedBy, fileName: safeName, mimeType, byteSize: bytes.length, contents: Uint8Array.from(bytes) },
   });
-  return { id, transferId, fileName: safeName, mimeType, size: bytes.length };
+  return { id: row.id, transferId, fileName: safeName, mimeType, size: bytes.length };
 }
 
 export async function listTransferEvidence(transferId: string) {
-  requireDatabase();
   const rows = await prisma.transferEvidence.findMany({
     where: { transferId },
-    select: { id: true, transferId: true, fileName: true, mimeType: true, byteSize: true, createdAt: true },
     orderBy: { createdAt: 'asc' },
+    select: { id: true, transferId: true, fileName: true, mimeType: true, byteSize: true, createdAt: true },
   });
-  return rows.map(({ byteSize, ...row }) => ({ ...row, size: byteSize }));
+  return rows.map((row) => ({ ...row, size: row.byteSize }));
 }
 
 export async function readTransferEvidence(transferId: string, id: string) {
-  requireDatabase();
-  return prisma.transferEvidence.findFirst({ where: { transferId, id }, select: { mimeType: true, contents: true } });
+  const row = await prisma.transferEvidence.findFirst({ where: { transferId, id }, select: { mimeType: true, contents: true } });
+  return row ? { mimeType: row.mimeType, contents: row.contents } : undefined;
 }

@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  createOtpSession,
-  verifyOtpSession,
-  clearOtpSession,
-} from './enterprise-repository.js';
-import {
   ACCESS_TOKEN_TTL_SECONDS,
-  REFRESH_TOKEN_TTL_SECONDS,
   generateJWT,
-  generateRefreshToken,
   resolveOtpDeliveryChannel,
   sendOtpEmail,
   setOtpSmtpSender,
@@ -20,16 +13,9 @@ function decodePayload(token: string): { exp: number; tokenType?: string } {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as { exp: number; tokenType?: string };
 }
 
-test('access tokens cannot be used as refresh tokens', () => {
+test('access tokens verify and carry userId/companyId', () => {
   const access = generateJWT('user-1', 'company-1');
   assert.deepEqual(verifyJWT(access, 'access'), { userId: 'user-1', companyId: 'company-1' });
-  assert.equal(verifyJWT(access, 'refresh'), null);
-});
-
-test('refresh tokens cannot be used as access tokens', () => {
-  const refresh = generateRefreshToken('user-1', 'company-1');
-  assert.deepEqual(verifyJWT(refresh, 'refresh'), { userId: 'user-1', companyId: 'company-1' });
-  assert.equal(verifyJWT(refresh, 'access'), null);
 });
 
 test('tampered tokens are rejected', () => {
@@ -37,25 +23,17 @@ test('tampered tokens are rejected', () => {
   assert.equal(verifyJWT(`${token}x`, 'access'), null);
 });
 
-test('refresh tokens issued in the same second are unique so logout can revoke one of them', () => {
-  const first = generateRefreshToken('user-1', 'company-1');
-  const second = generateRefreshToken('user-1', 'company-1');
-  assert.notEqual(first, second);
-});
-
-test('expired access tokens are rejected while refresh tokens outlive a workday', () => {
+test('expired access tokens are rejected', () => {
   const expired = generateJWT('user-1', 'company-1', -10, 'access');
   assert.equal(verifyJWT(expired, 'access'), null);
-
-  const access = generateJWT('user-1', 'company-1');
-  const refresh = generateRefreshToken('user-1', 'company-1');
-  const accessExp = decodePayload(access).exp;
-  const refreshExp = decodePayload(refresh).exp;
-  assert.ok(accessExp - Math.floor(Date.now() / 1000) <= ACCESS_TOKEN_TTL_SECONDS);
-  assert.ok(refreshExp - accessExp >= REFRESH_TOKEN_TTL_SECONDS - ACCESS_TOKEN_TTL_SECONDS - 5);
-  assert.equal(decodePayload(refresh).tokenType, 'refresh');
 });
 
+test('access tokens are short lived', () => {
+  const access = generateJWT('user-1', 'company-1');
+  const accessExp = decodePayload(access).exp;
+  assert.ok(accessExp - Math.floor(Date.now() / 1000) <= ACCESS_TOKEN_TTL_SECONDS);
+  assert.ok(ACCESS_TOKEN_TTL_SECONDS <= 15 * 60, 'ADR-003: access tokens must be short lived');
+});
 
 function withOtpEnv(overrides: Record<string, string | undefined>, run: () => Promise<void> | void) {
   const previous: Record<string, string | undefined> = {};
@@ -116,15 +94,6 @@ test('SMTP delivery failures do not leak an undelivered code', async () => {
     });
     assert.equal(await sendOtpEmail('admin@retail.local', '111222'), false);
   });
-});
-
-
-test('a new OTP replaces the previous unused code for the same email', () => {
-  createOtpSession('Admin@retail.local', '111111');
-  createOtpSession('admin@retail.local', '222222');
-  assert.equal(verifyOtpSession('admin@retail.local', '111111'), false);
-  assert.equal(verifyOtpSession('admin@retail.local', '222222'), true);
-  clearOtpSession('admin@retail.local');
 });
 
 test('production token generation requires an explicit JWT secret', () => {

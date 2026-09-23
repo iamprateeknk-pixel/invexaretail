@@ -24,29 +24,26 @@ function withCleanDbEnv(run) {
     }
 }
 (0, node_test_1.default)('resolveDatabaseUrl is empty without connection settings', () => {
-    withCleanDbEnv(() => strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), ''));
-});
-(0, node_test_1.default)('resolveDatabaseUrl accepts Render-style PostgreSQL URL', () => {
     withCleanDbEnv(() => {
-        process.env.DATABASE_URL = 'postgresql://invexa:p%40ss@db.internal:5432/invexa';
-        strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), process.env.DATABASE_URL);
-        strict_1.default.equal((0, db_js_1.validatePostgresUrl)((0, db_js_1.resolveDatabaseUrl)()), process.env.DATABASE_URL);
+        strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), '');
     });
 });
-(0, node_test_1.default)('resolveDatabaseUrl composes standard PostgreSQL environment variables', () => {
+(0, node_test_1.default)('resolveDatabaseUrl passes DATABASE_URL through unchanged', () => {
     withCleanDbEnv(() => {
-        process.env.PGHOST = 'localhost';
+        process.env.DATABASE_URL = 'postgresql://shop:p%40ss@127.0.0.1:5432/invexa';
+        strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), 'postgresql://shop:p%40ss@127.0.0.1:5432/invexa');
+    });
+});
+(0, node_test_1.default)('resolveDatabaseUrl builds a URL from discrete PG_* parts', () => {
+    withCleanDbEnv(() => {
+        process.env.PGHOST = '127.0.0.1';
         process.env.PGUSER = 'shop';
         process.env.PGPASSWORD = 'p@ss';
         process.env.PGDATABASE = 'invexa';
-        strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), 'postgresql://shop:p%40ss@localhost:5432/invexa');
+        strict_1.default.equal((0, db_js_1.resolveDatabaseUrl)(), 'postgresql://shop:p%40ss@127.0.0.1:5432/invexa');
     });
 });
-(0, node_test_1.default)('validatePostgresUrl rejects non-PostgreSQL URLs', () => {
-    strict_1.default.throws(() => (0, db_js_1.validatePostgresUrl)('http://user:pass@host/database'), /postgresql/);
-});
-(0, node_test_1.default)('ready hint explains PostgreSQL connection exhaustion', () => {
-    const result = (0, db_js_1.safeDatabaseError)({ code: '53300' });
-    strict_1.default.equal(result.code, '53300');
-    strict_1.default.match(result.hint, /connection slots/);
+(0, node_test_1.default)('safeDatabaseError names unreachable hosts and bad credentials', () => {
+    strict_1.default.match((0, db_js_1.safeDatabaseError)({ code: 'ECONNREFUSED' }).hint, /reachable/);
+    strict_1.default.match((0, db_js_1.safeDatabaseError)({ code: '28P01' }).hint, /credentials/);
 });

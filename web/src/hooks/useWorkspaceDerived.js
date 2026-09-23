@@ -127,8 +127,17 @@ export function useWorkspaceDerived({
     (entry) => entry.status !== 'RETURNED' && entry.dueAt && new Date(entry.dueAt) < clock,
   );
   const pageMeta = PAGE_META[activeSection] ?? PAGE_META.dashboard;
+  // Week 9: the one place this Set is built. `pack.hide` already carries
+  // both industry-pack hides and server-computed plan-entitlement hides
+  // (routes/core.ts's `/workspace/profile` merges
+  // `hiddenNavigationForCompany()` into it) - this was previously
+  // recomputed ad hoc in three different files (this one, WorkspaceChrome,
+  // useWorkspaceCore's navigateTo guard); now computed once and exposed
+  // through context so `lib/permissions.js`'s route-level gate
+  // (Workspace.jsx) uses the exact same value the nav uses, instead of a
+  // fourth divergent copy.
+  const hiddenModules = useMemo(() => new Set(workspaceProfile.pack?.hide ?? []), [workspaceProfile.pack?.hide]);
   const commandResults = useMemo(() => {
-    const hiddenModules = new Set(workspaceProfile.pack?.hide ?? []);
     const accessiblePages = visibleNavigationGroups(NAVIGATION, { role, hiddenModules })
       .flatMap((group) => group.items)
       .map((item) => ({ id: `page-${item.id}`, label: item.label, description: PAGE_META[item.id]?.[1] ?? 'Open workspace', icon: item.icon, action: () => navigateTo(item.id) }));
@@ -145,7 +154,7 @@ export function useWorkspaceDerived({
         : []),
     ];
     return filterCommandCatalog([...quickActions, ...accessiblePages], commandQuery);
-  }, [activeSection, commandQuery, locations, role, runtimeConfig, stock.openScanner, stock.openQuickAdd]);
+  }, [commandQuery, hiddenModules, navigateTo, role, runtimeConfig, setModalOpen, stock.openScanner, stock.openQuickAdd]);
 
   const runCommand = (command) => {
     setCommandPaletteOpen(false);
@@ -195,6 +204,7 @@ export function useWorkspaceDerived({
     expiryBoard,
     expiringSoonCount,
     filteredTransfers,
+    hiddenModules,
     lowStockRows,
     overdueAssetCheckouts,
     pageMeta,

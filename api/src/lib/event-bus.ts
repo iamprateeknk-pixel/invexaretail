@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Prisma } from '@prisma/client';
 import { databaseEnabled } from './persistence.js';
 import { prisma } from './db.js';
 
@@ -26,10 +25,37 @@ async function persistEvent(event: DomainEvent): Promise<void> {
     data: {
       topic: event.topic,
       companyId: event.companyId,
-      locationIds: event.locationIds?.length ? event.locationIds : Prisma.JsonNull,
+      locationIds: event.locationIds?.length ? event.locationIds : undefined,
       actorId: event.actorId ?? null,
       requestId: event.requestId ?? null,
       occurredAt: new Date(event.at),
+    },
+  });
+}
+
+// ADR-006 / Week 7: `publishEvent` above persists the outbox row *after*
+// business state has already committed - a crash in that gap loses the
+// event silently. Callers that need the outbox row to be atomic with their
+// own business write (the reservation primitive, the six transition maps)
+// use this instead, passing the same `tx` they used for the business
+// mutation, so the outbox row and the mutation commit or roll back together.
+// Minimal client typing kept local: `domainEventOutbox.create` is all this
+// needs, and importing Prisma.TransactionClient would tie this file to a
+// generated type that varies by Prisma version.
+type OutboxTxClient = { domainEventOutbox: { create: (args: { data: Record<string, unknown> }) => Promise<unknown> } };
+
+export async function recordOutboxEventInTransaction(
+  tx: OutboxTxClient,
+  input: Omit<DomainEvent, 'id' | 'at'>,
+): Promise<void> {
+  if (!databaseEnabled) return;
+  await tx.domainEventOutbox.create({
+    data: {
+      topic: input.topic,
+      companyId: input.companyId,
+      locationIds: input.locationIds?.length ? input.locationIds : undefined,
+      actorId: input.actorId ?? null,
+      requestId: input.requestId ?? null,
     },
   });
 }
@@ -66,7 +92,6 @@ export function eventsSince(lastEventId: number, subscriber: Pick<EventSubscribe
   return { kind: 'replay', events: buffer.filter((event) => event.id > lastEventId && canReceive(subscriber, event)) };
 }
 
-type DurableRow = { id: bigint | number; topic: EventTopic; companyId: string; locationIds: unknown; actorId: string | null; requestId: string | null; occurredAt: Date };
 function locations(value: unknown): string[] | undefined {
   if (Array.isArray(value)) return value.filter((id): id is string => typeof id === 'string');
   if (typeof value !== 'string') return undefined;
@@ -78,12 +103,12 @@ export async function durableEventsSince(lastEventId: number, subscriber: Pick<E
     where: { id: { gt: BigInt(lastEventId) }, companyId: subscriber.companyId },
     orderBy: { id: 'asc' },
     take: 500,
-  }) as DurableRow[];
+  });
   return rows.map((row) => ({ id: Number(row.id), topic: row.topic as EventTopic, companyId: row.companyId, ...(locations(row.locationIds)?.length ? { locationIds: locations(row.locationIds) } : {}), ...(row.actorId ? { actorId: row.actorId } : {}), ...(row.requestId ? { requestId: row.requestId } : {}), at: new Date(row.occurredAt).toISOString() })).filter((event) => canReceive(subscriber, event));
 }
 export async function durableLatestEventId(): Promise<number> {
   if (!databaseEnabled) return latestEventId();
-  const result = await prisma.domainEventOutbox.aggregate({ _max: { id: true } });
-  return Number(result._max.id ?? 0);
+  const row = await prisma.domainEventOutbox.aggregate({ _max: { id: true } });
+  return Number(row._max.id ?? 0);
 }
-export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }
+export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }

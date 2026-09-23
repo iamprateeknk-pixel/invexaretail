@@ -23,11 +23,9 @@ function asJsonPayload(snapshot: ControlPlaneSnapshot): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue;
 }
 
-export async function ensureControlPlaneSchema(): Promise<void> {
-  if (!databaseEnabled()) return;
-  const { prisma } = await import('../db.js');
-  await prisma.$queryRaw`SELECT 1`;
-}
+// ADR-004: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
+// its schema. No-op kept so existing call sites do not need to change.
+export async function ensureControlPlaneSchema(): Promise<void> {}
 
 export async function loadControlPlaneSnapshot(): Promise<ControlPlaneSnapshot | null> {
   if (!databaseEnabled()) return null;

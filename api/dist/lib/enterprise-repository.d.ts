@@ -47,15 +47,6 @@ export type EnhancedUserRecord = {
     createdAt: string;
     updatedAt: string;
 };
-export type OtpSessionRecord = {
-    id: string;
-    email: string;
-    otpCode: string;
-    expiresAt: string;
-    attempts: number;
-    verified: boolean;
-    createdAt: string;
-};
 export type BiometricCredentialRecord = {
     id: string;
     userId: string;
@@ -229,7 +220,6 @@ export declare function seedEnhancedUsersForMemoryMode(seedUsers: ReadonlyArray<
     role: Role;
     assignedLocationIds: readonly string[];
 }>, passwordHash: string): void;
-export declare const otpSessions: OtpSessionRecord[];
 export declare const biometricCredentials: BiometricCredentialRecord[];
 export declare const locations: LocationRecord[];
 export declare const items: ItemRecord[];
@@ -252,10 +242,6 @@ export declare function findUserById(userId: string): EnhancedUserRecord | undef
 export declare function findUserByEmail(email: string): EnhancedUserRecord | undefined;
 export declare function listUsersByCompany(companyId: string): EnhancedUserRecord[];
 export declare function updateUserLastLogin(userId: string): EnhancedUserRecord;
-export declare function createOtpSession(email: string, otpCode: string): OtpSessionRecord;
-export declare function findOtpSession(email: string): OtpSessionRecord | undefined;
-export declare function verifyOtpSession(email: string, otpCode: string): boolean;
-export declare function clearOtpSession(email: string): void;
 export declare function createBiometricCredential(input: Omit<BiometricCredentialRecord, 'id' | 'createdAt' | 'updatedAt'>): BiometricCredentialRecord;
 export declare function findBiometricByUserId(userId: string): BiometricCredentialRecord | undefined;
 export declare function createLocation(input: Omit<LocationRecord, 'id' | 'createdAt' | 'updatedAt'>): LocationRecord;
@@ -283,16 +269,5 @@ export declare function updateTransferStatusSafe(transferId: string, newStatus: 
 export declare const rolePermissions: Record<string, string[]>;
 export declare function getPermissionsForRole(role: string): string[];
 export declare function userHasPermission(userId: string, permission: string): boolean;
-interface RefreshTokenData {
-    userId: string;
-    companyId: string;
-    issuedAt: number;
-    expiresAt: number;
-}
-export declare function storeRefreshToken(token: string, userId: string, companyId: string, expiresIn?: number): void;
-export declare function validateRefreshToken(token: string): RefreshTokenData | null;
-export declare function isRefreshTokenRevoked(token: string): boolean;
-export declare function revokeRefreshToken(token: string): void;
 export declare function getPendingCountsForApproval(companyId: string): CountRecord[];
 export declare function rejectCount(countId: string, rejectedBy: string, reason: string): CountRecord;
-export {};

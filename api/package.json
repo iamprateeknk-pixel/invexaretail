@@ -14,7 +14,12 @@
     "db:verify": "node scripts/verify-production-db.cjs",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "worker": "tsx src/worker.ts"
+    "worker": "tsx src/worker.ts",
+    "lint:arch": "node scripts/architecture-lint.mjs --check",
+    "contract:generate": "node scripts/generate-contract.mjs",
+    "contract:validate": "node scripts/validate-openapi.mjs",
+    "contract:check-drift": "node scripts/check-contract-drift.mjs",
+    "contract:typecheck": "tsc --project contracts/tsconfig.json"
   },
   "keywords": [],
   "author": "",
@@ -43,14 +48,15 @@
     "multer": "^2.3.0",
     "nodemailer": "^10.0.10",
     "pdfkit": "^0.20.2",
-    "pg": "^8.23.0",
+    "pg": "^8.16.3",
     "prisma": "^7.10.0",
     "read-excel-file": "^9.3.10",
     "typescript": "^5.9.3",
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@types/pg": "^8.23.1",
+    "@types/pg": "^8.15.6",
+    "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.13"
   }
 }

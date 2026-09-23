@@ -2,11 +2,6 @@
 import * as crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 
-// Generate 6-digit OTP
-export function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
 // Must stay bcrypt: prisma/seed.ts writes bcrypt hashes, so any other
 // algorithm here makes every seeded account fail to log in.
 export function hashPassword(password: string): string {
@@ -122,8 +117,14 @@ export async function sendOtpEmail(email: string, otpCode: string): Promise<bool
   return false;
 }
 
-// Generate JWT token
-type TokenType = 'access' | 'refresh';
+// ADR-003: access tokens only - jsonwebtoken (already a dependency),
+// not a hand-rolled HMAC encoder. AGENTS.md prohibits custom crypto for
+// tokens; this used to implement its own JWT sign/verify, which is exactly
+// that pattern. Refresh tokens are no longer JWTs at all - see
+// lib/session-store.ts for the persisted, hashed, rotating session model.
+import jwt from 'jsonwebtoken';
+
+type TokenType = 'access';
 
 function getJwtSecret(): string {
   const configuredSecret = process.env.JWT_SECRET?.trim();
@@ -134,8 +135,10 @@ function getJwtSecret(): string {
   return 'dev-secret-key-change-in-production';
 }
 
-export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
-export const REFRESH_TOKEN_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
+// Week 3: access tokens must be short lived - a compromised access token
+// self-expires quickly; session-store.ts's refresh rotation is what carries
+// a signed-in session across that window.
+export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 export function generateJWT(
   userId: string,
@@ -143,83 +146,26 @@ export function generateJWT(
   expiresIn: number = ACCESS_TOKEN_TTL_SECONDS,
   tokenType: TokenType = 'access',
 ): string {
-  const header = {
-    alg: 'HS256',
-    typ: 'JWT',
-  };
-
-  const payload = {
-    userId,
-    companyId,
-    tokenType,
-    jti: crypto.randomBytes(8).toString('hex'),
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + expiresIn,
-  };
-
-  const secret = getJwtSecret();
-
-  // Simple JWT encoding (in production, use jsonwebtoken library)
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64').replace(/[=]+$/, '');
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64').replace(/[=]+$/, '');
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest('base64')
-    .replace(/[=]+$/, '');
-
-  return `${encodedHeader}.${encodedPayload}.${signature}`;
+  return jwt.sign(
+    { userId, companyId, tokenType, jti: crypto.randomBytes(8).toString('hex') },
+    getJwtSecret(),
+    { algorithm: 'HS256', expiresIn },
+  );
 }
 
-// Verify JWT token
-export function verifyJWT(token: string, expectedType?: TokenType): { userId: string; companyId: string } | null {
+export function verifyJWT(token: string, expectedType: TokenType = 'access'): { userId: string; companyId: string } | null {
   try {
-    const secret = getJwtSecret();
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [encodedHeader, encodedPayload, signature] = parts;
-    if (!encodedHeader || !encodedPayload || !signature) return null;
-
-    const header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as { alg?: string; typ?: string };
-    if (header.alg !== 'HS256' || header.typ !== 'JWT') return null;
-
-    // Verify signature
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(`${encodedHeader}.${encodedPayload}`)
-      .digest('base64')
-      .replace(/[=]+$/, '');
-
-    const actual = Buffer.from(signature);
-    const expected = Buffer.from(expectedSignature);
-    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-      return null;
-    }
-
-    // Decode payload
-    const payloadJson = Buffer.from(encodedPayload, 'base64url').toString('utf-8');
-    const payload = JSON.parse(payloadJson) as { userId?: unknown; companyId?: unknown; exp?: unknown; tokenType?: unknown };
-
-    // Check expiration
-    if (typeof payload.userId !== 'string' || typeof payload.companyId !== 'string' || typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-
+    const payload = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as {
+      userId?: unknown; companyId?: unknown; tokenType?: unknown;
+    };
+    if (typeof payload.userId !== 'string' || typeof payload.companyId !== 'string') return null;
     // Tokens issued before this hardening update have no tokenType. They can
     // remain valid only as access tokens until their short normal expiry.
-    if (expectedType && (payload.tokenType ?? 'access') !== expectedType) return null;
-
-    return {
-      userId: payload.userId,
-      companyId: payload.companyId,
-    };
+    if ((payload.tokenType ?? 'access') !== expectedType) return null;
+    return { userId: payload.userId, companyId: payload.companyId };
   } catch {
     return null;
   }
-}
-
-export function generateRefreshToken(userId: string, companyId: string): string {
-  return generateJWT(userId, companyId, REFRESH_TOKEN_TTL_SECONDS, 'refresh');
 }
 
 // Validation utilities

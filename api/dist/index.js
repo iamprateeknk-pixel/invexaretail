@@ -48,6 +48,10 @@ const enterprise_auth_js_1 = __importDefault(require("./routes/enterprise-auth.j
 const enterprise_management_js_1 = __importDefault(require("./routes/enterprise-management.js"));
 const enterprise_analytics_js_1 = __importDefault(require("./routes/enterprise-analytics.js"));
 const core_js_1 = __importDefault(require("./routes/core.js"));
+const transfers_js_1 = __importDefault(require("./routes/transfers.js"));
+const branches_js_1 = __importDefault(require("./routes/branches.js"));
+const items_js_1 = __importDefault(require("./routes/items.js"));
+const imports_js_1 = __importDefault(require("./routes/imports.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
@@ -67,6 +71,7 @@ const kill_switch_js_1 = require("./lib/saas/kill-switch.js");
 const company_access_js_1 = require("./lib/saas/company-access.js");
 const entitlements_js_1 = require("./lib/saas/entitlements.js");
 const db_js_1 = require("./lib/db.js");
+const errors_js_1 = require("./lib/errors.js");
 if (process.env.REQUIRE_DATABASE === 'true' && !(0, db_js_1.resolveDatabaseUrl)()) {
     throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
 }
@@ -187,6 +192,16 @@ app.get('/ready', async (_req, res) => {
         const { prisma } = await import('./lib/db.js');
         const { enhancedUsers } = await import('./lib/enterprise-repository.js');
         await prisma.$queryRaw `SELECT 1`;
+        const { verifySchemaVersion } = await import('./lib/schema-version.js');
+        const schemaVersion = await verifySchemaVersion();
+        if (schemaVersion.ok === false) {
+            return res.status(503).json({
+                ok: false,
+                persistence: 'database',
+                code: 'SCHEMA_VERSION_MISMATCH',
+                hint: schemaVersion.reason,
+            });
+        }
         if (enhancedUsers.length === 0) {
             return res.status(503).json({
                 ok: false,
@@ -219,7 +234,7 @@ app.get('/ready', async (_req, res) => {
 // ENTERPRISE ROUTES
 // ============================================
 // Shared hosting requires listen() almost immediately after startup. Requests
-// still wait for durable PostgreSQL hydration, so the browser never receives seed
+// still wait for durable database hydration, so the browser never receives seed
 // branches or seed items during a restart.
 app.use('/api/v1', async (req, res, next) => {
     try {
@@ -288,6 +303,10 @@ app.use('/api/v1', events_js_1.publishMutationEvents);
 app.use('/api/v1', transfer_logistics_js_1.default);
 app.use('/api/v1', command_center_js_1.default);
 // Mounted last so the prefixed routers above keep priority over its paths.
+app.use('/api/v1', transfers_js_1.default);
+app.use('/api/v1', branches_js_1.default);
+app.use('/api/v1', items_js_1.default);
+app.use('/api/v1', imports_js_1.default);
 app.use('/api/v1', core_js_1.default);
 app.use('/api/v1', catalog_procurement_js_1.default);
 app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
@@ -361,6 +380,14 @@ app.use((error, req, res, _next) => {
     });
     if (res.headersSent)
         return;
+    // ADR-006 / Week 7: reservation, transition and outbox rejections carry a
+    // stable machine-readable code plus a trace ID - surface both rather than
+    // collapsing everything into a generic 500, so a client or dashboard can
+    // branch on `code` without parsing `error` text.
+    if ((0, errors_js_1.isDomainError)(error)) {
+        res.status((0, errors_js_1.statusForErrorCode)(error.code)).json(error.toEnvelope());
+        return;
+    }
     res.status(500).json({
         error: 'Internal server error',
         code: 'INTERNAL_ERROR',
@@ -384,8 +411,8 @@ const hydrateDatabase = async () => {
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         // The repo carries two older schemas that create a lowercase `users`
-        // table. Prisma queries the canonical `User` model, so
-        // importing one of those leaves logins failing with a bare 401.
+        // table under a different design. Prisma queries the exact-case `User`
+        // table, so importing one of those leaves logins failing with a bare 401.
         if (/doesn't exist|Unknown table|no such table/i.test(message)) {
             console.error('⚠️  The database is missing the tables this API expects.');
             console.error('    Prisma needs `User`, `Location`, `Item`, `Lot`, `StockLedger`,');
@@ -405,7 +432,7 @@ const hydrateDatabase = async () => {
 const hydrateRepository = async () => {
     const { databaseEnabled, hydrateRepositoryFromDatabase, hydrateAuditFromDatabase, hydrateCompanyProfile } = await import('./lib/persistence.js');
     if (!databaseEnabled) {
-        console.log('DATABASE_URL is not set; serving inventory from seed data instead of PostgreSQL.');
+        console.log('DATABASE_URL is not set; serving inventory from seed data instead of Postgres.');
         const { seedEnhancedUsersForMemoryMode } = await import('./lib/enterprise-repository.js');
         const { seedUsers } = await import('./lib/seed.js');
         const { hashPassword } = await import('./lib/otp-auth.js');
@@ -480,7 +507,7 @@ const refreshRepositoryIfStale = async () => {
     await repositoryRefreshInFlight;
 };
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind
-// the hydration promise until PostgreSQL branches, users and stock are available.
+// the hydration promise until database branches, users and stock are available.
 const startServer = () => {
     authHydration = hydrateDatabase();
     startupHydration = (async () => {

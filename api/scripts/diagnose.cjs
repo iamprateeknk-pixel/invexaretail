@@ -78,21 +78,30 @@ function step(n, title) {
       await prisma.$queryRaw`SELECT 1`;
       ok('connected');
 
+      // The repo also ships database/schema.sql and backend/src/database/schema.sql,
+      // which build a lowercase `users` table under a different design. Prisma
+      // queries the exact-case "User" table, so importing the wrong one gives a
+      // bare 401.
       const expected = ['User', 'Location', 'Item', 'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine', 'AuditLog'];
       const rows = await prisma.$queryRaw`SELECT table_name AS t FROM information_schema.tables WHERE table_schema = current_schema()`;
-      const present = rows.map((r) => r.t);
+      const present = rows.map((r) => r.t ?? r.TABLE_NAME);
       const missing = expected.filter((t) => !present.includes(t));
       if (missing.length === 0) {
         ok(`all ${expected.length} expected tables present`);
       } else {
         fail(`missing table(s): ${missing.join(', ')}`);
         console.log(`        database actually contains: ${present.join(', ') || '(nothing)'}`);
-        console.log('        Fix: run npm run db:migrate && npm run db:seed');
+        const wrongSchema = present.some((t) => ['users', 'companies', 'branches', 'stock_lots', 'blind_counts'].includes(t));
+        if (wrongSchema) {
+          console.log('        This is database/schema.sql or backend/src/database/schema.sql.');
+          console.log('        Those belong to a different design and this API cannot read them.');
+        }
+        console.log('        Fix: import invexaretail-database.sql, or run npm run db:migrate && npm run db:seed');
       }
 
       dbUsers = await prisma.user.findMany().catch(() => []);
       if (dbUsers.length === 0) {
-        fail('the User table is empty. Run: npm run db:seed');
+        fail('the User table is empty. Import the SQL file, or run: npm run db:seed');
       } else {
         ok(`${dbUsers.length} user(s): ${dbUsers.map((u) => u.email).join(', ')}`);
       }
@@ -117,7 +126,7 @@ function step(n, title) {
       if (bcrypt.compareSync(PASSWORD, hash)) {
         ok(`"${PASSWORD}" matches the stored hash`);
       } else {
-        fail(`"${PASSWORD}" does NOT match the stored hash. The account has a different password; re-run npm run db:seed.`);
+        fail(`"${PASSWORD}" does NOT match the stored hash. The account has a different password; re-run npm run db:seed or import the SQL file.`);
       }
     } else if (/^[a-f0-9]{64}$/.test(hash)) {
       fail('hash is sha256, written by an older build. Re-seed so it is stored as bcrypt.');

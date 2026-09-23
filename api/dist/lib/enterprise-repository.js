@@ -1,7 +1,7 @@
 "use strict";
 // Enterprise-grade repository with multi-organization support, OTP, biometrics, and audit logging
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.rolePermissions = exports.auditLogs = exports.stockLedger = exports.transferAssignments = exports.transfers = exports.countAssignments = exports.counts = exports.items = exports.locations = exports.biometricCredentials = exports.otpSessions = exports.enhancedUsers = exports.branches = exports.companies = void 0;
+exports.rolePermissions = exports.auditLogs = exports.stockLedger = exports.transferAssignments = exports.transfers = exports.countAssignments = exports.counts = exports.items = exports.locations = exports.biometricCredentials = exports.enhancedUsers = exports.branches = exports.companies = void 0;
 exports.seedEnhancedUsersForMemoryMode = seedEnhancedUsersForMemoryMode;
 exports.createCompany = createCompany;
 exports.findCompanyById = findCompanyById;
@@ -14,10 +14,6 @@ exports.findUserById = findUserById;
 exports.findUserByEmail = findUserByEmail;
 exports.listUsersByCompany = listUsersByCompany;
 exports.updateUserLastLogin = updateUserLastLogin;
-exports.createOtpSession = createOtpSession;
-exports.findOtpSession = findOtpSession;
-exports.verifyOtpSession = verifyOtpSession;
-exports.clearOtpSession = clearOtpSession;
 exports.createBiometricCredential = createBiometricCredential;
 exports.findBiometricByUserId = findBiometricByUserId;
 exports.createLocation = createLocation;
@@ -44,10 +40,6 @@ exports.canTransitionTransfer = canTransitionTransfer;
 exports.updateTransferStatusSafe = updateTransferStatusSafe;
 exports.getPermissionsForRole = getPermissionsForRole;
 exports.userHasPermission = userHasPermission;
-exports.storeRefreshToken = storeRefreshToken;
-exports.validateRefreshToken = validateRefreshToken;
-exports.isRefreshTokenRevoked = isRefreshTokenRevoked;
-exports.revokeRefreshToken = revokeRefreshToken;
 exports.getPendingCountsForApproval = getPendingCountsForApproval;
 exports.rejectCount = rejectCount;
 // ============================================
@@ -97,7 +89,6 @@ function seedEnhancedUsersForMemoryMode(seedUsers, passwordHash) {
         });
     }
 }
-exports.otpSessions = [];
 exports.biometricCredentials = [];
 exports.locations = [];
 exports.items = [];
@@ -180,49 +171,6 @@ function updateUserLastLogin(userId) {
     user.lastLogin = new Date().toISOString();
     user.updatedAt = new Date().toISOString();
     return { ...user };
-}
-// ============================================
-// OTP SESSION MANAGEMENT
-// ============================================
-function createOtpSession(email, otpCode) {
-    const normalized = email.trim().toLowerCase();
-    clearOtpSession(normalized);
-    const session = {
-        id: `otp-${Math.random().toString(36).slice(2, 9)}`,
-        email: normalized,
-        otpCode,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-        attempts: 0,
-        verified: false,
-        createdAt: new Date().toISOString(),
-    };
-    exports.otpSessions.push(session);
-    return { ...session };
-}
-function findOtpSession(email) {
-    const normalized = email.trim().toLowerCase();
-    return exports.otpSessions.find((o) => o.email === normalized && new Date(o.expiresAt) > new Date());
-}
-function verifyOtpSession(email, otpCode) {
-    const session = findOtpSession(email);
-    if (!session)
-        return false;
-    if (session.attempts >= 3)
-        return false;
-    if (session.otpCode !== otpCode) {
-        session.attempts += 1;
-        return false;
-    }
-    session.verified = true;
-    return true;
-}
-function clearOtpSession(email) {
-    const normalized = email.trim().toLowerCase();
-    for (let index = exports.otpSessions.length - 1; index >= 0; index -= 1) {
-        if (exports.otpSessions[index].email === normalized) {
-            exports.otpSessions.splice(index, 1);
-        }
-    }
 }
 // ============================================
 // BIOMETRIC MANAGEMENT
@@ -477,39 +425,9 @@ function userHasPermission(userId, permission) {
     const permissions = getPermissionsForRole(user.role);
     return permissions.includes(permission);
 }
-const refreshTokens = new Map();
-const revokedRefreshTokens = new Set();
-function storeRefreshToken(token, userId, companyId, expiresIn = 10 * 365 * 24 * 60 * 60 * 1000) {
-    const now = Date.now();
-    revokedRefreshTokens.delete(token);
-    refreshTokens.set(token, {
-        userId,
-        companyId,
-        issuedAt: now,
-        expiresAt: now + expiresIn,
-    });
-}
-function validateRefreshToken(token) {
-    if (revokedRefreshTokens.has(token))
-        return null;
-    const tokenData = refreshTokens.get(token);
-    if (!tokenData)
-        return null;
-    if (Date.now() > tokenData.expiresAt) {
-        refreshTokens.delete(token);
-        return null;
-    }
-    return tokenData;
-}
-function isRefreshTokenRevoked(token) {
-    return revokedRefreshTokens.has(token);
-}
-function revokeRefreshToken(token) {
-    if (!token)
-        return;
-    refreshTokens.delete(token);
-    revokedRefreshTokens.add(token);
-}
+// Refresh-token session families now live in lib/session-store.ts (ADR-003):
+// persisted, hashed, rotating, with reuse detection - not an in-process Map
+// keyed by the raw token value.
 // ============================================
 // COUNT APPROVAL WORKFLOW
 // ============================================

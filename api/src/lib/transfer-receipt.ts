@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { prisma } from './db.js';
+import { prisma, queryRaw, executeRaw } from './db.js';
 import { databaseEnabled } from './persistence.js';
 import { validateReceiptLines, type ReceiptLineInput, type TransferReceiptLine } from './receipt-validation.js';
 
@@ -19,6 +19,11 @@ export type PersistedReceiptResult = {
   lines: DbTransferLine[];
 };
 
+// ADR-004: TransferLine, TransferReceipt and TransferReceiptLine (including
+// shortageQty/excessQty) are Prisma models; `prisma migrate deploy` owns
+// their schema, so no runtime DDL self-heal is needed here any more.
+async function ensureReceiptSchema(): Promise<void> {}
+
 export type StoredReceipt = {
   requestId: string;
   transferId: string;
@@ -33,6 +38,10 @@ export type StoredReceipt = {
   notes?: string;
 };
 
+// Blueprint v4 §18: "duplicate receive request returns prior result rather
+// than double-posting". The database keeps the durable copy (TransferReceipt
+// has a unique requestId); this register makes the same true when the API runs
+// without a database and answers a retry without a query while the process is up.
 const memoryReceipts = new Map<string, StoredReceipt>();
 const inFlight = new Set<string>();
 
@@ -40,6 +49,7 @@ export function rememberReceipt(receipt: StoredReceipt): void {
   memoryReceipts.set(receipt.requestId, receipt);
 }
 
+/** Claims a requestId for the duration of one request; false while another identical request is running. */
 export function beginReceiptRequest(requestId: string): boolean {
   if (inFlight.has(requestId)) return false;
   inFlight.add(requestId);
@@ -50,35 +60,23 @@ export function endReceiptRequest(requestId: string): void {
   inFlight.delete(requestId);
 }
 
-async function receiptTotals(receiptId: string) {
-  const totals = await prisma.transferReceiptLine.aggregate({
-    where: { receiptId },
-    _sum: { receivedQty: true, damagedQty: true, shortageQty: true, excessQty: true },
-  });
-  return {
-    receivedQty: Number(totals._sum.receivedQty ?? 0),
-    damagedQty: Number(totals._sum.damagedQty ?? 0),
-    shortageQty: Number(totals._sum.shortageQty ?? 0),
-    excessQty: Number(totals._sum.excessQty ?? 0),
-  };
-}
-
 export async function findReceiptByRequestId(requestId: string): Promise<StoredReceipt | null> {
   const remembered = memoryReceipts.get(requestId);
   if (remembered) return remembered;
   if (!databaseEnabled) return null;
-  const row = await prisma.transferReceipt.findUnique({ where: { requestId } });
+  await ensureReceiptSchema();
+  const rows = await queryRaw<Array<{ id: string; transferId: string; receivedById: string; status: 'RECEIVED' | 'PARTIAL_RECEIVED'; notes: string | null; createdAt: Date }>>(prisma,
+    'SELECT id, "transferId", "receivedById", status, notes, "createdAt" FROM "TransferReceipt" WHERE "requestId" = ? LIMIT 1', requestId);
+  const row = rows[0];
   if (!row) return null;
-  const totals = await receiptTotals(row.id);
+  const totals = await queryRaw<Array<{ receivedQty: number; damagedQty: number; shortageQty: number; excessQty: number }>>(prisma,
+    'SELECT COALESCE(SUM("receivedQty"),0) "receivedQty", COALESCE(SUM("damagedQty"),0) "damagedQty", COALESCE(SUM("shortageQty"),0) "shortageQty", COALESCE(SUM("excessQty"),0) "excessQty" FROM "TransferReceiptLine" WHERE "receiptId" = ?',
+    row.id);
+  const total = totals[0] ?? { receivedQty: 0, damagedQty: 0, shortageQty: 0, excessQty: 0 };
   return {
-    requestId,
-    transferId: row.transferId,
-    receiptId: row.id,
-    status: row.status as StoredReceipt['status'],
-    receivedBy: row.receivedById,
-    receivedAt: row.createdAt.toISOString(),
-    ...totals,
-    notes: row.notes ?? undefined,
+    requestId, transferId: row.transferId, receiptId: row.id, status: row.status, receivedBy: row.receivedById,
+    receivedAt: row.createdAt.toISOString(), receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty),
+    shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), notes: row.notes ?? undefined,
   };
 }
 
@@ -91,104 +89,86 @@ export async function persistTransferReceipt(input: {
   lines: ReceiptLineInput[];
 }): Promise<PersistedReceiptResult | null> {
   if (!databaseEnabled) return null;
+  await ensureReceiptSchema();
 
   return prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-      'SELECT "id" FROM "Transfer" WHERE "id" = $1 FOR UPDATE',
-      input.transferId,
-    );
-    if (!locked[0]) throw new Error('Transfer was not found.');
-
-    const duplicate = await tx.transferReceipt.findUnique({ where: { requestId: input.requestId } });
-    if (duplicate) {
-      const totals = await tx.transferReceiptLine.aggregate({
-        where: { receiptId: duplicate.id },
-        _sum: { receivedQty: true, damagedQty: true, shortageQty: true, excessQty: true },
-      });
-      const lines = await tx.transferLine.findMany({
-        where: { transferId: input.transferId },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { id: true, itemId: true, lotId: true, requestedQty: true, receivedQty: true, damagedQty: true, shortageQty: true, excessQty: true },
-      });
-      return {
-        duplicate: true,
-        status: duplicate.status as PersistedReceiptResult['status'],
-        receiptId: duplicate.id,
-        receivedQty: Number(totals._sum.receivedQty ?? 0),
-        damagedQty: Number(totals._sum.damagedQty ?? 0),
-        shortageQty: Number(totals._sum.shortageQty ?? 0),
-        excessQty: Number(totals._sum.excessQty ?? 0),
-        lines,
-      };
+    const duplicate = await queryRaw<Array<{ id: string; status: 'RECEIVED' | 'PARTIAL_RECEIVED' }>>(tx,
+      'SELECT id, status FROM "TransferReceipt" WHERE "requestId" = ? LIMIT 1', input.requestId);
+    if (duplicate[0]) {
+      const totals = await queryRaw<Array<{ receivedQty: number; damagedQty: number; shortageQty: number; excessQty: number }>>(tx,
+        'SELECT COALESCE(SUM("receivedQty"),0) "receivedQty", COALESCE(SUM("damagedQty"),0) "damagedQty", COALESCE(SUM("shortageQty"),0) "shortageQty", COALESCE(SUM("excessQty"),0) "excessQty" FROM "TransferReceiptLine" WHERE "receiptId" = ?',
+        duplicate[0].id);
+      const lines = await queryRaw<DbTransferLine[]>(tx,
+        'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
+      return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, ...totals[0], lines };
     }
 
-    const transfer = await tx.transfer.findUnique({ where: { id: input.transferId }, select: { status: true, notes: true } });
-    if (!transfer) throw new Error('Transfer was not found.');
-    if (!['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'].includes(transfer.status)) {
-      throw new Error(`Transfer cannot be received while ${transfer.status}.`);
+    const transfers = await queryRaw<Array<{ status: string }>>(tx,
+      'SELECT status FROM "Transfer" WHERE id = ? FOR UPDATE', input.transferId);
+    if (!transfers[0]) throw new Error('Transfer was not found.');
+    if (!['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'].includes(transfers[0].status)) {
+      throw new Error(`Transfer cannot be received while ${transfers[0].status}.`);
     }
-    const dbLines = await tx.transferLine.findMany({
-      where: { transferId: input.transferId },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, itemId: true, lotId: true, requestedQty: true, receivedQty: true, damagedQty: true, shortageQty: true, excessQty: true },
-    });
+    const dbLines = await queryRaw<DbTransferLine[]>(tx,
+      'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id FOR UPDATE',
+      input.transferId);
     const transferLines: TransferReceiptLine[] = dbLines.map((line) => ({
       id: line.id, itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
-      receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty),
-      shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty),
+      receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
+      excessQty: Number(line.excessQty),
     }));
     const summary = validateReceiptLines(transferLines, input.lines);
-    const status: PersistedReceiptResult['status'] = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
+    const status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
     const receiptId = `receipt-${randomUUID()}`;
 
-    await tx.transferReceipt.create({
-      data: { id: receiptId, requestId: input.requestId, transferId: input.transferId, receivedById: input.receivedById, status, notes: input.notes || null },
-    });
+    await executeRaw(tx,
+      'INSERT INTO "TransferReceipt" (id,"requestId","transferId","receivedById",status,notes) VALUES (?,?,?,?,?,?)',
+      receiptId, input.requestId, input.transferId, input.receivedById, status, input.notes || null);
     for (const line of input.lines) {
       const dbLine = dbLines.find((candidate) => line.lineId ? candidate.id === line.lineId : candidate.itemId === line.itemId && candidate.lotId === line.lotId)!;
       const excessQty = Number(line.excessQty ?? 0);
-      await tx.transferReceiptLine.create({
-        data: {
-          id: `receipt-line-${randomUUID()}`, receiptId, transferLineId: dbLine.id,
-          itemId: dbLine.itemId, lotId: dbLine.lotId, receivedQty: line.receivedQty,
-          damagedQty: line.damagedQty, shortageQty: line.shortageQty, excessQty,
-        },
-      });
-      await tx.transferLine.update({
-        where: { id: dbLine.id },
-        data: {
-          receivedQty: { increment: line.receivedQty },
-          damagedQty: { increment: line.damagedQty },
-          shortageQty: { increment: line.shortageQty },
-          excessQty: { increment: excessQty },
-        },
-      });
+      await executeRaw(tx,
+        'INSERT INTO "TransferReceiptLine" (id,"receiptId","transferLineId","itemId","lotId","receivedQty","damagedQty","shortageQty","excessQty") VALUES (?,?,?,?,?,?,?,?,?)',
+        `receipt-line-${randomUUID()}`, receiptId, dbLine.id, dbLine.itemId, dbLine.lotId, line.receivedQty, line.damagedQty, line.shortageQty, excessQty);
+      await executeRaw(tx,
+        'UPDATE "TransferLine" SET "receivedQty"="receivedQty"+?, "damagedQty"="damagedQty"+?, "shortageQty"="shortageQty"+?, "excessQty"="excessQty"+?, "updatedAt"=CURRENT_TIMESTAMP(3) WHERE id=?',
+        line.receivedQty, line.damagedQty, line.shortageQty, excessQty, dbLine.id);
       if (line.receivedQty > 0) {
-        await tx.stockLedger.upsert({
-          where: { itemId_lotId_locationId: { itemId: dbLine.itemId, lotId: dbLine.lotId, locationId: input.destinationLocationId } },
-          create: { id: `ledger-${randomUUID()}`, itemId: dbLine.itemId, lotId: dbLine.lotId, locationId: input.destinationLocationId, onHand: line.receivedQty, version: 1 },
-          update: { onHand: { increment: line.receivedQty }, version: { increment: 1 } },
-        });
+        await executeRaw(tx,
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",version,"lastUpdatedAt")
+           VALUES (?,?,?,?,?,0,0,1,CURRENT_TIMESTAMP(3))
+           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand"="StockLedger"."onHand"+EXCLUDED."onHand",version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.receivedQty);
       }
-      const quarantineQty = line.damagedQty + excessQty;
-      if (quarantineQty > 0) {
-        await tx.stockLedger.upsert({
-          where: { itemId_lotId_locationId: { itemId: dbLine.itemId, lotId: dbLine.lotId, locationId: input.destinationLocationId } },
-          create: { id: `ledger-${randomUUID()}`, itemId: dbLine.itemId, lotId: dbLine.lotId, locationId: input.destinationLocationId, quarantine: quarantineQty, version: 1 },
-          update: { quarantine: { increment: quarantineQty }, version: { increment: 1 } },
-        });
+      // Blueprint section 7.2 / Module H: damaged receiving stock is
+      // physically on the shelf but not sellable - post it to the
+      // quarantine bucket instead of letting it vanish from the ledger.
+      // An Exception Inbox case (created by the caller) tracks disposition;
+      // resolving that case is what eventually moves it out of quarantine.
+      if (line.damagedQty > 0) {
+        await executeRaw(tx,
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
+           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty);
+      }
+      // Excess receipt: never silently absorbed into onHand. It is
+      // physically present, so it also lands in quarantine pending an
+      // explicit EXCESS_RECEIPT Exception Inbox accept/reject decision -
+      // accept posts it to onHand, reject returns it to the vendor/source.
+      if (excessQty > 0) {
+        await executeRaw(tx,
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
+           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty);
       }
     }
-    const receiptNote = `[RECEIPT ${receiptId}] Good: ${summary.receivedQty}, Damaged: ${summary.damagedQty}, Shortage: ${summary.shortageQty}, Excess: ${summary.excessQty}${input.notes ? `, Notes: ${input.notes}` : ''}`;
-    await tx.transfer.update({
-      where: { id: input.transferId },
-      data: { status, notes: [transfer.notes, receiptNote].filter(Boolean).join('\n') },
-    });
-    const lines = await tx.transferLine.findMany({
-      where: { transferId: input.transferId },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, itemId: true, lotId: true, requestedQty: true, receivedQty: true, damagedQty: true, shortageQty: true, excessQty: true },
-    });
+    await executeRaw(tx,
+      'UPDATE "Transfer" SET status=?, notes=CONCAT(COALESCE(notes,?::text), ?::text), "updatedAt"=CURRENT_TIMESTAMP(3) WHERE id=?',
+      status, '', `\n[RECEIPT ${receiptId}] Good: ${summary.receivedQty}, Damaged: ${summary.damagedQty}, Shortage: ${summary.shortageQty}, Excess: ${summary.excessQty}${input.notes ? `, Notes: ${input.notes}` : ''}`, input.transferId);
+    const lines = await queryRaw<DbTransferLine[]>(tx,
+      'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
     return { duplicate: false, status, receiptId, ...summary, lines };
   }, { maxWait: 10_000, timeout: 60_000 });
 }

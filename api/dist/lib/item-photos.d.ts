@@ -1,5 +1,5 @@
 export declare function saveItemPhoto(itemId: string, uploadedBy: string, fileName: string, bytes: Buffer, makePrimary?: boolean): Promise<{
-    id: `${string}-${string}-${string}-${string}-${string}`;
+    id: string;
     itemId: string;
     fileName: string;
     mimeType: string;
@@ -13,10 +13,11 @@ export declare function listItemPhotos(itemId: string): Promise<{
     itemId: string;
     fileName: string;
     mimeType: string;
+    byteSize: number;
     isPrimary: boolean;
 }[]>;
 export declare function readItemPhoto(itemId: string, id: string): Promise<{
-    contents: Uint8Array<ArrayBuffer>;
     mimeType: string;
+    contents: Uint8Array<ArrayBuffer>;
 }>;
 export declare function deleteItemPhoto(itemId: string, id: string): Promise<void>;

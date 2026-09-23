@@ -51,11 +51,16 @@ export declare function expireStaleReservations(): Promise<number>;
  * the order unchanged on any internal failure.
  */
 export declare function retryBackorderAllocation(orderId: string, ttlMinutes?: number): Promise<{
+    fulfillmentLocation: {
+        name: string;
+        code: string;
+        id: string;
+    };
     lines: ({
         item: {
             name: string;
-            id: string;
             code: string;
+            id: string;
         };
         lot: {
             id: string;
@@ -65,27 +70,22 @@ export declare function retryBackorderAllocation(orderId: string, ttlMinutes?: n
         id: string;
         createdAt: Date;
         updatedAt: Date;
+        tenantId: string;
         itemId: string;
         lotId: string | null;
-        tenantId: string;
         fulfillmentLocationId: string | null;
         requestedQty: number;
         orderId: string;
         fulfilledQty: number;
     })[];
-    fulfillmentLocation: {
-        name: string;
-        id: string;
-        code: string;
-    };
 } & {
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    tenantId: string;
     status: string;
     notes: string | null;
     createdById: string;
-    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -133,11 +133,16 @@ declare function createOrderInner(input: {
     customerLongitude?: number | null;
     lines: OrderLineInput[];
 }): Promise<({
+    fulfillmentLocation: {
+        name: string;
+        code: string;
+        id: string;
+    };
     lines: ({
         item: {
             name: string;
-            id: string;
             code: string;
+            id: string;
         };
         lot: {
             id: string;
@@ -147,27 +152,22 @@ declare function createOrderInner(input: {
         id: string;
         createdAt: Date;
         updatedAt: Date;
+        tenantId: string;
         itemId: string;
         lotId: string | null;
-        tenantId: string;
         fulfillmentLocationId: string | null;
         requestedQty: number;
         orderId: string;
         fulfilledQty: number;
     })[];
-    fulfillmentLocation: {
-        name: string;
-        id: string;
-        code: string;
-    };
 } & {
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    tenantId: string;
     status: string;
     notes: string | null;
     createdById: string;
-    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -187,11 +187,16 @@ declare function createOrderInner(input: {
  * sequencing already used for transfer confirmation.
  */
 export declare function fulfillOrder(orderId: string, actorId: string): Promise<{
+    fulfillmentLocation: {
+        name: string;
+        code: string;
+        id: string;
+    };
     lines: ({
         item: {
             name: string;
-            id: string;
             code: string;
+            id: string;
         };
         lot: {
             id: string;
@@ -201,27 +206,22 @@ export declare function fulfillOrder(orderId: string, actorId: string): Promise<
         id: string;
         createdAt: Date;
         updatedAt: Date;
+        tenantId: string;
         itemId: string;
         lotId: string | null;
-        tenantId: string;
         fulfillmentLocationId: string | null;
         requestedQty: number;
         orderId: string;
         fulfilledQty: number;
     })[];
-    fulfillmentLocation: {
-        name: string;
-        id: string;
-        code: string;
-    };
 } & {
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    tenantId: string;
     status: string;
     notes: string | null;
     createdById: string;
-    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -236,11 +236,16 @@ export declare function fulfillOrder(orderId: string, actorId: string): Promise<
 }>;
 /** Releases the reservation and marks the order cancelled. Refuses to cancel a fulfilled order (stock has already shipped). Idempotent for an order that already expired or was already cancelled - its reservation was already released, so it is returned as-is rather than released a second time. */
 export declare function cancelOrder(orderId: string, actorId: string): Promise<{
+    fulfillmentLocation: {
+        name: string;
+        code: string;
+        id: string;
+    };
     lines: ({
         item: {
             name: string;
-            id: string;
             code: string;
+            id: string;
         };
         lot: {
             id: string;
@@ -250,27 +255,22 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
         id: string;
         createdAt: Date;
         updatedAt: Date;
+        tenantId: string;
         itemId: string;
         lotId: string | null;
-        tenantId: string;
         fulfillmentLocationId: string | null;
         requestedQty: number;
         orderId: string;
         fulfilledQty: number;
     })[];
-    fulfillmentLocation: {
-        name: string;
-        id: string;
-        code: string;
-    };
 } & {
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    tenantId: string;
     status: string;
     notes: string | null;
     createdById: string;
-    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;
@@ -286,11 +286,16 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
 export declare function normalizedExternalReference(value: string | null | undefined): string | null;
 /** The order already created for this channel + external reference, if any - whatever its status, since the database allows one per pair. */
 export declare function findOrderByExternalReference(channel: string, externalReference: string): Promise<({
+    fulfillmentLocation: {
+        name: string;
+        code: string;
+        id: string;
+    };
     lines: ({
         item: {
             name: string;
-            id: string;
             code: string;
+            id: string;
         };
         lot: {
             id: string;
@@ -300,27 +305,22 @@ export declare function findOrderByExternalReference(channel: string, externalRe
         id: string;
         createdAt: Date;
         updatedAt: Date;
+        tenantId: string;
         itemId: string;
         lotId: string | null;
-        tenantId: string;
         fulfillmentLocationId: string | null;
         requestedQty: number;
         orderId: string;
         fulfilledQty: number;
     })[];
-    fulfillmentLocation: {
-        name: string;
-        id: string;
-        code: string;
-    };
 } & {
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    tenantId: string;
     status: string;
     notes: string | null;
     createdById: string;
-    tenantId: string;
     channel: string;
     externalReference: string | null;
     fulfillmentLocationId: string;

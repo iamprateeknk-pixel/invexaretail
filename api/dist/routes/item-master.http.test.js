@@ -12,6 +12,7 @@ const seed_js_1 = require("../lib/seed.js");
 const enterprise_auth_js_1 = require("./enterprise-auth.js");
 const item_master_js_1 = __importDefault(require("./item-master.js"));
 const core_js_1 = __importDefault(require("./core.js"));
+const transfers_js_1 = __importDefault(require("./transfers.js"));
 const tenant_scope_js_1 = require("../lib/saas/tenant-scope.js");
 function tokenFor(email) {
     const user = (0, enterprise_repository_js_1.findUserByEmail)(email);
@@ -31,6 +32,7 @@ async function withServer(run) {
     app.use(express_1.default.json());
     app.use('/api/v1', enterprise_auth_js_1.extractToken, tenant_scope_js_1.enforceOperationalCompanyScope);
     app.use('/api/v1', item_master_js_1.default);
+    app.use('/api/v1', transfers_js_1.default);
     app.use('/api/v1', core_js_1.default);
     const server = app.listen(0);
     const address = server.address();

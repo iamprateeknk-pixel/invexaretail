@@ -6,7 +6,7 @@ import {
   scheduleControlPlanePersist,
 } from './persistence.js';
 
-test('hydrate and persist are no-ops without PostgreSQL or during node:test', async () => {
+test('hydrate and persist are no-ops without a database or during node:test', async () => {
   assert.equal(await hydrateControlPlaneFromStore(), 'skipped');
   scheduleControlPlanePersist();
   await flushControlPlanePersist();

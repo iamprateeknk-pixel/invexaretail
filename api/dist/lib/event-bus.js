@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SERVER_EPOCH = exports.EVENT_TOPICS = void 0;
 exports.canReceive = canReceive;
+exports.recordOutboxEventInTransaction = recordOutboxEventInTransaction;
 exports.publishEvent = publishEvent;
 exports.subscribe = subscribe;
 exports.subscriberCount = subscriberCount;
@@ -11,7 +12,6 @@ exports.durableEventsSince = durableEventsSince;
 exports.durableLatestEventId = durableLatestEventId;
 exports.resetEventBusForTests = resetEventBusForTests;
 const node_crypto_1 = require("node:crypto");
-const client_1 = require("@prisma/client");
 const persistence_js_1 = require("./persistence.js");
 const db_js_1 = require("./db.js");
 exports.EVENT_TOPICS = ['stock.changed', 'item.changed', 'lot.changed', 'count.changed', 'assignment.changed', 'campaign.changed', 'transfer.changed', 'pick.changed', 'receipt.changed', 'putaway.changed', 'import.committed', 'exception.changed', 'approval.changed', 'permission.changed', 'config.changed', 'connector.changed'];
@@ -34,10 +34,23 @@ async function persistEvent(event) {
         data: {
             topic: event.topic,
             companyId: event.companyId,
-            locationIds: event.locationIds?.length ? event.locationIds : client_1.Prisma.JsonNull,
+            locationIds: event.locationIds?.length ? event.locationIds : undefined,
             actorId: event.actorId ?? null,
             requestId: event.requestId ?? null,
             occurredAt: new Date(event.at),
+        },
+    });
+}
+async function recordOutboxEventInTransaction(tx, input) {
+    if (!persistence_js_1.databaseEnabled)
+        return;
+    await tx.domainEventOutbox.create({
+        data: {
+            topic: input.topic,
+            companyId: input.companyId,
+            locationIds: input.locationIds?.length ? input.locationIds : undefined,
+            actorId: input.actorId ?? null,
+            requestId: input.requestId ?? null,
         },
     });
 }
@@ -106,7 +119,7 @@ async function durableEventsSince(lastEventId, subscriber) {
 async function durableLatestEventId() {
     if (!persistence_js_1.databaseEnabled)
         return latestEventId();
-    const result = await db_js_1.prisma.domainEventOutbox.aggregate({ _max: { id: true } });
-    return Number(result._max.id ?? 0);
+    const row = await db_js_1.prisma.domainEventOutbox.aggregate({ _max: { id: true } });
+    return Number(row._max.id ?? 0);
 }
 function resetEventBusForTests() { sequence = 0; buffer.length = 0; subscribers.clear(); }

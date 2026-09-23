@@ -93,6 +93,7 @@ export const NAVIGATION = [
     label: 'Inventory',
     items: [
       { id: 'inventory', label: 'Items & stock', icon: Boxes },
+      { id: 'item-search', label: 'Item search & stock detail', icon: PackageSearch },
       { id: 'stock-update', label: 'Stock update', icon: PackagePlus, roles: ['ADMIN', 'ADMIN_USER'] },
       { id: 'expiry', label: 'Lots & expiry', icon: Clock3 },
       { id: 'catalog', label: 'Tags & custom fields', icon: Tags },
@@ -154,6 +155,17 @@ export const NAV_ENTITLEMENTS = {
   catalog: 'INVENTORY',
 };
 
+// Week 9 note: not currently called from application code. The server
+// already computes entitlement-driven hides and merges them into
+// `GET /workspace/profile`'s `pack.hide` (api/src/routes/core.ts's
+// `hiddenNavigationForCompany()`), so `workspaceProfile.pack.hide` alone is
+// already the complete hidden-module set by the time it reaches
+// useWorkspaceDerived's `hiddenModules`. Kept (not deleted) as a documented,
+// tested pure function rather than silently removed, in case a future
+// optimistic-UI path needs to compute this client-side before the profile
+// fetch resolves - flagged in docs/route-ownership-matrix.md-equivalent
+// backlog (docs/web/role-journeys.md) as a real candidate for deletion if
+// nothing ends up calling it by the time the page-rebuild phase starts.
 export function hiddenModulesForEntitlements(modules = {}) {
   return Object.entries(NAV_ENTITLEMENTS)
     .filter(([, feature]) => modules[feature] === false)
@@ -173,6 +185,7 @@ export const PAGE_META = {
   dashboard: ['Operations overview', 'Live work, stock risk and performance across your locations.'],
   inventory: ['Items and stock', 'Search current stock, inspect lots and open item-level details.'],
   'stock-update': ['Stock update', 'Add, remove or set branch stock manually or from a 5,000+ row lot-wise Excel file.'],
+  'item-search': ['Item search and stock detail', 'Search items, inspect branch balances, lots and movement history, and post guided adjustments/reversals.'],
   expiry: ['Lots and expiry', 'FEFO action queue for expired, near-expiry and missing-date lots, with write-off and date repair.'],
   catalog: ['Tags and custom fields', 'Create a flexible product catalogue without changing core retail fields.'],
   campaigns: ['Auto stock take', 'Set up a monthly stock take once - the daily counts are assigned to your team automatically.'],

@@ -3,6 +3,7 @@ import { extractToken, requireAuth } from './enterprise-auth.js';
 import { DEFAULT_COMPANY_ID, companyOwnsItem } from '../lib/saas/tenant-scope.js';
 import { deleteBlockers, parseStatusChange } from '../lib/item-master.js';
 import { ItemMasterError, changeItemStatus, deleteItemPermanently, referenceCounts } from '../lib/item-master-service.js';
+import { requireTenantContext } from '../lib/tenant-context.js';
 
 // Blueprint v4 §6: lifecycle controls for the canonical Item Master.
 // Create/edit live on POST/PUT /items in core.ts.
@@ -36,6 +37,15 @@ function itemIdOf(req: Request): string {
   return id;
 }
 
+/** Fails closed (throws) if the session has no resolvable tenant - see ADR-002. */
+function tenantContextOf(req: Request) {
+  return requireTenantContext({
+    companyId: companyOf(req),
+    userId: req.user?.id,
+    role: req.user?.role,
+  });
+}
+
 router.get('/items/:id/references', ...guard, respond(async (req, res) => {
   if (!canMaintain(req.user!.role) && req.user!.role !== 'AUDITOR') throw new ItemMasterError('Admin access required.', 403);
   const counts = await referenceCounts(itemIdOf(req));
@@ -51,14 +61,14 @@ router.patch('/items/:id/status', ...guard, respond(async (req, res) => {
   } catch (error) {
     throw new ItemMasterError(error instanceof Error ? error.message : 'Invalid status change.');
   }
-  const result = await changeItemStatus(itemIdOf(req), change, { id: req.user!.id, role: req.user!.role }, companyOf(req));
+  const result = await changeItemStatus(tenantContextOf(req), itemIdOf(req), change);
   res.json(result);
 }));
 
 router.delete('/items/:id', ...guard, respond(async (req, res) => {
   // Hard-delete governance stays with the Main Admin (blueprint v4 §4).
   if (req.user!.role !== 'ADMIN') throw new ItemMasterError('Only the Main Admin can permanently delete an item.', 403);
-  await deleteItemPermanently(itemIdOf(req), { id: req.user!.id, role: req.user!.role }, companyOf(req));
+  await deleteItemPermanently(tenantContextOf(req), itemIdOf(req));
   res.status(204).send();
 }));
 

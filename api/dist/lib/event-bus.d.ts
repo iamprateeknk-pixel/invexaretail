@@ -18,6 +18,14 @@ export type EventSubscriber = {
 };
 export declare const SERVER_EPOCH: `${string}-${string}-${string}-${string}-${string}`;
 export declare function canReceive(subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>, event: DomainEvent): boolean;
+type OutboxTxClient = {
+    domainEventOutbox: {
+        create: (args: {
+            data: Record<string, unknown>;
+        }) => Promise<unknown>;
+    };
+};
+export declare function recordOutboxEventInTransaction(tx: OutboxTxClient, input: Omit<DomainEvent, 'id' | 'at'>): Promise<void>;
 /** Local delivery is for memory mode. Database mode readers poll the durable outbox, including events from other replicas. */
 export declare function publishEvent(input: Omit<DomainEvent, 'id' | 'at'>): DomainEvent;
 export declare function subscribe(subscriber: Omit<EventSubscriber, 'id'>): {
@@ -36,3 +44,4 @@ export declare function eventsSince(lastEventId: number, subscriber: Pick<EventS
 export declare function durableEventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>): Promise<DomainEvent[]>;
 export declare function durableLatestEventId(): Promise<number>;
 export declare function resetEventBusForTests(): void;
+export {};

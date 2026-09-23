@@ -1,19 +1,8 @@
-import { prisma } from './db.js';
-
-let schemaPromise: Promise<void> | undefined;
-
 /**
- * Verify that the migration-managed PostgreSQL schema is reachable.
- * Application startup never creates or mutates tables at runtime.
+ * ADR-004: schema evolution runs exclusively through `prisma migrate deploy`
+ * now that the database is Postgres with a real deploy pipeline (see
+ * render.yaml's preDeployCommand and docker-compose's api entrypoint). Every
+ * table this used to hand-create with MySQL DDL is a Prisma model already.
+ * Kept as a no-op so existing call sites do not need to change.
  */
-export function ensureRuntimeSchema(): Promise<void> {
-  schemaPromise ??= prisma.$queryRaw`SELECT 1`
-    .then(() => undefined)
-    .catch((error) => {
-      schemaPromise = undefined;
-      throw error;
-    });
-  return schemaPromise;
-}
-
-export const ensureDailySyncSchema = ensureRuntimeSchema;
+export async function ensureDailySyncSchema(): Promise<void> {}

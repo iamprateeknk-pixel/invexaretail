@@ -11,6 +11,8 @@ import { aggregateOpeningStock, type StockImportPreview } from './stock-import.j
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { hydrateActiveWorkflow } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
+import { assertValidCountReviewTransition, type CountReviewStatus } from './domain-policies.js';
+import { DomainError } from './errors.js';
 
 export const databaseEnabled = Boolean(resolveDatabaseUrl());
 
@@ -77,7 +79,7 @@ export type PersistedStockRow = {
 
 function requireDatabase(): void {
   if (!databaseEnabled) {
-    throw new Error('Database persistence is disabled. Set DATABASE_URL to PostgreSQL.');
+    throw new Error('Database persistence is disabled. Set DATABASE_URL to the Postgres database.');
   }
 }
 
@@ -461,15 +463,13 @@ export async function persistOpeningStockImport(
       for (let offset = 0; offset < itemMasters.length; offset += 500) {
         const chunk = itemMasters.slice(offset, offset + 500);
         await tx.$executeRaw(Prisma.sql`
-          INSERT INTO "Item" ("id", "code", "name", "category", "subcategory", "company", "companyId", "unit", "createdAt", "updatedAt")
+          INSERT INTO "Item" (id, code, name, category, subcategory, company, "companyId", unit, "createdAt", "updatedAt")
           VALUES ${Prisma.join(chunk.map((item) => Prisma.sql`(
             ${item.id}, ${item.code}, ${item.name}, ${item.category ?? null}, ${item.subcategory ?? null},
             ${item.company ?? null}, ${companyId}, ${item.unit}, NOW(), NOW()
           )`))}
-          ON CONFLICT ("id") DO UPDATE SET
-            "name" = EXCLUDED."name", "category" = EXCLUDED."category",
-            "subcategory" = EXCLUDED."subcategory", "company" = EXCLUDED."company",
-            "unit" = EXCLUDED."unit", "updatedAt" = NOW()
+          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category,
+            subcategory = EXCLUDED.subcategory, company = EXCLUDED.company, unit = EXCLUDED.unit, "updatedAt" = NOW()
         `);
       }
       if (newLots.length) {
@@ -488,10 +488,10 @@ export async function persistOpeningStockImport(
       for (let offset = 0; offset < lotsWithExpiry.length; offset += 400) {
         const chunk = lotsWithExpiry.slice(offset, offset + 400);
         await tx.$executeRaw(Prisma.sql`
-          UPDATE "Lot" SET "expiryDate" = CASE "id"
+          UPDATE "Lot" SET "expiryDate" = CASE id
             ${Prisma.join(chunk.map((lot) => Prisma.sql`WHEN ${lot.id} THEN ${new Date(lot.expiryDate!)}`), ' ')}
           END, "updatedAt" = NOW()
-          WHERE "id" IN (${Prisma.join(chunk.map((lot) => Prisma.sql`${lot.id}`))})
+          WHERE id IN (${Prisma.join(chunk.map((lot) => Prisma.sql`${lot.id}`))})
         `);
       }
 
@@ -536,15 +536,12 @@ export async function persistOpeningStockImport(
           skipDuplicates: true,
         });
         await tx.$executeRaw(Prisma.sql`
-          INSERT INTO "StockLedger" ("id", "itemId", "lotId", "locationId", "onHand", "reserved", "inTransit", "version", "lastUpdatedAt")
+          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt")
           VALUES ${Prisma.join(chunk.map(({ row, item, lot, location }) => Prisma.sql`(
             ${importId('stock', `${item.id}|${lot.id}|${location.id}`)}, ${item.id}, ${lot.id}, ${location.id},
             ${row.quantity ?? 0}, 0, 0, 1, NOW()
           )`))}
-          ON CONFLICT ("itemId", "lotId", "locationId") DO UPDATE SET
-            "onHand" = EXCLUDED."onHand",
-            "version" = "StockLedger"."version" + 1,
-            "lastUpdatedAt" = NOW()
+          ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
       }
     }, { maxWait: 10_000, timeout: 120_000 });
@@ -605,8 +602,8 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
       },
     });
     for (const lot of input.lots) await tx.lot.upsert({ where: { itemId_lotNo: { itemId: lot.itemId, lotNo: lot.lotNo } }, update: { expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : undefined, attributes: lot.attributes as Prisma.InputJsonValue }, create: { id: lot.id, itemId: lot.itemId, lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes as Prisma.InputJsonValue } });
-    // Import in bounded chunks so 5,000+ lot rows do not time out on shared
-    // PostgreSQL. Existing dedupe keys are excluded before ledger updates,
+    // Import in bounded chunks so 5,000+ lot rows do not time out the
+    // database connection. Existing dedupe keys are excluded before ledger updates,
     // preventing a retried file from changing stock twice.
     for (let offset = 0; offset < input.movements.length; offset += 400) {
       const chunk = input.movements.slice(offset, offset + 400);
@@ -625,15 +622,12 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
       const ledgerRows = fresh.filter((movement) => movement.lotId);
       if (ledgerRows.length) {
         await tx.$executeRaw(Prisma.sql`
-          INSERT INTO "StockLedger" ("id", "itemId", "lotId", "locationId", "onHand", "reserved", "inTransit", "version", "lastUpdatedAt")
+          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt")
           VALUES ${Prisma.join(ledgerRows.map((movement) => Prisma.sql`(
             ${importId('stock', `${movement.itemId}|${movement.lotId}|${movement.locationId}`)},
             ${movement.itemId}, ${movement.lotId!}, ${movement.locationId}, ${movement.qtyDelta}, 0, 0, 1, NOW()
           )`))}
-          ON CONFLICT ("itemId", "lotId", "locationId") DO UPDATE SET
-            "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand",
-            "version" = "StockLedger"."version" + 1,
-            "lastUpdatedAt" = NOW()
+          ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
       }
     }
@@ -728,6 +722,19 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
 
+  // Week 7: name the legal moves centrally instead of relying only on the
+  // `WHERE reviewStatus = 'PENDING_REVIEW'` claim below to reject a bad
+  // target status. The claim still does the concurrency-safe part (two
+  // simultaneous reviews of the same count can't both win); this rejects an
+  // illegal *target* (e.g. something other than APPROVED/REJECTED/RECOUNT)
+  // before the transaction opens, with a stable error code and an audit row.
+  await assertValidCountReviewTransition(
+    'PENDING_REVIEW',
+    (count.status ?? 'PENDING_REVIEW') as CountReviewStatus,
+    count.id,
+    { actorId: count.reviewedBy ?? 'system', actorRole: count.role ?? 'UNKNOWN', reason: count.reviewReason },
+  );
+
   await prisma.$transaction(async (tx) => {
     const claimed = await tx.stockCount.updateMany({
       where: { id: count.id, reviewStatus: 'PENDING_REVIEW' },
@@ -740,7 +747,9 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
         reviewReason: count.reviewReason ?? null,
       },
     });
-    if (claimed.count !== 1) throw new Error('Stock count was already reviewed; variance was not posted again.');
+    if (claimed.count !== 1) {
+      throw new DomainError('CONCURRENT_UPDATE_CONFLICT', 'Stock count was already reviewed; variance was not posted again.');
+    }
 
     if (count.status === 'APPROVED') {
       const variance = count.physicalQuantity - count.bookQty;

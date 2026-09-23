@@ -2,7 +2,6 @@
 import { type Request, type Response, type NextFunction, Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import {
-  generateOTP,
   hashPassword,
   verifyPassword,
   hashPin,
@@ -12,15 +11,24 @@ import {
   shouldExposeDevOtpCode,
   generateJWT,
   verifyJWT,
-  generateRefreshToken,
   ACCESS_TOKEN_TTL_SECONDS,
-  REFRESH_TOKEN_TTL_SECONDS,
   validateEmail,
   validatePassword,
   validateUserName,
   checkOtpRateLimit,
   resetOtpRateLimit,
 } from '../lib/otp-auth.js';
+import {
+  createOtpChallenge,
+  verifyOtpChallenge,
+  clearOtpChallenge,
+  createRefreshFamily,
+  rotateRefreshToken,
+  revokeRefreshFamily,
+  revokeAllSessionsForUser,
+  type SessionMeta,
+} from '../lib/session-store.js';
+import { isAllowedOrigin } from '../lib/cors-origins.js';
 import * as repo from '../lib/enterprise-repository.js';
 import { rejectSuspendedCompany } from '../lib/saas/company-access.js';
 import { ControlPlaneError, apiKeyAllowsMethod, controlPlane } from '../lib/saas/control-plane.js';
@@ -150,11 +158,85 @@ function publicUser(user: repo.EnhancedUserRecord) {
   };
 }
 
-function issueSessionTokens(user: repo.EnhancedUserRecord) {
-  const token = generateJWT(user.id, user.companyId, ACCESS_TOKEN_TTL_SECONDS);
-  const refreshToken = generateRefreshToken(user.id, user.companyId);
-  repo.storeRefreshToken(refreshToken, user.id, user.companyId, REFRESH_TOKEN_TTL_SECONDS * 1000);
-  return { token, refreshToken };
+// ADR-003: the refresh token lives in a Secure HttpOnly SameSite cookie for
+// browser clients. `SameSite=None` is required for the API and web app to be
+// on different origins (per ALLOWED_ORIGINS/render.yaml), which in turn
+// requires Secure - so this cookie is never usable over plain HTTP.
+const REFRESH_COOKIE_NAME = 'invexa_rt';
+const REFRESH_COOKIE_PATH = '/api/v1/auth';
+const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function refreshCookieOptions() {
+  const production = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: production,
+    sameSite: (production ? 'none' : 'lax') as 'none' | 'lax',
+    path: REFRESH_COOKIE_PATH,
+    maxAge: REFRESH_COOKIE_MAX_AGE_MS,
+  };
+}
+
+function setRefreshCookie(res: Response, token: string): void {
+  res.cookie(REFRESH_COOKIE_NAME, token, refreshCookieOptions());
+}
+
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+}
+
+/** Minimal cookie-header parser: avoids adding a cookie-parser dependency for one read path. */
+function readCookie(req: Request, name: string): string | undefined {
+  const header = req.headers.cookie;
+  if (!header) return undefined;
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return decodeURIComponent(rest.join('='));
+  }
+  return undefined;
+}
+
+/**
+ * Temporary compatibility path (Week 3 requirement): keep returning the
+ * refresh token in the JSON body - mobile clients have no cookie jar and
+ * must receive it this way to store it in platform secure storage (Week 16)
+ * - in addition to setting the cookie. Set LEGACY_REFRESH_TOKEN_IN_BODY_UNTIL
+ * to an ISO date to stop returning it to *browser* callers (any request
+ * carrying an Origin header) after that date; requests with no Origin header
+ * (native apps) always get it in the body regardless.
+ */
+function legacyBodyTokenExpired(): boolean {
+  const until = process.env.LEGACY_REFRESH_TOKEN_IN_BODY_UNTIL?.trim();
+  if (!until) return false;
+  const parsed = Date.parse(until);
+  return Number.isFinite(parsed) && Date.now() > parsed;
+}
+
+function sessionMetaFor(req: Request): SessionMeta {
+  return {
+    deviceInfo: typeof req.body?.deviceInfo === 'string' ? req.body.deviceInfo.slice(0, 191) : undefined,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent']?.slice(0, 500),
+  };
+}
+
+async function issueSessionTokens(req: Request, res: Response, user: repo.EnhancedUserRecord): Promise<{ token: string; refreshToken?: string }> {
+  const accessToken = generateJWT(user.id, user.companyId, ACCESS_TOKEN_TTL_SECONDS);
+  const issued = await createRefreshFamily(user.id, user.companyId, sessionMetaFor(req));
+  setRefreshCookie(res, issued.token);
+  const isBrowserOrigin = Boolean(req.headers.origin);
+  const includeInBody = !isBrowserOrigin || !legacyBodyTokenExpired();
+  return { token: accessToken, ...(includeInBody ? { refreshToken: issued.token } : {}) };
+}
+
+/** Defense in depth against CSRF beyond SameSite: a same-site request either has no Origin header (native apps, same-origin form posts in old browsers) or one that matches our allowlist. */
+function rejectCrossSiteOrigin(req: Request, res: Response): boolean {
+  const origin = req.headers.origin;
+  if (origin && !isAllowedOrigin(origin)) {
+    res.status(403).json({ error: 'Cross-site request rejected', code: 'CSRF_ORIGIN_MISMATCH' });
+    return true;
+  }
+  return false;
 }
 
 // ============================================
@@ -192,15 +274,14 @@ router.post('/send-otp', otpLimiter, async (req: Request, res: Response) => {
 
     if (rejectSuspendedCompany(user.companyId, res)) return;
 
-    // Generate and save OTP
-    const otpCode = generateOTP();
-    repo.createOtpSession(normalizedEmail, otpCode);
+    // Generate and save OTP - crypto.randomInt (not Math.random), hashed at rest.
+    const otpCode = await createOtpChallenge(normalizedEmail, 'LOGIN');
 
-    // Send OTP via email. Delete the short-lived session when no provider is
+    // Send OTP via email. Delete the short-lived challenge when no provider is
     // configured so an undelivered code can never be accepted.
     const delivered = await sendOtpEmail(normalizedEmail, otpCode);
     if (!delivered) {
-      repo.clearOtpSession(normalizedEmail);
+      await clearOtpChallenge(normalizedEmail, 'LOGIN');
       return res.status(503).json({ error: 'Email OTP is not configured. Use password login.' });
     }
 
@@ -233,10 +314,10 @@ router.post('/verify-otp', loginLimiter, async (req: Request, res: Response) => 
       return res.status(400).json({ error: 'Invalid OTP format' });
     }
 
-    // Verify OTP
-    const isValid = repo.verifyOtpSession(normalizedEmail, normalizedOtp);
-    if (!isValid) {
-      return res.status(401).json({ error: 'Invalid or expired OTP' });
+    // Verify OTP - single atomic consume, so a code cannot succeed twice.
+    const result = await verifyOtpChallenge(normalizedEmail, normalizedOtp, 'LOGIN');
+    if (result.ok === false) {
+      return res.status(401).json({ error: 'Invalid or expired OTP', code: `OTP_${result.reason.toUpperCase()}` });
     }
 
     // Find user
@@ -249,12 +330,9 @@ router.post('/verify-otp', loginLimiter, async (req: Request, res: Response) => 
 
     // Update last login
     repo.updateUserLastLogin(user.id);
-
-    // Clear OTP session
-    repo.clearOtpSession(normalizedEmail);
     resetOtpRateLimit(normalizedEmail);
 
-    const { token, refreshToken } = issueSessionTokens(user);
+    const tokens = await issueSessionTokens(req, res, user);
 
     // Log audit
     repo.logAuditAction({
@@ -269,8 +347,7 @@ router.post('/verify-otp', loginLimiter, async (req: Request, res: Response) => 
     res.json({
       success: true,
       user: publicUser(user),
-      token,
-      refreshToken,
+      ...tokens,
     });
   } catch (error) {
     console.error('Verify OTP error:', error);
@@ -333,13 +410,12 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     // Update last login
     repo.updateUserLastLogin(user.id);
 
-    const { token, refreshToken } = issueSessionTokens(user);
+    const tokens = await issueSessionTokens(req, res, user);
 
     res.json({
       success: true,
       user: publicUser(user),
-      token,
-      refreshToken,
+      ...tokens,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -353,35 +429,38 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
 router.post('/refresh-token', async (req: Request, res: Response) => {
   try {
-    const { refreshToken } = req.body;
+    if (rejectCrossSiteOrigin(req, res)) return;
 
-    if (!refreshToken) {
-      return res.status(400).json({ error: 'Refresh token required' });
+    const presented = readCookie(req, REFRESH_COOKIE_NAME) || (typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '');
+    if (!presented) {
+      return res.status(400).json({ error: 'Refresh token required', code: 'REFRESH_TOKEN_MISSING' });
     }
 
-    if (repo.isRefreshTokenRevoked(refreshToken)) {
-      return res.status(401).json({ error: 'Refresh token revoked' });
+    const rotated = await rotateRefreshToken(presented, sessionMetaFor(req));
+    if (rotated.ok === false) {
+      clearRefreshCookie(res);
+      if (rotated.reason === 'reused') {
+        // Replay of an already-rotated/revoked token: the whole family was
+        // just revoked server-side. Every device on it must sign in again.
+        return res.status(401).json({ error: 'Session invalidated; please sign in again.', code: 'REFRESH_TOKEN_REUSED' });
+      }
+      return res.status(401).json({ error: 'Invalid refresh token', code: `REFRESH_TOKEN_${rotated.reason.toUpperCase()}` });
     }
 
-    const decoded = verifyJWT(refreshToken, 'refresh');
-    if (!decoded) {
-      return res.status(401).json({ error: 'Invalid refresh token' });
-    }
-
-    const user = repo.findUserById(decoded.userId);
+    const user = repo.findUserById(rotated.userId);
     if (!user || user.status !== 'active') {
-      return res.status(401).json({ error: 'User not found or inactive' });
+      return res.status(401).json({ error: 'User not found or inactive', code: 'USER_INACTIVE' });
     }
-
     if (rejectSuspendedCompany(user.companyId, res)) return;
 
-    repo.revokeRefreshToken(refreshToken);
-    const tokens = issueSessionTokens(user);
+    setRefreshCookie(res, rotated.issued.token);
+    const isBrowserOrigin = Boolean(req.headers.origin);
+    const includeInBody = !isBrowserOrigin || !legacyBodyTokenExpired();
 
     res.json({
       success: true,
-      token: tokens.token,
-      refreshToken: tokens.refreshToken,
+      token: generateJWT(user.id, user.companyId, ACCESS_TOKEN_TTL_SECONDS),
+      ...(includeInBody ? { refreshToken: rotated.issued.token } : {}),
       user: publicUser(user),
     });
   } catch (error) {
@@ -391,10 +470,19 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
 });
 
 router.post('/logout', async (req: Request, res: Response) => {
-  const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '';
-  if (refreshToken) {
-    repo.revokeRefreshToken(refreshToken);
+  const presented = readCookie(req, REFRESH_COOKIE_NAME) || (typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '');
+  if (presented) {
+    await revokeRefreshFamily(presented);
   }
+  clearRefreshCookie(res);
+  res.json({ success: true });
+});
+
+// "Sign out everywhere": revokes every refresh-token family for this user,
+// not just the caller's own session.
+router.post('/logout-all', extractToken, requireAuth, async (req: Request, res: Response) => {
+  await revokeAllSessionsForUser(req.user!.id);
+  clearRefreshCookie(res);
   res.json({ success: true });
 });
 
@@ -507,13 +595,12 @@ router.post('/verify-biometric', loginLimiter, async (req: Request, res: Respons
     repo.updateUserLastLogin(user.id);
     credential.lastUsed = new Date().toISOString();
 
-    const { token, refreshToken } = issueSessionTokens(user);
+    const tokens = await issueSessionTokens(req, res, user);
 
     res.json({
       success: true,
       user: publicUser(user),
-      token,
-      refreshToken,
+      ...tokens,
     });
   } catch (error) {
     console.error('Verify biometric error:', error);

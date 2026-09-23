@@ -1,6 +1,6 @@
 import type { CampaignItemRecord, CampaignRecord } from './stock-take-campaign.js';
 
-// In-memory campaign state, hydrated from PostgreSQL at startup and written
+// In-memory campaign state, hydrated from the database at startup and written
 // through by lib/campaign-persistence.ts (same shape as lib/repository.ts).
 
 export const campaigns: CampaignRecord[] = [];
