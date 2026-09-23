@@ -92,7 +92,7 @@ async function authenticateUser(email, password, requestedRole) {
 }
 function requireDatabase() {
     if (!exports.databaseEnabled) {
-        throw new Error('Database persistence is disabled. Set DATABASE_URL to the Hostinger MySQL database.');
+        throw new Error('Database persistence is disabled. Set DATABASE_URL to PostgreSQL.');
     }
 }
 // Packing/dispatch details live in one JSON column; JSON null means "not set yet".
@@ -450,13 +450,15 @@ async function persistOpeningStockImport(preview, fileName, importedBy, options)
             for (let offset = 0; offset < itemMasters.length; offset += 500) {
                 const chunk = itemMasters.slice(offset, offset + 500);
                 await tx.$executeRaw(client_1.Prisma.sql `
-          INSERT INTO Item (id, code, name, category, subcategory, company, companyId, unit, createdAt, updatedAt)
+          INSERT INTO "Item" ("id", "code", "name", "category", "subcategory", "company", "companyId", "unit", "createdAt", "updatedAt")
           VALUES ${client_1.Prisma.join(chunk.map((item) => client_1.Prisma.sql `(
             ${item.id}, ${item.code}, ${item.name}, ${item.category ?? null}, ${item.subcategory ?? null},
             ${item.company ?? null}, ${companyId}, ${item.unit}, NOW(), NOW()
           )`))}
-          ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category),
-            subcategory = VALUES(subcategory), company = VALUES(company), unit = VALUES(unit), updatedAt = NOW()
+          ON CONFLICT ("id") DO UPDATE SET
+            "name" = EXCLUDED."name", "category" = EXCLUDED."category",
+            "subcategory" = EXCLUDED."subcategory", "company" = EXCLUDED."company",
+            "unit" = EXCLUDED."unit", "updatedAt" = NOW()
         `);
             }
             if (newLots.length) {
@@ -475,10 +477,10 @@ async function persistOpeningStockImport(preview, fileName, importedBy, options)
             for (let offset = 0; offset < lotsWithExpiry.length; offset += 400) {
                 const chunk = lotsWithExpiry.slice(offset, offset + 400);
                 await tx.$executeRaw(client_1.Prisma.sql `
-          UPDATE Lot SET expiryDate = CASE id
+          UPDATE "Lot" SET "expiryDate" = CASE "id"
             ${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `WHEN ${lot.id} THEN ${new Date(lot.expiryDate)}`), ' ')}
-          END, updatedAt = NOW()
-          WHERE id IN (${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `${lot.id}`))})
+          END, "updatedAt" = NOW()
+          WHERE "id" IN (${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `${lot.id}`))})
         `);
             }
             await tx.importBatch.upsert({
@@ -521,12 +523,15 @@ async function persistOpeningStockImport(preview, fileName, importedBy, options)
                     skipDuplicates: true,
                 });
                 await tx.$executeRaw(client_1.Prisma.sql `
-          INSERT INTO StockLedger (id, itemId, lotId, locationId, onHand, reserved, inTransit, version, lastUpdatedAt)
+          INSERT INTO "StockLedger" ("id", "itemId", "lotId", "locationId", "onHand", "reserved", "inTransit", "version", "lastUpdatedAt")
           VALUES ${client_1.Prisma.join(chunk.map(({ row, item, lot, location }) => client_1.Prisma.sql `(
             ${importId('stock', `${item.id}|${lot.id}|${location.id}`)}, ${item.id}, ${lot.id}, ${location.id},
             ${row.quantity ?? 0}, 0, 0, 1, NOW()
           )`))}
-          ON DUPLICATE KEY UPDATE onHand = VALUES(onHand), version = version + 1, lastUpdatedAt = NOW()
+          ON CONFLICT ("itemId", "lotId", "locationId") DO UPDATE SET
+            "onHand" = EXCLUDED."onHand",
+            "version" = "StockLedger"."version" + 1,
+            "lastUpdatedAt" = NOW()
         `);
             }
         }, { maxWait: 10_000, timeout: 120_000 });
@@ -591,7 +596,7 @@ async function persistDailyMovementImport(input) {
         for (const lot of input.lots)
             await tx.lot.upsert({ where: { itemId_lotNo: { itemId: lot.itemId, lotNo: lot.lotNo } }, update: { expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : undefined, attributes: lot.attributes }, create: { id: lot.id, itemId: lot.itemId, lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes } });
         // Import in bounded chunks so 5,000+ lot rows do not time out on shared
-        // Hostinger MySQL. Existing dedupe keys are excluded before ledger updates,
+        // PostgreSQL. Existing dedupe keys are excluded before ledger updates,
         // preventing a retried file from changing stock twice.
         for (let offset = 0; offset < input.movements.length; offset += 400) {
             const chunk = input.movements.slice(offset, offset + 400);
@@ -611,12 +616,15 @@ async function persistDailyMovementImport(input) {
             const ledgerRows = fresh.filter((movement) => movement.lotId);
             if (ledgerRows.length) {
                 await tx.$executeRaw(client_1.Prisma.sql `
-          INSERT INTO StockLedger (id, itemId, lotId, locationId, onHand, reserved, inTransit, version, lastUpdatedAt)
+          INSERT INTO "StockLedger" ("id", "itemId", "lotId", "locationId", "onHand", "reserved", "inTransit", "version", "lastUpdatedAt")
           VALUES ${client_1.Prisma.join(ledgerRows.map((movement) => client_1.Prisma.sql `(
             ${importId('stock', `${movement.itemId}|${movement.lotId}|${movement.locationId}`)},
             ${movement.itemId}, ${movement.lotId}, ${movement.locationId}, ${movement.qtyDelta}, 0, 0, 1, NOW()
           )`))}
-          ON DUPLICATE KEY UPDATE onHand = onHand + VALUES(onHand), version = version + 1, lastUpdatedAt = NOW()
+          ON CONFLICT ("itemId", "lotId", "locationId") DO UPDATE SET
+            "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand",
+            "version" = "StockLedger"."version" + 1,
+            "lastUpdatedAt" = NOW()
         `);
             }
         }

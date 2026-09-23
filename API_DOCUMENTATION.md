@@ -30,7 +30,7 @@ Request:
 Response (200):
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token": "<ACCESS_TOKEN>",
   "user": {
     "id": "user-1",
     "email": "admin@retail.local",
@@ -675,13 +675,13 @@ curl -X POST http://localhost:4000/api/v1/login \
 ### Get Stock
 ```bash
 curl -X GET http://localhost:4000/api/v1/stock/loc-1 \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
 ### Submit Count
 ```bash
 curl -X POST http://localhost:4000/api/v1/stock-counts \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "itemId": "sku-001",
@@ -707,4 +707,3 @@ curl -X POST http://localhost:4000/api/v1/stock-counts \
 ---
 
 **Last Updated**: 2026-09-08
-

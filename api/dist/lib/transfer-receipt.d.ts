@@ -33,7 +33,6 @@ export type StoredReceipt = {
     notes?: string;
 };
 export declare function rememberReceipt(receipt: StoredReceipt): void;
-/** Claims a requestId for the duration of one request; false while another identical request is running. */
 export declare function beginReceiptRequest(requestId: string): boolean;
 export declare function endReceiptRequest(requestId: string): void;
 export declare function findReceiptByRequestId(requestId: string): Promise<StoredReceipt | null>;

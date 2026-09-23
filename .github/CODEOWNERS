@@ -1,0 +1,29 @@
+# Draft ownership map for the Week 1 containment milestone.
+# Replace the fallback owner after the product and engineering owners are confirmed.
+
+# Default reviewer
+* @iamprateeknk-pixel
+
+# Security and identity
+/api/src/lib/otp-auth.ts @iamprateeknk-pixel
+/api/src/middleware/auth.ts @iamprateeknk-pixel
+/api/src/lib/saas/ @iamprateeknk-pixel
+
+# Tenant boundaries and inventory integrity
+/api/src/lib/repository.ts @iamprateeknk-pixel
+/api/src/lib/tenant-*.ts @iamprateeknk-pixel
+/api/src/lib/stock-*.ts @iamprateeknk-pixel
+/api/src/lib/reservation.ts @iamprateeknk-pixel
+
+# Database authority and imports
+/api/prisma/ @iamprateeknk-pixel
+/api/src/lib/runtime-schema.ts @iamprateeknk-pixel
+/api/src/lib/foundation-schema.ts @iamprateeknk-pixel
+/api/src/lib/import-*.ts @iamprateeknk-pixel
+
+# External ingress and release paths
+/api/src/lib/webhook-*.ts @iamprateeknk-pixel
+/.github/ @iamprateeknk-pixel
+/docker-compose.yml @iamprateeknk-pixel
+/render.yaml @iamprateeknk-pixel
+/docs/ @iamprateeknk-pixel

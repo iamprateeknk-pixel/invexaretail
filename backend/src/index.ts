@@ -4,7 +4,6 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import WebSocket from 'ws';
 import { createServer } from 'http';
-import mysql from 'mysql2/promise';
 
 // Routes
 import authRoutes from './routes/auth';

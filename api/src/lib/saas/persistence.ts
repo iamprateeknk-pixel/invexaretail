@@ -9,13 +9,6 @@ import {
   type ControlPlaneSnapshot,
 } from './snapshot.js';
 
-const CREATE_CONTROL_PLANE_STATE_SQL = `CREATE TABLE IF NOT EXISTS \`ControlPlaneState\` (
-    \`id\` VARCHAR(191) NOT NULL,
-    \`payload\` JSON NOT NULL,
-    \`updatedAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    PRIMARY KEY (\`id\`)
-  ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`;
-
 function databaseEnabled(): boolean {
   if (process.env.NODE_TEST_CONTEXT && process.env.CONTROL_PLANE_PERSIST_IN_TESTS !== '1') {
     return false;
@@ -33,7 +26,7 @@ function asJsonPayload(snapshot: ControlPlaneSnapshot): Prisma.InputJsonValue {
 export async function ensureControlPlaneSchema(): Promise<void> {
   if (!databaseEnabled()) return;
   const { prisma } = await import('../db.js');
-  await prisma.$executeRawUnsafe(CREATE_CONTROL_PLANE_STATE_SQL);
+  await prisma.$queryRaw`SELECT 1`;
 }
 
 export async function loadControlPlaneSnapshot(): Promise<ControlPlaneSnapshot | null> {

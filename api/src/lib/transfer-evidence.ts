@@ -9,36 +9,32 @@ export function evidenceMime(bytes: Buffer): string {
   throw new Error('Only JPEG, PNG and WebP photos are supported.');
 }
 
-let schema: Promise<unknown> | undefined;
-async function ensureSchema() {
-  if (!resolveDatabaseUrl()) throw new Error('Durable evidence requires a connected MySQL database.');
-  schema ??= prisma.$executeRawUnsafe(
-    'CREATE TABLE IF NOT EXISTS TransferEvidence (id VARCHAR(191) PRIMARY KEY, transferId VARCHAR(191) NOT NULL, fileName VARCHAR(191) NOT NULL, mimeType VARCHAR(64) NOT NULL, byteSize INT NOT NULL, uploadedBy VARCHAR(191) NOT NULL, createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), contents LONGBLOB NOT NULL, INDEX TransferEvidence_transfer_idx (transferId))'
-  ).catch((error) => { schema = undefined; throw error; });
-  await schema;
+function requireDatabase(): void {
+  if (!resolveDatabaseUrl()) throw new Error('Durable evidence requires a connected PostgreSQL database.');
 }
 
 export async function saveTransferEvidence(transferId: string, uploadedBy: string, fileName: string, bytes: Buffer) {
-  const mimeType = evidenceMime(bytes);
-  await ensureSchema();
+  requireDatabase();
   const id = randomUUID();
+  const mimeType = evidenceMime(bytes);
   const safeName = fileName.replace(/[\\/\r\n\x00-\x1f]/g, '_').slice(0, 191) || 'photo';
-  await prisma.$executeRawUnsafe(
-    'INSERT INTO TransferEvidence (id, transferId, fileName, mimeType, byteSize, uploadedBy, contents) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    id, transferId, safeName, mimeType, bytes.length, uploadedBy, bytes,
-  );
+  await prisma.transferEvidence.create({
+    data: { id, transferId, uploadedBy, fileName: safeName, mimeType, byteSize: bytes.length, contents: new Uint8Array(bytes) },
+  });
   return { id, transferId, fileName: safeName, mimeType, size: bytes.length };
 }
 
 export async function listTransferEvidence(transferId: string) {
-  await ensureSchema();
-  return prisma.$queryRawUnsafe('SELECT id, transferId, fileName, mimeType, byteSize AS size, createdAt FROM TransferEvidence WHERE transferId = ? ORDER BY createdAt', transferId);
+  requireDatabase();
+  const rows = await prisma.transferEvidence.findMany({
+    where: { transferId },
+    select: { id: true, transferId: true, fileName: true, mimeType: true, byteSize: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  return rows.map(({ byteSize, ...row }) => ({ ...row, size: byteSize }));
 }
 
 export async function readTransferEvidence(transferId: string, id: string) {
-  await ensureSchema();
-  const rows = await prisma.$queryRawUnsafe<Array<{ mimeType: string; contents: Uint8Array }>>(
-    'SELECT mimeType, contents FROM TransferEvidence WHERE transferId = ? AND id = ?', transferId, id,
-  );
-  return rows[0];
+  requireDatabase();
+  return prisma.transferEvidence.findFirst({ where: { transferId, id }, select: { mimeType: true, contents: true } });
 }

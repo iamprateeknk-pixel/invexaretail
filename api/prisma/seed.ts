@@ -1,7 +1,10 @@
 import bcrypt from 'bcryptjs';
 import { PrismaClient, Role, TransferStatus } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
-const prisma = new PrismaClient();
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) throw new Error('DATABASE_URL is required to seed PostgreSQL.');
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
 const locations = [
   { id: 'loc-1', code: 'MAIN-STORE', name: 'Main Store', type: 'store' },

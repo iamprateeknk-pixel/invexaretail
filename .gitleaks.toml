@@ -1,0 +1,7 @@
+title = "Invexa Retail Gitleaks configuration"
+
+[[allowlists]]
+description = "Historical API documentation examples; current docs use placeholders."
+paths = ['''^API_DOCUMENTATION\.md$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\.$''']

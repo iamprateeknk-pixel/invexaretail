@@ -8,7 +8,7 @@ exports.listCampaignItems = listCampaignItems;
 exports.saveCampaignItems = saveCampaignItems;
 exports.replaceCampaignState = replaceCampaignState;
 exports.resetCampaignStateForTests = resetCampaignStateForTests;
-// In-memory campaign state, hydrated from MySQL at startup and written
+// In-memory campaign state, hydrated from PostgreSQL at startup and written
 // through by lib/campaign-persistence.ts (same shape as lib/repository.ts).
 exports.campaigns = [];
 exports.campaignItems = [];

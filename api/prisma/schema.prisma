@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
 }
 
 enum Role {
@@ -144,71 +144,70 @@ model CompanyProfile {
   tenantId    String   @default("tenant-invexa")
 
   @@index([tenantId])
-
 }
 
 model User {
-  id                 String   @id @default(cuid())
-  name               String
-  email              String   @unique
-  passwordHash       String
-  role               Role
-  status             UserStatus @default(ACTIVE)
-  assignedLocations  String   @db.Text
-  assignedBranches   String?  @db.Text
+  id                String     @id @default(cuid())
+  name              String
+  email             String     @unique
+  passwordHash      String
+  role              Role
+  status            UserStatus @default(ACTIVE)
+  assignedLocations String     @db.Text
+  assignedBranches  String?    @db.Text
   // SaaS company that owns this login. Distinct from Item.company (brand).
-  companyId          String   @default("default-company")
-  tenantId           String   @default("tenant-invexa")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  lastLoginAt        DateTime?
-  passwordChangedAt  DateTime?
-  otpSecret          String?
-  mfaEnabled         Boolean  @default(false)
-  suspendedReason    String?
+  companyId         String     @default("default-company")
+  tenantId          String     @default("tenant-invexa")
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime?
+  otpSecret         String?
+  mfaEnabled        Boolean    @default(false)
+  suspendedReason   String?
 
-  stockCounts        StockCount[]
-  transferRequests   Transfer[]
-  assignmentsGiven   CountAssignment[] @relation("CountAssignmentAssignedBy")
-  assignmentsOwned   CountAssignment[] @relation("CountAssignmentAssignedTo")
-  importBatches      ImportBatch[]
-  inventoryMovements InventoryMovement[]
-  workAssignments    WorkAssignment[] @relation("WorkAssignmentAssignedTo")
-  workAssignmentsCreated WorkAssignment[] @relation("WorkAssignmentCreatedBy")
-  userSessions       UserSession[]
-  userPermissions    UserPermission[]
-  userRoles          UserRole[]
-  loginHistory       LoginHistory[]
-  workComments       WorkComment[]
-  importTemplates    ImportTemplate[]
-  exceptionCasesOwned    ExceptionCase[] @relation("ExceptionCaseOwner")
-  exceptionCasesReported ExceptionCase[] @relation("ExceptionCaseReportedBy")
-  putawayTasks           PutawayTask[]
-  pickWavesAssigned      PickWave[] @relation("PickWaveAssignedTo")
-  pickWavesCreated       PickWave[] @relation("PickWaveCreatedBy")
-  orders                 Order[]
-  toleranceRules         ToleranceRule[]
-  approvalRules          ApprovalRule[]
-  approvalRequestsMade   ApprovalRequest[] @relation("ApprovalRequestRequestedBy")
-  approvalRequestsDecided ApprovalRequest[] @relation("ApprovalRequestDecidedBy")
-  evidenceRules          EvidenceRule[]
-  qcChecklistTemplates   QcChecklistTemplate[]
-  qcInspections          QcInspection[]
-  intelligenceDismissals IntelligenceDismissal[]
+  stockCounts             StockCount[]
+  transferRequests        Transfer[]
+  assignmentsGiven        CountAssignment[]       @relation("CountAssignmentAssignedBy")
+  assignmentsOwned        CountAssignment[]       @relation("CountAssignmentAssignedTo")
+  importBatches           ImportBatch[]
+  inventoryMovements      InventoryMovement[]
+  workAssignments         WorkAssignment[]        @relation("WorkAssignmentAssignedTo")
+  workAssignmentsCreated  WorkAssignment[]        @relation("WorkAssignmentCreatedBy")
+  userSessions            UserSession[]
+  userPermissions         UserPermission[]
+  userRoles               UserRole[]
+  loginHistory            LoginHistory[]
+  workComments            WorkComment[]
+  importTemplates         ImportTemplate[]
+  exceptionCasesOwned     ExceptionCase[]         @relation("ExceptionCaseOwner")
+  exceptionCasesReported  ExceptionCase[]         @relation("ExceptionCaseReportedBy")
+  putawayTasks            PutawayTask[]
+  pickWavesAssigned       PickWave[]              @relation("PickWaveAssignedTo")
+  pickWavesCreated        PickWave[]              @relation("PickWaveCreatedBy")
+  orders                  Order[]
+  toleranceRules          ToleranceRule[]
+  approvalRules           ApprovalRule[]
+  approvalRequestsMade    ApprovalRequest[]       @relation("ApprovalRequestRequestedBy")
+  approvalRequestsDecided ApprovalRequest[]       @relation("ApprovalRequestDecidedBy")
+  evidenceRules           EvidenceRule[]
+  qcChecklistTemplates    QcChecklistTemplate[]
+  qcInspections           QcInspection[]
+  intelligenceDismissals  IntelligenceDismissal[]
 
   @@index([companyId])
   @@index([tenantId])
 }
 
 model Branch {
-  id              String   @id @default(cuid())
-  code            String   @unique
+  id              String           @id @default(cuid())
+  code            String           @unique
   name            String
-  type            String   @default("WAREHOUSE")
-  status          String   @default("ACTIVE")
-  companyId       String   @default("default-company")
-  tenantId        String   @default("tenant-invexa")
-  address         String?  @db.Text
+  type            String           @default("WAREHOUSE")
+  status          String           @default("ACTIVE")
+  companyId       String           @default("default-company")
+  tenantId        String           @default("tenant-invexa")
+  address         String?          @db.Text
   phone           String?
   email           String?
   managerId       String?
@@ -219,8 +218,8 @@ model Branch {
   toleranceRules  ToleranceRule[]
   approvalRules   ApprovalRule[]
   evidenceRules   EvidenceRule[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@index([code, status])
   @@index([companyId])
@@ -228,47 +227,47 @@ model Branch {
 }
 
 model Location {
-  id                    String   @id @default(cuid())
-  code                  String   @unique
-  name                  String
-  type                  String
-  locationType          String?  @default("STANDARD")
-  branchId              String?
-  branch                Branch?  @relation(fields: [branchId], references: [id])
-  parentId              String?
-  status                String   @default("ACTIVE")
-  companyId             String   @default("default-company")
-  tenantId              String   @default("tenant-invexa")
-  description           String?  @db.Text
-  latitude              Float?
-  longitude             Float?
-  deliverySlaHours      Float?
-  shippingCostPerKm     Float?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  type              String
+  locationType      String?  @default("STANDARD")
+  branchId          String?
+  branch            Branch?  @relation(fields: [branchId], references: [id])
+  parentId          String?
+  status            String   @default("ACTIVE")
+  companyId         String   @default("default-company")
+  tenantId          String   @default("tenant-invexa")
+  description       String?  @db.Text
+  latitude          Float?
+  longitude         Float?
+  deliverySlaHours  Float?
+  shippingCostPerKm Float?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  stock                 StockLedger[]
-  stockBalance          StockBalance[]
-  counts                StockCount[]
-  transfers             Transfer[] @relation("TransferLocation")
-  countAssignments      CountAssignment[]
-  openingSnapshots      OpeningStockSnapshot[]
-  inventoryMovements    InventoryMovement[]
-  syncCheckpoints       SyncCheckpoint[]
-  workAssignments       WorkAssignment[]
-  expiryAlerts          ExpiryAlert[]
-  stockMovements        StockMovement[]
+  stock                    StockLedger[]
+  stockBalance             StockBalance[]
+  counts                   StockCount[]
+  transfers                Transfer[]                @relation("TransferLocation")
+  countAssignments         CountAssignment[]
+  openingSnapshots         OpeningStockSnapshot[]
+  inventoryMovements       InventoryMovement[]
+  syncCheckpoints          SyncCheckpoint[]
+  workAssignments          WorkAssignment[]
+  expiryAlerts             ExpiryAlert[]
+  stockMovements           StockMovement[]
   replenishmentSuggestions ReplenishmentSuggestion[]
-  exceptionCases        ExceptionCase[]
-  bins                  Bin[]
-  putawayTasks          PutawayTask[]
-  pickWaves             PickWave[]
-  orders                Order[]
-  qcInspections         QcInspection[]
-  intelligenceDismissals IntelligenceDismissal[]
-  binStocks             BinStock[]
-  serialNumbers         SerialNumber[]
-  binMovements          BinMovement[]
+  exceptionCases           ExceptionCase[]
+  bins                     Bin[]
+  putawayTasks             PutawayTask[]
+  pickWaves                PickWave[]
+  orders                   Order[]
+  qcInspections            QcInspection[]
+  intelligenceDismissals   IntelligenceDismissal[]
+  binStocks                BinStock[]
+  serialNumbers            SerialNumber[]
+  binMovements             BinMovement[]
 
   @@index([code, branchId, status])
   @@index([companyId])
@@ -282,33 +281,32 @@ model Location {
 // phase). Putaway confirmation below records which bin holds what, giving
 // guided putaway and pick-path data without re-keying the existing ledger.
 model Bin {
-  id            String   @id @default(cuid())
-  locationId    String
-  location      Location @relation(fields: [locationId], references: [id])
-  code          String
-  zone          String?
-  aisle         String?
-  rack          String?
-  shelf         String?
-  capacity      Float?
-  storageClass  String?
-  status        String   @default("ACTIVE")
+  id           String   @id @default(cuid())
+  locationId   String
+  location     Location @relation(fields: [locationId], references: [id])
+  code         String
+  zone         String?
+  aisle        String?
+  rack         String?
+  shelf        String?
+  capacity     Float?
+  storageClass String?
+  status       String   @default("ACTIVE")
   // Blueprint P4 "Internal replenishment": pick-face vs reserve storage.
   // A pick-face bin is where pickers actually pick from; reserve bins back
   // it up. min/max drive when a reserve-to-pick-face task is suggested.
-  isPickFace    Boolean  @default(false)
-  pickFaceMin   Float?
-  pickFaceMax   Float?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isPickFace   Boolean  @default(false)
+  pickFaceMin  Float?
+  pickFaceMax  Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   putawaySuggested PutawayTask[] @relation("PutawaySuggestedBin")
   putawayConfirmed PutawayTask[] @relation("PutawayConfirmedBin")
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  tenantId         String        @default("tenant-invexa")
 
   @@unique([locationId, code])
+  @@index([tenantId])
   @@index([locationId, status])
 }
 
@@ -318,30 +316,29 @@ model Bin {
 // the task and its suggested-vs-confirmed bin so that flow can be added
 // without another schema change.
 model PutawayTask {
-  id              String    @id @default(cuid())
-  itemId          String
-  item            Item      @relation(fields: [itemId], references: [id])
-  lotId           String?
-  lot             Lot?      @relation(fields: [lotId], references: [id])
-  locationId      String
-  location        Location  @relation(fields: [locationId], references: [id])
-  quantity        Float
-  suggestedBinId  String?
-  suggestedBin    Bin?      @relation("PutawaySuggestedBin", fields: [suggestedBinId], references: [id])
-  confirmedBinId  String?
-  confirmedBin    Bin?      @relation("PutawayConfirmedBin", fields: [confirmedBinId], references: [id])
-  status          String    @default("PENDING")
-  sourceDocument  String?
-  sourceLineId    String?
-  assignedToId    String?
-  assignedTo      User?     @relation(fields: [assignedToId], references: [id])
-  confirmedAt     DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  id             String    @id @default(cuid())
+  itemId         String
+  item           Item      @relation(fields: [itemId], references: [id])
+  lotId          String?
+  lot            Lot?      @relation(fields: [lotId], references: [id])
+  locationId     String
+  location       Location  @relation(fields: [locationId], references: [id])
+  quantity       Float
+  suggestedBinId String?
+  suggestedBin   Bin?      @relation("PutawaySuggestedBin", fields: [suggestedBinId], references: [id])
+  confirmedBinId String?
+  confirmedBin   Bin?      @relation("PutawayConfirmedBin", fields: [confirmedBinId], references: [id])
+  status         String    @default("PENDING")
+  sourceDocument String?
+  sourceLineId   String?
+  assignedToId   String?
+  assignedTo     User?     @relation(fields: [assignedToId], references: [id])
+  confirmedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenantId       String    @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status])
   @@index([status])
 }
@@ -369,10 +366,9 @@ model PickWave {
   completedAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  tenantId     String    @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status])
 }
 
@@ -410,16 +406,15 @@ model Order {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  lines OrderLine[]
-  packSessions PackSession[]
-  shipments    Shipment[]
+  lines          OrderLine[]
+  packSessions   PackSession[]
+  shipments      Shipment[]
   returnRequests ReturnRequest[]
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
+  tenantId       String          @default("tenant-invexa")
 
-
-  @@index([status, createdAt])
   @@unique([channel, externalReference])
+  @@index([tenantId])
+  @@index([status, createdAt])
   @@index([channel, status])
   @@index([fulfillmentLocationId, status])
   @@index([status, reservationExpiresAt])
@@ -431,21 +426,21 @@ model Order {
 // flow - it never changes Order.status itself, so it cannot desync the
 // stock-truth invariant those already enforce.
 model PackSession {
-  id           String       @id @default(cuid())
-  orderId      String
-  order        Order        @relation(fields: [orderId], references: [id])
-  status       String       @default("IN_PROGRESS")
-  cartonCount  Int?
-  weightKg     Float?
-  lengthCm     Float?
-  widthCm      Float?
-  heightCm     Float?
-  packedById   String
-  sealedAt     DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  companyId    String       @default("default-company")
-  tenantId     String       @default("tenant-invexa")
+  id          String    @id @default(cuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id])
+  status      String    @default("IN_PROGRESS")
+  cartonCount Int?
+  weightKg    Float?
+  lengthCm    Float?
+  widthCm     Float?
+  heightCm    Float?
+  packedById  String
+  sealedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  companyId   String    @default("default-company")
+  tenantId    String    @default("tenant-invexa")
 
   lines PackedLine[]
 
@@ -472,21 +467,21 @@ model PackedLine {
 // directly. A RECEIVED return with a RESTOCK-disposition line is the only
 // thing that posts stock back onto the ledger, and only then.
 model ReturnRequest {
-  id            String   @id @default(cuid())
-  orderId       String
-  order         Order    @relation(fields: [orderId], references: [id])
-  status        String   @default("REQUESTED")
-  reason        String?
-  createdById   String
+  id           String    @id @default(cuid())
+  orderId      String
+  order        Order     @relation(fields: [orderId], references: [id])
+  status       String    @default("REQUESTED")
+  reason       String?
+  createdById  String
   // Blueprint v4 §24: PENDING until finance decides; REFUNDED / DENIED afterwards.
-  refundStatus  String   @default("PENDING")
-  refundNote    String?  @db.Text
-  refundedAt    DateTime?
-  refundedById  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  companyId     String   @default("default-company")
-  tenantId      String   @default("tenant-invexa")
+  refundStatus String    @default("PENDING")
+  refundNote   String?   @db.Text
+  refundedAt   DateTime?
+  refundedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  companyId    String    @default("default-company")
+  tenantId     String    @default("tenant-invexa")
 
   lines ReturnLine[]
 
@@ -516,22 +511,22 @@ model ReturnLine {
 // "Shipped"/"Delivered" order view reads it without touching the
 // reservation/fulfilment invariants.
 model Shipment {
-  id              String    @id @default(cuid())
+  id              String   @id @default(cuid())
   orderId         String
-  order           Order     @relation(fields: [orderId], references: [id])
+  order           Order    @relation(fields: [orderId], references: [id])
   packSessionId   String?
   carrierProvider String
   awbNumber       String
   serviceCode     String
-  status          String    @default("BOOKED")
+  status          String   @default("BOOKED")
   labelUrl        String?
   manifestId      String?
   weightKg        Float?
   createdById     String
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  companyId       String    @default("default-company")
-  tenantId        String    @default("tenant-invexa")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  companyId       String   @default("default-company")
+  tenantId        String   @default("tenant-invexa")
 
   @@unique([awbNumber])
   @@index([orderId])
@@ -539,23 +534,23 @@ model Shipment {
 }
 
 model OrderLine {
-  id           String   @id @default(cuid())
-  orderId      String
-  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  itemId       String
-  item         Item     @relation(fields: [itemId], references: [id])
-  lotId        String?
-  lot          Lot?     @relation(fields: [lotId], references: [id])
-  requestedQty Float
-  fulfilledQty Float    @default(0)
+  id                    String   @id @default(cuid())
+  orderId               String
+  order                 Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId                String
+  item                  Item     @relation(fields: [itemId], references: [id])
+  lotId                 String?
+  lot                   Lot?     @relation(fields: [lotId], references: [id])
+  requestedQty          Float
+  fulfilledQty          Float    @default(0)
   fulfillmentLocationId String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  tenantId              String   @default("tenant-invexa")
 
   returnLines ReturnLine[]
 
+  @@index([tenantId])
   @@index([orderId])
 }
 
@@ -646,39 +641,39 @@ model EvidenceRule {
 // blocked record (e.g. "Transfer"/<transferId>) generically so future
 // trigger types do not need their own request table.
 model ApprovalRequest {
-  id             String    @id @default(cuid())
-  ruleId         String
-  rule           ApprovalRule @relation(fields: [ruleId], references: [id])
-  triggerType    String
-  entityType     String
-  entityId       String
-  valueAtStake   Float
-  status         String    @default("PENDING")
-  requestedById  String
-  requestedBy    User      @relation("ApprovalRequestRequestedBy", fields: [requestedById], references: [id])
-  decidedById    String?
-  decidedBy      User?     @relation("ApprovalRequestDecidedBy", fields: [decidedById], references: [id])
-  decidedAt      DateTime?
-  decisionNotes  String?   @db.Text
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id            String       @id @default(cuid())
+  ruleId        String
+  rule          ApprovalRule @relation(fields: [ruleId], references: [id])
+  triggerType   String
+  entityType    String
+  entityId      String
+  valueAtStake  Float
+  status        String       @default("PENDING")
+  requestedById String
+  requestedBy   User         @relation("ApprovalRequestRequestedBy", fields: [requestedById], references: [id])
+  decidedById   String?
+  decidedBy     User?        @relation("ApprovalRequestDecidedBy", fields: [decidedById], references: [id])
+  decidedAt     DateTime?
+  decisionNotes String?      @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   @@index([entityType, entityId, status])
   @@index([status, triggerType])
 }
 
 model Item {
-  id          String   @id @default(cuid())
-  code        String   @unique
-  name        String
-  category    String?
-  subcategory String?
-  company     String?
+  id                 String    @id @default(cuid())
+  code               String    @unique
+  name               String
+  category           String?
+  subcategory        String?
+  company            String?
   // SaaS tenant. Item.company above is the brand/manufacturer name.
-  companyId   String   @default("default-company")
-  tenantId    String   @default("tenant-invexa")
-  unit        String?
-  description String?  @db.Text
+  companyId          String    @default("default-company")
+  tenantId           String    @default("tenant-invexa")
+  unit               String?
+  description        String?   @db.Text
   // Blueprint v4 §6 "Operations" field group. countMethod: LOT_SCAN (scan a
   // lot barcode, count in whole units) | ITEM_WEIGHT (enter a decimal
   // quantity, server allocates FIFO/FEFO across lots - see
@@ -689,59 +684,59 @@ model Item {
   // whose quantities are entered as a decimal rather than a scan-counted
   // whole number. Defaults preserve today's de facto behavior (scan-and-
   // increment, whole units) for every existing item.
-  countMethod       String  @default("LOT_SCAN")
-  pickMethod        String  @default("LOT_SCAN")
-  allocationStrategy String @default("FEFO")
-  lotRequired       Boolean @default(true)
-  expiryRequired    Boolean @default(false)
-  decimalQuantity   Boolean @default(false)
+  countMethod        String    @default("LOT_SCAN")
+  pickMethod         String    @default("LOT_SCAN")
+  allocationStrategy String    @default("FEFO")
+  lotRequired        Boolean   @default(true)
+  expiryRequired     Boolean   @default(false)
+  decimalQuantity    Boolean   @default(false)
   // Blueprint v4 §6 canonical Item Master. status ACTIVE | INACTIVE |
   // ARCHIVED: anything but ACTIVE is hidden from operational users and
   // blocked from new transactions, but history stays explainable. Permanent
   // delete is only allowed with no history (see lib/item-master.ts).
-  status            String    @default("ACTIVE")
-  archiveReason     String?
-  archivedAt        DateTime?
-  archivedById      String?
-  barcode           String?
-  hsn               String?
-  gstRate           Float?
-  mrp               Float?
-  leadTimeDays      Int?
-  shelfLifeDays     Int?
+  status             String    @default("ACTIVE")
+  archiveReason      String?
+  archivedAt         DateTime?
+  archivedById       String?
+  barcode            String?
+  hsn                String?
+  gstRate            Float?
+  mrp                Float?
+  leadTimeDays       Int?
+  shelfLifeDays      Int?
   // ERP aliases / alternate names and codes used to resolve import rows.
-  aliases           Json?
-  version           Int       @default(1)
-  createdById       String?
-  updatedById       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  aliases            Json?
+  version            Int       @default(1)
+  createdById        String?
+  updatedById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  lots                    Lot[]
-  stock                   StockLedger[]
-  stockBalance            StockBalance[]
-  counts                  StockCount[]
-  transferLines           TransferLine[]
-  countAssignments        CountAssignment[]
-  tags                    ItemTag[]
-  customFieldValues       CustomFieldValue[]
-  purchaseOrderLines      PurchaseOrderLine[]
-  reorderRules            ReorderRule[]
-  openingSnapshots        OpeningStockSnapshot[]
-  inventoryMovements      InventoryMovement[]
-  stockMovements          StockMovement[]
-  expiryAlerts            ExpiryAlert[]
+  lots                     Lot[]
+  stock                    StockLedger[]
+  stockBalance             StockBalance[]
+  counts                   StockCount[]
+  transferLines            TransferLine[]
+  countAssignments         CountAssignment[]
+  tags                     ItemTag[]
+  customFieldValues        CustomFieldValue[]
+  purchaseOrderLines       PurchaseOrderLine[]
+  reorderRules             ReorderRule[]
+  openingSnapshots         OpeningStockSnapshot[]
+  inventoryMovements       InventoryMovement[]
+  stockMovements           StockMovement[]
+  expiryAlerts             ExpiryAlert[]
   replenishmentSuggestions ReplenishmentSuggestion[]
-  exceptionCases          ExceptionCase[]
-  putawayTasks            PutawayTask[]
-  orderLines              OrderLine[]
-  qcInspections           QcInspection[]
-  intelligenceDismissals  IntelligenceDismissal[]
-  binStocks               BinStock[]
-  serialNumbers           SerialNumber[]
-  binMovements            BinMovement[]
-  priceLists              PriceList[]
-  returnLines             ReturnLine[]
+  exceptionCases           ExceptionCase[]
+  putawayTasks             PutawayTask[]
+  orderLines               OrderLine[]
+  qcInspections            QcInspection[]
+  intelligenceDismissals   IntelligenceDismissal[]
+  binStocks                BinStock[]
+  serialNumbers            SerialNumber[]
+  binMovements             BinMovement[]
+  priceLists               PriceList[]
+  returnLines              ReturnLine[]
 
   @@index([companyId])
   @@index([tenantId])
@@ -750,50 +745,49 @@ model Item {
 }
 
 model Lot {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   lotNo      String
   itemId     String
-  item       Item     @relation(fields: [itemId], references: [id])
+  item       Item      @relation(fields: [itemId], references: [id])
   expiryDate DateTime?
   // AVAILABLE | EXPIRED | BLOCKED | QUARANTINE (blueprint section 17): a
   // lot in any state other than AVAILABLE is excluded from normal FEFO/FIFO
   // allocation and can only be drawn from via an authorized manual override.
-  status     String   @default("AVAILABLE")
+  status     String    @default("AVAILABLE")
   attributes Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
-  stock                   StockLedger[]
-  stockBalance            StockBalance[]
-  counts                  StockCount[]
-  transfers               TransferLine[]
-  openingSnapshots        OpeningStockSnapshot[]
-  inventoryMovements      InventoryMovement[]
-  stockMovements          StockMovement[]
-  expiryAlerts            ExpiryAlert[]
-  exceptionCases          ExceptionCase[]
-  putawayTasks            PutawayTask[]
-  orderLines              OrderLine[]
-  qcInspections           QcInspection[]
-  serialNumbers           SerialNumber[]
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  stock              StockLedger[]
+  stockBalance       StockBalance[]
+  counts             StockCount[]
+  transfers          TransferLine[]
+  openingSnapshots   OpeningStockSnapshot[]
+  inventoryMovements InventoryMovement[]
+  stockMovements     StockMovement[]
+  expiryAlerts       ExpiryAlert[]
+  exceptionCases     ExceptionCase[]
+  putawayTasks       PutawayTask[]
+  orderLines         OrderLine[]
+  qcInspections      QcInspection[]
+  serialNumbers      SerialNumber[]
+  tenantId           String                 @default("tenant-invexa")
 
   @@unique([itemId, lotNo])
+  @@index([tenantId])
 }
 
 model StockLedger {
-  id             String   @id @default(cuid())
-  itemId         String
-  item           Item     @relation(fields: [itemId], references: [id])
-  lotId          String
-  lot            Lot      @relation(fields: [lotId], references: [id])
-  locationId     String
-  location       Location @relation(fields: [locationId], references: [id])
-  onHand         Float    @default(0)
-  reserved       Float    @default(0)
-  inTransit      Float    @default(0)
+  id            String   @id @default(cuid())
+  itemId        String
+  item          Item     @relation(fields: [itemId], references: [id])
+  lotId         String
+  lot           Lot      @relation(fields: [lotId], references: [id])
+  locationId    String
+  location      Location @relation(fields: [locationId], references: [id])
+  onHand        Float    @default(0)
+  reserved      Float    @default(0)
+  inTransit     Float    @default(0)
   // Blueprint section 7.2 inventory state model: physical stock that is on
   // hand but not sellable. Quarantine = received/counted but blocked
   // pending a QC/exception disposition (Exception Inbox); Damaged = the
@@ -801,36 +795,35 @@ model StockLedger {
   // write-off/vendor-return. Neither bucket is part of `onHand` availability
   // math done elsewhere - they are tracked here so quarantined stock is
   // visible instead of silently vanishing from the ledger.
-  quarantine     Float    @default(0)
-  damaged        Float    @default(0)
-  version        Int      @default(0)
-  lastUpdatedAt  DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  quarantine    Float    @default(0)
+  damaged       Float    @default(0)
+  version       Int      @default(0)
+  lastUpdatedAt DateTime @updatedAt
+  tenantId      String   @default("tenant-invexa")
 
   @@unique([itemId, lotId, locationId])
+  @@index([tenantId])
 }
 
 model StockCount {
-  id              String   @id @default(cuid())
-  itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
-  lotId           String
-  lot             Lot      @relation(fields: [lotId], references: [id])
-  locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
-  physicalQty     Float
-  bookQty         Float    @default(0)
-  mode            String   @default("manual")
-  submittedById   String
-  submittedBy     User     @relation(fields: [submittedById], references: [id])
-  countDate       DateTime @default(now())
-  approvedById    String?
-  approvedAt      DateTime?
-  reviewStatus    String   @default("PENDING_REVIEW")
-  reviewReason    String?  @db.Text
-  parentCountId   String?
+  id                     String    @id @default(cuid())
+  itemId                 String
+  item                   Item      @relation(fields: [itemId], references: [id])
+  lotId                  String
+  lot                    Lot       @relation(fields: [lotId], references: [id])
+  locationId             String
+  location               Location  @relation(fields: [locationId], references: [id])
+  physicalQty            Float
+  bookQty                Float     @default(0)
+  mode                   String    @default("manual")
+  submittedById          String
+  submittedBy            User      @relation(fields: [submittedById], references: [id])
+  countDate              DateTime  @default(now())
+  approvedById           String?
+  approvedAt             DateTime?
+  reviewStatus           String    @default("PENDING_REVIEW")
+  reviewReason           String?   @db.Text
+  parentCountId          String?
   // Blueprint v4 §14: sales/purchase files imported after a count can carry
   // movements dated before it, changing what the book quantity should have
   // been. Instead of silently rewriting history the count is flagged;
@@ -839,117 +832,113 @@ model StockCount {
   // Blueprint v4 §38: client-generated idempotency key. A retried submit
   // (offline outbox, timeout) returns the count it already created instead of
   // creating another. Weight counts share one key across their lot counts.
-  requestId       String?
+  requestId              String?
   reconciliationRequired Boolean   @default(false)
   reconciliationNote     String?   @db.Text
   reconciliationAt       DateTime?
   bookQtyOriginal        Float?
   lateDelta              Float     @default(0)
   lateMovementKeys       Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  tenantId               String    @default("tenant-invexa")
 
   @@index([tenantId])
   @@index([reconciliationRequired])
   @@index([submittedById, requestId])
-
 }
 
 /// Admin assigns an item to a Store User to count at a location. Blind by
 /// construction: the assignment never carries a book quantity. Fulfilled by
 /// linking to the StockCount the Store User eventually submits against it.
 model CountAssignment {
-  id             String   @id @default(cuid())
-  locationId     String
-  location       Location @relation(fields: [locationId], references: [id])
-  itemId         String
-  item           Item     @relation(fields: [itemId], references: [id])
-  assignedToId   String
-  assignedTo     User     @relation("CountAssignmentAssignedTo", fields: [assignedToId], references: [id])
-  assignedById   String
-  assignedBy     User     @relation("CountAssignmentAssignedBy", fields: [assignedById], references: [id])
-  countDate      DateTime @default(now())
-  dueDate        DateTime?
-  priority       String   @default("NORMAL")
-  instructions   String?  @db.Text
-  status         AssignmentStatus @default(ASSIGNED)
-  countId        String?  @unique
-  parentCountId  String?
+  id            String           @id @default(cuid())
+  locationId    String
+  location      Location         @relation(fields: [locationId], references: [id])
+  itemId        String
+  item          Item             @relation(fields: [itemId], references: [id])
+  assignedToId  String
+  assignedTo    User             @relation("CountAssignmentAssignedTo", fields: [assignedToId], references: [id])
+  assignedById  String
+  assignedBy    User             @relation("CountAssignmentAssignedBy", fields: [assignedById], references: [id])
+  countDate     DateTime         @default(now())
+  dueDate       DateTime?
+  priority      String           @default("NORMAL")
+  instructions  String?          @db.Text
+  status        AssignmentStatus @default(ASSIGNED)
+  countId       String?          @unique
+  parentCountId String?
   // Set when a stock-take campaign's daily allocation created this task
   // (blueprint v4 §12); recounts inherit it so the campaign tracks coverage.
-  campaignId     String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  campaignId    String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  tenantId      String           @default("tenant-invexa")
+
   @@index([tenantId])
   @@index([campaignId])
-
   @@index([assignedToId, status])
 }
 
 model Transfer {
-  id                    String        @id @default(cuid())
+  id                    String         @id @default(cuid())
   sourceLocationId      String
-  sourceLocation        Location      @relation("TransferLocation", fields: [sourceLocationId], references: [id])
-  destinationLocationId  String
+  sourceLocation        Location       @relation("TransferLocation", fields: [sourceLocationId], references: [id])
+  destinationLocationId String
   status                TransferStatus @default(REQUESTED)
   requestedById         String
-  requestedBy           User          @relation(fields: [requestedById], references: [id])
-  notes                 String?       @db.Text
+  requestedBy           User           @relation(fields: [requestedById], references: [id])
+  notes                 String?        @db.Text
   cartonCount           Int?
   // Blueprint v4 §16/§17: packing completion and dispatch details
   // ({ packing: {...}, dispatch: {...} }) - see lib/transfer-packing.ts.
   logistics             Json?
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
 
-  lines                 TransferLine[]
-  cartons               TransferCarton[]
-  tenantId    String   @default("tenant-invexa")
+  lines    TransferLine[]
+  cartons  TransferCarton[]
+  tenantId String           @default("tenant-invexa")
 
   @@index([tenantId])
-
 }
 
 model TransferLine {
-  id            String   @id @default(cuid())
-  transferId    String
-  transfer      Transfer @relation(fields: [transferId], references: [id])
-  itemId        String
-  item          Item     @relation(fields: [itemId], references: [id])
-  lotId         String
-  lot           Lot      @relation(fields: [lotId], references: [id])
-  requestedQty  Float
-  pickedQty     Float    @default(0)
-  receivedQty   Float    @default(0)
-  damagedQty    Float    @default(0)
-  shortageQty    Float    @default(0)
+  id           String   @id @default(cuid())
+  transferId   String
+  transfer     Transfer @relation(fields: [transferId], references: [id])
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  lotId        String
+  lot          Lot      @relation(fields: [lotId], references: [id])
+  requestedQty Float
+  pickedQty    Float    @default(0)
+  receivedQty  Float    @default(0)
+  damagedQty   Float    @default(0)
+  shortageQty  Float    @default(0)
   // Blueprint Module H: received quantity beyond what was requested. Never
   // auto-absorbed into receivedQty - held in StockLedger.quarantine behind
   // an explicit EXCESS_RECEIPT Exception Inbox accept/reject decision.
-  excessQty      Float    @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  excessQty    Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  tenantId     String   @default("tenant-invexa")
 
   @@index([tenantId])
-
 }
 
 model TransferReceipt {
-  id           String   @id
-  requestId    String   @unique
+  id           String                @id
+  requestId    String                @unique
   transferId   String
   receivedById String
   status       String
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now())
+  notes        String?               @db.Text
+  createdAt    DateTime              @default(now())
   lines        TransferReceiptLine[]
-  tenantId    String   @default("tenant-invexa")
+  tenantId     String                @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([transferId, createdAt])
 }
 
@@ -964,102 +953,98 @@ model TransferReceiptLine {
   damagedQty     Float           @default(0)
   shortageQty    Float           @default(0)
   excessQty      Float           @default(0)
-  tenantId    String   @default("tenant-invexa")
+  tenantId       String          @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([transferLineId])
   @@index([receiptId])
 }
 
 model AuditLog {
-  id              String   @id @default(cuid())
-  actorId         String
-  actorRole       String
-  action          String
-  entityType      String
-  entityId        String
-  metadata        Json?
-  branchId        String?
-  correlationId   String?
-  oldValues       Json?
-  newValues       Json?
-  reason          String?  @db.Text
-  sourceContext   String?  @db.Text
-  createdAt       DateTime @default(now())
-  tenantId    String   @default("tenant-invexa")
+  id            String   @id @default(cuid())
+  actorId       String
+  actorRole     String
+  action        String
+  entityType    String
+  entityId      String
+  metadata      Json?
+  branchId      String?
+  correlationId String?
+  oldValues     Json?
+  newValues     Json?
+  reason        String?  @db.Text
+  sourceContext String?  @db.Text
+  createdAt     DateTime @default(now())
+  tenantId      String   @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([entityType, entityId])
   @@index([actorId, createdAt])
   @@index([correlationId])
   @@index([createdAt])
 }
 
-
 model Tag {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  color     String   @default("emerald")
-  createdAt DateTime @default(now())
+  id        String    @id @default(cuid())
+  name      String    @unique
+  color     String    @default("emerald")
+  createdAt DateTime  @default(now())
   items     ItemTag[]
 }
 
 model ItemTag {
   itemId String
-  item   Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
   tagId  String
-  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([itemId, tagId])
   @@index([tagId])
 }
 
 model CustomFieldDefinition {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  type      String   @default("text")
+  id        String             @id @default(cuid())
+  name      String             @unique
+  type      String             @default("text")
   options   Json?
-  required  Boolean  @default(false)
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  required  Boolean            @default(false)
+  sortOrder Int                @default(0)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
   values    CustomFieldValue[]
 }
 
 model CustomFieldValue {
-  id        String   @id @default(cuid())
+  id        String                @id @default(cuid())
   itemId    String
-  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  item      Item                  @relation(fields: [itemId], references: [id], onDelete: Cascade)
   fieldId   String
   field     CustomFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
-  value     String   @db.Text
-  updatedAt DateTime @updatedAt
+  value     String                @db.Text
+  updatedAt DateTime              @updatedAt
 
   @@unique([itemId, fieldId])
   @@index([fieldId])
 }
 
 model Supplier {
-  id        String   @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
+  id             String          @id @default(cuid())
+  name           String
+  email          String?
+  phone          String?
   // Blueprint v4 §22 supplier master.
-  contactName  String?
-  leadTimeDays Int?
-  moq          Float?
-  paymentTerms String?
-  categories   String? @db.Text
-  status       String  @default("ACTIVE")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  contactName    String?
+  leadTimeDays   Int?
+  moq            Float?
+  paymentTerms   String?
+  categories     String?         @db.Text
+  status         String          @default("ACTIVE")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   purchaseOrders PurchaseOrder[]
-  tenantId    String   @default("tenant-invexa")
+  tenantId       String          @default("tenant-invexa")
 
   @@index([tenantId])
-
 }
 
 // Blueprint v4 §22/§38: one row per accepted receive request, so a retry of the
@@ -1076,57 +1061,55 @@ model PurchaseReceipt {
 }
 
 model PurchaseOrder {
-  id          String   @id @default(cuid())
-  number      String   @unique
-  supplierId  String
-  supplier    Supplier @relation(fields: [supplierId], references: [id])
-  locationId  String
-  createdById String
-  status      String   @default("DRAFT")
-  expectedAt  DateTime?
+  id               String              @id @default(cuid())
+  number           String              @unique
+  supplierId       String
+  supplier         Supplier            @relation(fields: [supplierId], references: [id])
+  locationId       String
+  createdById      String
+  status           String              @default("DRAFT")
+  expectedAt       DateTime?
   // Blueprint v4 §22 lifecycle stamps (Draft -> Approval -> Send -> Receive -> Close).
-  approvedAt   DateTime?
-  approvedById String?
-  sentAt       DateTime?
-  closedAt     DateTime?
-  closeNote    String?  @db.Text
-  notes       String?  @db.Text
-  totalAmount Float    @default(0)
+  approvedAt       DateTime?
+  approvedById     String?
+  sentAt           DateTime?
+  closedAt         DateTime?
+  closeNote        String?             @db.Text
+  notes            String?             @db.Text
+  totalAmount      Float               @default(0)
   // Blueprint P7 "Landed cost": extra charges allocated across the PO's
   // lines on receipt (lib/landed-cost.ts), so each received lot's cost
   // attributes carry the true landed cost, not just the PO unit price.
-  freightCost   Float?  @default(0)
-  customsCost   Float?  @default(0)
-  insuranceCost Float?  @default(0)
-  handlingCost  Float?  @default(0)
-  landedCostMethod String? @default("VALUE")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  lines       PurchaseOrderLine[]
+  freightCost      Float?              @default(0)
+  customsCost      Float?              @default(0)
+  insuranceCost    Float?              @default(0)
+  handlingCost     Float?              @default(0)
+  landedCostMethod String?             @default("VALUE")
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  lines            PurchaseOrderLine[]
   supplierInvoices SupplierInvoice[]
-  tenantId    String   @default("tenant-invexa")
+  tenantId         String              @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status])
   @@index([supplierId])
 }
 
 model PurchaseOrderLine {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
+  item            Item          @relation(fields: [itemId], references: [id])
   quantity        Int
-  receivedQty     Int      @default(0)
-  unitCost        Float    @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  receivedQty     Int           @default(0)
+  unitCost        Float         @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  tenantId        String        @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([purchaseOrderId])
   @@index([itemId])
 }
@@ -1137,18 +1120,18 @@ model PurchaseOrderLine {
 // side of the match); the result is stored so AP can see exactly which
 // lines cleared and which are exceptions, without recomputing it.
 model SupplierInvoice {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
   invoiceNumber   String
   invoiceDate     DateTime?
-  totalAmount     Float    @default(0)
-  status          String   @default("PENDING")
+  totalAmount     Float         @default(0)
+  status          String        @default("PENDING")
   matchResult     Json?
   createdById     String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId        String   @default("tenant-invexa")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  tenantId        String        @default("tenant-invexa")
 
   lines SupplierInvoiceLine[]
 
@@ -1194,7 +1177,6 @@ model PriceList {
   @@index([companyId])
 }
 
-
 model ReorderRule {
   id         String   @id @default(cuid())
   itemId     String
@@ -1204,11 +1186,10 @@ model ReorderRule {
   targetQty  Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  tenantId   String   @default("tenant-invexa")
 
   @@unique([itemId, locationId])
+  @@index([tenantId])
   @@index([locationId])
 }
 
@@ -1222,10 +1203,9 @@ model SavedReport {
   isShared   Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  tenantId   String   @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([ownerId, updatedAt])
   @@index([isShared, updatedAt])
 }
@@ -1265,10 +1245,9 @@ model AssetCheckout {
   returnedAt   DateTime?
   createdById  String
   updatedAt    DateTime  @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  tenantId     String    @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status])
   @@index([itemId, status])
 }
@@ -1285,10 +1264,9 @@ model Job {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lines       JobLine[]
-  tenantId    String   @default("tenant-invexa")
+  tenantId    String    @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status])
 }
 
@@ -1305,9 +1283,8 @@ model JobLine {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([jobId])
   @@index([itemId])
 }
@@ -1349,10 +1326,9 @@ model WebhookSubscription {
   status          String   @default("ACTIVE")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  tenantId        String   @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([status, createdAt])
 }
 
@@ -1372,45 +1348,43 @@ model WebhookDeliveryLog {
   payloadHash    String?
   nextRetryAt    DateTime?
   body           String?   @db.Text
-  tenantId    String   @default("tenant-invexa")
+  tenantId       String    @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([subscriptionId, createdAt])
   @@index([status, createdAt])
   @@index([status, nextRetryAt])
 }
 
 model ImportBatch {
-  id                   String   @id
-  type                 String
-  fileName             String
-  sourceFormat         String
-  importedById         String
-  importedBy           User     @relation(fields: [importedById], references: [id])
-  importedAt           DateTime @default(now())
-  totalRows            Int
-  validRows            Int
-  invalidRows          Int
-  duplicateRows        Int      @default(0)
-  metadata             Json?
+  id                 String                 @id
+  type               String
+  fileName           String
+  sourceFormat       String
+  importedById       String
+  importedBy         User                   @relation(fields: [importedById], references: [id])
+  importedAt         DateTime               @default(now())
+  totalRows          Int
+  validRows          Int
+  invalidRows        Int
+  duplicateRows      Int                    @default(0)
+  metadata           Json?
   // Batches created by the existing single-step import flows (persistence.ts)
   // post their stock movements in the same transaction as this row, so they
   // are already POSTED by the time this record exists. New Import Center
   // flows (blueprint 12.1) can create a batch as DRAFT and progress it
   // through the lifecycle explicitly before posting.
-  status               String   @default("POSTED")
-  branchId             String?
-  fileHash             String?
-  sourceDateFrom       DateTime?
-  sourceDateTo         DateTime?
-  openingSnapshots     OpeningStockSnapshot[]
-  inventoryMovements   InventoryMovement[]
-  rows                 ImportRow[]
-  tenantId    String   @default("tenant-invexa")
+  status             String                 @default("POSTED")
+  branchId           String?
+  fileHash           String?
+  sourceDateFrom     DateTime?
+  sourceDateTo       DateTime?
+  openingSnapshots   OpeningStockSnapshot[]
+  inventoryMovements InventoryMovement[]
+  rows               ImportRow[]
+  tenantId           String                 @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([type, importedAt])
   @@index([importedById, importedAt])
   @@index([status])
@@ -1418,29 +1392,28 @@ model ImportBatch {
 }
 
 model InventoryMovement {
-  id              String   @id
-  dedupeKey       String   @unique
+  id              String       @id
+  dedupeKey       String       @unique
   itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
+  item            Item         @relation(fields: [itemId], references: [id])
   lotId           String?
-  lot             Lot?     @relation(fields: [lotId], references: [id])
+  lot             Lot?         @relation(fields: [lotId], references: [id])
   locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
+  location        Location     @relation(fields: [locationId], references: [id])
   movementType    String
   qtyDelta        Float
   transactionAt   DateTime
-  importedAt      DateTime @default(now())
+  importedAt      DateTime     @default(now())
   sourceType      String
   sourceReference String
   importBatchId   String?
   importBatch     ImportBatch? @relation(fields: [importBatchId], references: [id])
   createdById     String
-  createdBy       User     @relation(fields: [createdById], references: [id])
+  createdBy       User         @relation(fields: [createdById], references: [id])
   metadata        Json?
-  tenantId    String   @default("tenant-invexa")
+  tenantId        String       @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, transactionAt])
   @@index([itemId, locationId, transactionAt])
   @@index([sourceType, sourceReference])
@@ -1454,31 +1427,29 @@ model SyncCheckpoint {
   syncedThroughAt   DateTime
   lastImportBatchId String?
   updatedAt         DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  tenantId          String   @default("tenant-invexa")
 
   @@unique([locationId, sourceType])
+  @@index([tenantId])
 }
 
 model OpeningStockSnapshot {
-  id            String   @id
+  id            String      @id
   importBatchId String
   importBatch   ImportBatch @relation(fields: [importBatchId], references: [id])
   itemId        String
-  item          Item     @relation(fields: [itemId], references: [id])
+  item          Item        @relation(fields: [itemId], references: [id])
   lotId         String
-  lot           Lot      @relation(fields: [lotId], references: [id])
+  lot           Lot         @relation(fields: [lotId], references: [id])
   locationId    String
-  location      Location @relation(fields: [locationId], references: [id])
+  location      Location    @relation(fields: [locationId], references: [id])
   qty           Float
   snapshotAt    DateTime
-  createdAt     DateTime @default(now())
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  createdAt     DateTime    @default(now())
+  tenantId      String      @default("tenant-invexa")
 
   @@unique([importBatchId, itemId, lotId, locationId])
+  @@index([tenantId])
   @@index([itemId, locationId, snapshotAt])
 }
 
@@ -1487,32 +1458,31 @@ model OpeningStockSnapshot {
 // ============================================================================
 
 model StockMovement {
-  id                String   @id @default(cuid())
-  itemId            String
-  item              Item     @relation(fields: [itemId], references: [id])
-  lotId             String?
-  lot               Lot?     @relation(fields: [lotId], references: [id])
-  locationId        String
-  location          Location @relation(fields: [locationId], references: [id])
-  binId             String?
-  movementType      StockMovementType
-  qtyDelta          Float
-  beforeBalance     Float
-  afterBalance      Float
-  sourceDocument    String?
-  sourceLineId      String?
-  actor             String?
-  timestamp         DateTime
-  correlationId     String?
-  reason            String?  @db.Text
-  metadata          Json?
-  posted            Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  id             String            @id @default(cuid())
+  itemId         String
+  item           Item              @relation(fields: [itemId], references: [id])
+  lotId          String?
+  lot            Lot?              @relation(fields: [lotId], references: [id])
+  locationId     String
+  location       Location          @relation(fields: [locationId], references: [id])
+  binId          String?
+  movementType   StockMovementType
+  qtyDelta       Float
+  beforeBalance  Float
+  afterBalance   Float
+  sourceDocument String?
+  sourceLineId   String?
+  actor          String?
+  timestamp      DateTime
+  correlationId  String?
+  reason         String?           @db.Text
+  metadata       Json?
+  posted         Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  tenantId       String            @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([itemId, locationId, timestamp])
   @@index([correlationId])
   @@index([sourceDocument, sourceLineId])
@@ -1520,34 +1490,33 @@ model StockMovement {
 }
 
 model StockBalance {
-  id              String   @id @default(cuid())
-  itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
-  lotId           String?
-  lot             Lot?     @relation(fields: [lotId], references: [id])
-  locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
-  onHand          Float    @default(0)
-  reserved        Float    @default(0)
-  inTransit       Float    @default(0)
-  available       Float    @default(0)
-  version         Int      @default(0)
-  lastPostedAt    DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  id           String   @id @default(cuid())
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  lotId        String?
+  lot          Lot?     @relation(fields: [lotId], references: [id])
+  locationId   String
+  location     Location @relation(fields: [locationId], references: [id])
+  onHand       Float    @default(0)
+  reserved     Float    @default(0)
+  inTransit    Float    @default(0)
+  available    Float    @default(0)
+  version      Int      @default(0)
+  lastPostedAt DateTime @updatedAt
+  tenantId     String   @default("tenant-invexa")
 
   @@unique([itemId, lotId, locationId])
+  @@index([tenantId])
   @@index([locationId, available])
 }
 
 // RBAC: Permission & Role Configuration
 model Permission {
-  id              String   @id @default(cuid())
-  module          String
-  action          PermissionAction
-  description     String?
-  createdAt       DateTime @default(now())
+  id          String           @id @default(cuid())
+  module      String
+  action      PermissionAction
+  description String?
+  createdAt   DateTime         @default(now())
 
   rolePermissions RolePermission[]
   userPermissions UserPermission[]
@@ -1556,84 +1525,84 @@ model Permission {
 }
 
 model RoleTemplate {
-  id              String   @id @default(cuid())
-  name            String   @unique
-  description     String?  @db.Text
-  isSystemRole    Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String   @unique
+  description  String?  @db.Text
+  isSystemRole Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   rolePermissions RolePermission[]
   roleUsers       UserRole[]
 }
 
 model RolePermission {
-  id            String   @id @default(cuid())
-  roleId        String
-  role          RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permissionId  String
-  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
+  id           String       @id @default(cuid())
+  roleId       String
+  role         RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission   @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime     @default(now())
 
   @@unique([roleId, permissionId])
 }
 
 model UserRole {
-  id            String   @id @default(cuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  roleId        String
-  role          RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  scopeId       String?
-  scopeType     String?
-  createdAt     DateTime @default(now())
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId    String
+  role      RoleTemplate @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  scopeId   String?
+  scopeType String?
+  createdAt DateTime     @default(now())
 
   @@unique([userId, roleId, scopeId])
 }
 
 model UserPermission {
-  id            String   @id @default(cuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  permissionId  String
-  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  allowed       Boolean  @default(true)
-  denied        Boolean  @default(false)
-  scopeId       String?
-  scopeType     String?
-  reason        String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  allowed      Boolean    @default(true)
+  denied       Boolean    @default(false)
+  scopeId      String?
+  scopeType    String?
+  reason       String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@unique([userId, permissionId, scopeId])
 }
 
 // User Sessions & Login History
 model UserSession {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token           String   @unique
-  deviceInfo      String?
-  ipAddress       String?
-  userAgent       String?  @db.Text
-  createdAt       DateTime @default(now())
-  lastActivityAt  DateTime @updatedAt
-  revokedAt       DateTime?
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token          String    @unique
+  deviceInfo     String?
+  ipAddress      String?
+  userAgent      String?   @db.Text
+  createdAt      DateTime  @default(now())
+  lastActivityAt DateTime  @updatedAt
+  revokedAt      DateTime?
 
   @@index([userId, revokedAt])
 }
 
 model LoginHistory {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  device          String?
-  ipAddress       String?
-  userAgent       String?  @db.Text
-  status          String   @default("SUCCESS")
-  failureReason   String?
-  createdAt       DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device        String?
+  ipAddress     String?
+  userAgent     String?  @db.Text
+  status        String   @default("SUCCESS")
+  failureReason String?
+  createdAt     DateTime @default(now())
 
   @@index([userId, createdAt])
   @@index([createdAt])
@@ -1641,34 +1610,34 @@ model LoginHistory {
 
 // Universal Work/Assignment Engine
 model WorkAssignment {
-  id              String   @id @default(cuid())
-  type            String
-  reference       String?
-  title           String
-  description     String?  @db.Text
-  branchId        String?
-  branch          Branch?  @relation(fields: [branchId], references: [id])
-  locationId      String?
-  location        Location? @relation(fields: [locationId], references: [id])
-  assignedToId    String
-  assignedTo      User     @relation("WorkAssignmentAssignedTo", fields: [assignedToId], references: [id])
-  createdById     String
-  createdBy       User     @relation("WorkAssignmentCreatedBy", fields: [createdById], references: [id])
-  status          String   @default("ASSIGNED")
-  priority        String   @default("NORMAL")
-  dueAt           DateTime?
-  slaMinutes      Int?
-  instructions    String?  @db.Text
-  checklist       Json?
-  progress        Int      @default(0)
-  startedAt       DateTime?
-  submittedAt     DateTime?
-  reviewedAt      DateTime?
-  closedAt        DateTime?
-  items           Json?
-  metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String    @id @default(cuid())
+  type         String
+  reference    String?
+  title        String
+  description  String?   @db.Text
+  branchId     String?
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  locationId   String?
+  location     Location? @relation(fields: [locationId], references: [id])
+  assignedToId String
+  assignedTo   User      @relation("WorkAssignmentAssignedTo", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User      @relation("WorkAssignmentCreatedBy", fields: [createdById], references: [id])
+  status       String    @default("ASSIGNED")
+  priority     String    @default("NORMAL")
+  dueAt        DateTime?
+  slaMinutes   Int?
+  instructions String?   @db.Text
+  checklist    Json?
+  progress     Int       @default(0)
+  startedAt    DateTime?
+  submittedAt  DateTime?
+  reviewedAt   DateTime?
+  closedAt     DateTime?
+  items        Json?
+  metadata     Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   workComments    WorkComment[]
   workAttachments WorkAttachment[]
@@ -1679,28 +1648,28 @@ model WorkAssignment {
 }
 
 model WorkComment {
-  id              String   @id @default(cuid())
+  id               String         @id @default(cuid())
   workAssignmentId String
-  workAssignment  WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
-  authorId        String
-  author          User     @relation(fields: [authorId], references: [id])
-  body            String   @db.Text
-  mentions        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  workAssignment   WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
+  authorId         String
+  author           User           @relation(fields: [authorId], references: [id])
+  body             String         @db.Text
+  mentions         Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@index([workAssignmentId, createdAt])
 }
 
 model WorkAttachment {
-  id              String   @id @default(cuid())
+  id               String         @id @default(cuid())
   workAssignmentId String
-  workAssignment  WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
-  fileName        String
-  fileUrl         String   @db.Text
-  fileType        String
-  fileSize        Int
-  uploadedAt      DateTime @default(now())
+  workAssignment   WorkAssignment @relation(fields: [workAssignmentId], references: [id], onDelete: Cascade)
+  fileName         String
+  fileUrl          String         @db.Text
+  fileType         String
+  fileSize         Int
+  uploadedAt       DateTime       @default(now())
 
   @@index([workAssignmentId])
 }
@@ -1711,47 +1680,46 @@ model WorkAttachment {
 // an owner, priority, SLA (dueAt), evidence/discussion (via ContextComment
 // keyed by entityType "exception"), and a defined closure disposition.
 model ExceptionCase {
-  id              String   @id @default(cuid())
+  id              String                @id @default(cuid())
   type            ExceptionType
-  status          ExceptionStatus @default(OPEN)
-  priority        ExceptionPriority @default(MEDIUM)
+  status          ExceptionStatus       @default(OPEN)
+  priority        ExceptionPriority     @default(MEDIUM)
   title           String
-  description     String?  @db.Text
+  description     String?               @db.Text
   itemId          String?
-  item            Item?    @relation(fields: [itemId], references: [id])
+  item            Item?                 @relation(fields: [itemId], references: [id])
   lotId           String?
-  lot             Lot?     @relation(fields: [lotId], references: [id])
+  lot             Lot?                  @relation(fields: [lotId], references: [id])
   locationId      String?
-  location        Location? @relation(fields: [locationId], references: [id])
+  location        Location?             @relation(fields: [locationId], references: [id])
   branchId        String?
-  branch          Branch?  @relation(fields: [branchId], references: [id])
+  branch          Branch?               @relation(fields: [branchId], references: [id])
   quantity        Float?
   valueAtRisk     Float?
   sourceDocument  String?
   sourceLineId    String?
   ownerId         String?
-  owner           User?    @relation("ExceptionCaseOwner", fields: [ownerId], references: [id])
+  owner           User?                 @relation("ExceptionCaseOwner", fields: [ownerId], references: [id])
   reportedById    String
-  reportedBy      User     @relation("ExceptionCaseReportedBy", fields: [reportedById], references: [id])
+  reportedBy      User                  @relation("ExceptionCaseReportedBy", fields: [reportedById], references: [id])
   dueAt           DateTime?
   disposition     ExceptionDisposition?
-  resolutionNotes String?  @db.Text
+  resolutionNotes String?               @db.Text
   resolvedAt      DateTime?
   closedAt        DateTime?
   metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  tenantId        String                @default("tenant-invexa")
+
+  qcInspections QcInspection[]
+
   @@index([tenantId])
-
-
   @@index([status, priority, dueAt])
   @@index([type, status])
   @@index([ownerId, status])
   @@index([locationId, status])
   @@index([sourceDocument, sourceLineId])
-
-  qcInspections QcInspection[]
 }
 
 // Blueprint §8.2 (Quality Control): "seal/packaging/weight/moisture/
@@ -1785,29 +1753,28 @@ model QcChecklistTemplate {
 // ExceptionCase automatically - the inspection becomes that case's
 // structured evidence instead of a reporter's free-text description.
 model QcInspection {
-  id              String    @id @default(cuid())
+  id              String              @id @default(cuid())
   templateId      String
   template        QcChecklistTemplate @relation(fields: [templateId], references: [id])
   itemId          String?
-  item            Item?     @relation(fields: [itemId], references: [id])
+  item            Item?               @relation(fields: [itemId], references: [id])
   lotId           String?
-  lot             Lot?      @relation(fields: [lotId], references: [id])
+  lot             Lot?                @relation(fields: [lotId], references: [id])
   locationId      String?
-  location        Location? @relation(fields: [locationId], references: [id])
+  location        Location?           @relation(fields: [locationId], references: [id])
   sourceDocument  String?
   sourceLineId    String?
   results         Json
   overallResult   String
-  notes           String?   @db.Text
+  notes           String?             @db.Text
   inspectedById   String
-  inspectedBy     User      @relation(fields: [inspectedById], references: [id])
+  inspectedBy     User                @relation(fields: [inspectedById], references: [id])
   exceptionCaseId String?
-  exceptionCase   ExceptionCase? @relation(fields: [exceptionCaseId], references: [id])
-  createdAt       DateTime  @default(now())
-  tenantId    String   @default("tenant-invexa")
+  exceptionCase   ExceptionCase?      @relation(fields: [exceptionCaseId], references: [id])
+  createdAt       DateTime            @default(now())
+  tenantId        String              @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([sourceDocument, sourceLineId])
   @@index([overallResult, createdAt])
 }
@@ -1819,7 +1786,7 @@ model QcInspection {
 // trail" - a dismissal, which the accept actions above already get for
 // free from their own real records (a created Transfer/PurchaseOrder *is*
 // the audit trail for an accepted recommendation). FK-free for the same
-// restricted-MySQL reason as the other rule/result tables in this app.
+// migration-managed schema like the other rule/result tables in this app.
 // Time-bounded rather than permanent: a dismissed item resurfaces after 24h
 // if it is genuinely still under target, matching normal reorder cadence,
 // rather than a stale dismissal silently hiding a recommendation forever.
@@ -1841,77 +1808,74 @@ model IntelligenceDismissal {
 
 // Expiry Management
 model ExpiryAlert {
-  id              String   @id @default(cuid())
-  itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
-  lotId           String
-  lot             Lot      @relation(fields: [lotId], references: [id])
-  locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
-  quantity        Float
-  value           Float?
-  expiryDate      DateTime
-  daysUntilExpiry Int
-  status          ExpiryAlertStatus @default(ACTIVE)
+  id                String            @id @default(cuid())
+  itemId            String
+  item              Item              @relation(fields: [itemId], references: [id])
+  lotId             String
+  lot               Lot               @relation(fields: [lotId], references: [id])
+  locationId        String
+  location          Location          @relation(fields: [locationId], references: [id])
+  quantity          Float
+  value             Float?
+  expiryDate        DateTime
+  daysUntilExpiry   Int
+  status            ExpiryAlertStatus @default(ACTIVE)
   recommendedAction String?
-  metadata        Json?
-  acknowledgedAt  DateTime?
-  resolvedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  metadata          Json?
+  acknowledgedAt    DateTime?
+  resolvedAt        DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  tenantId          String            @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([status, locationId, expiryDate])
   @@index([itemId, expiryDate])
 }
 
 // Replenishment Engine
 model ReplenishmentSuggestion {
-  id              String   @id @default(cuid())
-  itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
-  locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
-  suggestType     String
-  currentStock    Float
-  minRequired     Float
-  targetStock     Float
-  suggestedQty    Float
-  sourceLocation  String?
-  salesVelocity   Float?
-  daysOfCover     Float?
-  priority        String
-  status          String   @default("PENDING_REVIEW")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
+  id             String   @id @default(cuid())
+  itemId         String
+  item           Item     @relation(fields: [itemId], references: [id])
+  locationId     String
+  location       Location @relation(fields: [locationId], references: [id])
+  suggestType    String
+  currentStock   Float
+  minRequired    Float
+  targetStock    Float
+  suggestedQty   Float
+  sourceLocation String?
+  salesVelocity  Float?
+  daysOfCover    Float?
+  priority       String
+  status         String   @default("PENDING_REVIEW")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenantId       String   @default("tenant-invexa")
+
   @@index([tenantId])
-
-
   @@index([locationId, status, priority])
 }
 
 // Enhanced Import with Row Details
 model ImportRow {
-  id              String   @id @default(cuid())
-  importBatchId   String
-  importBatch     ImportBatch @relation(fields: [importBatchId], references: [id])
-  rowNumber       Int
-  rawData         Json
-  status          String   @default("DRAFT")
-  errors          Json?
-  warnings        Json?
-  mappedData      Json?
-  sourceKey       String?
-  processedAt     DateTime?
-  createdAt       DateTime @default(now())
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
-
+  id            String      @id @default(cuid())
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId], references: [id])
+  rowNumber     Int
+  rawData       Json
+  status        String      @default("DRAFT")
+  errors        Json?
+  warnings      Json?
+  mappedData    Json?
+  sourceKey     String?
+  processedAt   DateTime?
+  createdAt     DateTime    @default(now())
+  tenantId      String      @default("tenant-invexa")
 
   @@unique([importBatchId, rowNumber])
+  @@index([tenantId])
   @@index([importBatchId, status])
 }
 
@@ -1919,14 +1883,14 @@ model ImportRow {
 // "Logic ERP Purchase", so a recurring source file format doesn't need
 // manual column mapping on every import.
 model ImportTemplate {
-  id              String   @id @default(cuid())
-  name            String
-  importType      String
-  columnMapping   Json
-  createdById     String
-  createdBy       User     @relation(fields: [createdById], references: [id])
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  importType    String
+  columnMapping Json
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@unique([name, importType])
   @@index([importType])
@@ -1934,56 +1898,55 @@ model ImportTemplate {
 
 // Transfer with Carton/Packaging Details
 model TransferCarton {
-  id              String   @id @default(cuid())
-  transferId      String
-  transfer        Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  cartonNumber    String
-  qrCode          String?
-  contents        Json?
-  quantity        Float
-  weight          Float?
-  status          String   @default("PACKED")
-  photoUrl        String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  @@index([tenantId])
+  id           String   @id @default(cuid())
+  transferId   String
+  transfer     Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  cartonNumber String
+  qrCode       String?
+  contents     Json?
+  quantity     Float
+  weight       Float?
+  status       String   @default("PACKED")
+  photoUrl     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  tenantId     String   @default("tenant-invexa")
 
-
-  @@index([transferId, status])
   @@unique([transferId, cartonNumber])
+  @@index([tenantId])
+  @@index([transferId, status])
 }
 
 // Feature Configuration
 model FeatureFlag {
-  id              String   @id @default(cuid())
-  name            String   @unique
-  enabled         Boolean  @default(false)
-  betaMode        Boolean  @default(false)
-  readOnly        Boolean  @default(false)
-  scope           String   @default("global")
-  scopeId         String?
-  config          Json?
-  description     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id          String   @id @default(cuid())
+  name        String   @unique
+  enabled     Boolean  @default(false)
+  betaMode    Boolean  @default(false)
+  readOnly    Boolean  @default(false)
+  scope       String   @default("global")
+  scopeId     String?
+  config      Json?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([scope, scopeId, enabled])
 }
 
 model WorkflowConfiguration {
-  id              String   @id @default(cuid())
-  type            String
-  scopeId         String?
-  requiresApproval Boolean  @default(false)
+  id                String   @id @default(cuid())
+  type              String
+  scopeId           String?
+  requiresApproval  Boolean  @default(false)
   varianceThreshold Float?
-  negativeStockRule String @default("BLOCK")
-  fefoEnforced    Boolean  @default(true)
-  expiryBlocking  Boolean  @default(false)
-  photoRequired   Boolean  @default(false)
-  config          Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  negativeStockRule String   @default("BLOCK")
+  fefoEnforced      Boolean  @default(true)
+  expiryBlocking    Boolean  @default(false)
+  photoRequired     Boolean  @default(false)
+  config            Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@unique([type, scopeId])
 }
@@ -1997,20 +1960,60 @@ model ControlPlaneState {
   updatedAt DateTime @updatedAt
 }
 
+model DomainEventOutbox {
+  id          BigInt   @id @default(autoincrement())
+  topic       String
+  companyId   String
+  locationIds Json?
+  actorId     String?
+  requestId   String?
+  occurredAt  DateTime @default(now())
+
+  @@index([companyId, id])
+  @@index([occurredAt])
+}
+
+model ItemPhoto {
+  id         String   @id
+  itemId     String
+  fileName   String
+  mimeType   String
+  byteSize   Int
+  isPrimary  Boolean  @default(false)
+  uploadedBy String
+  createdAt  DateTime @default(now())
+  contents   Bytes
+
+  @@index([itemId])
+}
+
+model TransferEvidence {
+  id         String   @id
+  transferId String
+  fileName   String
+  mimeType   String
+  byteSize   Int
+  uploadedBy String
+  createdAt  DateTime @default(now())
+  contents   Bytes
+
+  @@index([transferId])
+}
+
 // Blueprint P8: bin-granularity stock. Location ATP remains on StockLedger
 // (item+lot+location); this table answers "Bin A currently holds N units".
 model BinStock {
-  id          String   @id @default(cuid())
-  itemId      String
-  item        Item     @relation(fields: [itemId], references: [id])
-  lotId       String   @default("")
-  locationId  String
-  location    Location @relation(fields: [locationId], references: [id])
-  binId       String
-  onHand      Float    @default(0)
-  reserved    Float    @default(0)
-  version     Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id])
+  lotId      String   @default("")
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  binId      String
+  onHand     Float    @default(0)
+  reserved   Float    @default(0)
+  version    Int      @default(0)
+  updatedAt  DateTime @updatedAt
 
   @@unique([itemId, lotId, locationId, binId])
   @@index([locationId, binId])
@@ -2020,18 +2023,18 @@ model BinStock {
 // separate from BinStock's current-balance projection, so every scanned
 // source -> destination move has an auditable record (who, when, how much).
 model BinMovement {
-  id          String   @id @default(cuid())
-  itemId      String
-  item        Item     @relation(fields: [itemId], references: [id])
-  lotId       String   @default("")
-  locationId  String
-  location    Location @relation(fields: [locationId], references: [id])
-  fromBinId   String
-  toBinId     String
-  quantity    Float
-  reference   String?
-  actorId     String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id])
+  lotId      String   @default("")
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  fromBinId  String
+  toBinId    String
+  quantity   Float
+  reference  String?
+  actorId    String?
+  createdAt  DateTime @default(now())
 
   @@index([locationId, createdAt])
   @@index([itemId])
@@ -2080,7 +2083,7 @@ model SerialNumber {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  movements         SerialMovement[]
+  movements SerialMovement[]
 
   @@unique([itemId, serial])
   @@index([currentLocationId, status])
@@ -2107,9 +2110,8 @@ model SerialMovement {
   @@index([serialNumberId, createdAt])
 }
 
-
 // Blueprint v4 §12 / Appendix A: monthly stock-take campaign. FK-free like
-// the other rule/result tables (restricted-MySQL hosting); joined in code.
+// the other rule/result tables; joined in code.
 model StockTakeCampaign {
   id                String    @id @default(cuid())
   companyId         String    @default("default-company")
