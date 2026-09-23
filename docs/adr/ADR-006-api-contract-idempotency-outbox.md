@@ -138,3 +138,50 @@ The gap named above - "Worker/idempotent-consumer semantics for this outbox
   generic 500. This is adoption for the new Week 7 code, not the full
   retrofit this ADR already scoped as future work in its original text
   above.
+
+## Addendum (Week 8): the first versioned OpenAPI contract, and the `api/dist` decision
+
+The "OpenAPI: deferred to a dedicated week" line above is partially closed:
+`contracts/openapi.json` (OpenAPI 3.1, `info.version: "2026.8.0"`) now
+documents the endpoints extracted this week (`GET /transfers/list`,
+`POST /transfers`, and the four `/branches` routes), including the
+`ErrorEnvelope` schema (`{error, code, traceId}`) as a first-class component
+and the reservation path's `422 INSUFFICIENT_STOCK` response using it. This
+is deliberately **not** a spec for the whole API - the ~180 routes still on
+`core.ts`/`operations-extension.ts` are not documented here, so the contract
+can never silently drift ahead of what has actually been modularized (see
+`docs/route-ownership-matrix.md`). Extending the contract is part of
+extracting each future module, not a separate catch-up task.
+
+**Generated clients**: `contracts/generated/types.ts` (via
+`openapi-typescript`, `npm run contract:generate`) and
+`contracts/generated/client.ts` (a minimal typed fetch wrapper, not a full
+codegen SDK - proportionate to a five-endpoint contract). Both compile
+standalone (`npm run contract:typecheck`, its own `contracts/tsconfig.json`)
+and CI checks them for drift against the spec (`npm run contract:check-drift`)
+so an edited spec without a regenerated, committed client fails the build.
+`npm run contract:validate` structurally validates the spec itself (valid
+JSON, every `$ref` resolves, every operation has an `operationId` and a
+response, the error envelope schema is present) - no new runtime dependency
+for a document this size.
+
+**`api/dist` removal - deferred, not done, with a concrete reason.** The
+guide's gate is "prove deploy builds from source, only then remove committed
+`dist`." Render's own deploy (`render.yaml`'s `buildCommand: cd api && npm
+install && npm run build`) already builds from source - proven again this
+week with a clean `rm -rf dist && npm run build`. But a second deploy path
+exists: `api/app.js` (the "Hostinger startup file" CI already smoke-tests)
+`require.resolve('./dist/index.js')`s directly, with no build step of its
+own - it is written to run against a checkout that already has `dist/`
+present. Deleting committed `dist` would silently break that path the next
+time it deploys, with no CI signal, because CI's own "Verify Hostinger
+startup file" step runs `node app.js` *after* the build step in the same
+job has already regenerated `dist/` - it does not prove the committed
+artifact is unnecessary, only that this job's freshly-built one works.
+Removing committed `dist` safely needs one of: teaching the Hostinger
+deploy process to run `npm run build` first, or changing `app.js` to build
+on demand if `dist/` is missing. Neither is a one-line change to make
+alongside an unrelated god-router extraction, so this is recorded as an
+approved exception (per this week's Definition of Done: "Independent review
+comments are resolved or recorded as an approved exception") rather than
+silently skipped or forced through.

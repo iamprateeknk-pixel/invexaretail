@@ -57,6 +57,15 @@ jobs:
       - name: Check architecture rules (AGENTS.md / ADR-001..006)
         run: npm run lint:arch
 
+      - name: Validate OpenAPI contract (Week 8)
+        run: npm run contract:validate
+
+      - name: Check generated contract client has no drift from the spec (Week 8)
+        run: npm run contract:check-drift
+
+      - name: Typecheck the generated contract client compiles standalone (Week 8)
+        run: npm run contract:typecheck
+
       - name: Deploy migrations to real Postgres
         run: npm run db:migrate
         env:
@@ -94,6 +103,11 @@ jobs:
 
       - name: Run outbox worker delivery/retry/poison coverage against real Postgres (ADR-006 / Week 7)
         run: npx tsx --test src/lib/outbox-worker.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run Branch management coverage against real Postgres (Week 8)
+        run: npx tsx --test src/routes/branches.postgres.test.ts
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 

@@ -12,6 +12,8 @@ const seed_js_1 = require("../lib/seed.js");
 const enterprise_auth_js_1 = require("./enterprise-auth.js");
 const tenant_scope_js_1 = require("../lib/saas/tenant-scope.js");
 const core_js_1 = __importDefault(require("./core.js"));
+const transfers_js_1 = __importDefault(require("./transfers.js"));
+const branches_js_1 = __importDefault(require("./branches.js"));
 const catalog_procurement_js_1 = __importDefault(require("./catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./operations-extension.js"));
 const campaigns_js_1 = __importDefault(require("./campaigns.js"));
@@ -43,7 +45,7 @@ const fill = (path) => path.replace(/:[A-Za-z]+\??/g, 'probe').replace(/\*/g, 'p
 (0, node_test_1.default)('no route on the operational routers answers a request that carries no credentials', async () => {
     (0, enterprise_repository_js_1.seedEnhancedUsersForMemoryMode)(seed_js_1.seedUsers, (0, otp_auth_js_1.hashPassword)('x'));
     const routers = [
-        ['core', core_js_1.default], ['catalog-procurement', catalog_procurement_js_1.default], ['operations-extension', operations_extension_js_1.default],
+        ['core', core_js_1.default], ['transfers', transfers_js_1.default], ['branches', branches_js_1.default], ['catalog-procurement', catalog_procurement_js_1.default], ['operations-extension', operations_extension_js_1.default],
         ['campaigns', campaigns_js_1.default], ['item-master', item_master_js_1.default], ['import-control-center', import_control_center_js_1.default],
         ['transfer-logistics', transfer_logistics_js_1.default], ['command-center', command_center_js_1.default],
     ];

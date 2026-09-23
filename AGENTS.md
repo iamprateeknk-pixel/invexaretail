@@ -14,6 +14,10 @@ read those first if a rule below seems arbitrary.
   Not deployed by anything in `render.yaml` or `docker-compose.yml`. Do not
   add features here; see Week 18 of the execution guide for the
   archive-after-parity-check plan.
+- `api/contracts/` - the versioned OpenAPI contract (Week 8), covering only
+  the routes that have been extracted out of the god routers so far (see
+  `docs/route-ownership-matrix.md`). `contracts/generated/` is regenerated
+  output (`npm run contract:generate`) - never hand-edit it.
 
 ## Commands (run from `api/`)
 
@@ -26,6 +30,12 @@ read those first if a rule below seems arbitrary.
 - `npm run db:verify` - `scripts/verify-production-db.cjs`, checks the
   target Postgres is reachable and migrated.
 - `node scripts/architecture-lint.mjs` - the prohibited-pattern check below.
+- `npm run contract:validate` - structurally validates `contracts/openapi.json`.
+- `npm run contract:check-drift` - fails if `contracts/generated/` is stale
+  relative to `contracts/openapi.json` (CI-gated).
+- `npm run contract:generate` - regenerates `contracts/generated/types.ts`
+  from the spec; run this and commit the result after editing the spec.
+- `npm run contract:typecheck` - compiles `contracts/generated/` standalone.
 
 Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`.
 
@@ -41,7 +51,10 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 | Reservation | `api/src/lib/reservation.ts` (`reserveStockForTransfer`, `releaseReservedStock`) | Atomic conditional-`UPDATE` reservation (Week 7) - no read-then-write gap; see `docs/transition-policy-coverage.md`. |
 | State transitions / domain policy | `api/src/lib/domain-policies.ts` (central `DomainError`-shaped rejection + audit log), plus the three pre-existing per-entity modules: `lib/transfer-lifecycle.ts`, `lib/po-lifecycle.ts`, `lib/returns-rma.ts` | Six entities named in Week 7 scope (Transfer, StockCount, PurchaseOrder, Order, ReturnRequest, QcInspection); coverage and honest gaps in `docs/transition-policy-coverage.md`. |
 | Error catalog | `api/src/lib/errors.ts` (`DomainError`, `ERROR_CODES`, stable `{error, code, traceId}` envelope) | Surfaced uniformly by `src/index.ts`'s last-resort error handler for any `DomainError`, wherever it was thrown (ADR-006 Week 7 addendum). |
-| `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005) | |
+| `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005); god-router extraction started Week 8 | 5 routes extracted so far (`routes/transfers.ts`, `routes/branches.ts`) - full accounting and backlog in `docs/route-ownership-matrix.md`. New routes for an already-extracted domain go in its own router, not back into `core.ts`/`operations-extension.ts`. |
+| Transfers (extracted) | `api/src/routes/transfers.ts` (thin route), `lib/transfer-command-service.ts` (command service), `lib/repositories/transfer-repository.ts` (`AccessContext`-typed read repository) | First bounded-context extraction (Week 8). Any test harness that mounts `coreRouter` directly and exercises `/transfers` routes must also mount `transfersRouter` (see `transfer-logistics.http.test.ts`, `item-master.http.test.ts`, `route-auth-coverage.test.ts` for the pattern) - those two routes no longer live on `coreRouter`. |
+| Branches | `api/src/routes/branches.ts`, `lib/branch-service.ts` | Migrated from the retired `routes/foundation.ts` (Week 8) - DB-only, no in-memory mirror. |
+| OpenAPI contract | `api/contracts/openapi.json`, `contracts/generated/` | Covers only extracted routes (Week 8, ADR-006 addendum); grows as each future module is extracted. |
 
 ## Required tests
 
@@ -94,6 +107,15 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   entities must reject its illegal-transition case with a `DomainError`
   carrying a stable `code` and a `traceId`, not a bare `Error` -
   `domain-policies.test.ts` is the reference.
+- Extracting a route out of `core.ts`/`operations-extension.ts` into its own
+  router must keep it registered in `route-auth-coverage.test.ts`'s router
+  list (the no-credentials sweep) and in any `.http.test.ts` file whose
+  mini test server mounts `coreRouter` and exercises that route - the
+  extraction is not done until the moved route still has authorization and
+  parity coverage under its new home, not just a passing build.
+  `routes/transfers.test.ts` is the reference for a dedicated
+  extraction-specific test file (the stable error envelope on the new
+  router, and that it does not widen access beyond the original handler).
 
 ## Prohibited patterns
 
@@ -165,4 +187,17 @@ tracks how much of it):
   error envelope) frozen; the durable Postgres outbox is already real; Week 7
   addendum ships the idempotent delivery worker (retry/backoff, poison
   events, durable cursor via row status) and the `DomainError` envelope for
-  the reservation/transition code (`lib/outbox-worker.ts`, `lib/errors.ts`)
+  the reservation/transition code (`lib/outbox-worker.ts`, `lib/errors.ts`);
+  Week 8 addendum ships the first versioned OpenAPI contract + generated
+  typed client for the routes extracted that week, with a CI drift check
+  (`api/contracts/`), and records `api/dist` removal as a deferred, reasoned
+  exception (Render already builds from source; a second, no-build
+  "Hostinger" deploy path in `api/app.js` still hard-requires the committed
+  artifact)
+- Week 8 also started the `core.ts`/`operations-extension.ts` god-router
+  extraction named (but not required complete) by ADR-005: `routes/transfers.ts`
+  and `routes/branches.ts` are the first two thin-route modules, each backed
+  by its own command service and (for Transfers) a scoped repository. Full
+  accounting and backlog: `docs/route-ownership-matrix.md`. The unmounted
+  `routes/foundation.ts` is retired - its one unique surface (Branches)
+  migrated, everything else superseded or tracked as backlog.

@@ -15,7 +15,11 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "worker": "tsx src/worker.ts",
-    "lint:arch": "node scripts/architecture-lint.mjs --check"
+    "lint:arch": "node scripts/architecture-lint.mjs --check",
+    "contract:generate": "node scripts/generate-contract.mjs",
+    "contract:validate": "node scripts/validate-openapi.mjs",
+    "contract:check-drift": "node scripts/check-contract-drift.mjs",
+    "contract:typecheck": "tsc --project contracts/tsconfig.json"
   },
   "keywords": [],
   "author": "",
@@ -52,6 +56,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.6",
+    "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.13"
   }
 }

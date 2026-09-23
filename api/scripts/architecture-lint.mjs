@@ -45,7 +45,9 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   'src/lib/persistence.ts',
   'src/routes/catalog-procurement.ts',
   'src/routes/operations-extension.ts',
-  'src/routes/foundation.ts',
+  // routes/foundation.ts was retired in Week 8 (its one unique surface,
+  // Branch management, migrated to routes/branches.ts, which does not
+  // touch these tables) - no longer needed here.
   // The canonical service itself, and its reconciliation tooling.
   'src/lib/inventory-posting-service.ts',
 ]);

@@ -1,0 +1,228 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Invexa Retail API - extracted modules",
+    "version": "2026.8.0",
+    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module."
+  },
+  "servers": [
+    { "url": "https://invexaretail-h1ps.onrender.com/api/v1", "description": "production" },
+    { "url": "http://localhost:4000/api/v1", "description": "local" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "requestId",
+        "in": "query",
+        "required": false,
+        "description": "Client-supplied idempotency key. Mutating endpoints that accept one return the original result on replay instead of double-posting (ADR-006). Most endpoints in this contract take it as a body field, not a query parameter - see each operation.",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "The stable error shape (ADR-006 / lib/errors.ts's DomainError) that new and extracted code returns. Not yet the shape of every endpoint in the full API - see AGENTS.md's Error catalog row.",
+        "required": ["error", "code", "traceId"],
+        "properties": {
+          "error": { "type": "string", "description": "Human-readable message. May change wording without notice - do not branch on it." },
+          "code": {
+            "type": "string",
+            "description": "Stable, SCREAMING_SNAKE_CASE. Clients branch on this.",
+            "enum": ["INSUFFICIENT_STOCK", "INVALID_TRANSITION", "CONCURRENT_UPDATE_CONFLICT", "DUPLICATE_REQUEST", "NOT_FOUND", "VALIDATION_FAILED"]
+          },
+          "traceId": { "type": "string", "description": "Correlates this rejection to server logs and the audit trail." }
+        }
+      },
+      "LegacyErrorMessage": {
+        "type": "object",
+        "description": "The older, pre-Week-7 error shape most of these endpoints still use for validation/role failures (see each operation's 4xx responses for which shape applies).",
+        "required": ["message"],
+        "properties": { "message": { "type": "string" } }
+      },
+      "TransferLine": {
+        "type": "object",
+        "required": ["itemId", "lotId", "quantity"],
+        "properties": {
+          "itemId": { "type": "string" },
+          "lotId": { "type": "string" },
+          "quantity": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      },
+      "TransferCreateRequest": {
+        "type": "object",
+        "required": ["sourceLocationId", "destinationLocationId", "lines"],
+        "properties": {
+          "sourceLocationId": { "type": "string" },
+          "destinationLocationId": { "type": "string" },
+          "cartonCount": { "type": "integer", "minimum": 1 },
+          "notes": { "type": "string" },
+          "photos": { "type": "array", "items": { "type": "string" } },
+          "lines": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/TransferLine" } }
+        }
+      },
+      "Transfer": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "sourceLocationId": { "type": "string" },
+          "destinationLocationId": { "type": "string" },
+          "status": { "type": "string", "enum": ["DRAFT", "SUBMITTED", "PENDING_PICK", "REQUESTED", "PICKING", "PARTIAL", "PICKED", "READY_FOR_ADMIN", "CONFIRMED", "IN_TRANSIT", "DISPATCHED", "PARTIALLY_RECEIVED", "PARTIAL_RECEIVED", "RECEIVED", "CLOSED", "REJECTED", "CANCELLED"] },
+          "lines": { "type": "array", "items": { "$ref": "#/components/schemas/TransferLine" } },
+          "cartonCount": { "type": "integer" },
+          "notes": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TransferListItem": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Transfer" },
+          {
+            "type": "object",
+            "properties": {
+              "cartons": { "type": "array", "items": { "type": "object", "properties": { "packageId": { "type": "string" }, "quantity": { "type": "number" }, "weightKg": { "type": "number" } } } },
+              "delayed": { "type": "boolean" }
+            }
+          }
+        ]
+      },
+      "Branch": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "code": { "type": "string", "description": "Immutable after creation." },
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "status": { "type": "string", "enum": ["ACTIVE", "ARCHIVED"] },
+          "address": { "type": "string", "nullable": true },
+          "phone": { "type": "string", "nullable": true },
+          "email": { "type": "string", "nullable": true },
+          "managerId": { "type": "string", "nullable": true },
+          "workingHours": { "type": "string", "nullable": true }
+        }
+      },
+      "BranchCreateRequest": {
+        "type": "object",
+        "required": ["code", "name"],
+        "properties": {
+          "code": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "address": { "type": "string" },
+          "phone": { "type": "string" },
+          "email": { "type": "string" },
+          "managerId": { "type": "string" },
+          "workingHours": { "type": "string" }
+        }
+      },
+      "BranchArchiveBlockers": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "blockers": {
+            "type": "object",
+            "properties": {
+              "activeStock": { "type": "integer" },
+              "openTransfers": { "type": "integer" },
+              "pendingWork": { "type": "integer" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/transfers/list": {
+      "get": {
+        "operationId": "listTransfers",
+        "summary": "List transfers visible to the caller's access context (location-scoped).",
+        "tags": ["Transfers"],
+        "responses": {
+          "200": {
+            "description": "Transfers the caller can see by source or destination location access.",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "transfers": { "type": "array", "items": { "$ref": "#/components/schemas/TransferListItem" } } } } } }
+          },
+          "401": { "description": "No or invalid credentials." }
+        }
+      }
+    },
+    "/transfers": {
+      "post": {
+        "operationId": "createTransfer",
+        "summary": "Request a transfer. Reserves source stock atomically before the transfer row is created.",
+        "tags": ["Transfers"],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TransferCreateRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "transfer": { "$ref": "#/components/schemas/Transfer" } } } } }
+          },
+          "400": { "description": "Validation failed (bad payload, wrong destination type for a store user's request, etc.).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "403": { "description": "Role or location-access check failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "409": { "description": "Expiry-blocked lot.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "422": {
+            "description": "Insufficient stock to reserve - the stable DomainError envelope (ADR-006/Week 7).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+          }
+        }
+      }
+    },
+    "/branches": {
+      "get": {
+        "operationId": "listBranches",
+        "summary": "List all branches.",
+        "tags": ["Branches"],
+        "responses": {
+          "200": { "description": "OK.", "content": { "application/json": { "schema": { "type": "object", "properties": { "branches": { "type": "array", "items": { "$ref": "#/components/schemas/Branch" } } } } } } }
+        }
+      },
+      "post": {
+        "operationId": "createBranch",
+        "summary": "Create a branch. Admin only.",
+        "tags": ["Branches"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BranchCreateRequest" } } } },
+        "responses": {
+          "201": { "description": "Created.", "content": { "application/json": { "schema": { "type": "object", "properties": { "branch": { "$ref": "#/components/schemas/Branch" } } } } } },
+          "400": { "description": "Missing code or name.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "403": { "description": "Non-admin caller.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "409": { "description": "Branch code already exists.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } }
+        }
+      }
+    },
+    "/branches/{id}": {
+      "patch": {
+        "operationId": "updateBranch",
+        "summary": "Update a branch's editable fields. Code is immutable. Admin only.",
+        "tags": ["Branches"],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "OK.", "content": { "application/json": { "schema": { "type": "object", "properties": { "branch": { "$ref": "#/components/schemas/Branch" } } } } } },
+          "403": { "description": "Non-admin caller.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "404": { "description": "Branch not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } }
+        }
+      }
+    },
+    "/branches/{id}/archive": {
+      "post": {
+        "operationId": "archiveBranch",
+        "summary": "Archive a branch. Blocked if any of its locations have on-hand stock, open transfers, or pending work assignments.",
+        "tags": ["Branches"],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Archived.", "content": { "application/json": { "schema": { "type": "object", "properties": { "branch": { "$ref": "#/components/schemas/Branch" } } } } } },
+          "403": { "description": "Non-admin caller.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "404": { "description": "Branch not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LegacyErrorMessage" } } } },
+          "409": { "description": "Branch has active stock, open transfers, or pending work.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BranchArchiveBlockers" } } } }
+        }
+      }
+    }
+  }
+}
