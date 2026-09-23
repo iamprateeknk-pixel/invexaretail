@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SERVER_EPOCH = exports.EVENT_TOPICS = void 0;
 exports.canReceive = canReceive;
+exports.recordOutboxEventInTransaction = recordOutboxEventInTransaction;
 exports.publishEvent = publishEvent;
 exports.subscribe = subscribe;
 exports.subscriberCount = subscriberCount;
@@ -37,6 +38,19 @@ async function persistEvent(event) {
             actorId: event.actorId ?? null,
             requestId: event.requestId ?? null,
             occurredAt: new Date(event.at),
+        },
+    });
+}
+async function recordOutboxEventInTransaction(tx, input) {
+    if (!persistence_js_1.databaseEnabled)
+        return;
+    await tx.domainEventOutbox.create({
+        data: {
+            topic: input.topic,
+            companyId: input.companyId,
+            locationIds: input.locationIds?.length ? input.locationIds : undefined,
+            actorId: input.actorId ?? null,
+            requestId: input.requestId ?? null,
         },
     });
 }

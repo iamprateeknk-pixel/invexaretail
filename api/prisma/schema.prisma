@@ -1409,7 +1409,26 @@ model ImportBatch {
   inventoryMovements   InventoryMovement[]
   rows                 ImportRow[]
   tenantId    String   @default("tenant-invexa")
+  // Week 11: the new DRAFT -> VALIDATED -> QUEUED_FOR_COMMIT -> COMMITTING
+  // -> COMMITTED/PARTIALLY_COMMITTED/FAILED -> REVERSED lifecycle
+  // (lib/import-commit-service.ts) needs the real per-tenant column - the
+  // pre-existing `tenantId` above is a single constant across the whole
+  // app, not the SaaS company boundary ADR-002 scopes everything else by.
+  // Every ImportBatch/ImportRow before this week had no companyId at all.
+  companyId            String   @default("default-company")
+  // Durable resume point for the batched commit worker: the highest
+  // ImportRow.rowNumber successfully committed so far. A crash/restart
+  // resumes from here instead of restarting (re-posting already-committed
+  // rows) or losing progress.
+  checkpointRowNumber  Int      @default(0)
+  // ALL_OR_NOTHING | PARTIAL_SUCCESS - decided per import `type`, not per
+  // batch (see lib/import-business-rules.ts's IMPORT_TYPE_POLICY), but
+  // stored on the batch so a change to the policy table later never
+  // reinterprets an already-committed batch's semantics retroactively.
+  commitPolicy         String   @default("PARTIAL_SUCCESS")
+  reversedAt           DateTime?
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([type, importedAt])
@@ -1947,7 +1966,15 @@ model ImportRow {
   processedAt     DateTime?
   createdAt       DateTime @default(now())
   tenantId    String   @default("tenant-invexa")
+  // Week 11: denormalized from the parent ImportBatch so a row-level query
+  // (e.g. the failure export) never needs a join to stay tenant-scoped.
+  companyId       String   @default("default-company")
+  // The StockMovement this row posted, once committed - lets reverse walk
+  // rows instead of re-deriving movements, and lets a row prove it was
+  // actually posted through InventoryPostingService, not some other path.
+  movementId      String?
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@unique([importBatchId, rowNumber])
@@ -2234,6 +2261,21 @@ model DomainEventOutbox {
   requestId   String?
   occurredAt  DateTime @default(now())
 
+  // Week 7: worker delivery state. `status` starts PENDING; the worker moves
+  // it to DELIVERED on success or, after MAX_DELIVERY_ATTEMPTS failures, to
+  // POISON (a visible, queryable exception - never silently dropped).
+  // `availableAt` is the retry/backoff gate: a failed attempt pushes it
+  // forward instead of retrying immediately. The status column itself is
+  // this worker's durable cursor - `SELECT ... WHERE status = 'PENDING'
+  // FOR UPDATE SKIP LOCKED` needs no separate offset table and is safe for
+  // more than one worker process to poll concurrently.
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  lastError   String?
+  deliveredAt DateTime?
+
   @@index([companyId, id])
   @@index([occurredAt])
+  @@index([status, availableAt])
 }

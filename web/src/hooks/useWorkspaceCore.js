@@ -81,6 +81,15 @@ export function useWorkspaceCore() {
     setNotifications((prev) => [{ id, title, description, type, timestamp: new Date() }, ...prev].slice(0, 20));
   }, []);
 
+  // Week 9: this is a best-effort UX redirect (skip straight past a
+  // pack/entitlement-hidden module when a nav click somehow still points at
+  // one), not the authorization boundary - `role` isn't available at this
+  // point in the hook composition order (useWorkspaceAuth runs after
+  // useWorkspaceCore), so it cannot also apply NAVIGATION's per-item role
+  // check here. The real, authoritative gate - which does have `role` - is
+  // Workspace.jsx's render-time `canAccessSection` check
+  // (lib/permissions.js); this redirect only makes the common case (a
+  // stale link to a since-hidden module) not flash the wrong page first.
   const navigateTo = (section) => {
     const hiddenModules = new Set(workspaceProfile.pack?.hide ?? []);
     const next = hiddenModules.has(section) ? 'dashboard' : section;

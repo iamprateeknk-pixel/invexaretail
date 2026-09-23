@@ -6,6 +6,20 @@
 :root {
   --radius: 0.65rem;
 
+  /* Week 9 token consolidation - see docs/web/token-specification.md.
+     Focus is the one visual contract every new shared component
+     (AppShell, SmartDataTable's row/cell focus, FilterBar, FormField,
+     Stepper) must use identically, rather than each component picking its
+     own ring width/offset/color. Density tokens are defined here as the
+     single source for a future compact-density mode - not yet switched on
+     anywhere (no page reads --density-scale yet), documented honestly as
+     "defined, not adopted" rather than half-wired. */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--ring);
+  --density-scale: 1;
+  --density-scale-compact: 0.85;
+
   /* Invexa design system: emerald primary on a slate neutral base. */
   --background: oklch(1 0 0);
   --foreground: oklch(0.21 0.03 265);
@@ -143,6 +157,14 @@
     font-family: Inter, 'Segoe UI', sans-serif;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+  }
+  /* Week 9: the one keyboard-focus style. Every interactive element in the
+     shared component set relies on this instead of a per-component outline
+     - a visible, high-contrast ring that never disappears on :focus-visible
+     failure (outline never fully removed, only restyled). */
+  :focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
   }
 }
 

@@ -9,6 +9,10 @@ import enterpriseAuthRouter from './routes/enterprise-auth.js';
 import enterpriseManagementRouter from './routes/enterprise-management.js';
 import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
+import transfersRouter from './routes/transfers.js';
+import branchesRouter from './routes/branches.js';
+import itemsRouter from './routes/items.js';
+import importsRouter from './routes/imports.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
@@ -28,6 +32,7 @@ import { enforceOperationalKillSwitches } from './lib/saas/kill-switch.js';
 import { enforcePlanLimits, enforceSuspendedCompany, enforceApiUsage } from './lib/saas/company-access.js';
 import { enforcePlanEntitlements } from './lib/saas/entitlements.js';
 import { resolveDatabaseUrl } from './lib/db.js';
+import { isDomainError, statusForErrorCode } from './lib/errors.js';
 
 if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
   throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
@@ -277,6 +282,10 @@ app.use('/api/v1', transferLogisticsRouter);
 app.use('/api/v1', commandCenterRouter);
 
 // Mounted last so the prefixed routers above keep priority over its paths.
+app.use('/api/v1', transfersRouter);
+app.use('/api/v1', branchesRouter);
+app.use('/api/v1', itemsRouter);
+app.use('/api/v1', importsRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 
@@ -350,6 +359,14 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     error: error instanceof Error ? error.message : String(error),
   });
   if (res.headersSent) return;
+  // ADR-006 / Week 7: reservation, transition and outbox rejections carry a
+  // stable machine-readable code plus a trace ID - surface both rather than
+  // collapsing everything into a generic 500, so a client or dashboard can
+  // branch on `code` without parsing `error` text.
+  if (isDomainError(error)) {
+    res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    return;
+  }
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_ERROR',

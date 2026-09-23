@@ -20,13 +20,13 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 63,
+    "line": 64,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, include: { lots: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/persistence.ts",
-    "line": 95,
+    "line": 97,
     "snippet": "prisma.item.findMany({ include: { lots: true } }),"
   },
   {
@@ -194,13 +194,13 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1768,
+    "line": 1787,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1891,
+    "line": 1910,
     "snippet": "value           Float?"
   }
 ]

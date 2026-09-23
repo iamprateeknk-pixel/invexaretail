@@ -48,6 +48,10 @@ const enterprise_auth_js_1 = __importDefault(require("./routes/enterprise-auth.j
 const enterprise_management_js_1 = __importDefault(require("./routes/enterprise-management.js"));
 const enterprise_analytics_js_1 = __importDefault(require("./routes/enterprise-analytics.js"));
 const core_js_1 = __importDefault(require("./routes/core.js"));
+const transfers_js_1 = __importDefault(require("./routes/transfers.js"));
+const branches_js_1 = __importDefault(require("./routes/branches.js"));
+const items_js_1 = __importDefault(require("./routes/items.js"));
+const imports_js_1 = __importDefault(require("./routes/imports.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
@@ -67,6 +71,7 @@ const kill_switch_js_1 = require("./lib/saas/kill-switch.js");
 const company_access_js_1 = require("./lib/saas/company-access.js");
 const entitlements_js_1 = require("./lib/saas/entitlements.js");
 const db_js_1 = require("./lib/db.js");
+const errors_js_1 = require("./lib/errors.js");
 if (process.env.REQUIRE_DATABASE === 'true' && !(0, db_js_1.resolveDatabaseUrl)()) {
     throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
 }
@@ -298,6 +303,10 @@ app.use('/api/v1', events_js_1.publishMutationEvents);
 app.use('/api/v1', transfer_logistics_js_1.default);
 app.use('/api/v1', command_center_js_1.default);
 // Mounted last so the prefixed routers above keep priority over its paths.
+app.use('/api/v1', transfers_js_1.default);
+app.use('/api/v1', branches_js_1.default);
+app.use('/api/v1', items_js_1.default);
+app.use('/api/v1', imports_js_1.default);
 app.use('/api/v1', core_js_1.default);
 app.use('/api/v1', catalog_procurement_js_1.default);
 app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
@@ -371,6 +380,14 @@ app.use((error, req, res, _next) => {
     });
     if (res.headersSent)
         return;
+    // ADR-006 / Week 7: reservation, transition and outbox rejections carry a
+    // stable machine-readable code plus a trace ID - surface both rather than
+    // collapsing everything into a generic 500, so a client or dashboard can
+    // branch on `code` without parsing `error` text.
+    if ((0, errors_js_1.isDomainError)(error)) {
+        res.status((0, errors_js_1.statusForErrorCode)(error.code)).json(error.toEnvelope());
+        return;
+    }
     res.status(500).json({
         error: 'Internal server error',
         code: 'INTERNAL_ERROR',

@@ -4,6 +4,7 @@ exports.ItemNotFoundError = void 0;
 exports.findItemById = findItemById;
 exports.requireItemById = requireItemById;
 exports.listItems = listItems;
+exports.searchItems = searchItems;
 exports.assertItemOwnedByTenant = assertItemOwnedByTenant;
 // ADR-002 / Week 4: the Catalog repository for Item. Every exported function
 // requires a TenantContext as its first argument - not optional, not
@@ -49,6 +50,48 @@ async function listItems(ctx, filter = {}) {
         return rows;
     }
     return repository_js_1.items.filter((item) => (0, tenant_scope_js_1.ownerOfItem)(item.id) === ctx.companyId && (!filter.status || item.status === filter.status));
+}
+const MAX_SEARCH_LIMIT = 100;
+const DEFAULT_SEARCH_LIMIT = 25;
+/**
+ * Week 10: server-side cursor pagination for item search. `GET /items`
+ * (routes/core.ts) loads a tenant's *entire* item list into memory on every
+ * call - fine at seed-data scale, not at the 5,000+ item scale this
+ * function is built and tested for
+ * (item-repository.postgres.test.ts's pagination suite). Cursor is the
+ * last-seen item id (stable `id` ordering), not an offset - an offset
+ * re-scans and re-skips every prior row on each page and drifts under
+ * concurrent inserts; a cursor does neither.
+ */
+async function searchItems(ctx, filter = {}) {
+    const limit = Math.min(Math.max(filter.limit ?? DEFAULT_SEARCH_LIMIT, 1), MAX_SEARCH_LIMIT);
+    const search = filter.search?.trim();
+    if (persistence_js_1.databaseEnabled) {
+        const rows = await db_js_1.prisma.item.findMany({
+            where: {
+                companyId: ctx.companyId,
+                ...(filter.status ? { status: filter.status } : {}),
+                ...(search
+                    ? { OR: [{ name: { contains: search, mode: 'insensitive' } }, { code: { contains: search, mode: 'insensitive' } }] }
+                    : {}),
+            },
+            orderBy: { id: 'asc' },
+            take: limit + 1,
+            ...(filter.cursor ? { cursor: { id: filter.cursor }, skip: 1 } : {}),
+        });
+        const hasMore = rows.length > limit;
+        const page = hasMore ? rows.slice(0, limit) : rows;
+        return { items: page, nextCursor: hasMore ? page[page.length - 1].id : null };
+    }
+    const matches = repository_js_1.items
+        .filter((item) => (0, tenant_scope_js_1.ownerOfItem)(item.id) === ctx.companyId)
+        .filter((item) => !filter.status || item.status === filter.status)
+        .filter((item) => !search || item.name.toLowerCase().includes(search.toLowerCase()) || item.code.toLowerCase().includes(search.toLowerCase()))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const startIndex = filter.cursor ? matches.findIndex((item) => item.id === filter.cursor) + 1 : 0;
+    const page = matches.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < matches.length;
+    return { items: page, nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null };
 }
 /**
  * Guard for a mutation (status change, delete) that the caller implements

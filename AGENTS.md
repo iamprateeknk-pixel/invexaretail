@@ -14,6 +14,13 @@ read those first if a rule below seems arbitrary.
   Not deployed by anything in `render.yaml` or `docker-compose.yml`. Do not
   add features here; see Week 18 of the execution guide for the
   archive-after-parity-check plan.
+- `api/contracts/` - the versioned OpenAPI contract (Week 8), covering only
+  the routes that have been extracted out of the god routers so far (see
+  `docs/route-ownership-matrix.md`). `contracts/generated/` is regenerated
+  output (`npm run contract:generate`) - never hand-edit it.
+- `docs/web/` - the Week 9 UX foundation: role journeys, information
+  architecture, token specification, and the component catalog. Read these
+  before adding a new page-level pattern in `web/`.
 
 ## Commands (run from `api/`)
 
@@ -26,8 +33,17 @@ read those first if a rule below seems arbitrary.
 - `npm run db:verify` - `scripts/verify-production-db.cjs`, checks the
   target Postgres is reachable and migrated.
 - `node scripts/architecture-lint.mjs` - the prohibited-pattern check below.
+- `npm run contract:validate` - structurally validates `contracts/openapi.json`.
+- `npm run contract:check-drift` - fails if `contracts/generated/` is stale
+  relative to `contracts/openapi.json` (CI-gated).
+- `npm run contract:generate` - regenerates `contracts/generated/types.ts`
+  from the spec; run this and commit the result after editing the spec.
+- `npm run contract:typecheck` - compiles `contracts/generated/` standalone.
 
-Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`.
+Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
+`.js` hooks/lib/control-plane logic), `npm run test:components` (real
+`.jsx` component rendering via `@testing-library/react` + `jsdom` - see
+`web/test/jsx-loader.mjs`), `npm run test:all` (both), `npm run lint`.
 
 ## Module ownership
 
@@ -37,8 +53,21 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 | Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
-| Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts` | Durable outbox is the source of truth in database mode (ADR-006). |
-| `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005) | |
+| Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts`, `lib/outbox-worker.ts` (idempotent delivery worker - shipped Week 7) | Durable outbox is the source of truth in database mode (ADR-006). A business write that needs its outbox row atomic with itself uses `recordOutboxEventInTransaction`, not `publishEvent`. |
+| Reservation | `api/src/lib/reservation.ts` (`reserveStockForTransfer`, `releaseReservedStock`) | Atomic conditional-`UPDATE` reservation (Week 7) - no read-then-write gap; see `docs/transition-policy-coverage.md`. |
+| State transitions / domain policy | `api/src/lib/domain-policies.ts` (central `DomainError`-shaped rejection + audit log), plus the three pre-existing per-entity modules: `lib/transfer-lifecycle.ts`, `lib/po-lifecycle.ts`, `lib/returns-rma.ts` | Six entities named in Week 7 scope (Transfer, StockCount, PurchaseOrder, Order, ReturnRequest, QcInspection); coverage and honest gaps in `docs/transition-policy-coverage.md`. |
+| Error catalog | `api/src/lib/errors.ts` (`DomainError`, `ERROR_CODES`, stable `{error, code, traceId}` envelope) | Surfaced uniformly by `src/index.ts`'s last-resort error handler for any `DomainError`, wherever it was thrown (ADR-006 Week 7 addendum). |
+| `core.ts`, `operations-extension.ts` | frozen size, no new domains (ADR-005); god-router extraction started Week 8 | 5 routes extracted so far (`routes/transfers.ts`, `routes/branches.ts`) - full accounting and backlog in `docs/route-ownership-matrix.md`. New routes for an already-extracted domain go in its own router, not back into `core.ts`/`operations-extension.ts`. |
+| Transfers (extracted) | `api/src/routes/transfers.ts` (thin route), `lib/transfer-command-service.ts` (command service), `lib/repositories/transfer-repository.ts` (`AccessContext`-typed read repository) | First bounded-context extraction (Week 8). Any test harness that mounts `coreRouter` directly and exercises `/transfers` routes must also mount `transfersRouter` (see `transfer-logistics.http.test.ts`, `item-master.http.test.ts`, `route-auth-coverage.test.ts` for the pattern) - those two routes no longer live on `coreRouter`. |
+| Branches | `api/src/routes/branches.ts`, `lib/branch-service.ts` | Migrated from the retired `routes/foundation.ts` (Week 8) - DB-only, no in-memory mirror. |
+| OpenAPI contract | `api/contracts/openapi.json`, `contracts/generated/` | Covers only extracted routes (Week 8, ADR-006 addendum); grows as each future module is extracted. |
+| Route/nav permission gate (web) | `web/src/lib/permissions.js` (`canAccessSection`), consumed by `web/src/lib/workspace.js` (nav visibility) and `web/src/components/workspace/Workspace.jsx` (route render gate) | One source of truth (Week 9) - both the nav and the route guard call the same function. Do not add a second per-page or per-route role table; add the restriction to `NAVIGATION`'s `roles`/`adminOnly` field instead, and both callers pick it up. |
+| Shared feedback components (web) | `web/src/components/ui/feedback-states.jsx` (`LoadingState`, `EmptyState`, `ErrorState`, `PermissionDeniedState`, `OfflineState`) | Week 9. New loading/empty/error/permission/offline UI in `web/` uses these, not a new one-off card. |
+| Web design tokens | `web/src/index.css` | Single source (Week 9) - color, radius, focus, density (defined, not yet adopted) tokens. Spec: `docs/web/token-specification.md`. `admin-panel/` is not yet consolidated onto this token set (documented gap). |
+| Web component test toolchain | `web/test/jsx-loader.mjs`, `web/test/register.mjs` | Week 9 - the first JSX-capable test loader in this repo (esbuild-based), enabling `@testing-library/react` + `jsdom` component tests via `npm run test:components`. |
+| Item search / stock detail | `api/src/routes/items.ts`, `lib/repositories/item-repository.ts` (`searchItems`, cursor pagination), `lib/stock-detail-service.ts` (`getStockDetail`) | Week 10. Additive to `core.ts`'s existing unpaginated `GET /items` - not a replacement. All mutation (`/adjust`, `/reverse`) goes through `lib/inventory-posting-service.ts` with a required idempotency key. See `docs/week10-item-search-stock-detail.md` for what's shipped vs backlog (the exception-first Dashboard is not built yet). |
+| Item search / stock detail (web) | `web/src/hooks/useItemSearch.js`, `useStockDetail.js`, `useInventoryAdjustment.js`, `web/src/components/inventory/*.jsx`, `web/src/components/workspace/pages/ItemStockDetailPage.jsx` | Week 10. Per-screen queries, not wired into `useWorkspaceHydration`'s whole-workspace poll. Registered as the `item-search` `NAVIGATION` entry - goes through `lib/permissions.js` like every other section. |
+| Staged import lifecycle | `api/src/routes/imports.ts` (thin route), `lib/import-commit-service.ts` (the state machine - `createImportBatch`, `validateImportBatch`, `queueImportBatchForCommit`, `commitImportBatchChunk`/`commitImportBatchToCompletion`, `reverseImportBatch`, `exportFailedRows`), `lib/import-row-validation.ts` (per-row validation, read-only), `lib/import-business-rules.ts` (HO Basni / branch routing / lot find-or-create / late-movement checkpoint policy), `lib/import-checksum.ts` (file-level dedupe), `lib/import-worker.ts` (`startImportWorker`/`drainImportCommitsOnce`, wired into `worker.ts`'s boot sweep and poll loop) | Week 11. `ImportBatch`/`ImportRow` states: DRAFT -> VALIDATED -> QUEUED_FOR_COMMIT -> COMMITTING -> COMMITTED/PARTIALLY_COMMITTED/FAILED -> REVERSING -> REVERSED. Commit posts exclusively through `lib/inventory-posting-service.ts` (never touches `StockLedger`/`StockMovement` directly), one idempotency key per row (`import:${batchId}:${rowNumber}`), and only ever advances past `ImportBatch.checkpointRowNumber` - a crash/restart resumes from the checkpoint without double-posting. Commit policy is PARTIAL_SUCCESS for PURCHASE/SALES/SALES_RETURN, ALL_OR_NOTHING for OPENING_STOCK (`IMPORT_TYPE_POLICY`). Fixed a real tenant-scoping gap this week: `ImportBatch`/`ImportRow` had only a constant `tenantId` before Week 11, no `companyId` at all - both models now carry `companyId` (migration `20261001090000_import_lifecycle_tenant_scope`). This path is separate from, and does not touch, the older `InventoryMovement`-journal import path in `lib/persistence.ts`/`lib/import-reversal.ts` (still baseline, unmigrated). Known gap discovered while wiring `worker.ts`: `lib/outbox-worker.ts`'s `startOutboxWorker` (Week 7) is still never called from any production entrypoint - out of this week's scope to fix (needs a real delivery-handler decision, not a one-line addition). Accepted, documented gap: `routes/imports.ts` accepts already-parsed JSON rows, not raw file/CSV upload with column mapping - no import-wizard UI was built this week. See `docs/week11-import-staging-commit-reverse.md`. |
 
 ## Required tests
 
@@ -75,6 +104,68 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   stock policy enforcement, and reversal (equal-and-opposite movement,
   original row never edited, reversal itself idempotent) -
   `inventory-posting-service.postgres.test.ts` is the reference.
+- A change to `lib/reservation.ts` must be exercised against real Postgres
+  with a genuine concurrent-request test (`Promise.allSettled` on two or
+  more real overlapping calls, not a sequential simulation) proving reserved
+  quantity never exceeds on-hand quantity - `reservation.postgres.test.ts`
+  is the reference.
+- A change to `lib/outbox-worker.ts` must be exercised against real Postgres
+  and cover: a simulated crash between claim and delivery does not lose the
+  event (it becomes available again once its lease expires), redelivering an
+  already-`DELIVERED` row is never attempted, and a handler that always
+  fails eventually becomes a visible `POISON` row without blocking other
+  pending events in the same batch - `outbox-worker.postgres.test.ts` is the
+  reference.
+- A new or changed state-transition rule for one of the six domain-policy
+  entities must reject its illegal-transition case with a `DomainError`
+  carrying a stable `code` and a `traceId`, not a bare `Error` -
+  `domain-policies.test.ts` is the reference.
+- Extracting a route out of `core.ts`/`operations-extension.ts` into its own
+  router must keep it registered in `route-auth-coverage.test.ts`'s router
+  list (the no-credentials sweep) and in any `.http.test.ts` file whose
+  mini test server mounts `coreRouter` and exercises that route - the
+  extraction is not done until the moved route still has authorization and
+  parity coverage under its new home, not just a passing build.
+  `routes/transfers.test.ts` is the reference for a dedicated
+  extraction-specific test file (the stable error envelope on the new
+  router, and that it does not widen access beyond the original handler).
+- A new module/section added to `web/src/lib/workspace.js`'s `NAVIGATION`
+  must work through `lib/permissions.js`'s `canAccessSection` for both nav
+  visibility and route access - never add a second, separately maintained
+  role table the way the old (removed) `Workspace.jsx` `SECTION_ROLES` map
+  did. `lib/permissions.test.js`'s exhaustive role x section matrix is the
+  reference; extend it rather than hand-writing a new one-off case.
+- A new shared `web/` UI component with interactive elements needs a real
+  `@testing-library/react` test (via `npm run test:components`) proving it
+  is keyboard-focusable and exposes its state as accessible text/roles, not
+  only visually (color/icon alone) - `feedback-states.test.jsx` is the
+  reference.
+- A new server-paginated list endpoint must have a real Postgres test
+  seeding enough rows to exercise more than one page (thousands, not tens),
+  proving every row is returned exactly once across pages, in a stable
+  order, with no cross-tenant leakage - `item-repository.postgres.test.ts`'s
+  5,200-item suite is the reference.
+- A new mutating endpoint that posts through
+  `lib/inventory-posting-service.ts` must require a caller-supplied
+  idempotency key (not derive one server-side from other fields) and have a
+  test proving a retried request with the same key returns the original
+  result instead of posting again - `items.postgres.test.ts` is the
+  reference.
+- A change to the staged import lifecycle (`lib/import-commit-service.ts`,
+  `import-business-rules.ts`, `import-row-validation.ts`, `import-worker.ts`)
+  must be exercised against real Postgres and cover: a 5,000+ row commit
+  reconciling to expected ledger totals; a byte-identical re-upload
+  returning the existing batch instead of creating a duplicate; a resumed
+  commit (simulated crash mid-chunk, called again from the same checkpoint)
+  posting each row exactly once; wrong branch name, missing lot, and
+  malformed quantity each producing a structured row error instead of a
+  crash; a row dated before a location's `SyncCheckpoint` still posting
+  (flagged `LATE_MOVEMENT`) without moving the checkpoint backward; a
+  mid-commit failure on one row (e.g. a negative-stock block) leaving the
+  rest of that chunk's rows unaffected; a reverse netting stock back to zero
+  and being safe to call twice; and tenant isolation (a batch created under
+  one company must be unreadable, uncommittable and unreversible from
+  another) - `import-commit-service.postgres.test.ts` is the reference.
 
 ## Prohibited patterns
 
@@ -110,9 +201,15 @@ of whether the linter catches a given instance:
    `lib/otp-auth.ts` only. Tokens: `jsonwebtoken` only.
 6. **Direct push to `main`.** All changes land through a reviewed PR.
 7. **State transitions outside the domain policy.** `Transfer`, `Order`,
-   `PurchaseOrder`, `StockCount` status changes must go through their
-   lifecycle module (e.g. `lib/transfer-lifecycle.ts`), not a bare
+   `PurchaseOrder`, `StockCount`, `ReturnRequest` status changes must go
+   through their lifecycle module (`lib/transfer-lifecycle.ts`,
+   `lib/po-lifecycle.ts`, `lib/returns-rma.ts`, or `lib/domain-policies.ts`
+   for `StockCount`/`Order`), not a bare
    `prisma.transfer.update({ data: { status: ... } })` scattered in a route.
+   Not machine-checked yet (Week 7 added the modules and wired every known
+   write site; a lint rule to catch a *new* bare status write is a standing
+   follow-up, the same honest gap as the `unscoped-tenant-query` rule only
+   covering `Item` today).
 
 ## Architecture decisions
 
@@ -137,4 +234,59 @@ tracks how much of it):
 - ADR-005: bounded contexts named (Identity, Catalog, Inventory, Warehouse,
   Procurement, Orders, Reporting); no new domains in the two mega-files
 - ADR-006: target API contract (versioned OpenAPI, idempotency keys, stable
-  error envelope) frozen; the durable Postgres outbox is already real
+  error envelope) frozen; the durable Postgres outbox is already real; Week 7
+  addendum ships the idempotent delivery worker (retry/backoff, poison
+  events, durable cursor via row status) and the `DomainError` envelope for
+  the reservation/transition code (`lib/outbox-worker.ts`, `lib/errors.ts`);
+  Week 8 addendum ships the first versioned OpenAPI contract + generated
+  typed client for the routes extracted that week, with a CI drift check
+  (`api/contracts/`), and records `api/dist` removal as a deferred, reasoned
+  exception (Render already builds from source; a second, no-build
+  "Hostinger" deploy path in `api/app.js` still hard-requires the committed
+  artifact)
+- Week 8 also started the `core.ts`/`operations-extension.ts` god-router
+  extraction named (but not required complete) by ADR-005: `routes/transfers.ts`
+  and `routes/branches.ts` are the first two thin-route modules, each backed
+  by its own command service and (for Transfers) a scoped repository. Full
+  accounting and backlog: `docs/route-ownership-matrix.md`. The unmounted
+  `routes/foundation.ts` is retired - its one unique surface (Branches)
+  migrated, everything else superseded or tracked as backlog.
+- Week 9 (`web/`, no dedicated ADR - see `docs/web/`): froze the role-first
+  UX foundation. Unified nav visibility and route access into one function
+  (`lib/permissions.js`), fixing a real gap where 15+ role-restricted
+  `NAVIGATION` sections had no route-level guard at all (a direct URL hash
+  could open them regardless of the nav hiding the link). Shipped the first
+  five shared feedback components, a `:focus-visible` token contract, and
+  the repo's first JSX-capable test toolchain (`web/test/jsx-loader.mjs`).
+  `SmartDataTable`/`FilterBar`/`Drawer`/`Stepper`/`FormField`/`AppShell` and
+  the `admin-panel` token consolidation are explicit backlog, not silently
+  dropped - see `docs/web/component-catalog.md`.
+- Week 10 (`api/routes/items.ts` + `web/src/components/inventory/`, no
+  dedicated ADR - see `docs/week10-item-search-stock-detail.md`): the first
+  full-stack vertical slice on the new contract/design-system/canonical-
+  stock foundation. Server cursor pagination for item search (proven to
+  5,200 items, real Postgres); a stock-detail read model from the canonical
+  StockLedger/StockMovement journal; a guided adjustment/reversal wizard
+  where every post requires a client-supplied idempotency key and goes
+  through `InventoryPostingService` exclusively; per-screen queries (not
+  the whole-workspace poll) on the frontend. The exception-first Dashboard
+  (SLA/backlog/stock-risk read model) is explicit backlog, not a shallow
+  hard-coded stand-in - building one honestly needs a product decision on
+  what "at risk" and "SLA" mean per queue, which this week did not make
+  unilaterally.
+- Week 11 (`api/src/lib/import-*.ts`, `routes/imports.ts`, no dedicated ADR
+  - see `docs/week11-import-staging-commit-reverse.md`): the staged import
+  lifecycle (DRAFT -> VALIDATED -> QUEUED_FOR_COMMIT -> COMMITTING ->
+  COMMITTED/PARTIALLY_COMMITTED/FAILED -> REVERSING -> REVERSED), replacing
+  the old single-transaction import path for new uploads. File-checksum
+  dedupe up front, per-row idempotency keys plus a durable checkpoint for
+  crash-safe resumable commit, an explicit ALL_OR_NOTHING/PARTIAL_SUCCESS
+  policy per import type, and the HO-Basni/branch-routing/lot-uniqueness/
+  late-movement-checkpoint business rules, all proven against real Postgres
+  including a 5,000+ row golden dataset. Fixed a genuine tenant-isolation
+  gap found while doing this: `ImportBatch`/`ImportRow` had no `companyId`
+  before this week. Two gaps documented rather than fixed: `routes/imports.ts`
+  takes already-parsed JSON rows, not a raw file/CSV upload with column
+  mapping (no import-wizard UI this week), and Week 7's `startOutboxWorker`
+  is still never called from a production entrypoint - discovered while
+  wiring this week's own worker into `worker.ts`, out of scope to fix here.

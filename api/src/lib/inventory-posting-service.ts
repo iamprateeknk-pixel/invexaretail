@@ -2,12 +2,14 @@
 //
 // Important correction to the Week 2 read of this codebase: `StockMovement`
 // + `StockBalance` (via `routes/foundation.ts`'s old `postStockMovement`)
-// looked like the live canonical path, but `routes/foundation.ts` is never
-// mounted from `src/index.ts` - it is dead code, a "sketch" per its own file
-// header. The actually-live balance table, written from eight places today
-// (ADR-001's baseline), is `StockLedger`. A canonical posting service that
-// writes to an unused table has no real value; this one posts to the table
-// that is actually live.
+// looked like the live canonical path, but that file was never mounted from
+// `src/index.ts` - dead code, a "sketch" per its own file header (Week 8
+// retired the file entirely once its one unique surface, Branch management,
+// was migrated to `routes/branches.ts` - see docs/route-ownership-matrix.md).
+// The actually-live balance table, written from eight places today (ADR-001's
+// baseline), is `StockLedger`. A canonical posting service that writes to an
+// unused table has no real value; this one posts to the table that is
+// actually live.
 //
 // `StockMovement` remains the immutable append-only journal (rows are
 // created, never edited or deleted - a reversal is a new, opposite movement

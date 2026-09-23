@@ -61,6 +61,15 @@ jobs:
       - name: Check architecture rules (AGENTS.md / ADR-001..006)
         run: npm run lint:arch
 
+      - name: Validate OpenAPI contract (Week 8)
+        run: npm run contract:validate
+
+      - name: Check generated contract client has no drift from the spec (Week 8)
+        run: npm run contract:check-drift
+
+      - name: Typecheck the generated contract client compiles standalone (Week 8)
+        run: npm run contract:typecheck
+
       - name: Deploy migrations to real Postgres
         run: npm run db:migrate
 
@@ -89,6 +98,26 @@ jobs:
 
       - name: Run canonical inventory posting coverage against real Postgres (ADR-001 / Week 6)
         run: npx tsx --test src/lib/inventory-posting-service.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run atomic reservation coverage against real Postgres (Week 7)
+        run: npx tsx --test src/lib/reservation.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run outbox worker delivery/retry/poison coverage against real Postgres (ADR-006 / Week 7)
+        run: npx tsx --test src/lib/outbox-worker.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run Branch management coverage against real Postgres (Week 8)
+        run: npx tsx --test src/routes/branches.postgres.test.ts
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run item search/stock detail/adjustment/reversal coverage against real Postgres (Week 10)
+        run: npx tsx --test src/routes/items.postgres.test.ts
         env:
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
@@ -154,6 +183,9 @@ jobs:
 
       - name: Test web utilities
         run: npm test
+
+      - name: Test shared component accessibility/permission behavior (Week 9)
+        run: npm run test:components
 
       - name: Lint web
         run: npm run lint

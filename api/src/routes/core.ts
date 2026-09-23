@@ -1,7 +1,7 @@
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
-import { activeCartons, isTransitDelayed } from '../lib/transfer-packing.js';
+import { activeCartons } from '../lib/transfer-packing.js';
 import { recordThenPersist } from '../lib/record-then-persist.js';
 import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import type { QcCheckResult } from '../lib/qc-inspection.js';
@@ -59,7 +59,6 @@ import {
 } from '../lib/transfer-lifecycle.js';
 import {
   createInventoryItem,
-  createTransferRequest,
   submitStockCount,
 } from '../lib/store.js';
 import {
@@ -122,7 +121,8 @@ import { createPutawayTask } from '../lib/putaway.js';
 import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { persistBinStockDelta, STAGING_BIN_ID } from '../lib/bin-stock.js';
 import { lastKnownBin, sequenceKeyForBin } from '../lib/pick-wave.js';
-import { reserveStockForTransfer, releaseReservedStock, InsufficientStockError, TERMINAL_TRANSFER_STATUSES } from '../lib/reservation.js';
+import { reserveStockForTransfer, releaseReservedStock, TERMINAL_TRANSFER_STATUSES } from '../lib/reservation.js';
+import { isDomainError, statusForErrorCode } from '../lib/errors.js';
 import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { generateThermalTransferLabel, getReprintAudit, recordReprint } from '../lib/thermal-pdf.js';
 import { listAuditEvents, recordAudit } from '../lib/audit.js';
@@ -1204,6 +1204,9 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     await reconcileCampaignQuietly(reviewedCampaignId);
     return res.json({ success: true, count: { ...updated, variance }, recountAssignment });
   } catch (error) {
+    if (isDomainError(error)) {
+      return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    }
     const message = error instanceof Error ? error.message : 'Stock count was not found.';
     return res.status(message.includes('not found') ? 404 : 400).json({ message });
   }
@@ -1587,118 +1590,10 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
 // TRANSFERS
 // ============================================
 
-router.get('/transfers/list', (req: Request, res: Response) => {
-  const context = accessContext(req.user!);
-  const transfers = listTransfers().filter((transfer) =>
-    canAccessLocation(context, transfer.sourceLocationId)
-    || canAccessLocation(context, transfer.destinationLocationId),
-  ).map((transfer) => ({
-    ...transfer,
-    // Carton labels and the transit flag (blueprint §17/§18) so a receiver can find a transfer by carton.
-    cartons: activeCartons(listTransferCartons(transfer.id)).map((carton) => ({ packageId: carton.packageId, quantity: carton.quantity, weightKg: carton.weightKg })),
-    delayed: isTransitDelayed({ status: transfer.status, expectedArrivalAt: transfer.dispatch?.expectedArrivalAt }),
-  }));
-  return res.json({ transfers });
-});
-
-router.post('/transfers', async (req: Request, res: Response) => {
-  const context = accessContext(req.user!);
-  const input = req.body as TransferInput;
-
-  try {
-    if (!canCreateTransfer(context.role)) {
-      return res.status(403).json({ message: 'This role cannot create transfer requests.' });
-    }
-    if (context.role === 'BRANCH_MANAGER' && !canAccessLocation(context, input.sourceLocationId)) {
-      return res.status(403).json({ message: 'Branch managers can only create transfers from assigned locations.' });
-    }
-    if (context.role === 'STORE_USER') {
-      if (!canAccessLocation(context, input.sourceLocationId)) {
-        return res.status(403).json({ message: 'Store user can only request from an assigned location.' });
-      }
-      const destination = listLocations().find((location) => location.id === input.destinationLocationId);
-      if (destination?.type !== 'warehouse') {
-        return res.status(400).json({ message: 'Store transfer destination must be a warehouse.' });
-      }
-    }
-
-    const cartonCount = parseCartonCount(input.cartonCount);
-    const validated = validateTransferRequest(context.role, { ...input, cartonCount });
-    const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
-    if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
-    const workflow = getActiveWorkflow();
-    if (workflow.expiryBlocking) {
-      const expired = validated.lines.filter((line) => {
-        const item = listItems().find((entry) => entry.id === line.itemId);
-        const lot = item?.lots.find((entry) => entry.id === line.lotId);
-        if (!lot) return false;
-        if (lot.status && lot.status !== 'AVAILABLE') return true;
-        return Boolean(lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now());
-      });
-      if (expired.length) {
-        return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
-      }
-    }
-
-    // Blueprint §7.2/§9: reserve before creating the request so a second
-    // concurrent request against the same low-stock lot is rejected here
-    // rather than discovering the shortfall later, one pick at a time.
-    try {
-      await reserveStockForTransfer(validated.lines.map((line) => ({
-        itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-      })));
-    } catch (error) {
-      if (error instanceof InsufficientStockError) return res.status(409).json({ message: error.message });
-      throw error;
-    }
-
-    try {
-      const saved = createTransferRequest({
-        sourceLocationId: validated.sourceLocationId,
-        destinationLocationId: validated.destinationLocationId,
-        requestedBy: req.user!.id,
-        role: context.role === 'WAREHOUSE_PICKER' || context.role === 'AUDITOR' ? 'ADMIN' : context.role,
-        lines: validated.lines,
-        cartonCount,
-        photos: input.photos,
-        notes: input.notes,
-      });
-
-      createTransferRecord({
-        id: saved.id,
-        sourceLocationId: saved.sourceLocationId,
-        destinationLocationId: saved.destinationLocationId,
-        requestedBy: saved.requestedBy,
-        role: saved.role,
-        status: saved.status,
-        lines: saved.lines,
-        cartonCount: saved.cartonCount,
-        photos: saved.photos,
-        notes: saved.notes,
-        createdAt: saved.createdAt,
-      });
-      await persistTransfer(saved);
-      await persistAudit(recordAudit({
-        actorId: req.user!.id,
-        actorRole: req.user!.role,
-        action: 'TRANSFER_REQUESTED',
-        entityType: 'Transfer',
-        entityId: saved.id,
-      }));
-
-      return res.status(201).json({ success: true, transfer: saved });
-    } catch (error) {
-      // The reservation above already committed; do not leave it stranded
-      // against a transfer that was never actually created.
-      void releaseReservedStock(validated.lines.map((line) => ({
-        itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-      })));
-      throw error;
-    }
-  } catch (error) {
-    return res.status(403).json({ message: error instanceof Error ? error.message : 'Invalid transfer payload' });
-  }
-});
+// Week 8: GET /transfers/list and POST /transfers moved to
+// routes/transfers.ts (thin route -> lib/transfer-command-service.ts ->
+// lib/repositories/transfer-repository.ts), the first bounded-context
+// extraction out of this file. See docs/route-ownership-matrix.md.
 
 const EDITABLE_TRANSFER_STATUSES = new Set<TransferRecord['status']>(['DRAFT', 'SUBMITTED', 'REQUESTED']);
 
