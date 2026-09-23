@@ -77,6 +77,7 @@ function WorkspaceNavigation({ role, hiddenModules, sidebarCompact, activeSectio
 export function WorkspaceChrome({ children }) {
   const {
     workspaceProfile,
+    hiddenModules,
     role,
     session,
     activeSection,
@@ -102,7 +103,6 @@ export function WorkspaceChrome({ children }) {
     moduleWarning,
     liveStatus,
   } = useWorkspace();
-  const hiddenModules = new Set(workspaceProfile.pack?.hide ?? []);
   const workspaceName = workspaceProfile.name || 'Invexa Retail';
   const workspaceIndustry = workspaceProfile.industry || 'Inventory operations';
 

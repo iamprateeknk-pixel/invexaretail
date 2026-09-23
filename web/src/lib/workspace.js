@@ -154,6 +154,17 @@ export const NAV_ENTITLEMENTS = {
   catalog: 'INVENTORY',
 };
 
+// Week 9 note: not currently called from application code. The server
+// already computes entitlement-driven hides and merges them into
+// `GET /workspace/profile`'s `pack.hide` (api/src/routes/core.ts's
+// `hiddenNavigationForCompany()`), so `workspaceProfile.pack.hide` alone is
+// already the complete hidden-module set by the time it reaches
+// useWorkspaceDerived's `hiddenModules`. Kept (not deleted) as a documented,
+// tested pure function rather than silently removed, in case a future
+// optimistic-UI path needs to compute this client-side before the profile
+// fetch resolves - flagged in docs/route-ownership-matrix.md-equivalent
+// backlog (docs/web/role-journeys.md) as a real candidate for deletion if
+// nothing ends up calling it by the time the page-rebuild phase starts.
 export function hiddenModulesForEntitlements(modules = {}) {
   return Object.entries(NAV_ENTITLEMENTS)
     .filter(([, feature]) => modules[feature] === false)

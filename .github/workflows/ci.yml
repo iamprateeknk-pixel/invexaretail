@@ -174,6 +174,9 @@ jobs:
       - name: Test web utilities
         run: npm test
 
+      - name: Test shared component accessibility/permission behavior (Week 9)
+        run: npm run test:components
+
       - name: Lint web
         run: npm run lint
 

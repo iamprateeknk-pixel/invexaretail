@@ -18,6 +18,9 @@ read those first if a rule below seems arbitrary.
   the routes that have been extracted out of the god routers so far (see
   `docs/route-ownership-matrix.md`). `contracts/generated/` is regenerated
   output (`npm run contract:generate`) - never hand-edit it.
+- `docs/web/` - the Week 9 UX foundation: role journeys, information
+  architecture, token specification, and the component catalog. Read these
+  before adding a new page-level pattern in `web/`.
 
 ## Commands (run from `api/`)
 
@@ -37,7 +40,10 @@ read those first if a rule below seems arbitrary.
   from the spec; run this and commit the result after editing the spec.
 - `npm run contract:typecheck` - compiles `contracts/generated/` standalone.
 
-Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`.
+Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
+`.js` hooks/lib/control-plane logic), `npm run test:components` (real
+`.jsx` component rendering via `@testing-library/react` + `jsdom` - see
+`web/test/jsx-loader.mjs`), `npm run test:all` (both), `npm run lint`.
 
 ## Module ownership
 
@@ -55,6 +61,10 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
 | Transfers (extracted) | `api/src/routes/transfers.ts` (thin route), `lib/transfer-command-service.ts` (command service), `lib/repositories/transfer-repository.ts` (`AccessContext`-typed read repository) | First bounded-context extraction (Week 8). Any test harness that mounts `coreRouter` directly and exercises `/transfers` routes must also mount `transfersRouter` (see `transfer-logistics.http.test.ts`, `item-master.http.test.ts`, `route-auth-coverage.test.ts` for the pattern) - those two routes no longer live on `coreRouter`. |
 | Branches | `api/src/routes/branches.ts`, `lib/branch-service.ts` | Migrated from the retired `routes/foundation.ts` (Week 8) - DB-only, no in-memory mirror. |
 | OpenAPI contract | `api/contracts/openapi.json`, `contracts/generated/` | Covers only extracted routes (Week 8, ADR-006 addendum); grows as each future module is extracted. |
+| Route/nav permission gate (web) | `web/src/lib/permissions.js` (`canAccessSection`), consumed by `web/src/lib/workspace.js` (nav visibility) and `web/src/components/workspace/Workspace.jsx` (route render gate) | One source of truth (Week 9) - both the nav and the route guard call the same function. Do not add a second per-page or per-route role table; add the restriction to `NAVIGATION`'s `roles`/`adminOnly` field instead, and both callers pick it up. |
+| Shared feedback components (web) | `web/src/components/ui/feedback-states.jsx` (`LoadingState`, `EmptyState`, `ErrorState`, `PermissionDeniedState`, `OfflineState`) | Week 9. New loading/empty/error/permission/offline UI in `web/` uses these, not a new one-off card. |
+| Web design tokens | `web/src/index.css` | Single source (Week 9) - color, radius, focus, density (defined, not yet adopted) tokens. Spec: `docs/web/token-specification.md`. `admin-panel/` is not yet consolidated onto this token set (documented gap). |
+| Web component test toolchain | `web/test/jsx-loader.mjs`, `web/test/register.mjs` | Week 9 - the first JSX-capable test loader in this repo (esbuild-based), enabling `@testing-library/react` + `jsdom` component tests via `npm run test:components`. |
 
 ## Required tests
 
@@ -116,6 +126,17 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test`, `npm run lint`
   `routes/transfers.test.ts` is the reference for a dedicated
   extraction-specific test file (the stable error envelope on the new
   router, and that it does not widen access beyond the original handler).
+- A new module/section added to `web/src/lib/workspace.js`'s `NAVIGATION`
+  must work through `lib/permissions.js`'s `canAccessSection` for both nav
+  visibility and route access - never add a second, separately maintained
+  role table the way the old (removed) `Workspace.jsx` `SECTION_ROLES` map
+  did. `lib/permissions.test.js`'s exhaustive role x section matrix is the
+  reference; extend it rather than hand-writing a new one-off case.
+- A new shared `web/` UI component with interactive elements needs a real
+  `@testing-library/react` test (via `npm run test:components`) proving it
+  is keyboard-focusable and exposes its state as accessible text/roles, not
+  only visually (color/icon alone) - `feedback-states.test.jsx` is the
+  reference.
 
 ## Prohibited patterns
 
@@ -201,3 +222,13 @@ tracks how much of it):
   accounting and backlog: `docs/route-ownership-matrix.md`. The unmounted
   `routes/foundation.ts` is retired - its one unique surface (Branches)
   migrated, everything else superseded or tracked as backlog.
+- Week 9 (`web/`, no dedicated ADR - see `docs/web/`): froze the role-first
+  UX foundation. Unified nav visibility and route access into one function
+  (`lib/permissions.js`), fixing a real gap where 15+ role-restricted
+  `NAVIGATION` sections had no route-level guard at all (a direct URL hash
+  could open them regardless of the nav hiding the link). Shipped the first
+  five shared feedback components, a `:focus-visible` token contract, and
+  the repo's first JSX-capable test toolchain (`web/test/jsx-loader.mjs`).
+  `SmartDataTable`/`FilterBar`/`Drawer`/`Stepper`/`FormField`/`AppShell` and
+  the `admin-panel` token consolidation are explicit backlog, not silently
+  dropped - see `docs/web/component-catalog.md`.
