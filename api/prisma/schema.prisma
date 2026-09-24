@@ -1234,7 +1234,15 @@ model ReorderRule {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Bare-id call-site migration slice 7: real per-company scoping, added
+  // after finding this model had none (its rules were reachable across
+  // companies from several routes). Backfilled from the rule's own
+  // Location.companyId, same join pattern as PurchaseOrder/Order/
+  // Transfer/StockCount/ExpiryAlert - see
+  // docs/week29-expiryalert-reorderrule-bare-id-remediation.md.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@unique([itemId, locationId])

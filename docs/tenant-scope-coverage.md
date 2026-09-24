@@ -307,17 +307,57 @@ Proven with
 passing) and `src/routes/operations-extension-connectors.postgres.test.ts`
 (2/2 passing). See `docs/week28-item-supplier-bare-id-remediation.md`.
 
-Remaining, not yet migrated: `ExpiryAlert`/`ReorderRule` call sites across
-`routes/operations-extension.ts`, `routes/catalog-procurement.ts`,
-`lib/orders.ts`, `lib/persistence.ts`, and various import-lifecycle
-internals (many of the latter are already scoped one level up by their
-caller and are lower priority than direct route handlers). `core.ts`'s
+## ReorderRule - real companyId added (bare-id call-site migration, seventh slice)
+
+`ReorderRule` had no per-company scoping column at all before this slice
+- only the constant `tenantId`. Unlike `Supplier`, it has a real
+`locationId` relation to `Location` (which does carry a real `companyId`),
+so migration `20261102090000_reorder_rule_company_scope` backfills it the
+same way `PurchaseOrder`/`Order`/`Transfer`/`StockCount`/`ExpiryAlert`
+were: join through the rule's own `Location`.
+
+## Bare-id call-site migration - seventh slice: ExpiryAlert and ReorderRule routes
+
+Seventh slice: `ExpiryAlert`'s remaining call sites (it already had a real
+`companyId` since Week 22 - only the call sites needed fixing) and every
+`ReorderRule` call site (schema side above). Worst finding: `PUT
+/reorder-rules/:itemId` had **no location-ownership check of any kind** -
+only an admin-role check - so any admin of any company could set the
+reorder min/target quantities for any location and item, a genuine
+cross-tenant write, not just a read leak. Fixed with an explicit
+`Location` ownership check before the upsert (same pattern as `GET
+/purchase-orders/plan` and `PUT /suppliers/:id`). Also fixed: `GET
+/reorder-rules`, and the reorder-rule queries inside `GET
+/items/:itemId/forecast` and `GET /intelligence/:locationId` - the last of
+these is the exact gap Week 26's own writeup named and left open
+("`ReorderRule` visibility ... is still not company-scoped"), now closed.
+`PATCH /expiry-alerts/:id/status` and `POST /expiry-alerts/:id/write-off`
+both gained a direct `companyId` filter, independent of the
+`canAccessLocation` fallback (which, since Week 27, only denies a *known*
+cross-company location, not an unregistered one). Proven with
+`src/routes/catalog-procurement-reorder-rules.postgres.test.ts` (3/3
+passing) and `src/routes/operations-extension-expiry-alerts.postgres.test.ts`
+(2/2 passing); Week 26's own `GET /intelligence/:locationId` test was
+updated to assert the reorder rule itself is now invisible cross-tenant,
+not just degraded. See
+`docs/week29-expiryalert-reorderrule-bare-id-remediation.md`.
+
+With this slice, every model named across the bare-id remediation's seven
+slices (`Order`, `PurchaseOrder`, `ReturnRequest`, `ExceptionCase`,
+`Transfer`, `StockCount`, `Item`, `Supplier`, `ExpiryAlert`,
+`ReorderRule`) has its route-level bare-id call sites fixed. Remaining,
+not yet migrated: `lib/orders.ts`, `lib/persistence.ts`, and various
+import-lifecycle internals (many already scoped one level up by their
+caller and lower priority than direct route handlers). `core.ts`'s
 in-memory `TransferRecord`/`CountRecord` types still carry no `companyId`
 field, relying entirely on the in-memory ownership map rather than a real
 column - and auditing whether that map is reliably populated for every
 location-creation path in the codebase (not just `routes/core.ts`'s) is
 itself a worthwhile follow-up, since Week 27's fix is only as complete as
-that map's coverage.
+that map's coverage. A further slice past this point would be net-new
+scope: `core.ts`'s in-memory records, or widening past the
+`unscoped-tenant-query` rule's current `TENANT_SCOPED_MODELS` list toward
+the full `OPERATIONAL_TENANT_TABLES`.
 
 ## Control-plane elevation
 

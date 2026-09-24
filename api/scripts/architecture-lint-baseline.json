@@ -338,25 +338,25 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 198,
+    "line": 200,
     "snippet": "const orders = await prisma.purchaseOrder.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 324,
+    "line": 326,
     "snippet": "const itemRows = await prisma.item.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 512,
+    "line": 514,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
     "rule": "bare-status-write",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 512,
+    "line": 514,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
@@ -370,12 +370,6 @@
     "file": "src/routes/operations-extension.ts",
     "line": 417,
     "snippet": "await prisma.expiryAlert.updateMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 593,
-    "snippet": "const current = await prisma.expiryAlert.findUnique({ where: { id: req.params.id } });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -542,13 +536,13 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1815,
+    "line": 1823,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1945,
+    "line": 1953,
     "snippet": "value           Float?"
   }
 ]

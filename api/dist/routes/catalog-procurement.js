@@ -129,7 +129,7 @@ router.get('/reorder-rules', async (req, res) => {
     if (!persistence_js_1.databaseEnabled) {
         return res.json({ rules: (0, reorder_store_js_1.listReorderRules)(locationId) });
     }
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId }, orderBy: { createdAt: 'asc' } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'asc' } });
     return res.json({ rules });
 });
 router.put('/reorder-rules/:itemId', async (req, res) => {
@@ -150,10 +150,13 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
             return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
         }
     }
+    const location = await db_js_1.prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
+    if (!location)
+        return res.status(404).json({ message: 'Location not found.' });
     const rule = await db_js_1.prisma.reorderRule.upsert({
         where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
         update: { minQty, targetQty },
-        create: { itemId: req.params.itemId, locationId, minQty, targetQty },
+        create: { itemId: req.params.itemId, locationId, minQty, targetQty, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID },
         include: { item: true },
     });
     return res.json({ rule });
@@ -536,7 +539,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
         return res.status(404).json({ message: 'Location not found.' });
     const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
     const since = new Date(Date.now() - windowDays * 86_400_000);
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     const itemIds = rules.map((rule) => rule.itemId);
     if (!itemIds.length)
         return res.json({ locationId, windowDays, suggestions: [], groups: [], skipped: [], note: 'No reorder rules are set for this location.' });

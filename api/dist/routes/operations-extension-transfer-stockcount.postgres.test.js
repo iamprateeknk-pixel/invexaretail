@@ -73,10 +73,10 @@ async function makeFixture() {
     const token = (0, otp_auth_js_1.generateJWT)(userId, companyId);
     return { companyId, userId, locationId, destLocationId, itemId, lotId: lot.id, token };
 }
-integration('GET /intelligence/:locationId: another company\'s admin never sees this location\'s stock-count history, even though the location check itself is bypassed for admins', async () => {
+integration('GET /intelligence/:locationId: another company\'s admin sees neither the reorder rule nor the stock-count history behind it, even though the location check itself is bypassed for admins', async () => {
     const a = await makeFixture();
     const b = await makeFixture();
-    await db_js_1.prisma.reorderRule.create({ data: { itemId: a.itemId, locationId: a.locationId, minQty: 5, targetQty: 20 } });
+    await db_js_1.prisma.reorderRule.create({ data: { itemId: a.itemId, locationId: a.locationId, minQty: 5, targetQty: 20, companyId: a.companyId } });
     await db_js_1.prisma.stockCount.create({
         data: { itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, physicalQty: 8, bookQty: 20, submittedById: a.userId, companyId: a.companyId },
     });
@@ -84,8 +84,7 @@ integration('GET /intelligence/:locationId: another company\'s admin never sees 
         const cross = await call('GET', `/intelligence/${a.locationId}`, b.token);
         strict_1.default.equal(cross.status, 200, 'the permissive location check still lets an admin of any company through');
         const crossRec = cross.body.intelligence.recommendations.find((r) => r.itemId === a.itemId);
-        strict_1.default.ok(crossRec, 'the reorder rule itself is not company-scoped, only the count history behind it');
-        strict_1.default.equal(crossRec.confidence, 'LOW', 'with no visible count history, confidence must fall back to LOW rather than reflect another company\'s data');
+        strict_1.default.equal(crossRec, undefined, 'ReorderRule is now company-scoped too - another company\'s admin must not see this reorder rule at all, not even with a degraded confidence');
         const own = await call('GET', `/intelligence/${a.locationId}`, a.token);
         strict_1.default.equal(own.status, 200);
         const ownRec = own.body.intelligence.recommendations.find((r) => r.itemId === a.itemId);

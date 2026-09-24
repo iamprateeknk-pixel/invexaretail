@@ -575,7 +575,7 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
     if (status === 'RESOLVED' && reason.length < 5)
         return res.status(400).json({ message: 'A resolution reason of at least 5 characters is required.' });
-    const current = await db_js_1.prisma.expiryAlert.findUnique({ where: { id: req.params.id } });
+    const current = await db_js_1.prisma.expiryAlert.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!current)
         return res.status(404).json({ message: 'Expiry alert not found.' });
     if (!canAccessLocation(req, current.locationId))
@@ -604,7 +604,7 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
     const requestedQty = Number(req.body.quantity);
     try {
         const result = await db_js_1.prisma.$transaction(async (tx) => {
-            const alert = await tx.expiryAlert.findUnique({ where: { id: req.params.id } });
+            const alert = await tx.expiryAlert.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
             if (!alert)
                 throw new Error('Expiry alert not found.');
             if (!['ACTIVE', 'ACKNOWLEDGED'].includes(String(alert.status)))
@@ -699,7 +699,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
         expiryDate: lot.expiryDate?.toISOString() ?? null,
     })));
     const expiryActions = (0, intelligence_actions_js_1.buildExpiryActionRecommendations)(lotInputs);
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { itemId: req.params.itemId } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { itemId: req.params.itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     const networkLedger = await db_js_1.prisma.stockLedger.findMany({
         where: { itemId: req.params.itemId },
         select: { locationId: true, onHand: true, location: { select: { name: true } } },
@@ -779,7 +779,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
     const [rules, ledger, counts, dismissals] = await Promise.all([
-        db_js_1.prisma.reorderRule.findMany({ where: { locationId: req.params.locationId }, include: { item: true } }),
+        db_js_1.prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { item: true } }),
         db_js_1.prisma.stockLedger.findMany({
             select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, location: { select: { name: true, type: true } } },
         }),

@@ -668,3 +668,30 @@ tracks how much of it):
   (the in-memory one wins via `??`, so fixing only the Postgres branch
   would have left it open) and on its per-line SKU-to-Item lookup. Proven
   with two new real-Postgres test files (7/7 and 2/2 passing).
+- Post-Week-20 follow-up 10 (`api/prisma/schema.prisma`,
+  `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, no
+  dedicated ADR - see
+  `docs/week29-expiryalert-reorderrule-bare-id-remediation.md`): the
+  seventh and, for the models named across this remediation, final slice
+  - `ExpiryAlert`'s remaining call sites (it already had a real
+  `companyId` since Week 22) and `ReorderRule`, which needed its own
+  migration first (`20261102090000_reorder_rule_company_scope`,
+  backfilled through the rule's own `Location` since, unlike `Supplier`,
+  it has one). Worst finding: `PUT /reorder-rules/:itemId` had **no
+  location-ownership check of any kind** - any admin of any company could
+  set reorder quantities for another company's location and item, a
+  cross-tenant write, not just a read leak - fixed with an explicit
+  `Location` ownership check before the upsert. Also fixed: `GET
+  /reorder-rules` and the reorder-rule queries inside `GET
+  /items/:itemId/forecast`/`GET /intelligence/:locationId` (the last
+  closing the exact gap Week 26's own writeup named and left open); `PATCH
+  /expiry-alerts/:id/status` and `POST /expiry-alerts/:id/write-off`
+  gained a direct `companyId` filter, independent of the
+  `canAccessLocation` fallback. Proven with two new real-Postgres test
+  files (3/3 and 2/2 passing); Week 26's own `GET /intelligence/:locationId`
+  test was updated to assert the reorder rule is now invisible
+  cross-tenant, not just degraded. With this slice every model named
+  across the remediation's seven slices has its route-level bare-id call
+  sites fixed - a further slice would be net-new scope (`core.ts`'s
+  in-memory Transfer/StockCount records, or widening past
+  `unscoped-tenant-query`'s current `TENANT_SCOPED_MODELS` list).
