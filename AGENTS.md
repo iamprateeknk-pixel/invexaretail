@@ -857,3 +857,37 @@ tracks how much of it):
   under real traffic - all need either a real staging environment or human
   decisions (target volume, acceptable budgets) outside this session's
   authority.
+- Post-merge follow-up 4 (`api/src/lib/stock-take-campaign.test.ts`,
+  `api/src/lib/orders-idempotent-replay.postgres.test.ts`,
+  `.github/workflows/ci.yml`, no dedicated ADR - see
+  `docs/week36-partial-incomplete-remediation.md`): closes what was
+  safely verifiable of three "Partial/Incomplete" gaps. (1) Directly
+  asserted the Week 12 guide's exact fair-assignment acceptance numbers
+  (100 items/3 users -> 33/33/34; daily cap 20 -> 20/20/20 then 20/20/20
+  with no duplicate/missing product) against the existing
+  `planDailyAllocation` - both passed unchanged, a coverage gap not a code
+  defect. (2) Added real-Postgres coverage for Week 15's "replay twice
+  creates one order" requirement (already correctly implemented via
+  `orders.ts`'s `ingestLocks` + `findOrderByExternalReference`, but only
+  proven in memory mode before); found and documented, not fixed, a real
+  gap while doing this - no DB-level unique constraint on `(channel,
+  externalReference)` means this is safe for a single Node process but
+  not proven safe across multiple API replicas, and fixing that needs a
+  schema migration this sandbox has no Postgres instance to rehearse
+  safely. (3) The most consequential finding: an audit while looking for
+  Postgres coverage found `.github/workflows/ci.yml` only ever ran 8 of
+  the repository's 22 `*.postgres.test.ts` files - the other 14, including
+  the entire bare-id tenant-scope remediation's proof suite and several
+  files AGENTS.md itself names as "the reference" for a required-tests
+  rule, only ever ran by hand, never in CI. Wired all 14 in as explicit
+  steps (pure CI-config change, no test code altered) - a real fix with
+  real risk: any of them could have silently drifted from current schema/
+  code and CI running them again for the first time in a long while may
+  surface genuine unrelated failures, which is the correct outcome of
+  closing this gap, not a reason it shouldn't have been closed. `npm
+  test`: 569 passing, 0 failing; `architecture-lint`: 0 new violations;
+  `contract:validate`/`contract:check-drift`: both pass. The newly-wired
+  CI steps and the new Postgres test file could not be verified against
+  real Postgres in this sandbox (no `DATABASE_URL`/`TEST_DATABASE_URL`
+  here) - they depend on this PR's own CI run, which does have a real
+  Postgres service container, to prove out.

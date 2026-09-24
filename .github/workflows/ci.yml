@@ -131,6 +131,67 @@ jobs:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      # The steps above were the only *.postgres.test.ts files actually
+      # wired into CI - a `find src -name "*.postgres.test.ts"` audit found
+      # 14 more real-Postgres test files that exist in the repo (several
+      # AGENTS.md itself cites as "the reference" for a rule) but silently
+      # never ran anywhere except a developer's own machine with
+      # TEST_DATABASE_URL set by hand. Wiring them in is mechanical - no
+      # code changed, only what CI executes - but closes a real gap: this
+      # covers the entire bare-id tenant-scope remediation's proof suite,
+      # the staged-import/reporting/outbox-retention integration tests, and
+      # the opening-stock-import decimal/timestamp fix's regression test.
+      - name: Run staged import lifecycle coverage against real Postgres (Week 11)
+        run: npx tsx --test src/lib/import-commit-service.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run reporting/exception-dashboard coverage against real Postgres (Week 12)
+        run: npx tsx --test src/lib/reporting-repository.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run outbox retention/pruning coverage against real Postgres (Week 14)
+        run: npx tsx --test src/lib/outbox-retention.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run outbox lag/poison business-SLI coverage against real Postgres (Week 19)
+        run: npx tsx --test src/lib/event-bus-outbox-health.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run opening-stock import expiry-date fix regression against real Postgres
+        run: npx tsx --test src/lib/persistence-opening-stock-expiry.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run marketplace-order idempotent-replay coverage against real Postgres (Week 15)
+        run: npx tsx --test src/lib/orders-idempotent-replay.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
+      - name: Run bare-id remediation coverage against real Postgres (Order/PO/Transfer/StockCount/Returns/Exceptions/Item/Supplier/ExpiryAlert/ReorderRule/canAccessLocation)
+        run: |
+          npx tsx --test src/routes/operations-extension-orders.postgres.test.ts
+          npx tsx --test src/routes/operations-extension-connectors.postgres.test.ts
+          npx tsx --test src/routes/operations-extension-returns-exceptions.postgres.test.ts
+          npx tsx --test src/routes/operations-extension-transfer-stockcount.postgres.test.ts
+          npx tsx --test src/routes/operations-extension-canaccesslocation.postgres.test.ts
+          npx tsx --test src/routes/operations-extension-expiry-alerts.postgres.test.ts
+          npx tsx --test src/routes/catalog-procurement-purchase-orders.postgres.test.ts
+          npx tsx --test src/routes/catalog-procurement-item-supplier.postgres.test.ts
+          npx tsx --test src/routes/catalog-procurement-reorder-rules.postgres.test.ts
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
 
