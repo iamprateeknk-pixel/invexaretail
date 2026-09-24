@@ -715,6 +715,29 @@ tracks how much of it):
   slice. Proven with a unit test in `src/lib/repository.test.ts`; no
   schema/migration change (these are in-memory types, not Prisma
   models).
+- Post-Week-20 follow-up 12 (`api/src/lib/repository.ts`,
+  `routes/core.ts`, no dedicated ADR - see
+  `docs/week31-core-transfer-count-companyid-scoping.md`): the ninth
+  slice, and the "natural next increment" follow-up 11 named. Every one
+  of `core.ts`'s ~18 `listTransfers().find(...)`/`listCounts().find(...)`
+  lookups converted to two new functions, `findTransferForCompany`/
+  `findCountForCompany`, checking the record's own `companyId` directly -
+  fail-safe-if-unknown, the same pattern as follow-up 8's centralized
+  `canAccessLocation` fix (a record whose `companyId` is known and
+  mismatches the caller's is denied; one with no `companyId` yet, from
+  before follow-up 11's field existed, falls through unchanged). This is
+  an independent second layer alongside the location-ownership check
+  these lookups already sit behind, not a fix for an active leak -
+  `core.ts`'s Transfer/StockCount handling was already sound per follow-up
+  7's investigation. One post-mutation re-fetch was left unconverted,
+  safe by construction (re-reads an id already resolved earlier in the
+  same request). Proven with a new memory-mode test file (3/3 passing,
+  including a fail-safe-if-unknown regression test) - no
+  `TEST_DATABASE_URL` needed since these are in-memory records, not a
+  Prisma model. With this slice, every model named across the bare-id
+  remediation has both its route-level Prisma call sites and its
+  in-memory mirror lookups (where one exists) scoped by a real
+  `companyId`, independent of the location-ownership map.
 - Merge with `main` (34 commits, no dedicated ADR): this branch had
   diverged from `main` by 34 commits of independent work - Cloudflare/
   Railway deploy configuration (`api/railway.worker.json`,

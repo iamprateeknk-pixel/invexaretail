@@ -380,6 +380,40 @@ wanting a second, independent layer. Proven with a unit test in
 `src/lib/repository.test.ts`. See
 `docs/week30-transfer-count-inmemory-companyid.md`.
 
+## Bare-id call-site migration - ninth slice: core.ts's Transfer/StockCount lookups
+
+Ninth slice: the "natural next increment" the eighth slice named. Every
+one of `core.ts`'s ~18 `listTransfers().find(...)`/`listCounts().find(...)`
+lookups converted to two new `lib/repository.ts` functions,
+`findTransferForCompany`/`findCountForCompany`, which check the record's
+own `companyId` directly - fail-safe-if-unknown, the same pattern as Week
+27's centralized `canAccessLocation` fix (a record whose `companyId` is
+known and mismatches the caller's is denied; a record with no
+`companyId` yet falls through unchanged, so a pre-existing record from
+before the eighth slice can never be false-denied). This is an
+independent second layer alongside the location-ownership check these
+lookups already sit behind - `core.ts`'s Transfer/StockCount handling was
+never actually vulnerable, so this closes the last standing structural
+gap rather than an active leak. One re-fetch
+(`POST /transfers/:transferId/receive`'s post-mutation lookup) was left
+unconverted, safe by construction since it re-reads a `transferId`
+already resolved through a fixed lookup earlier in the same request.
+Proven with `src/routes/core-transfer-count-companyid.test.ts` (3/3
+passing, memory-mode - no `TEST_DATABASE_URL` needed since these are
+in-memory records, not a Prisma model), including a fail-safe-if-unknown
+regression test. See
+`docs/week31-core-transfer-count-companyid-scoping.md`.
+
+With this slice, every model named across the bare-id remediation now has
+both its route-level Prisma call sites *and* its in-memory mirror lookups
+(where one exists) scoped by a real `companyId`, independent of the
+location-ownership map. Remaining backlog is net-new scope beyond this
+remediation's original charter: auditing whether the location-ownership
+map itself is reliably populated for every location-creation path (Week
+27's standing follow-up), or widening past the `unscoped-tenant-query`
+lint rule's current `TENANT_SCOPED_MODELS` list toward the full
+`OPERATIONAL_TENANT_TABLES`.
+
 ## Control-plane elevation
 
 No generic bypass flag exists in `TenantContext` (`lib/tenant-context.ts`) -

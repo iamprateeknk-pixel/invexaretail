@@ -738,7 +738,7 @@ router.get('/counts', async (req, res) => {
 router.post('/stock-counts/:countId/reconciliation/ack', async (req, res) => {
     if (!(0, count_lifecycle_js_1.canManageCountWork)(req.user.role))
         return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
-    const count = (0, repository_js_1.listCounts)().find((candidate) => candidate.id === firstParam(req.params.countId));
+    const count = (0, repository_js_1.findCountForCompany)(firstParam(req.params.countId), req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!count)
         return res.status(404).json({ message: 'Stock count was not found.' });
     if (!(0, inventory_js_1.canAccessLocation)(accessContext(req.user), count.locationId))
@@ -1002,7 +1002,7 @@ router.patch('/stock-counts/:countId/review', async (req, res) => {
     }
     try {
         const countId = firstParam(req.params.countId);
-        const current = (0, repository_js_1.listCounts)().find((count) => count.id === countId);
+        const current = (0, repository_js_1.findCountForCompany)(countId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         if (!current)
             return res.status(404).json({ message: 'Stock count was not found.' });
         if (current.status !== 'PENDING_REVIEW')
@@ -1444,7 +1444,7 @@ function canModifyTransfer(context, userId, transfer) {
 router.patch('/transfers/:transferId', async (req, res) => {
     const context = accessContext(req.user);
     const transferId = firstParam(req.params.transferId);
-    const current = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const current = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!current)
         return res.status(404).json({ message: 'Transfer was not found.' });
     if (!canModifyTransfer(context, req.user.id, current))
@@ -1491,7 +1491,7 @@ router.patch('/transfers/:transferId', async (req, res) => {
 router.delete('/transfers/:transferId', async (req, res) => {
     const context = accessContext(req.user);
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     if (!canModifyTransfer(context, req.user.id, transfer))
@@ -1526,7 +1526,7 @@ router.post('/replenishment-actions/transfer', async (req, res) => {
     if (!(0, inventory_js_1.canAccessLocation)(context, sourceLocationId) || !(0, inventory_js_1.canAccessLocation)(context, destinationLocationId))
         return res.status(403).json({ message: 'Location access denied.' });
     const transferId = `replenishment-${(0, node_crypto_1.createHash)('sha1').update(requestId).digest('hex').slice(0, 24)}`;
-    const existing = (0, repository_js_1.listTransfers)().find((entry) => entry.id === transferId);
+    const existing = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (existing)
         return res.json({ success: true, duplicate: true, transfer: existing });
     const item = (0, repository_js_1.listItems)().find((entry) => entry.id === itemId);
@@ -1575,7 +1575,7 @@ router.post('/replenishment-actions/transfer', async (req, res) => {
 router.patch('/transfers/:transferId/status', async (req, res) => {
     const context = accessContext(req.user);
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     const nextStatus = req.body.status;
     if (!transfer) {
         return res.status(404).json({ message: 'Transfer was not found.' });
@@ -2821,7 +2821,7 @@ async function savedPickSlips(transferId) {
 }
 router.get('/picker/transfers/:transferId', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     const context = accessContext(req.user);
@@ -2875,7 +2875,7 @@ async function pooledPickState(transfer, itemId) {
     return { item, remaining: Math.max(0, Math.round((requestedTotal - pickedTotal) * 1000) / 1000), lots };
 }
 router.post('/picker/transfers/:transferId/allocation-preview', async (req, res) => {
-    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === firstParam(req.params.transferId));
+    const transfer = (0, repository_js_1.findTransferForCompany)(firstParam(req.params.transferId), req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     const context = accessContext(req.user);
     if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId))
         return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
@@ -2893,7 +2893,7 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req, res)
 });
 router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     const context = accessContext(req.user);
     if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId))
         return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
@@ -3019,7 +3019,7 @@ router.post('/transfers/:transferId/confirm', async (req, res) => {
     if (!isOperationalAdmin(req.user.role))
         return res.status(403).json({ message: 'Only admins can confirm transfer-out.' });
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status))
@@ -3068,7 +3068,7 @@ router.get('/transfers/:transferId/export.xls', async (req, res) => {
     if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user.role))
         return res.status(403).json({ message: 'Transfer export is restricted to admins and auditors.' });
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((entry) => entry.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     const itemMap = new Map((0, repository_js_1.listItems)().map((item) => [item.id, item]));
@@ -3237,7 +3237,7 @@ router.get('/transfers/:transferId/reprint-audit', (req, res) => {
 });
 router.get('/transfers/:transferId/label', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer) {
         return res.status(404).json({ message: 'Transfer not found.' });
     }
@@ -3269,7 +3269,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
     if (!(0, receipt_validation_js_1.canReceiveTransfer)(req.user.role))
         return res.status(403).json({ message: 'Only operational admins and destination store users can receive transfers.' });
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer not found.' });
     if (!(0, inventory_js_1.canAccessLocation)(accessContext(req.user), transfer.destinationLocationId)) {
@@ -3564,7 +3564,7 @@ router.delete('/items/:itemId/photos/:photoId', async (req, res) => {
 });
 router.post('/transfers/:transferId/evidence', upload.single('evidence'), async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     const context = accessContext(req.user);
@@ -3590,7 +3590,7 @@ router.post('/transfers/:transferId/evidence', upload.single('evidence'), async 
 });
 router.get('/transfers/:transferId/evidence', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     const context = accessContext(req.user);
@@ -3606,7 +3606,7 @@ router.get('/transfers/:transferId/evidence', async (req, res) => {
 });
 router.get('/transfers/:transferId/evidence/:evidenceId', async (req, res) => {
     const transferId = firstParam(req.params.transferId);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (!transfer)
         return res.status(404).json({ message: 'Transfer was not found.' });
     const context = accessContext(req.user);
@@ -3648,7 +3648,7 @@ router.post('/picker-tasks', (req, res) => {
 });
 router.post('/picker-tasks/complete', async (req, res) => {
     const context = accessContext(req.user);
-    const transfer = (0, repository_js_1.listTransfers)().find((record) => record.id === req.body.transferId);
+    const transfer = (0, repository_js_1.findTransferForCompany)(req.body.transferId, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
     if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !(0, inventory_js_1.canAccessLocation)(context, transfer.sourceLocationId)) {
         return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
     }
