@@ -150,8 +150,31 @@ which would confirm the row exists), while the owning company's own
 access is unaffected. Reuse this harness's `withServer`/`makeFixture`
 pattern for every subsequent slice rather than writing a new one.
 
-Remaining, not yet migrated: `PurchaseOrder`/`Transfer`/`ExceptionCase`/
-`ReturnRequest`/`StockCount`/`ExpiryAlert`/`Item` call sites across
+## Bare-id call-site migration - second slice: PurchaseOrder routes
+
+Second slice: every `PurchaseOrder`-model call site in
+`routes/catalog-procurement.ts`. Worse than Week 23's Order findings in
+one respect - `GET /purchase-orders` had **no tenant filter at all**
+(`_req`, an unused parameter, was the tell), so any authenticated user of
+any company saw every company's purchase orders, not just a cross-tenant
+id needing to be guessed. Also fixed: `PATCH /purchase-orders/:id/status`,
+`POST /purchase-orders/:id/receive`, `POST /purchase-orders/:id/invoices`
+(each a bare-id `findUnique` -> `findFirst` with `companyId`), and `GET
+/purchase-orders/:id/invoices` (scoped through the `purchaseOrder`
+relation, since `SupplierInvoice` itself has no `companyId` column).
+`unscoped-tenant-query` baseline: 112 -> 108. Proven with
+`src/routes/catalog-procurement-purchase-orders.postgres.test.ts` (4/4
+passing), reusing Week 23's harness. See
+`docs/week24-purchase-order-bare-id-remediation.md`.
+
+New finding, not fixed this slice: `GET /suppliers/:id/score` looks a
+`Supplier` up by bare id with no tenant check, and `Supplier` has no
+`companyId` column at all (only the constant `tenantId`) - its own
+tenant-scope migration is a prerequisite, out of scope for a
+"PurchaseOrder routes" slice.
+
+Remaining, not yet migrated: `Transfer`/`ExceptionCase`/`ReturnRequest`/
+`StockCount`/`ExpiryAlert`/`Item`/`Supplier` call sites across
 `routes/operations-extension.ts`, `routes/catalog-procurement.ts`,
 `lib/orders.ts`, `lib/persistence.ts`, and various import-lifecycle
 internals (many of the latter are already scoped one level up by their

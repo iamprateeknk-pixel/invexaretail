@@ -543,3 +543,22 @@ tracks how much of it):
   revealing that another company's row exists - while the owning company's
   own access is unaffected. This harness is meant to be reused, not
   rewritten, by the next slice of the bare-id remediation.
+- Post-Week-20 follow-up 5 (`routes/catalog-procurement.ts`, no dedicated
+  ADR - see `docs/week24-purchase-order-bare-id-remediation.md`): the
+  second slice of the bare-id remediation - every `PurchaseOrder`-model
+  call site in `routes/catalog-procurement.ts`. Worse than slice 1's Order
+  findings in one respect: `GET /purchase-orders` took `_req` (an unused
+  parameter) and returned every company's purchase orders with **no
+  tenant filter at all**, not just a bare-id lookup needing one added.
+  Also fixed: `PATCH /purchase-orders/:id/status`, `POST
+  /purchase-orders/:id/receive`, `POST /purchase-orders/:id/invoices`
+  (bare-id `findUnique` -> `findFirst` with `companyId`), and `GET
+  /purchase-orders/:id/invoices` (scoped through the `purchaseOrder`
+  relation, since `SupplierInvoice` has no `companyId` column of its
+  own). `unscoped-tenant-query` baseline: 112 -> 108. Proven with
+  `src/routes/catalog-procurement-purchase-orders.postgres.test.ts`
+  (4/4 passing), reusing follow-up 4's harness rather than writing a new
+  one. New finding, not fixed: `GET /suppliers/:id/score` looks a
+  `Supplier` up by bare id, and `Supplier` has no `companyId` column at
+  all - its own tenant-scope migration is a prerequisite, out of scope
+  here.

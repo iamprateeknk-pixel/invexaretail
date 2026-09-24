@@ -240,8 +240,9 @@ router.get('/suppliers/:id/score', async (req, res) => {
         priceVarianceByItem,
     });
 });
-router.get('/purchase-orders', async (_req, res) => {
+router.get('/purchase-orders', async (req, res) => {
     const purchaseOrders = await db_js_1.prisma.purchaseOrder.findMany({
+        where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID },
         include: { supplier: true, lines: { include: { item: true } } },
         orderBy: { createdAt: 'desc' },
     });
@@ -307,7 +308,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
             return res.status(409).json({ message: 'This requestId was already used for a different purchase order.' });
         return res.json({ ...priorReceipt.result, duplicate: true });
     }
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     if (!(0, po_lifecycle_js_1.isReceivablePo)(order.status))
@@ -483,7 +484,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
     const to = req.body.status;
     if (!(0, po_lifecycle_js_1.isPoStatus)(to))
         return res.status(400).json({ message: 'Invalid purchase order status.' });
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
@@ -629,7 +630,7 @@ router.get('/purchase-orders/:id/invoices', async (req, res) => {
     if (!requireReportingRole(req, res))
         return;
     const invoices = await db_js_1.prisma.supplierInvoice.findMany({
-        where: { purchaseOrderId: req.params.id },
+        where: { purchaseOrderId: req.params.id, purchaseOrder: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } },
         include: { lines: true },
         orderBy: { createdAt: 'desc' },
     });
@@ -649,7 +650,7 @@ router.post('/purchase-orders/:id/invoices', async (req, res) => {
         .filter((line) => line.itemId && Number.isFinite(line.invoicedQty) && line.invoicedQty > 0);
     if (!normalizedLines.length)
         return res.status(400).json({ message: 'Every line requires an item and a positive invoiced quantity.' });
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     const poLines = order.lines.map((line) => ({ itemId: line.itemId, orderedQty: line.quantity, receivedQty: line.receivedQty, unitCost: line.unitCost }));
