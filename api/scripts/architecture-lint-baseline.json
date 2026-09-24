@@ -362,25 +362,13 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 539,
-    "snippet": "prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 545,
-    "snippet": "prisma.transfer.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 721,
+    "line": 723,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 846,
+    "line": 848,
     "snippet": "const items = await prisma.item.findMany({ include: { tags: true } });"
   },
   {
@@ -418,12 +406,6 @@
     "file": "src/routes/operations-extension.ts",
     "line": 680,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 782,
-    "snippet": "prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since } }, include: { item: true }, orderBy: { countDate: 'desc' }, t"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -496,12 +478,6 @@
     "file": "src/routes/operations-extension.ts",
     "line": 2253,
     "snippet": "const updated = await prisma.exceptionCase.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 2310,
-    "snippet": "const transfer = await prisma.transfer.findUnique({ where: { id: transferId }, include: { lines: true } }).catch(() => null);"
   },
   {
     "rule": "unscoped-tenant-query",

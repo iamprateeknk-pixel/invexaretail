@@ -768,7 +768,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
         db_js_1.prisma.stockLedger.findMany({
             select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, location: { select: { name: true, type: true } } },
         }),
-        db_js_1.prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since } }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
+        db_js_1.prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
         db_js_1.prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
     ]);
     const dismissedItemIds = new Set(dismissals.filter((d) => d.type === 'REPLENISHMENT').map((d) => d.itemId));
@@ -2386,7 +2386,7 @@ router.post('/pick-waves/:id/scan', async (req, res) => {
             return res.status(400).json({ message: decision.message, code: decision.code, expected: walkOrder[scannedIndex] ?? null, walkOrder });
         return res.json({ ok: true, nextBin: walkOrder[scannedIndex + 1] ?? null, walkOrder, scannedIndex: scannedIndex + 1 });
     }
-    const wave = await db_js_1.prisma.pickWave.findUnique({ where: { id: req.params.id } });
+    const wave = await db_js_1.prisma.pickWave.findFirst({ where: { id: req.params.id, location: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } } });
     if (!wave)
         return res.status(404).json({ message: 'Pick wave not found.' });
     if (!canAccessLocation(req, wave.locationId))
@@ -2394,7 +2394,7 @@ router.post('/pick-waves/:id/scan', async (req, res) => {
     const transferIds = Array.isArray(wave.transferIds) ? wave.transferIds.map(String) : [];
     const walkBins = [];
     for (const transferId of transferIds) {
-        const transfer = await db_js_1.prisma.transfer.findUnique({ where: { id: transferId }, include: { lines: true } }).catch(() => null);
+        const transfer = await db_js_1.prisma.transfer.findFirst({ where: { id: transferId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } }).catch(() => null);
         if (!transfer)
             continue;
         for (const line of transfer.lines) {

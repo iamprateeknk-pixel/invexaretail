@@ -592,3 +592,31 @@ tracks how much of it):
   (7/7 passing, including a regression test that a newly created exception
   case is stamped with the caller's real companyId, not the schema
   default), reusing follow-up 4's harness.
+- Post-Week-20 follow-up 7 (`routes/operations-extension.ts`,
+  `routes/catalog-procurement.ts`, no dedicated ADR - see
+  `docs/week26-transfer-stockcount-bare-id-remediation.md`): the fourth
+  slice of the bare-id remediation - every direct `Transfer`/`StockCount`
+  Prisma call site in these two files. Traced the actual root cause behind
+  every slice's findings so far while scoping this one: `core.ts`'s
+  in-memory Transfer/StockCount lookups are already protected by
+  `lib/inventory.ts`'s `canAccessLocation`, a *different*, stricter
+  function than `operations-extension.ts`'s own local one of the same
+  name - the former checks `companyOwnsLocation` and denies
+  unconditionally even for `ADMIN`, the latter grants
+  `ADMIN`/`ADMIN_USER`/`AUDITOR` unconditional access with no company
+  check at all. Fixed: `GET /intelligence/:locationId` (stock-count
+  history no longer leaks to a cross-tenant admin even though the
+  permissive location check still lets them reach the endpoint); `GET
+  /purchase-orders/plan` (had **no ownership check of any kind** on its
+  `locationId` - worse than any prior slice's finding - fixed with an
+  explicit `Location` ownership check up front); `POST
+  /pick-waves/:id/scan` (`PickWave` scoped through its `location`
+  relation, since it has no `companyId` column of its own). Proven with
+  `src/routes/operations-extension-transfer-stockcount.postgres.test.ts`
+  (3/3 passing). New findings, not fixed: the permissive
+  `canAccessLocation` itself (flagged as the highest-leverage next step -
+  fixing it once closes this bug class for every route using it, instead
+  of patching each downstream query one at a time); `ReorderRule` has no
+  `companyId` column at all; `core.ts`'s in-memory Transfer/StockCount
+  records carry no `companyId` field, relying entirely on the in-memory
+  ownership map rather than a real column.

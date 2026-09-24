@@ -198,12 +198,50 @@ that a newly created exception case is stamped with the caller's real
 companyId rather than the schema default. See
 `docs/week25-returnrequest-exceptioncase-bare-id-remediation.md`.
 
-Remaining, not yet migrated: `Transfer`/`StockCount`/`ExpiryAlert`/`Item`/
-`Supplier` call sites across `routes/operations-extension.ts`,
+## Bare-id call-site migration - fourth slice: Transfer and StockCount routes
+
+Fourth slice: every direct `prisma.transfer.*`/`prisma.stockCount.*` call
+site in `routes/operations-extension.ts` and `routes/catalog-procurement.ts`.
+`core.ts` was checked and found already sound for these two models - its
+in-memory `listTransfers()`/`listCounts()` lookups go through
+`lib/inventory.ts`'s `canAccessLocation`, a stricter, already company-aware
+function (calls `companyOwnsLocation` and denies unconditionally on
+failure, even for `ADMIN`), unlike `operations-extension.ts`'s own local
+`canAccessLocation` which grants `ADMIN`/`ADMIN_USER`/`AUDITOR`
+unconditional access with no company check at all - the actual root cause
+behind every finding in slices 1-4. Fixed this slice: `GET
+/intelligence/:locationId` (`stockCount.findMany` gained a direct
+`companyId` filter - the permissive location check itself still lets a
+cross-tenant admin reach the endpoint, but the query behind it no longer
+leaks another company's stock-count history once there); `GET
+/purchase-orders/plan` (had **no ownership check of any kind** on its
+`locationId` query param, the worst finding of this slice - fixed with an
+explicit `Location` ownership check before any other query runs, plus a
+direct `companyId` filter on its `transfer.findMany`); `POST
+/pick-waves/:id/scan` (`pickWave.findUnique` scoped through its `location`
+relation since `PickWave` has no `companyId` column of its own, and the
+per-transfer `findUnique` inside it converted to `findFirst` with a direct
+`companyId` filter). Proven with
+`src/routes/operations-extension-transfer-stockcount.postgres.test.ts`
+(3/3 passing), reusing the Week 23 harness (parameterized over two
+routers this time). New findings, not fixed: `operations-extension.ts`'s
+own permissive `canAccessLocation` itself (the highest-leverage next
+step - fixing it once would close this class of bug for every route that
+uses it); `ReorderRule` has no `companyId` column at all, so reorder-rule
+visibility in `GET /intelligence/:locationId` is still not company-scoped,
+only the stock-count history behind it; `core.ts`'s in-memory
+`TransferRecord`/`CountRecord` types carry no `companyId` field at all,
+so their protection depends entirely on the in-memory
+`companyOwnsLocation` ownership map staying correct, not a real column.
+See `docs/week26-transfer-stockcount-bare-id-remediation.md`.
+
+Remaining, not yet migrated: `ExpiryAlert`/`Item`/`Supplier`/`ReorderRule`
+call sites across `routes/operations-extension.ts`,
 `routes/catalog-procurement.ts`, `lib/orders.ts`, `lib/persistence.ts`, and
 various import-lifecycle internals (many of the latter are already scoped
 one level up by their caller and are lower priority than direct route
-handlers).
+handlers). `operations-extension.ts`'s permissive `canAccessLocation` is
+the standing, highest-priority structural fix behind most of these.
 
 ## Control-plane elevation
 

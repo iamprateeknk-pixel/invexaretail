@@ -528,6 +528,8 @@ router.get('/purchase-orders/plan', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
   const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
   const since = new Date(Date.now() - windowDays * 86_400_000);
 
@@ -543,7 +545,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
       select: { itemId: true, quantity: true, receivedQty: true },
     }),
     prisma.transfer.findMany({
-      where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] } },
+      where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
       include: { lines: true },
     }),
     prisma.stockMovement.findMany({
