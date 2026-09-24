@@ -478,7 +478,7 @@ async function persistOpeningStockImport(preview, fileName, importedBy, options)
                 const chunk = lotsWithExpiry.slice(offset, offset + 400);
                 await tx.$executeRaw(client_1.Prisma.sql `
           UPDATE "Lot" SET "expiryDate" = CASE id
-            ${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `WHEN ${lot.id} THEN ${new Date(lot.expiryDate)}`), ' ')}
+            ${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `WHEN ${lot.id} THEN ${new Date(lot.expiryDate)}::timestamp`), ' ')}
           END, "updatedAt" = NOW()
           WHERE id IN (${client_1.Prisma.join(chunk.map((lot) => client_1.Prisma.sql `${lot.id}`))})
         `);
