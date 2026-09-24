@@ -650,7 +650,7 @@ export async function persistCountDeletion(id: string): Promise<void> {
   await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
 
-export async function persistCount(count: CountRecord): Promise<void> {
+export async function persistCount(count: CountRecord, companyId?: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.stockCount.upsert({
@@ -672,6 +672,7 @@ export async function persistCount(count: CountRecord): Promise<void> {
       submittedById: count.submittedBy,
       parentCountId: count.parentCountId ?? null,
       requestId: count.requestId ?? null,
+      companyId: companyId ?? DEFAULT_COMPANY_ID,
     } as never,
   });
 }
@@ -836,7 +837,7 @@ export async function persistAssignmentSubmitted(assignmentId: string, countId: 
   await prisma.countAssignment.update({ where: { id: assignmentId }, data: { status: 'SUBMITTED', countId } });
 }
 
-export async function persistTransfer(transfer: TransferRecord): Promise<void> {
+export async function persistTransfer(transfer: TransferRecord, companyId?: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
@@ -851,6 +852,7 @@ export async function persistTransfer(transfer: TransferRecord): Promise<void> {
       status: status as any,
       notes: transfer.notes,
       cartonCount: transfer.cartonCount ?? null,
+      companyId: companyId ?? DEFAULT_COMPANY_ID,
       lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
     },
   });

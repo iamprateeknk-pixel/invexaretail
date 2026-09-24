@@ -79,6 +79,7 @@ export declare function retryBackorderAllocation(orderId: string, ttlMinutes?: n
         fulfilledQty: number;
     })[];
 } & {
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;
@@ -132,6 +133,7 @@ declare function createOrderInner(input: {
     customerLatitude?: number | null;
     customerLongitude?: number | null;
     lines: OrderLineInput[];
+    companyId?: string;
 }): Promise<({
     fulfillmentLocation: {
         name: string;
@@ -161,6 +163,7 @@ declare function createOrderInner(input: {
         fulfilledQty: number;
     })[];
 } & {
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;
@@ -215,6 +218,7 @@ export declare function fulfillOrder(orderId: string, actorId: string): Promise<
         fulfilledQty: number;
     })[];
 } & {
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;
@@ -264,6 +268,7 @@ export declare function cancelOrder(orderId: string, actorId: string): Promise<{
         fulfilledQty: number;
     })[];
 } & {
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;
@@ -314,6 +319,7 @@ export declare function findOrderByExternalReference(channel: string, externalRe
         fulfilledQty: number;
     })[];
 } & {
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;

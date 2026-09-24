@@ -14,6 +14,7 @@ export type CreateExceptionCaseInput = {
     sourceLineId?: string | null;
     ownerId?: string | null;
     reportedById: string;
+    companyId: string;
     /** SLA window; defaults to 24h so nothing sits unowned overnight. */
     dueHours?: number;
 };
@@ -26,6 +27,7 @@ export declare function estimateValueAtRisk(itemId: string | null | undefined, q
  * underlying stock transaction just because the case log is unavailable.
  */
 export declare function createExceptionCase(input: CreateExceptionCaseInput): Promise<{
+    companyId: string;
     id: string;
     createdAt: Date;
     updatedAt: Date;

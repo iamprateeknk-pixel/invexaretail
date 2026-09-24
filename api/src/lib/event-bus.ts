@@ -118,3 +118,29 @@ export async function durableLatestEventId(): Promise<number> {
   return Number(row._max.id ?? 0);
 }
 export function resetEventBusForTests(): void { sequence = 0; buffer.length = 0; subscribers.clear(); }
+
+// Week 14: `DomainEventOutbox` rows are written by every business mutation
+// (`publishEvent`/`recordOutboxEventInTransaction`) and, before this week,
+// were never deleted by anything - a genuine unbounded-growth bug found
+// while investigating why `lib/outbox-worker.ts`'s `startOutboxWorker`
+// (Week 7) had never been wired into a production entrypoint. That
+// investigation's conclusion (see docs/week14-outbox-retention.md): the
+// worker's DELIVERED/POISON/retry machinery has no real consumer to wire
+// it to. `routes/events.ts`'s SSE stream reads this table directly via
+// `durableEventsSince` (a plain "since cursor X" poll, independent of
+// delivery status), and the existing webhook system
+// (`lib/webhook-dispatcher.ts`) is a separate, already-working mechanism
+// with its own entity payloads - these bare topic/companyId rows carry no
+// entity data a webhook could deliver. So the worker itself stays
+// deliberately unwired (there is nothing honest to wire it to), and this
+// retention window is the actual fix: enough runway for a disconnected SSE
+// client to reconnect and replay, not "forever".
+export const OUTBOX_RETENTION_DAYS = 7;
+
+/** Deletes DomainEventOutbox rows older than the retention window. Returns the number of rows removed. */
+export async function pruneDomainEventOutbox(olderThanDays: number = OUTBOX_RETENTION_DAYS): Promise<number> {
+  if (!databaseEnabled) return 0;
+  const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+  const result = await prisma.domainEventOutbox.deleteMany({ where: { occurredAt: { lt: cutoff } } });
+  return result.count;
+}

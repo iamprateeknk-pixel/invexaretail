@@ -805,7 +805,8 @@ async function commitLotCount(args) {
         createdAt: saved.createdAt,
         parentCountId: assignment?.parentCountId,
         requestId: args.requestId,
-    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }), (record) => (0, repository_js_1.removeCountRecord)(record.id));
+        companyId: args.companyId,
+    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId), (record) => (0, repository_js_1.removeCountRecord)(record.id));
     const followUps = [
         (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
     ];
@@ -873,6 +874,7 @@ router.post('/stock-counts', async (req, res) => {
         const { saved, bookQty } = await commitLotCount({
             userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId: validated.locationId,
             physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         });
         (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
         if (assignment)
@@ -949,6 +951,7 @@ router.post('/stock-counts/weight', async (req, res) => {
                 saved.push(await commitLotCount({
                     userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
                     physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+                    companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 }));
             }
         }
@@ -1550,12 +1553,13 @@ router.post('/replenishment-actions/transfer', async (req, res) => {
         lines: allocation.allocations.map((line) => ({ itemId, lotId: line.lotId, quantity: line.quantity })),
         notes: `Created from replenishment recommendation. Request: ${requestId}`,
         createdAt: new Date().toISOString(),
+        companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
     };
     try {
         await (0, reservation_js_1.reserveStockForTransfer)(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
         // Commit first so a database failure cannot leave a phantom transfer in
         // the process mirror. The deterministic ID makes request retries safe.
-        await (0, persistence_js_1.persistTransfer)(transfer);
+        await (0, persistence_js_1.persistTransfer)(transfer, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         (0, repository_js_1.createTransferRecord)(transfer);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
             actorId: req.user.id, actorRole: req.user.role,
@@ -2799,9 +2803,10 @@ router.post('/transfers/import/commit', upload.single('file'), async (req, res) 
             lines: plan.mapped.flatMap(({ item, allocations }) => allocations.map((allocation) => ({ itemId: item.id, lotId: allocation.lotId, quantity: allocation.quantity }))),
             notes: `Imported from ${req.file.originalname}`,
             createdAt: new Date().toISOString(),
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         };
         (0, repository_js_1.createTransferRecord)(transfer);
-        await (0, persistence_js_1.persistTransfer)(transfer);
+        await (0, persistence_js_1.persistTransfer)(transfer, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'TRANSFER_IMPORTED', entityType: 'Transfer', entityId: transfer.id, metadata: { fileName: req.file.originalname, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId, rows: preview.totalRows, duplicateRows: preview.duplicateRows, mergeDuplicates: req.body.mergeDuplicates !== 'false' } }));
         return res.status(201).json({ message: `Transfer ${transfer.id} released to picker with ${transfer.lines.length} FEFO lot allocations.`, transfer });
     }
@@ -2997,6 +3002,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
                 itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
                 quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
                 reportedById: req.user.id,
+                companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             });
         }
         const nextStatus = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
@@ -3443,6 +3449,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                     if (line.shortageQty > 0) {
@@ -3453,6 +3460,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                     if (Number(line.excessQty ?? 0) > 0) {
@@ -3467,6 +3475,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                 }

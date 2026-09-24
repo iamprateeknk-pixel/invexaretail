@@ -62,6 +62,7 @@ export type RecordQcInspectionInput = {
     results: Record<string, QcCheckResult>;
     notes?: string | null;
     inspectedById: string;
+    companyId: string;
 };
 /**
  * Records a filled-in checklist and, on FAIL, opens the same QC_FAIL
@@ -93,6 +94,7 @@ export declare function recordQcInspection(input: RecordQcInspectionInput): Prom
         inspectedById: string;
     };
     exceptionCase: {
+        companyId: string;
         id: string;
         createdAt: Date;
         updatedAt: Date;

@@ -45,4 +45,7 @@ export declare function eventsSince(lastEventId: number, subscriber: Pick<EventS
 export declare function durableEventsSince(lastEventId: number, subscriber: Pick<EventSubscriber, 'companyId' | 'locationIds'>): Promise<DomainEvent[]>;
 export declare function durableLatestEventId(): Promise<number>;
 export declare function resetEventBusForTests(): void;
+export declare const OUTBOX_RETENTION_DAYS = 7;
+/** Deletes DomainEventOutbox rows older than the retention window. Returns the number of rows removed. */
+export declare function pruneDomainEventOutbox(olderThanDays?: number): Promise<number>;
 export {};

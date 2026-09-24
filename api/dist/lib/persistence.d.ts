@@ -68,7 +68,7 @@ export declare function persistDailyMovementImport(input: {
 }>;
 /** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
 export declare function persistCountDeletion(id: string): Promise<void>;
-export declare function persistCount(count: CountRecord): Promise<void>;
+export declare function persistCount(count: CountRecord, companyId?: string): Promise<void>;
 export declare function listStockFromDatabase(locationId: string): Promise<PersistedStockRow[]>;
 /**
  * Persists a count review decision. On APPROVED this also posts the
@@ -82,7 +82,7 @@ export declare function persistCountAssignment(assignment: CountAssignmentRecord
 export declare function persistCountAssignmentUpdate(assignment: CountAssignmentRecord): Promise<void>;
 export declare function persistCountAssignmentDelete(assignmentId: string): Promise<void>;
 export declare function persistAssignmentSubmitted(assignmentId: string, countId: string): Promise<void>;
-export declare function persistTransfer(transfer: TransferRecord): Promise<void>;
+export declare function persistTransfer(transfer: TransferRecord, companyId?: string): Promise<void>;
 export declare function persistTransferReplacement(current: TransferRecord, next: TransferRecord): Promise<void>;
 export declare function persistTransferDeletion(transfer: TransferRecord): Promise<void>;
 export declare function persistTransferCarton(carton: import('./transfer-packing.js').TransferCartonRecord): Promise<void>;

@@ -87,6 +87,7 @@ export type CountRecord = {
     bookQtyOriginal?: number;
     lateDelta?: number;
     lateMovementKeys?: string[];
+    companyId?: string;
 };
 export type StockLedgerRecord = {
     itemId: string;
@@ -152,6 +153,7 @@ export type TransferRecord = {
         expectedArrivalAt?: string;
     };
     createdAt: string;
+    companyId?: string;
 };
 import type { StockMovementRecord } from './stock-ledger.js';
 import type { TransferCartonRecord } from './transfer-packing.js';

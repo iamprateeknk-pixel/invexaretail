@@ -13,6 +13,7 @@ import transfersRouter from './routes/transfers.js';
 import branchesRouter from './routes/branches.js';
 import itemsRouter from './routes/items.js';
 import importsRouter from './routes/imports.js';
+import reportsRouter from './routes/reports.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
@@ -286,6 +287,7 @@ app.use('/api/v1', transfersRouter);
 app.use('/api/v1', branchesRouter);
 app.use('/api/v1', itemsRouter);
 app.use('/api/v1', importsRouter);
+app.use('/api/v1', reportsRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 
@@ -334,6 +336,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req: Request, res:
       customerName: mapped.customerName,
       notes: mapped.notes,
       createdById: 'connector',
+      companyId: connector.tenantId,
       allowSplit: true,
       candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
       lines,

@@ -130,7 +130,7 @@ router.get('/reorder-rules', async (req, res) => {
   if (!databaseEnabled) {
     return res.json({ rules: listReorderRules(locationId) });
   }
-  const rules = await prisma.reorderRule.findMany({ where: { locationId }, orderBy: { createdAt: 'asc' } });
+  const rules = await prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'asc' } });
   return res.json({ rules });
 });
 
@@ -150,17 +150,19 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
       return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
     }
   }
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
   const rule = await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
     update: { minQty, targetQty },
-    create: { itemId: req.params.itemId, locationId, minQty, targetQty },
+    create: { itemId: req.params.itemId, locationId, minQty, targetQty, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { item: true },
   });
   return res.json({ rule });
 });
 
-router.get('/suppliers', async (_req, res) => {
-  const suppliers = await prisma.supplier.findMany({ orderBy: { name: 'asc' } });
+router.get('/suppliers', async (req, res) => {
+  const suppliers = await prisma.supplier.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { name: 'asc' } });
   return res.json({ suppliers: suppliers.map(presentSupplier) });
 });
 
@@ -168,7 +170,7 @@ router.post('/suppliers', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
     const fields = parseSupplierFields(req.body ?? {}, true);
-    const supplier = await prisma.supplier.create({ data: fields as never });
+    const supplier = await prisma.supplier.create({ data: { ...fields, companyId: req.companyId ?? DEFAULT_COMPANY_ID } as never });
     return res.status(201).json({ supplier: presentSupplier(supplier) });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
@@ -180,7 +182,7 @@ router.put('/suppliers/:id', async (req, res) => {
   try {
     const fields = parseSupplierFields(req.body ?? {}, false);
     if (!Object.keys(fields).length) return res.status(400).json({ message: 'Nothing to update.' });
-    const existing = await prisma.supplier.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
     if (!existing) return res.status(404).json({ message: 'Supplier not found.' });
     const supplier = await prisma.supplier.update({ where: { id: existing.id }, data: fields as never });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'SUPPLIER_UPDATED', entityType: 'Supplier', entityId: supplier.id, metadata: { fields: Object.keys(fields) } }));
@@ -192,7 +194,7 @@ router.put('/suppliers/:id', async (req, res) => {
 
 router.get('/suppliers/:id/score', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
-  const supplier = await prisma.supplier.findUnique({ where: { id: req.params.id } });
+  const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
 
   const orders = await prisma.purchaseOrder.findMany({
@@ -242,8 +244,9 @@ router.get('/suppliers/:id/score', async (req, res) => {
   });
 });
 
-router.get('/purchase-orders', async (_req, res) => {
+router.get('/purchase-orders', async (req, res) => {
   const purchaseOrders = await prisma.purchaseOrder.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { supplier: true, lines: { include: { item: true } } },
     orderBy: { createdAt: 'desc' },
   });
@@ -262,11 +265,13 @@ router.post('/purchase-orders', async (req, res) => {
   if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
     return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
   }
-  const supplier = await prisma.supplier.findUnique({ where: { id: String(req.body.supplierId) } });
+  const supplier = await prisma.supplier.findFirst({ where: { id: String(req.body.supplierId), companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
   if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} is ${String((supplier as { status?: string }).status).toLowerCase()} and cannot receive new purchase orders.` });
   const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
-  const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });
+  const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true, code: true, status: true } });
+  const missing = normalized.map((line) => line.itemId).filter((itemId) => !lineItems.some((row) => row.id === itemId));
+  if (missing.length) return res.status(400).json({ message: `Item ${missing[0]} was not found.` });
   const inactive = lineItems.find((row) => (row as { status?: string }).status && (row as { status?: string }).status !== 'ACTIVE');
   if (inactive) return res.status(400).json({ message: `Item ${inactive.code} is ${String((inactive as { status?: string }).status).toLowerCase()} and cannot be ordered.` });
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
@@ -276,6 +281,7 @@ router.post('/purchase-orders', async (req, res) => {
       supplierId: req.body.supplierId,
       locationId: req.body.locationId,
       createdById: req.user!.id,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       // Promise date: what the buyer said, else today plus the supplier's lead time.
       expectedAt: req.body.expectedAt ? new Date(req.body.expectedAt) : leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
       notes: req.body.notes || null,
@@ -305,7 +311,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     return res.json({ ...(priorReceipt.result as Record<string, unknown>), duplicate: true });
   }
 
-  const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
   if (!isReceivablePo(order.status)) return res.status(409).json({ message: `A purchase order in ${order.status} cannot be received. It must be approved and still open.` });
 
@@ -428,7 +434,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   for (const posting of postings) {
     const line = order.lines.find((row) => row.id === posting.lineId);
     const lotId = postedStock.find((row) => row.itemId === posting.itemId && row.lotNo === posting.lotNo)?.lotId ?? null;
-    const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user!.id };
+    const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user!.id, companyId: order.companyId };
     if (posting.damagedQty > 0) {
       void createExceptionCase({ ...base, type: 'DAMAGE', title: `Damaged receipt on ${order.number}`, description: `${posting.damagedQty} unit(s) arrived damaged or failed QC.`, quantity: posting.damagedQty });
     }
@@ -485,7 +491,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const to = req.body.status;
   if (!isPoStatus(to)) return res.status(400).json({ message: 'Invalid purchase order status.' });
-  const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
+  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
   const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
   const check = checkPoMove({
@@ -526,10 +532,12 @@ router.get('/purchase-orders/plan', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
   const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
   const since = new Date(Date.now() - windowDays * 86_400_000);
 
-  const rules = await prisma.reorderRule.findMany({ where: { locationId } });
+  const rules = await prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   const itemIds = rules.map((rule) => rule.itemId);
   if (!itemIds.length) return res.json({ locationId, windowDays, suggestions: [], groups: [], skipped: [], note: 'No reorder rules are set for this location.' });
 
@@ -541,7 +549,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
       select: { itemId: true, quantity: true, receivedQty: true },
     }),
     prisma.transfer.findMany({
-      where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] } },
+      where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
       include: { lines: true },
     }),
     prisma.stockMovement.findMany({
@@ -553,7 +561,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
       select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
       orderBy: { createdAt: 'desc' },
     }),
-    prisma.supplier.findMany(),
+    prisma.supplier.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }),
   ]);
   const sum = <T,>(rows: T[], pick: (row: T) => [string, number]) => {
     const totals = new Map<string, number>();
@@ -595,7 +603,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
     const lines = (group.lines ?? []).map((line) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), unitCost: Number(line.unitCost ?? 0) }));
     if (!group.supplierId) return res.status(400).json({ message: 'Choose a supplier for every group before creating draft orders.' });
     if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) return res.status(400).json({ message: 'Every line needs an item and a positive quantity.' });
-    const supplier = await prisma.supplier.findUnique({ where: { id: group.supplierId } });
+    const supplier = await prisma.supplier.findFirst({ where: { id: group.supplierId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
     if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
     if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} cannot receive new purchase orders.` });
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
@@ -603,6 +611,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
       data: {
         number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
         supplierId: supplier.id, locationId, createdById: req.user!.id,
+        companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
         notes: 'Drafted from the purchase plan.',
         totalAmount: lines.reduce((sum, line) => sum + line.quantity * line.unitCost, 0),
@@ -619,7 +628,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
 router.get('/purchase-orders/:id/invoices', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const invoices = await prisma.supplierInvoice.findMany({
-    where: { purchaseOrderId: req.params.id },
+    where: { purchaseOrderId: req.params.id, purchaseOrder: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { lines: true },
     orderBy: { createdAt: 'desc' },
   });
@@ -638,7 +647,7 @@ router.post('/purchase-orders/:id/invoices', async (req, res) => {
     .filter((line: { itemId: string; invoicedQty: number; unitCost: number }) => line.itemId && Number.isFinite(line.invoicedQty) && line.invoicedQty > 0);
   if (!normalizedLines.length) return res.status(400).json({ message: 'Every line requires an item and a positive invoiced quantity.' });
 
-  const order = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
 
   const poLines = order.lines.map((line) => ({ itemId: line.itemId, orderedQty: line.quantity, receivedQty: line.receivedQty, unitCost: line.unitCost }));
@@ -715,7 +724,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
     return res.status(400).json({ message: 'A price type and a positive price are required.' });
   }
 
-  const item = await prisma.item.findUnique({ where: { id: req.params.itemId } });
+  const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!item) return res.status(404).json({ message: 'Item not found.' });
 
   const effectiveFrom = req.body.effectiveFrom ? String(req.body.effectiveFrom) : null;
@@ -801,7 +810,7 @@ router.delete('/saved-reports/:id', async (req, res) => {
 // snapshot of item ids.
 router.get('/saved-views', async (req, res) => {
   const savedViews = await prisma.savedView.findMany({
-    where: { OR: [{ ownerId: req.user!.id }, { isShared: true }] },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user!.id }, { isShared: true }] },
     orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
   });
   return res.json({ savedViews });
@@ -825,7 +834,7 @@ router.post('/saved-views', async (req, res) => {
 });
 
 router.delete('/saved-views/:id', async (req, res) => {
-  const savedView = await prisma.savedView.findUnique({ where: { id: req.params.id } });
+  const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && savedView.ownerId !== req.user!.id) {
     return res.status(403).json({ message: 'Only the view owner or an Admin can delete this view.' });
@@ -835,12 +844,12 @@ router.delete('/saved-views/:id', async (req, res) => {
 });
 
 router.get('/saved-views/:id/items', async (req, res) => {
-  const savedView = await prisma.savedView.findUnique({ where: { id: req.params.id } });
+  const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
   if (!savedView.isShared && savedView.ownerId !== req.user!.id && !['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
     return res.status(403).json({ message: 'This saved view is private to its owner.' });
   }
-  const items = await prisma.item.findMany({ include: { tags: true } });
+  const items = await prisma.item.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { tags: true } });
   const filterableItems = items.map((item) => ({
     id: item.id, name: item.name, code: item.code, category: item.category, subcategory: item.subcategory,
     tagIds: item.tags.map((t) => t.tagId),

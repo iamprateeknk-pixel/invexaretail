@@ -919,6 +919,7 @@ type LotCountArgs = {
   mode: 'scan' | 'manual' | 'weight';
   requestId?: string;
   assignment?: ReturnType<typeof findActiveAssignment>;
+  companyId?: string;
   // 'auto' closes the assignment once every lot with stock is counted (scan
   // counts); weight counts close it themselves after allocating the item total.
   closeAssignment: 'auto' | 'never';
@@ -952,8 +953,9 @@ async function commitLotCount(args: LotCountArgs) {
       createdAt: saved.createdAt,
       parentCountId: assignment?.parentCountId,
       requestId: args.requestId,
+      companyId: args.companyId,
     }),
-    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }),
+    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId),
     (record) => removeCountRecord(record.id),
   );
   const followUps: Promise<unknown>[] = [
@@ -1031,6 +1033,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     const { saved, bookQty } = await commitLotCount({
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
@@ -1105,6 +1108,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
         saved.push(await commitLotCount({
           userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
           physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         }));
       }
     } catch (error) {
@@ -1702,12 +1706,13 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     lines: allocation.allocations.map((line) => ({ itemId, lotId: line.lotId, quantity: line.quantity })),
     notes: `Created from replenishment recommendation. Request: ${requestId}`,
     createdAt: new Date().toISOString(),
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   };
   try {
     await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
     // Commit first so a database failure cannot leave a phantom transfer in
     // the process mirror. The deterministic ID makes request retries safe.
-    await persistTransfer(transfer);
+    await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     createTransferRecord(transfer);
     await persistAudit(recordAudit({
       actorId: req.user!.id, actorRole: req.user!.role,
@@ -2889,9 +2894,10 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
       lines: plan.mapped.flatMap(({ item, allocations }) => allocations.map((allocation) => ({ itemId: item.id, lotId: allocation.lotId, quantity: allocation.quantity }))),
       notes: `Imported from ${req.file.originalname}`,
       createdAt: new Date().toISOString(),
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     };
     createTransferRecord(transfer);
-    await persistTransfer(transfer);
+    await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_IMPORTED', entityType: 'Transfer', entityId: transfer.id, metadata: { fileName: req.file.originalname, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId, rows: preview.totalRows, duplicateRows: preview.duplicateRows, mergeDuplicates: req.body.mergeDuplicates !== 'false' } }));
     return res.status(201).json({ message: `Transfer ${transfer.id} released to picker with ${transfer.lines.length} FEFO lot allocations.`, transfer });
   } catch (error) {
@@ -3064,6 +3070,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
         itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
         quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
         reportedById: req.user!.id,
+        companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       });
     }
 
@@ -3476,6 +3483,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
         if (line.shortageQty > 0) {
@@ -3486,6 +3494,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
         if (Number(line.excessQty ?? 0) > 0) {
@@ -3500,6 +3509,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
       }

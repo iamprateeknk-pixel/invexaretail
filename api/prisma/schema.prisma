@@ -415,7 +415,12 @@ model Order {
   shipments    Shipment[]
   returnRequests ReturnRequest[]
   tenantId    String   @default("tenant-invexa")
+  // Week 19: real per-company scoping, the second slice of the migration
+  // Week 17 started for PurchaseOrder. Backfilled from the order's own
+  // fulfillmentLocation.companyId.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, createdAt])
@@ -850,8 +855,13 @@ model StockCount {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Real per-company scoping, the fourth slice of the migration Weeks
+  // 17/19 started for PurchaseOrder/Order/Transfer. Backfilled from the
+  // count's own Location.
+  companyId   String   @default("default-company")
 
   @@index([tenantId])
+  @@index([companyId])
   @@index([reconciliationRequired])
   @@index([submittedById, requestId])
 
@@ -908,8 +918,13 @@ model Transfer {
   lines                 TransferLine[]
   cartons               TransferCarton[]
   tenantId    String   @default("tenant-invexa")
-
+  // Real per-company scoping, the third slice of the migration Weeks 17/19
+  // started for PurchaseOrder/Order. Backfilled from the transfer's own
+  // sourceLocation.companyId (the location that authorized the transfer
+  // out, the more natural tenant owner than the destination).
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 }
 
@@ -1058,8 +1073,17 @@ model Supplier {
   updatedAt DateTime @updatedAt
   purchaseOrders PurchaseOrder[]
   tenantId    String   @default("tenant-invexa")
+  // Bare-id call-site migration slice 6: real per-company scoping, added
+  // after finding this model had none at all (GET /suppliers had no
+  // filter of any kind - every company saw every supplier). No
+  // Location/single-owner relation exists to backfill from, so existing
+  // rows default to the same 'default-company' constant used elsewhere in
+  // this migration series when no better source exists - see the
+  // migration's own comment and docs/week28-item-supplier-bare-id-remediation.md.
+  companyId   String   @default("default-company")
 
   @@index([tenantId])
+  @@index([companyId])
 
 }
 
@@ -1106,8 +1130,12 @@ model PurchaseOrder {
   lines       PurchaseOrderLine[]
   supplierInvoices SupplierInvoice[]
   tenantId    String   @default("tenant-invexa")
+  // Week 17: real per-company scoping, added alongside ImportBatch (Week
+  // 11) and ExceptionCase (Week 12) - the same class of fix, this time for
+  // PurchaseOrder. Backfilled from the order's own Location.companyId.
+  companyId   String   @default("default-company")
   @@index([tenantId])
-
+  @@index([companyId])
 
   @@index([locationId, status])
   @@index([supplierId])
@@ -1206,7 +1234,15 @@ model ReorderRule {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Bare-id call-site migration slice 7: real per-company scoping, added
+  // after finding this model had none (its rules were reachable across
+  // companies from several routes). Backfilled from the rule's own
+  // Location.companyId, same join pattern as PurchaseOrder/Order/
+  // Transfer/StockCount/ExpiryAlert - see
+  // docs/week29-expiryalert-reorderrule-bare-id-remediation.md.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@unique([itemId, locationId])
@@ -1800,7 +1836,14 @@ model ExceptionCase {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Week 12: this model had no real per-company scoping at all before this
+  // week (locationId is optional, so a location-join can't safely stand in
+  // for it the way Week 12's reporting-repository.ts does for the other
+  // queue models) - a genuine cross-tenant leak for any case with no
+  // location. companyId closes it directly.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, priority, dueAt])
@@ -1918,7 +1961,12 @@ model ExpiryAlert {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Real per-company scoping, the fifth and last slice of the migration
+  // Weeks 17/19 started for PurchaseOrder/Order/Transfer/StockCount.
+  // Backfilled from the alert's own Location.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, locationId, expiryDate])

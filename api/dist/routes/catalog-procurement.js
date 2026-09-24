@@ -129,7 +129,7 @@ router.get('/reorder-rules', async (req, res) => {
     if (!persistence_js_1.databaseEnabled) {
         return res.json({ rules: (0, reorder_store_js_1.listReorderRules)(locationId) });
     }
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId }, orderBy: { createdAt: 'asc' } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'asc' } });
     return res.json({ rules });
 });
 router.put('/reorder-rules/:itemId', async (req, res) => {
@@ -150,16 +150,19 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
             return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
         }
     }
+    const location = await db_js_1.prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
+    if (!location)
+        return res.status(404).json({ message: 'Location not found.' });
     const rule = await db_js_1.prisma.reorderRule.upsert({
         where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
         update: { minQty, targetQty },
-        create: { itemId: req.params.itemId, locationId, minQty, targetQty },
+        create: { itemId: req.params.itemId, locationId, minQty, targetQty, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID },
         include: { item: true },
     });
     return res.json({ rule });
 });
-router.get('/suppliers', async (_req, res) => {
-    const suppliers = await db_js_1.prisma.supplier.findMany({ orderBy: { name: 'asc' } });
+router.get('/suppliers', async (req, res) => {
+    const suppliers = await db_js_1.prisma.supplier.findMany({ where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, orderBy: { name: 'asc' } });
     return res.json({ suppliers: suppliers.map(supplier_master_js_1.presentSupplier) });
 });
 router.post('/suppliers', async (req, res) => {
@@ -167,7 +170,7 @@ router.post('/suppliers', async (req, res) => {
         return;
     try {
         const fields = (0, supplier_master_js_1.parseSupplierFields)(req.body ?? {}, true);
-        const supplier = await db_js_1.prisma.supplier.create({ data: fields });
+        const supplier = await db_js_1.prisma.supplier.create({ data: { ...fields, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
         return res.status(201).json({ supplier: (0, supplier_master_js_1.presentSupplier)(supplier) });
     }
     catch (error) {
@@ -181,7 +184,7 @@ router.put('/suppliers/:id', async (req, res) => {
         const fields = (0, supplier_master_js_1.parseSupplierFields)(req.body ?? {}, false);
         if (!Object.keys(fields).length)
             return res.status(400).json({ message: 'Nothing to update.' });
-        const existing = await db_js_1.prisma.supplier.findUnique({ where: { id: req.params.id } });
+        const existing = await db_js_1.prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
         if (!existing)
             return res.status(404).json({ message: 'Supplier not found.' });
         const supplier = await db_js_1.prisma.supplier.update({ where: { id: existing.id }, data: fields });
@@ -195,7 +198,7 @@ router.put('/suppliers/:id', async (req, res) => {
 router.get('/suppliers/:id/score', async (req, res) => {
     if (!requireReportingRole(req, res))
         return;
-    const supplier = await db_js_1.prisma.supplier.findUnique({ where: { id: req.params.id } });
+    const supplier = await db_js_1.prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!supplier)
         return res.status(404).json({ message: 'Supplier not found.' });
     const orders = await db_js_1.prisma.purchaseOrder.findMany({
@@ -240,8 +243,9 @@ router.get('/suppliers/:id/score', async (req, res) => {
         priceVarianceByItem,
     });
 });
-router.get('/purchase-orders', async (_req, res) => {
+router.get('/purchase-orders', async (req, res) => {
     const purchaseOrders = await db_js_1.prisma.purchaseOrder.findMany({
+        where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID },
         include: { supplier: true, lines: { include: { item: true } } },
         orderBy: { createdAt: 'desc' },
     });
@@ -260,13 +264,16 @@ router.post('/purchase-orders', async (req, res) => {
     if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
         return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
     }
-    const supplier = await db_js_1.prisma.supplier.findUnique({ where: { id: String(req.body.supplierId) } });
+    const supplier = await db_js_1.prisma.supplier.findFirst({ where: { id: String(req.body.supplierId), companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!supplier)
         return res.status(404).json({ message: 'Supplier not found.' });
     if (!(0, supplier_master_js_1.canOrderFrom)(supplier.status))
         return res.status(409).json({ message: `${supplier.name} is ${String(supplier.status).toLowerCase()} and cannot receive new purchase orders.` });
     const leadTimeDays = supplier.leadTimeDays;
-    const lineItems = await db_js_1.prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });
+    const lineItems = await db_js_1.prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) }, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, select: { id: true, code: true, status: true } });
+    const missing = normalized.map((line) => line.itemId).filter((itemId) => !lineItems.some((row) => row.id === itemId));
+    if (missing.length)
+        return res.status(400).json({ message: `Item ${missing[0]} was not found.` });
     const inactive = lineItems.find((row) => row.status && row.status !== 'ACTIVE');
     if (inactive)
         return res.status(400).json({ message: `Item ${inactive.code} is ${String(inactive.status).toLowerCase()} and cannot be ordered.` });
@@ -277,6 +284,7 @@ router.post('/purchase-orders', async (req, res) => {
             supplierId: req.body.supplierId,
             locationId: req.body.locationId,
             createdById: req.user.id,
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             // Promise date: what the buyer said, else today plus the supplier's lead time.
             expectedAt: req.body.expectedAt ? new Date(req.body.expectedAt) : leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
             notes: req.body.notes || null,
@@ -306,7 +314,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
             return res.status(409).json({ message: 'This requestId was already used for a different purchase order.' });
         return res.json({ ...priorReceipt.result, duplicate: true });
     }
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     if (!(0, po_lifecycle_js_1.isReceivablePo)(order.status))
@@ -430,7 +438,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     for (const posting of postings) {
         const line = order.lines.find((row) => row.id === posting.lineId);
         const lotId = postedStock.find((row) => row.itemId === posting.itemId && row.lotNo === posting.lotNo)?.lotId ?? null;
-        const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user.id };
+        const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user.id, companyId: order.companyId };
         if (posting.damagedQty > 0) {
             void (0, exceptions_js_1.createExceptionCase)({ ...base, type: 'DAMAGE', title: `Damaged receipt on ${order.number}`, description: `${posting.damagedQty} unit(s) arrived damaged or failed QC.`, quantity: posting.damagedQty });
         }
@@ -482,7 +490,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
     const to = req.body.status;
     if (!(0, po_lifecycle_js_1.isPoStatus)(to))
         return res.status(400).json({ message: 'Invalid purchase order status.' });
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
@@ -526,9 +534,12 @@ router.get('/purchase-orders/plan', async (req, res) => {
     const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
     if (!locationId)
         return res.status(400).json({ message: 'locationId is required.' });
+    const location = await db_js_1.prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
+    if (!location)
+        return res.status(404).json({ message: 'Location not found.' });
     const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
     const since = new Date(Date.now() - windowDays * 86_400_000);
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     const itemIds = rules.map((rule) => rule.itemId);
     if (!itemIds.length)
         return res.json({ locationId, windowDays, suggestions: [], groups: [], skipped: [], note: 'No reorder rules are set for this location.' });
@@ -540,7 +551,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
             select: { itemId: true, quantity: true, receivedQty: true },
         }),
         db_js_1.prisma.transfer.findMany({
-            where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] } },
+            where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID },
             include: { lines: true },
         }),
         db_js_1.prisma.stockMovement.findMany({
@@ -552,7 +563,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
             select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
             orderBy: { createdAt: 'desc' },
         }),
-        db_js_1.prisma.supplier.findMany(),
+        db_js_1.prisma.supplier.findMany({ where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }),
     ]);
     const sum = (rows, pick) => {
         const totals = new Map();
@@ -601,7 +612,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
             return res.status(400).json({ message: 'Choose a supplier for every group before creating draft orders.' });
         if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0))
             return res.status(400).json({ message: 'Every line needs an item and a positive quantity.' });
-        const supplier = await db_js_1.prisma.supplier.findUnique({ where: { id: group.supplierId } });
+        const supplier = await db_js_1.prisma.supplier.findFirst({ where: { id: group.supplierId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
         if (!supplier)
             return res.status(404).json({ message: 'Supplier not found.' });
         if (!(0, supplier_master_js_1.canOrderFrom)(supplier.status))
@@ -611,6 +622,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
             data: {
                 number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
                 supplierId: supplier.id, locationId, createdById: req.user.id,
+                companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,
                 notes: 'Drafted from the purchase plan.',
                 totalAmount: lines.reduce((sum, line) => sum + line.quantity * line.unitCost, 0),
@@ -627,7 +639,7 @@ router.get('/purchase-orders/:id/invoices', async (req, res) => {
     if (!requireReportingRole(req, res))
         return;
     const invoices = await db_js_1.prisma.supplierInvoice.findMany({
-        where: { purchaseOrderId: req.params.id },
+        where: { purchaseOrderId: req.params.id, purchaseOrder: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } },
         include: { lines: true },
         orderBy: { createdAt: 'desc' },
     });
@@ -647,7 +659,7 @@ router.post('/purchase-orders/:id/invoices', async (req, res) => {
         .filter((line) => line.itemId && Number.isFinite(line.invoicedQty) && line.invoicedQty > 0);
     if (!normalizedLines.length)
         return res.status(400).json({ message: 'Every line requires an item and a positive invoiced quantity.' });
-    const order = await db_js_1.prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Purchase order not found.' });
     const poLines = order.lines.map((line) => ({ itemId: line.itemId, orderedQty: line.quantity, receivedQty: line.receivedQty, unitCost: line.unitCost }));
@@ -720,7 +732,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
     if (!priceType || !Number.isFinite(proposedPrice) || proposedPrice <= 0) {
         return res.status(400).json({ message: 'A price type and a positive price are required.' });
     }
-    const item = await db_js_1.prisma.item.findUnique({ where: { id: req.params.itemId } });
+    const item = await db_js_1.prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!item)
         return res.status(404).json({ message: 'Item not found.' });
     const effectiveFrom = req.body.effectiveFrom ? String(req.body.effectiveFrom) : null;
@@ -804,7 +816,7 @@ router.delete('/saved-reports/:id', async (req, res) => {
 // snapshot of item ids.
 router.get('/saved-views', async (req, res) => {
     const savedViews = await db_js_1.prisma.savedView.findMany({
-        where: { OR: [{ ownerId: req.user.id }, { isShared: true }] },
+        where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user.id }, { isShared: true }] },
         orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
     });
     return res.json({ savedViews });
@@ -827,7 +839,7 @@ router.post('/saved-views', async (req, res) => {
     return res.status(201).json({ savedView });
 });
 router.delete('/saved-views/:id', async (req, res) => {
-    const savedView = await db_js_1.prisma.savedView.findUnique({ where: { id: req.params.id } });
+    const savedView = await db_js_1.prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!savedView)
         return res.status(404).json({ message: 'Saved view not found.' });
     if (!['ADMIN', 'ADMIN_USER'].includes(req.user.role) && savedView.ownerId !== req.user.id) {
@@ -837,13 +849,13 @@ router.delete('/saved-views/:id', async (req, res) => {
     return res.status(204).send();
 });
 router.get('/saved-views/:id/items', async (req, res) => {
-    const savedView = await db_js_1.prisma.savedView.findUnique({ where: { id: req.params.id } });
+    const savedView = await db_js_1.prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!savedView)
         return res.status(404).json({ message: 'Saved view not found.' });
     if (!savedView.isShared && savedView.ownerId !== req.user.id && !['ADMIN', 'ADMIN_USER'].includes(req.user.role)) {
         return res.status(403).json({ message: 'This saved view is private to its owner.' });
     }
-    const items = await db_js_1.prisma.item.findMany({ include: { tags: true } });
+    const items = await db_js_1.prisma.item.findMany({ where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { tags: true } });
     const filterableItems = items.map((item) => ({
         id: item.id, name: item.name, code: item.code, category: item.category, subcategory: item.subcategory,
         tagIds: item.tags.map((t) => t.tagId),

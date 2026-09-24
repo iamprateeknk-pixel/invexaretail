@@ -54,6 +54,332 @@ defense-in-depth middleware layer) but are no longer the *only* check for
 Catalog - see the scoped repository above. Location/Branch scoping is not
 migrated this week; tracked as a follow-up alongside Identity.
 
+## PurchaseOrder - real companyId added (Week 17)
+
+Previously `tenantId`-only (the constant, shared-across-the-app field), like
+`Transfer`/`Order`/`StockCount`/`ExpiryAlert` still are. Migration
+`20261015090000_purchase_order_company_scope` added a real `companyId`
+column, backfilled from each order's `Location.companyId`. Both create call
+sites (`routes/catalog-procurement.ts`) now set it; `lib/reporting-
+repository.ts`'s purchase-order queue-backlog counts filter on it directly.
+The read/write call sites in `routes/catalog-procurement.ts` that look an
+order up by bare id (`findUnique`/`update` at lines 309, 489, 509, 643) are
+**not yet migrated to filter on it** - they're still counted in the
+`unscoped-tenant-query` lint baseline below, unchanged by adding the
+column. `Transfer`, `StockCount`, `ExpiryAlert` remain `tenantId`-only;
+migrating each is the same one-model-at-a-time follow-up. `Order` got the
+same treatment the next week - see below.
+
+## Order - real companyId added (Week 19)
+
+Migration `20261022090000_order_company_scope` added a real `companyId`
+column, backfilled from each order's `fulfillmentLocation.companyId`. All
+three production creation call sites (`index.ts`'s marketplace-connector
+webhook, and two in `routes/operations-extension.ts`) now set it;
+`lib/reporting-repository.ts`'s order queue-backlog counts filter on it
+directly. The many bare-id `findUnique`/`update` call sites elsewhere in
+`operations-extension.ts` are **not yet migrated** - still in the
+`unscoped-tenant-query` lint baseline, unchanged.
+
+`Transfer`'s creation path was investigated as the natural next slice and
+found more tangled than PurchaseOrder's or Order's: `lib/repository.ts`'s
+`createTransferRecord` is purely in-memory (`transfers.push(input)`, no
+Prisma call at all). The real database write turned out to be a separate
+function, `persistTransfer` in `lib/persistence.ts`, called right after -
+see below, resolved.
+
+## Transfer - real companyId added
+
+Migration `20261024090000_transfer_company_scope` added a real `companyId`
+column, backfilled from each transfer's own `sourceLocation.companyId`
+(the location that authorized the transfer out). `lib/persistence.ts`'s
+`persistTransfer` now takes an optional `companyId` parameter, set on
+creation by all three production call sites
+(`transfer-command-service.ts`'s `createTransfer`, and two in
+`routes/core.ts` - a replenishment-recommendation transfer and a bulk
+transfer-file import); `lib/reporting-repository.ts`'s transfer
+queue-backlog counts filter on it directly, the last of `PurchaseOrder`/
+`Order`/`Transfer` to move off the `companyLocationIds` join workaround.
+See `docs/week21-transfer-tenant-scope.md`. The bare-id `findUnique`/
+`update` call sites for Transfer in `routes/operations-extension.ts` and
+`routes/core.ts` are **not yet migrated** - still in the
+`unscoped-tenant-query` lint baseline. `StockCount` and `ExpiryAlert` got
+the same treatment next - see below.
+
+## StockCount and ExpiryAlert - real companyId added
+
+Migration `20261027090000_stockcount_expiryalert_company_scope` added a
+real `companyId` column to both, backfilled from each row's own
+`Location.companyId`. Same "trace the real write" lesson as Transfer:
+`lib/repository.ts`'s `createCountRecord` is memory-cache-only; the real
+write is `lib/persistence.ts`'s `persistCount`, called from
+`routes/core.ts`'s `commitLotCount` right after it. `persistCount` now
+takes an optional `companyId`, threaded through both `commitLotCount` call
+sites. `ExpiryAlert` has no such indirection - both its real write sites
+(`routes/operations-extension.ts`, one live via the expiry write-off
+route, one dead code via `syncExpiryAlerts`) now set `companyId` directly
+(the latter via `StockLedger.companyId`, already real, with no extra
+join needed). `lib/reporting-repository.ts`'s stock-risk and queue-backlog
+queries for both models filter on the new column directly; the
+`companyLocationIds` join-workaround helper is now fully removed (no
+remaining callers). See `docs/week22-stockcount-expiryalert-tenant-scope.md`.
+
+**All five models named across Weeks 12/15/19/20 now carry a real
+`companyId` column.** What remains is the call-site migration: the many
+bare-id `findUnique`/`update` lookups for these models scattered across
+`routes/operations-extension.ts` and `routes/core.ts` that don't filter by
+the column that now exists - still tracked in the `unscoped-tenant-query`
+lint baseline, a multi-week god-router remediation of its own.
+
+## Bare-id call-site migration - first slice: Order routes
+
+Started this remediation one coherent group at a time, same discipline as
+the schema migration. First slice: every `Order`-model call site in
+`routes/operations-extension.ts` (the order/pack/ship/returns routes and
+the order-listing endpoint) - nine call sites fixed, `unscoped-tenant-query`
+baseline dropped from 121 to 112. This was a real, reachable
+cross-tenant-access gap, not just a lint nag: `canAccessLocation` returns
+`true` unconditionally for `ADMIN`/`ADMIN_USER`/`AUDITOR` roles with no
+company check, so an admin given or guessing another company's order id
+could reach and pass that check. See
+`docs/week23-order-bare-id-remediation.md` for the full list of fixed
+routes. The follow-up real-Postgres HTTP test harness
+(`src/routes/operations-extension-orders.postgres.test.ts`) now proves the
+fix: five tests confirm a cross-tenant order id resolves 404 (never 403 -
+which would confirm the row exists), while the owning company's own
+access is unaffected. Reuse this harness's `withServer`/`makeFixture`
+pattern for every subsequent slice rather than writing a new one.
+
+## Bare-id call-site migration - second slice: PurchaseOrder routes
+
+Second slice: every `PurchaseOrder`-model call site in
+`routes/catalog-procurement.ts`. Worse than Week 23's Order findings in
+one respect - `GET /purchase-orders` had **no tenant filter at all**
+(`_req`, an unused parameter, was the tell), so any authenticated user of
+any company saw every company's purchase orders, not just a cross-tenant
+id needing to be guessed. Also fixed: `PATCH /purchase-orders/:id/status`,
+`POST /purchase-orders/:id/receive`, `POST /purchase-orders/:id/invoices`
+(each a bare-id `findUnique` -> `findFirst` with `companyId`), and `GET
+/purchase-orders/:id/invoices` (scoped through the `purchaseOrder`
+relation, since `SupplierInvoice` itself has no `companyId` column).
+`unscoped-tenant-query` baseline: 112 -> 108. Proven with
+`src/routes/catalog-procurement-purchase-orders.postgres.test.ts` (4/4
+passing), reusing Week 23's harness. See
+`docs/week24-purchase-order-bare-id-remediation.md`.
+
+New finding, not fixed this slice: `GET /suppliers/:id/score` looks a
+`Supplier` up by bare id with no tenant check, and `Supplier` has no
+`companyId` column at all (only the constant `tenantId`) - its own
+tenant-scope migration is a prerequisite, out of scope for a
+"PurchaseOrder routes" slice.
+
+## Bare-id call-site migration - third slice: ReturnRequest and ExceptionCase routes
+
+Third slice: every `ReturnRequest`-model call site in
+`routes/operations-extension.ts` (`PATCH /returns/:id/status`, `POST
+/returns/:id/lines/:lineId/disposition`, `PATCH /returns/:id/refund`), its
+`ExceptionCase` call sites (`GET /exceptions`, `PATCH /exceptions/:id`,
+`POST /exceptions/:id/resolve`), and `lib/exceptions.ts`'s
+`createExceptionCase()` - the single choke point every case-opening call
+site in the codebase funnels through. `GET /exceptions` had the same
+complete-list-leak shape as Week 24's `GET /purchase-orders` (a
+manager/auditor role with no `locationId` query param got an unfiltered
+`{}` scope); `createExceptionCase()` never set `companyId` at all, so
+every exception case ever opened silently landed under the schema's
+`"default-company"` default regardless of the reporting user's real
+company - a quieter, deeper version of the same bug, fixed by adding a
+required `companyId` field to its input type and threading a real value
+through all eight call sites (`operations-extension.ts`,
+`transfer-logistics.ts`, `catalog-procurement.ts`, `core.ts`,
+`qc-inspection.ts`). Proven with
+`src/routes/operations-extension-returns-exceptions.postgres.test.ts`
+(7/7 passing), reusing the Week 23/24 harness, including a regression test
+that a newly created exception case is stamped with the caller's real
+companyId rather than the schema default. See
+`docs/week25-returnrequest-exceptioncase-bare-id-remediation.md`.
+
+## Bare-id call-site migration - fourth slice: Transfer and StockCount routes
+
+Fourth slice: every direct `prisma.transfer.*`/`prisma.stockCount.*` call
+site in `routes/operations-extension.ts` and `routes/catalog-procurement.ts`.
+`core.ts` was checked and found already sound for these two models - its
+in-memory `listTransfers()`/`listCounts()` lookups go through
+`lib/inventory.ts`'s `canAccessLocation`, a stricter, already company-aware
+function (calls `companyOwnsLocation` and denies unconditionally on
+failure, even for `ADMIN`), unlike `operations-extension.ts`'s own local
+`canAccessLocation` which grants `ADMIN`/`ADMIN_USER`/`AUDITOR`
+unconditional access with no company check at all - the actual root cause
+behind every finding in slices 1-4. Fixed this slice: `GET
+/intelligence/:locationId` (`stockCount.findMany` gained a direct
+`companyId` filter - the permissive location check itself still lets a
+cross-tenant admin reach the endpoint, but the query behind it no longer
+leaks another company's stock-count history once there); `GET
+/purchase-orders/plan` (had **no ownership check of any kind** on its
+`locationId` query param, the worst finding of this slice - fixed with an
+explicit `Location` ownership check before any other query runs, plus a
+direct `companyId` filter on its `transfer.findMany`); `POST
+/pick-waves/:id/scan` (`pickWave.findUnique` scoped through its `location`
+relation since `PickWave` has no `companyId` column of its own, and the
+per-transfer `findUnique` inside it converted to `findFirst` with a direct
+`companyId` filter). Proven with
+`src/routes/operations-extension-transfer-stockcount.postgres.test.ts`
+(3/3 passing), reusing the Week 23 harness (parameterized over two
+routers this time). New findings, not fixed: `operations-extension.ts`'s
+own permissive `canAccessLocation` itself (the highest-leverage next
+step - fixing it once would close this class of bug for every route that
+uses it); `ReorderRule` has no `companyId` column at all, so reorder-rule
+visibility in `GET /intelligence/:locationId` is still not company-scoped,
+only the stock-count history behind it; `core.ts`'s in-memory
+`TransferRecord`/`CountRecord` types carry no `companyId` field at all,
+so their protection depends entirely on the in-memory
+`companyOwnsLocation` ownership map staying correct, not a real column.
+See `docs/week26-transfer-stockcount-bare-id-remediation.md`.
+
+## Bare-id call-site migration - fifth slice: centralized canAccessLocation fix
+
+Fifth slice: instead of continuing to patch individual query call sites,
+fixed the shared root cause Week 26 named -
+`routes/operations-extension.ts`'s own local `canAccessLocation`, which
+granted `ADMIN`/`ADMIN_USER`/`AUDITOR` unconditional access to any
+`locationId` with no company check at all (unlike `lib/inventory.ts`'s
+stricter version already used by `core.ts`). The function now denies
+outright when a location's company ownership is *known* (via
+`ownerOfLocation`/`companyOwnsLocation` from `lib/saas/tenant-scope.ts` -
+the same in-memory map `enforceOperationalCompanyScope` already relies on
+globally) and mismatches the caller's company, before the role check
+runs; a location not yet tracked in the map falls through to the original
+role/assignment check unchanged - the same fail-safe-if-unknown shape
+`enforceOperationalCompanyScope` itself already uses, chosen over a
+harder "deny unless proven owned" check (which risks false-denies for
+data the map hasn't seen) or an async real-Postgres lookup (which would
+require converting all ~38 call sites to `await`, a far larger change).
+One function change closes the access gate for every route that calls it,
+with every prior slice's query-level `companyId` filter left in place as
+an independent second layer of defense. Proven with
+`src/routes/operations-extension-canaccesslocation.postgres.test.ts`
+(2/2 passing): a cross-company admin is denied 403 once the location is
+registered in the ownership map (the same registration
+`routes/core.ts`'s real location-creation route already performs), while
+an unregistered location's request still succeeds unchanged, and all 19
+of slices 1-4's existing Postgres tests continue passing. See
+`docs/week27-canaccesslocation-centralized-fix.md`.
+
+## Supplier - real companyId added (bare-id call-site migration, sixth slice)
+
+`Supplier` had no per-company scoping column at all before this slice -
+the same complete gap `ExceptionCase` had before Week 12: `GET /suppliers`
+had no filter of any kind (the `_req` unused-parameter tell, same as Week
+24's `GET /purchase-orders`), returning every company's suppliers to any
+authenticated user. Migration `20261030090000_supplier_company_scope`
+adds a real `companyId` column. Unlike the five originally-`tenantId`-only
+models, `Supplier` has no `Location` (or other single-owner relation) to
+backfill from - and this very gap already let a supplier accumulate
+purchase orders from more than one company - so every existing row is
+backfilled to the same `'default-company'` constant this migration series
+uses whenever no better source exists, a documented approximation.
+
+## Bare-id call-site migration - sixth slice: Item and Supplier routes
+
+Sixth slice: every remaining route-level `Item` call site in
+`routes/operations-extension.ts`/`routes/catalog-procurement.ts`, and
+every `Supplier` call site in `routes/catalog-procurement.ts` (see the
+Supplier section above for the schema side). Fixed: `GET /suppliers`,
+`POST /suppliers` (now stamps a real companyId instead of the schema
+default), `PUT /suppliers/:id`, `GET /suppliers/:id/score`, the supplier
+lookups in `GET /purchase-orders/plan`/`POST /purchase-orders/plan/draft`;
+`POST /purchase-orders`'s item-line lookup (which also gained an explicit
+check that every requested itemId actually resolved to a real item -
+previously an unresolved or cross-tenant id would silently become a real
+order line, checked only for `ACTIVE` status if it *did* resolve); `POST
+/items/:itemId/prices`, `GET /items/:itemId/forecast`, `POST
+/items/:itemId/serials`, `POST /qc-inspections`'s item lookups. Two
+directly-adjacent findings fixed in the same slice: `GET
+/saved-views/:id/items` had a completely unfiltered
+`prisma.item.findMany()` (every company's whole item catalog, through any
+saved view) behind its own unscoped `SavedView` lookup - also fixed `GET
+/saved-views`'s unscoped `isShared` branch and `DELETE /saved-views/:id`;
+and `POST /connectors/:id/ingest` had the same bare-id gap on both
+`MarketplaceConnector` (in *both* its in-memory and Postgres lookup paths
+- the in-memory one was tried first via `??`, so fixing only the Postgres
+branch would have left it open) and the per-line SKU-to-Item lookup.
+Proven with
+`src/routes/catalog-procurement-item-supplier.postgres.test.ts` (7/7
+passing) and `src/routes/operations-extension-connectors.postgres.test.ts`
+(2/2 passing). See `docs/week28-item-supplier-bare-id-remediation.md`.
+
+## ReorderRule - real companyId added (bare-id call-site migration, seventh slice)
+
+`ReorderRule` had no per-company scoping column at all before this slice
+- only the constant `tenantId`. Unlike `Supplier`, it has a real
+`locationId` relation to `Location` (which does carry a real `companyId`),
+so migration `20261102090000_reorder_rule_company_scope` backfills it the
+same way `PurchaseOrder`/`Order`/`Transfer`/`StockCount`/`ExpiryAlert`
+were: join through the rule's own `Location`.
+
+## Bare-id call-site migration - seventh slice: ExpiryAlert and ReorderRule routes
+
+Seventh slice: `ExpiryAlert`'s remaining call sites (it already had a real
+`companyId` since Week 22 - only the call sites needed fixing) and every
+`ReorderRule` call site (schema side above). Worst finding: `PUT
+/reorder-rules/:itemId` had **no location-ownership check of any kind** -
+only an admin-role check - so any admin of any company could set the
+reorder min/target quantities for any location and item, a genuine
+cross-tenant write, not just a read leak. Fixed with an explicit
+`Location` ownership check before the upsert (same pattern as `GET
+/purchase-orders/plan` and `PUT /suppliers/:id`). Also fixed: `GET
+/reorder-rules`, and the reorder-rule queries inside `GET
+/items/:itemId/forecast` and `GET /intelligence/:locationId` - the last of
+these is the exact gap Week 26's own writeup named and left open
+("`ReorderRule` visibility ... is still not company-scoped"), now closed.
+`PATCH /expiry-alerts/:id/status` and `POST /expiry-alerts/:id/write-off`
+both gained a direct `companyId` filter, independent of the
+`canAccessLocation` fallback (which, since Week 27, only denies a *known*
+cross-company location, not an unregistered one). Proven with
+`src/routes/catalog-procurement-reorder-rules.postgres.test.ts` (3/3
+passing) and `src/routes/operations-extension-expiry-alerts.postgres.test.ts`
+(2/2 passing); Week 26's own `GET /intelligence/:locationId` test was
+updated to assert the reorder rule itself is now invisible cross-tenant,
+not just degraded. See
+`docs/week29-expiryalert-reorderrule-bare-id-remediation.md`.
+
+With this slice, every model named across the bare-id remediation's seven
+slices (`Order`, `PurchaseOrder`, `ReturnRequest`, `ExceptionCase`,
+`Transfer`, `StockCount`, `Item`, `Supplier`, `ExpiryAlert`,
+`ReorderRule`) has its route-level bare-id call sites fixed. Remaining,
+not yet migrated: `lib/orders.ts`, `lib/persistence.ts`, and various
+import-lifecycle internals (many already scoped one level up by their
+caller and lower priority than direct route handlers). `core.ts`'s
+in-memory `TransferRecord`/`CountRecord` types still carry no `companyId`
+field, relying entirely on the in-memory ownership map rather than a real
+column - and auditing whether that map is reliably populated for every
+location-creation path in the codebase (not just `routes/core.ts`'s) is
+itself a worthwhile follow-up, since Week 27's fix is only as complete as
+that map's coverage. A further slice past this point would be net-new
+scope: `core.ts`'s in-memory records, or widening past the
+`unscoped-tenant-query` rule's current `TENANT_SCOPED_MODELS` list toward
+the full `OPERATIONAL_TENANT_TABLES`.
+
+## Bare-id call-site migration - eighth slice: in-memory Transfer/StockCount companyId
+
+Eighth slice, lower severity than 1-7 (not an active leak - `core.ts`
+uses `lib/inventory.ts`'s stricter `canAccessLocation`, already confirmed
+sound in Week 26): `lib/repository.ts`'s in-memory `TransferRecord`/
+`CountRecord` types carried no `companyId` field at all, so `core.ts`'s
+bare-id lookups depended entirely on the in-memory location-ownership map
+for tenant isolation, with no independent record-level fallback. Both
+types gained an optional `companyId` field, threaded from every
+production creation call site's own already-known `companyId`
+(`routes/core.ts`'s replenishment-transfer and transfer-import-commit
+routes and `commitLotCount`, `lib/transfer-command-service.ts`'s
+`createTransfer`) - the same value each site already passes to
+`persistTransfer`/`persistCount` for the real Postgres write next to it.
+`core.ts`'s ~17 bare-id lookups themselves are deliberately not converted
+to filter by this field in this slice, since the check they already sit
+behind is sound; that's the natural next increment for a future slice
+wanting a second, independent layer. Proven with a unit test in
+`src/lib/repository.test.ts`. See
+`docs/week30-transfer-count-inmemory-companyid.md`.
+
 ## Control-plane elevation
 
 No generic bypass flag exists in `TenantContext` (`lib/tenant-context.ts`) -

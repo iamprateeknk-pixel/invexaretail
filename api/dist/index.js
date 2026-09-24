@@ -52,6 +52,7 @@ const transfers_js_1 = __importDefault(require("./routes/transfers.js"));
 const branches_js_1 = __importDefault(require("./routes/branches.js"));
 const items_js_1 = __importDefault(require("./routes/items.js"));
 const imports_js_1 = __importDefault(require("./routes/imports.js"));
+const reports_js_1 = __importDefault(require("./routes/reports.js"));
 const catalog_procurement_js_1 = __importDefault(require("./routes/catalog-procurement.js"));
 const operations_extension_js_1 = __importDefault(require("./routes/operations-extension.js"));
 const events_js_1 = __importStar(require("./routes/events.js"));
@@ -307,6 +308,7 @@ app.use('/api/v1', transfers_js_1.default);
 app.use('/api/v1', branches_js_1.default);
 app.use('/api/v1', items_js_1.default);
 app.use('/api/v1', imports_js_1.default);
+app.use('/api/v1', reports_js_1.default);
 app.use('/api/v1', core_js_1.default);
 app.use('/api/v1', catalog_procurement_js_1.default);
 app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
@@ -355,6 +357,7 @@ app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req, res) => {
             customerName: mapped.customerName,
             notes: mapped.notes,
             createdById: 'connector',
+            companyId: connector.tenantId,
             allowSplit: true,
             candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
             lines,

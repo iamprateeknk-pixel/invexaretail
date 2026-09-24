@@ -6,6 +6,44 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
 const repository_js_1 = require("./repository.js");
+// Bare-id call-site migration slice 8 (see docs/tenant-scope-coverage.md):
+// the in-memory Transfer/StockCount mirror carried no companyId field at
+// all before this slice, so core.ts's bare-id lookups depended entirely
+// on the separate in-memory location-ownership map for tenant isolation,
+// not a real field on the record itself. This proves the field round-trips
+// through both records' create/list functions, which is what every real
+// production creation call site (routes/core.ts, lib/transfer-command-service.ts)
+// now relies on.
+(0, node_test_1.default)('createTransferRecord and createCountRecord preserve a companyId, so a caller no longer has to rely on the location-ownership map alone', () => {
+    (0, repository_js_1.createTransferRecord)({
+        id: 'transfer-companyid-test-1',
+        sourceLocationId: 'wh-1',
+        destinationLocationId: 'loc-1',
+        requestedBy: 'user-admin-1',
+        role: 'ADMIN',
+        status: 'REQUESTED',
+        lines: [{ itemId: 'item-1001', lotId: 'lot-1001', quantity: 1 }],
+        createdAt: new Date().toISOString(),
+        companyId: 'default-company',
+    });
+    const transfer = (0, repository_js_1.listTransfers)().find((row) => row.id === 'transfer-companyid-test-1');
+    strict_1.default.equal(transfer?.companyId, 'default-company');
+    (0, repository_js_1.createCountRecord)({
+        id: 'count-companyid-test-1',
+        itemId: 'item-test-companyid',
+        lotId: 'lot-test-companyid',
+        locationId: 'loc-test-companyid',
+        physicalQuantity: 1,
+        bookQty: 1,
+        mode: 'manual',
+        submittedBy: 'user-store-1',
+        role: 'STORE_USER',
+        createdAt: new Date().toISOString(),
+        companyId: 'default-company',
+    });
+    const count = (0, repository_js_1.listCounts)().find((row) => row.id === 'count-companyid-test-1');
+    strict_1.default.equal(count?.companyId, 'default-company');
+});
 (0, node_test_1.default)('approving a count posts the variance to the stock ledger', () => {
     (0, repository_js_1.adjustStockLedger)('item-test-1', 'lot-test-1', 'loc-test-1', 50);
     (0, repository_js_1.createCountRecord)({

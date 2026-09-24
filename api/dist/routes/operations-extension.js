@@ -45,7 +45,22 @@ const tenant_scope_js_1 = require("../lib/saas/tenant-scope.js");
 const serial_tracking_js_1 = require("../lib/serial-tracking.js");
 const router = (0, express_1.Router)();
 router.use(enterprise_auth_js_1.extractToken, enterprise_auth_js_1.requireAuth, access_control_js_1.enforcePermissionOverrides, memory_mode_js_1.respondWhenMemoryUnavailable);
+// Centralized fix (see docs/tenant-scope-coverage.md's bare-id call-site
+// migration, slice 5): the role-only check below let ADMIN/ADMIN_USER/
+// AUDITOR through for ANY locationId, including one belonging to a
+// different company - the root cause behind most of the cross-tenant
+// findings in slices 1-4. A location whose company ownership is known
+// (registered via registerLocationCompany, or hydrated at boot) and
+// mismatches the caller's own company is now always denied, before the
+// role check runs, same fail-safe-if-unknown pattern already trusted
+// globally by enforceOperationalCompanyScope. A location not yet tracked
+// in the in-memory ownership map falls through to the original role/
+// assignment check unchanged, so this closes the verified vulnerability
+// class without risking a false-deny on data the map hasn't seen yet.
 function canAccessLocation(req, locationId) {
+    if (req.companyId && (0, tenant_scope_js_1.ownerOfLocation)(locationId) && !(0, tenant_scope_js_1.companyOwnsLocation)(req.companyId, locationId)) {
+        return false;
+    }
     return ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user.role) || (req.user.locationIds ?? []).includes(locationId);
 }
 function requireAdmin(req, res) {
@@ -362,6 +377,7 @@ async function syncExpiryAlerts(locationId) {
                 quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
                 status: 'ACTIVE', recommendedAction: (0, expiry_alerts_js_1.recommendedExpiryAction)(days),
                 metadata: { severity: (0, expiry_alerts_js_1.expirySeverity)(days) },
+                companyId: row.companyId,
             },
             update: {
                 quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
@@ -503,6 +519,7 @@ router.post('/expiry-write-off', async (req, res) => {
                     quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
                     status: 'ACTIVE', recommendedAction: (0, expiry_alerts_js_1.recommendedExpiryAction)(days),
                     metadata: { severity: lot.expiryDate ? (0, expiry_alerts_js_1.expirySeverity)(days) : 'MISSING' },
+                    companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 },
                 update: {
                     quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
@@ -558,7 +575,7 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
     if (status === 'RESOLVED' && reason.length < 5)
         return res.status(400).json({ message: 'A resolution reason of at least 5 characters is required.' });
-    const current = await db_js_1.prisma.expiryAlert.findUnique({ where: { id: req.params.id } });
+    const current = await db_js_1.prisma.expiryAlert.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!current)
         return res.status(404).json({ message: 'Expiry alert not found.' });
     if (!canAccessLocation(req, current.locationId))
@@ -587,7 +604,7 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
     const requestedQty = Number(req.body.quantity);
     try {
         const result = await db_js_1.prisma.$transaction(async (tx) => {
-            const alert = await tx.expiryAlert.findUnique({ where: { id: req.params.id } });
+            const alert = await tx.expiryAlert.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
             if (!alert)
                 throw new Error('Expiry alert not found.');
             if (!['ACTIVE', 'ACKNOWLEDGED'].includes(String(alert.status)))
@@ -666,7 +683,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     });
     const onOrder = openLines.reduce((sum, line) => sum + Math.max(0, line.quantity - line.receivedQty), 0);
     const suggestion = (0, demand_forecast_js_1.suggestReplenishment)({ onHand, onOrder, demand, averageLeadTimeDays: leadTimeDays, servicePercent });
-    const item = await db_js_1.prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });
+    const item = await db_js_1.prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, select: { name: true } });
     const lots = await db_js_1.prisma.lot.findMany({
         where: { itemId: req.params.itemId, stock: { some: { locationId, onHand: { gt: 0 } } } },
         include: { stock: { where: { locationId } } },
@@ -682,7 +699,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
         expiryDate: lot.expiryDate?.toISOString() ?? null,
     })));
     const expiryActions = (0, intelligence_actions_js_1.buildExpiryActionRecommendations)(lotInputs);
-    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { itemId: req.params.itemId } });
+    const rules = await db_js_1.prisma.reorderRule.findMany({ where: { itemId: req.params.itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     const networkLedger = await db_js_1.prisma.stockLedger.findMany({
         where: { itemId: req.params.itemId },
         select: { locationId: true, onHand: true, location: { select: { name: true } } },
@@ -762,11 +779,11 @@ router.get('/intelligence/:locationId', async (req, res) => {
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
     const [rules, ledger, counts, dismissals] = await Promise.all([
-        db_js_1.prisma.reorderRule.findMany({ where: { locationId: req.params.locationId }, include: { item: true } }),
+        db_js_1.prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { item: true } }),
         db_js_1.prisma.stockLedger.findMany({
             select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, location: { select: { name: true, type: true } } },
         }),
-        db_js_1.prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since } }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
+        db_js_1.prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
         db_js_1.prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
     ]);
     const dismissedItemIds = new Set(dismissals.filter((d) => d.type === 'REPLENISHMENT').map((d) => d.itemId));
@@ -1193,7 +1210,7 @@ router.post('/items/:itemId/serials', async (req, res) => {
     const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
     if (locationId && !canAccessLocation(req, locationId))
         return res.status(403).json({ message: 'Location access denied.' });
-    const item = await db_js_1.prisma.item.findUnique({ where: { id: itemId } });
+    const item = await db_js_1.prisma.item.findFirst({ where: { id: itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!item)
         return res.status(404).json({ message: 'Item was not found.' });
     const movement = (0, serial_tracking_js_1.planSerialMovement)({
@@ -1298,7 +1315,7 @@ router.get('/orders', async (req, res) => {
             ? {}
             : { fulfillmentLocationId: { in: req.user.locationIds ?? [] } };
     const orders = await db_js_1.prisma.order.findMany({
-        where: { ...scope, ...(status ? { status } : {}) },
+        where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, ...scope, ...(status ? { status } : {}) },
         include: {
             lines: { include: { item: { select: { id: true, code: true, name: true } }, lot: { select: { id: true, lotNo: true } } } },
             fulfillmentLocation: { select: { id: true, code: true, name: true } },
@@ -1371,6 +1388,7 @@ router.post('/orders', async (req, res) => {
             customerName: req.body.customerName || null,
             notes: req.body.notes || null,
             createdById: req.user.id,
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             reservationTtlMinutes,
             allowBackorder: Boolean(req.body.allowBackorder),
             allowSplit: req.body.allowSplit !== false,
@@ -1430,7 +1448,7 @@ async function packVerificationFor(orderId, session) {
 router.post('/orders/:id/pack/start', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1445,7 +1463,7 @@ router.post('/orders/:id/pack/start', async (req, res) => {
 router.get('/orders/:id/pack', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1463,7 +1481,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
     const quantity = Number(req.body.quantity ?? 1);
     if (!itemId || !Number.isFinite(quantity) || quantity <= 0)
         return res.status(400).json({ message: 'itemId and a positive quantity are required.' });
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1480,7 +1498,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
 router.post('/orders/:id/pack/seal', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1514,7 +1532,7 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
 router.post('/orders/:id/ship', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1559,7 +1577,7 @@ router.post('/orders/:id/ship', async (req, res) => {
 router.get('/orders/:id/shipment', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1574,10 +1592,10 @@ router.get('/orders/:id/shipment', async (req, res) => {
 router.post('/shipments/:awb/cancel', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const shipment = await db_js_1.prisma.shipment.findUnique({ where: { awbNumber: req.params.awb } });
+    const shipment = await db_js_1.prisma.shipment.findFirst({ where: { awbNumber: req.params.awb, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!shipment)
         return res.status(404).json({ message: 'Shipment not found.' });
-    if (!canAccessLocation(req, (await db_js_1.prisma.order.findUnique({ where: { id: shipment.orderId } }))?.fulfillmentLocationId ?? '')) {
+    if (!canAccessLocation(req, (await db_js_1.prisma.order.findFirst({ where: { id: shipment.orderId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }))?.fulfillmentLocationId ?? '')) {
         return res.status(403).json({ message: 'Location access denied.' });
     }
     try {
@@ -1601,7 +1619,7 @@ router.post('/shipments/:awb/cancel', async (req, res) => {
 router.post('/orders/:id/returns', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1655,7 +1673,7 @@ router.post('/orders/:id/returns', async (req, res) => {
 router.get('/orders/:id/returns', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1704,7 +1722,7 @@ async function returnLot(returnRequestId, itemId) {
 router.patch('/returns/:id/status', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId))
@@ -1763,6 +1781,7 @@ router.patch('/returns/:id/status', async (req, res) => {
                     description: plan.note ?? null,
                     itemId: line.itemId, lotId: lot.id, locationId, quantity: line.quantity,
                     sourceDocument: returnRequest.id, sourceLineId: line.id, reportedById: req.user.id,
+                    companyId: returnRequest.companyId,
                 });
             }
             await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
@@ -1782,7 +1801,7 @@ router.patch('/returns/:id/status', async (req, res) => {
 router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId))
@@ -1847,7 +1866,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
     const decision = (0, returns_rma_js_1.parseRefundDecision)(req.body.status);
     if (!decision)
         return res.status(400).json({ message: 'Refund status must be REFUNDED or DENIED.' });
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status))
@@ -2174,7 +2193,7 @@ router.post('/qc-inspections', async (req, res) => {
     try {
         let itemCategory = null;
         if (req.body.itemId) {
-            const item = await db_js_1.prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });
+            const item = await db_js_1.prisma.item.findFirst({ where: { id: String(req.body.itemId), companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, select: { category: true } });
             itemCategory = item?.category ?? null;
         }
         let branchId = null;
@@ -2194,6 +2213,7 @@ router.post('/qc-inspections', async (req, res) => {
             results,
             notes: req.body.notes || null,
             inspectedById: req.user.id,
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         });
         return res.status(201).json({ inspection, exceptionCase });
     }
@@ -2215,11 +2235,12 @@ router.get('/exceptions', async (req, res) => {
     const mine = req.query.mine === 'true';
     if (locationId && !canAccessLocation(req, locationId))
         return res.status(403).json({ message: 'Location access denied.' });
+    const companyId = req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID;
     const scope = mine
-        ? { ownerId: req.user.id }
+        ? { ownerId: req.user.id, companyId }
         : EXCEPTION_MANAGER_ROLES.includes(req.user.role) || req.user.role === 'AUDITOR'
-            ? (locationId ? { locationId } : {})
-            : { locationId: { in: req.user.locationIds ?? [] } };
+            ? (locationId ? { locationId, companyId } : { companyId })
+            : { locationId: { in: req.user.locationIds ?? [] }, companyId };
     const cases = await db_js_1.prisma.exceptionCase.findMany({
         where: {
             ...scope,
@@ -2270,6 +2291,7 @@ router.post('/exceptions', async (req, res) => {
         sourceLineId: req.body.sourceLineId || null,
         ownerId: req.body.ownerId || null,
         reportedById: req.user.id,
+        companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         dueHours: Number.isFinite(Number(req.body.dueHours)) ? Number(req.body.dueHours) : undefined,
     });
     if (!exceptionCase)
@@ -2277,7 +2299,7 @@ router.post('/exceptions', async (req, res) => {
     return res.status(201).json({ case: exceptionCase });
 });
 router.patch('/exceptions/:id', async (req, res) => {
-    const existing = await db_js_1.prisma.exceptionCase.findUnique({ where: { id: req.params.id } });
+    const existing = await db_js_1.prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!existing)
         return res.status(404).json({ message: 'Exception case not found.' });
     const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user.role);
@@ -2311,7 +2333,7 @@ router.patch('/exceptions/:id', async (req, res) => {
     return res.json({ case: updated });
 });
 router.post('/exceptions/:id/resolve', async (req, res) => {
-    const existing = await db_js_1.prisma.exceptionCase.findUnique({ where: { id: req.params.id } });
+    const existing = await db_js_1.prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!existing)
         return res.status(404).json({ message: 'Exception case not found.' });
     const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user.role);
@@ -2379,7 +2401,7 @@ router.post('/pick-waves/:id/scan', async (req, res) => {
             return res.status(400).json({ message: decision.message, code: decision.code, expected: walkOrder[scannedIndex] ?? null, walkOrder });
         return res.json({ ok: true, nextBin: walkOrder[scannedIndex + 1] ?? null, walkOrder, scannedIndex: scannedIndex + 1 });
     }
-    const wave = await db_js_1.prisma.pickWave.findUnique({ where: { id: req.params.id } });
+    const wave = await db_js_1.prisma.pickWave.findFirst({ where: { id: req.params.id, location: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } } });
     if (!wave)
         return res.status(404).json({ message: 'Pick wave not found.' });
     if (!canAccessLocation(req, wave.locationId))
@@ -2387,7 +2409,7 @@ router.post('/pick-waves/:id/scan', async (req, res) => {
     const transferIds = Array.isArray(wave.transferIds) ? wave.transferIds.map(String) : [];
     const walkBins = [];
     for (const transferId of transferIds) {
-        const transfer = await db_js_1.prisma.transfer.findUnique({ where: { id: transferId }, include: { lines: true } }).catch(() => null);
+        const transfer = await db_js_1.prisma.transfer.findFirst({ where: { id: transferId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } }).catch(() => null);
         if (!transfer)
             continue;
         for (const line of transfer.lines) {
@@ -2495,8 +2517,9 @@ router.post('/connectors', async (req, res) => {
 router.post('/connectors/:id/ingest', async (req, res) => {
     if (!requireAdmin(req, res))
         return;
-    const connector = (0, connectors_js_1.findConnector)(req.params.id)
-        ?? (persistence_js_1.databaseEnabled ? await db_js_1.prisma.marketplaceConnector.findUnique({ where: { id: req.params.id } }) : null);
+    const memoryConnector = (0, connectors_js_1.findConnector)(req.params.id);
+    const connector = (memoryConnector && memoryConnector.tenantId === (req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID) ? memoryConnector : undefined)
+        ?? (persistence_js_1.databaseEnabled ? await db_js_1.prisma.marketplaceConnector.findFirst({ where: { id: req.params.id, tenantId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }) : null);
     if (!connector)
         return res.status(404).json({ message: 'Connector not found.' });
     if (!(0, saas_js_1.tenantAllows)(req.user.companyId ?? 'default-company', 'connectors') && !(0, saas_js_1.tenantAllows)('default-company', 'connectors')) {
@@ -2518,7 +2541,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
             const memoryItem = (0, repository_js_1.listItems)().find((entry) => entry.code === line.sku || entry.id === line.sku);
             const item = !persistence_js_1.databaseEnabled
                 ? memoryItem
-                : await db_js_1.prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;
+                : await db_js_1.prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }], companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }).catch(() => null) ?? memoryItem;
             if (!item) {
                 errors.push({ reference: mapped.externalReference, message: `Unknown SKU ${line.sku}` });
                 continue;
@@ -2537,6 +2560,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
                 customerName: mapped.customerName,
                 notes: mapped.notes,
                 createdById: req.user.id,
+                companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 allowSplit: true,
                 candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
                 lines,

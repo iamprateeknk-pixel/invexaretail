@@ -137,6 +137,7 @@ export type RecordQcInspectionInput = {
   results: Record<string, QcCheckResult>;
   notes?: string | null;
   inspectedById: string;
+  companyId: string;
 };
 
 /**
@@ -200,6 +201,7 @@ export async function recordQcInspection(input: RecordQcInspectionInput) {
       sourceDocument: input.sourceDocument ?? null,
       sourceLineId: input.sourceLineId ?? null,
       reportedById: input.inspectedById,
+      companyId: input.companyId,
     });
     if (exceptionCase) {
       await prisma.qcInspection.update({ where: { id: inspection.id }, data: { exceptionCaseId: exceptionCase.id } });
