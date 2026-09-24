@@ -11,6 +11,7 @@ const cors_origins_js_1 = require("./cors-origins.js");
     const origins = (0, cors_origins_js_1.resolveAllowedOrigins)('https://api.invexaretail.com');
     strict_1.default.ok(origins.includes('https://invexaretail.com'));
     strict_1.default.ok(origins.includes('https://www.invexaretail.com'));
+    strict_1.default.ok(origins.includes('https://invexaretail-web.iamprateek-nk.workers.dev'));
     strict_1.default.ok(origins.includes('https://invexaretail.prateek160298.workers.dev'));
     strict_1.default.ok(origins.includes('https://api.invexaretail.com'));
 });
