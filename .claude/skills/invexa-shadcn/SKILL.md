@@ -32,6 +32,6 @@ Preserve blind stock counts, assignment and approval/rejection, transfer request
 
 Reuse `web/src/components/ui` before adding a component. Prefer Card for KPIs, Table or DataTable for queues, Sheet for contextual detail, Dialog for focused edits or confirmations, Tabs for queue views, Badge for state, Select or Command for structured choices, and Sonner for mutation feedback. Add new registry components with the shadcn CLI rather than hand-copying them when registry access is available.
 
-Keep Hostinger deployment compatible: the web app is a Vite static build on shared hosting and uses hash navigation unless an Apache fallback is deliberately configured. The existing API and Hostinger MySQL data contracts remain authoritative.
+Keep Cloudflare Workers deployment compatible: the web app is a Vite static build served from web/dist by web/wrangler.toml (SPA fallback enabled) and currently uses hash navigation - keep that unless routing is deliberately changed. The existing API and PostgreSQL data contracts remain authoritative.
 
 Before finishing, run `npm run build` and `npm run lint` in `web/`, verify desktop/mobile overflow and focus behavior, and report any pre-existing warnings separately from new failures.
