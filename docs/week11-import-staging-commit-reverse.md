@@ -150,11 +150,10 @@ route rejects a request with no credentials.
   mapping step, and no frontend for any of this yet. The guide's "Import
   wizard" deliverable is unbuilt; building one honestly needs a column-
   mapping UX decision this week did not make unilaterally.
-- **`lib/outbox-worker.ts`'s `startOutboxWorker` (Week 7) is still never
-  called from a production entrypoint.** Discovered while wiring this
-  week's own `import-worker.ts` into `worker.ts` - a pre-existing gap, out
-  of this week's scope (it needs a real `DeliveryHandler` decision, not a
-  one-line addition).
+- **Outbox production delivery is closed.** `worker.ts` now performs a boot
+  drain and starts `startOutboxWorker`; persisted events are delivered to
+  registered subscribers through `deliverPersistedEvent` without inserting
+  a second outbox row.
 - **The old `lib/persistence.ts`/`lib/import-reversal.ts` import path is
   untouched.** It still writes to the legacy `InventoryMovement` journal
   directly and does not go through this week's state machine or
@@ -162,6 +161,6 @@ route rejects a request with no credentials.
   attempted this week - this is a new path for new uploads, not a
   replacement, mirroring how Week 6 left baseline `StockLedger` writers
   documented rather than force-migrated (`docs/inventory-posting-coverage.md`).
-- **`contracts/openapi.json` has not yet been extended** with the six new
-  `/imports/staged/*` paths - tracked as immediate follow-up, not silently
-  dropped.
+- **The contract gap is closed.** `contracts/openapi.json` includes create,
+  read, validate, commit, failure-export and reverse operations for staged
+  batches; validation, generated-client drift and standalone typecheck pass.
