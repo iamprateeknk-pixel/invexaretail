@@ -245,6 +245,18 @@ export declare function createCountRecord(input: CountRecord): CountRecord;
 /** Undoes createCountRecord when the database write behind it failed. */
 export declare function removeCountRecord(id: string): void;
 export declare function listCounts(): CountRecord[];
+/**
+ * Bare-id call-site migration slice 9 (see docs/tenant-scope-coverage.md):
+ * a companyId-scoped lookup for core.ts's many bare-id count lookups, as
+ * an independent second layer alongside the location-ownership check
+ * they already sit behind. Fail-safe-if-unknown, same shape as Week 27's
+ * centralized canAccessLocation fix: a record whose companyId is known
+ * and mismatches the caller's is denied; a record with no companyId yet
+ * (created before this field existed, or by a path this migration hasn't
+ * reached) falls through unchanged, so this can never cause a false deny
+ * on data the field hasn't reached yet.
+ */
+export declare function findCountForCompany(id: string, companyId: string): CountRecord | undefined;
 export declare function createTransferRecord(input: TransferRecord): TransferRecord;
 export declare function replaceTransferRecord(id: string, input: TransferRecord): TransferRecord;
 export declare function removeTransferRecord(id: string): TransferRecord | undefined;
@@ -285,3 +297,5 @@ export declare function setTransferCartonStatus(id: string, status: TransferCart
 /** Records packing completion and/or dispatch details on the stored transfer. */
 export declare function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'packing' | 'dispatch' | 'cartonCount'>): TransferRecord;
 export declare function listTransfers(): TransferRecord[];
+/** Same fail-safe-if-unknown companyId scoping as findCountForCompany, for Transfer. */
+export declare function findTransferForCompany(id: string, companyId: string): TransferRecord | undefined;
