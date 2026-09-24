@@ -98,7 +98,7 @@
 - **Server**: Nginx (web) + Node (API)
 - **SSL/TLS**: Let's Encrypt (certbot)
 - **Database**: PostgreSQL 17 in Docker
-- **Hosting**: Hostinger Cloud / VPS
+- **Hosting**: Cloudflare Workers (web), Railway (API, worker, PostgreSQL)
 
 ### Testing
 - **Unit Testing**: Node test runner (built-in)
@@ -255,7 +255,7 @@ retail-inventory/
 ├── docker-compose.yml            # Docker Compose setup
 ├── .env.example                  # Environment template
 │
-├── DEPLOYMENT_GUIDE.md           # Hostinger deployment
+├── docs/deployment-railway-cloudflare.md  # Railway + Cloudflare deployment
 ├── MOBILE_APP_PLAN.md            # React Native app plan
 ├── API_DOCUMENTATION.md          # API reference
 ├── README.md                     # This file
@@ -404,18 +404,15 @@ docker-compose up
 # Access at http://localhost:5173
 ```
 
-### Hostinger Cloud
+### Production (Cloudflare + Railway)
 
-Follow the comprehensive guide: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
+Follow the guide: [docs/deployment-railway-cloudflare.md](docs/deployment-railway-cloudflare.md)
 
 Quick summary:
-1. Setup Docker on Hostinger VPS
-2. Clone repository
-3. Configure environment variables
-4. Setup SSL with Let's Encrypt
-5. Configure Nginx reverse proxy
-6. Start Docker containers
-7. Setup automated backups
+1. Railway: an API service, a separate worker service (`api/railway.worker.json`) and a PostgreSQL service
+2. Cloudflare Workers Builds: `invexaretail-web` (root `web`, `npm run build` / `npm run deploy`)
+3. Set `VITE_API_BASE` on the web build to the API's public HTTPS domain
+4. Keep `ALLOWED_ORIGINS` on the API in sync with the web origin
 
 ---
 
@@ -437,7 +434,7 @@ React Native mobile app is in development. See [MOBILE_APP_PLAN.md](MOBILE_APP_P
 ## 📖 Documentation
 
 - [API_DOCUMENTATION.md](API_DOCUMENTATION.md) - Complete API reference
-- [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - Hostinger deployment steps
+- [docs/deployment-railway-cloudflare.md](docs/deployment-railway-cloudflare.md) - Railway + Cloudflare deployment steps
 - [MOBILE_APP_PLAN.md](MOBILE_APP_PLAN.md) - Mobile app architecture
 - `api/README.md` - Backend setup
 - `web/README.md` - Frontend setup
@@ -516,7 +513,7 @@ docker-compose logs api
 curl http://localhost:4000/health
 ```
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#troubleshooting) for more.
+See [docs/deployment-railway-cloudflare.md](docs/deployment-railway-cloudflare.md) for deployment details.
 
 ---
 

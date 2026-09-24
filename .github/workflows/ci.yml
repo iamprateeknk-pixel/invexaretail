@@ -217,14 +217,14 @@ jobs:
           done
           exit 1
 
-      - name: Verify Hostinger startup file
+      - name: Verify API entry file (app.js) boots without a database
         env:
           SEED_PASSWORD: InvexaCiOnly123
           PORT: 4101
         run: |
-          node app.js > /tmp/invexa-hostinger.log 2>&1 &
+          node app.js > /tmp/invexa-entry.log 2>&1 &
           api_pid=$!
-          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-hostinger.log' EXIT
+          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-entry.log' EXIT
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if curl --fail --silent --show-error http://127.0.0.1:4101/health; then
               exit 0

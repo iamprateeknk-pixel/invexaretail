@@ -34,7 +34,7 @@ echo.
 echo Test the server by visiting:
 echo   - http://localhost:4000/health
 echo.
-echo To test registration from Hostinger, add this to frontend .env:
+echo To point the web app at this local API, add this to frontend .env:
 echo   VITE_API_BASE=http://localhost:4000
 echo.
 echo Press Ctrl+C to stop
