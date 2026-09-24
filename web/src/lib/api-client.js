@@ -24,12 +24,11 @@ export async function refreshSessionAccessToken() {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     const session = readPersistedSession();
-    const refreshToken = session?.refreshToken;
-    if (!refreshToken) return null;
     const response = await fetch(`${API_BASE}/api/v1/auth/refresh-token`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({}),
     });
     if (!response.ok) return null;
     const payload = await response.json().catch(() => ({}));
@@ -37,7 +36,6 @@ export async function refreshSessionAccessToken() {
     writePersistedSession({
       ...session,
       token: payload.token,
-      refreshToken: payload.refreshToken || refreshToken,
       user: payload.user ?? session.user,
     });
     return payload.token;
@@ -52,6 +50,7 @@ export async function apiRequest(path, options = {}, attempt = 0) {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
+      credentials: options.credentials ?? 'include',
       ...(method === 'GET' ? { cache: 'no-store' } : {}),
       headers: {
         'Content-Type': 'application/json',

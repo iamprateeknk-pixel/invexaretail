@@ -46,7 +46,6 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
   async function establishSession(login) {
     persistSession({
       token: login.token,
-      refreshToken: login.refreshToken,
       user: login.user,
     });
     setLoading(true);
@@ -124,11 +123,10 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
   }
 
   async function handleLogout() {
-    const refreshToken = readPersistedSession()?.refreshToken ?? session?.refreshToken;
     try {
       await apiRequest('/api/v1/auth/logout', {
         method: 'POST',
-        body: JSON.stringify({ refreshToken }),
+        body: JSON.stringify({}),
       });
     } catch {
       // Local sign-out must succeed even if the API is unreachable.
@@ -183,7 +181,7 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
   }, []);
 
   useEffect(() => {
-    if (!session?.refreshToken) return undefined;
+    if (!session?.token) return undefined;
     const timer = window.setInterval(() => {
       const current = readPersistedSession();
       if (current?.token && accessTokenNeedsRefresh(current.token)) {
@@ -191,7 +189,7 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
       }
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [session?.refreshToken]);
+  }, [session?.token]);
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {

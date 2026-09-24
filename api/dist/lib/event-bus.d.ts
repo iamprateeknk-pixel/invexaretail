@@ -32,6 +32,7 @@ export declare function subscribe(subscriber: Omit<EventSubscriber, 'id'>): {
     id: string;
     unsubscribe: () => void;
 };
+export declare function deliverPersistedEvent(event: DomainEvent): void;
 export declare function subscriberCount(): number;
 export declare function latestEventId(): number;
 export type ReplayResult = {

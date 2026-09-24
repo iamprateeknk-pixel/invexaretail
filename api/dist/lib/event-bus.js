@@ -5,6 +5,7 @@ exports.canReceive = canReceive;
 exports.recordOutboxEventInTransaction = recordOutboxEventInTransaction;
 exports.publishEvent = publishEvent;
 exports.subscribe = subscribe;
+exports.deliverPersistedEvent = deliverPersistedEvent;
 exports.subscriberCount = subscriberCount;
 exports.latestEventId = latestEventId;
 exports.eventsSince = eventsSince;
@@ -81,6 +82,18 @@ function subscribe(subscriber) {
     const id = (0, node_crypto_1.randomUUID)();
     subscribers.set(id, { ...subscriber, id });
     return { id, unsubscribe: () => { subscribers.delete(id); } };
+}
+function deliverPersistedEvent(event) {
+    for (const subscriber of subscribers.values()) {
+        if (!canReceive(subscriber, event))
+            continue;
+        try {
+            subscriber.send(event);
+        }
+        catch {
+            subscribers.delete(subscriber.id);
+        }
+    }
 }
 function subscriberCount() { return subscribers.size; }
 function latestEventId() { return sequence; }

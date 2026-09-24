@@ -7,6 +7,7 @@ exports.isAllowedOrigin = isAllowedOrigin;
 exports.REQUIRED_WEB_ORIGINS = [
     'https://invexaretail.com',
     'https://www.invexaretail.com',
+    'https://invexaretail-web.iamprateek-nk.workers.dev',
     'https://invexaretail.prateek160298.workers.dev',
     'http://localhost:5173',
     'http://127.0.0.1:5173',

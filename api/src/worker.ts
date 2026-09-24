@@ -3,6 +3,8 @@ import { startOrderScheduler, orderSweepTick } from './lib/order-scheduler.js';
 import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
 import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
+import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
+import { deliverPersistedEvent } from './lib/event-bus.js';
 
 async function main() {
   if (process.env.REQUIRE_DATABASE === 'true' && !process.env.DATABASE_URL) {
@@ -12,21 +14,23 @@ async function main() {
     await campaignSchedulerTick();
     await orderSweepTick();
     await drainImportCommitsOnce();
+    await drainOutboxOnce(deliverPersistedEvent);
     await pruneOutboxOnce();
   });
   startCampaignScheduler();
   startOrderScheduler();
   // Week 11: the durable import-commit worker.
   startImportWorker();
-  // Week 14: retention sweep for DomainEventOutbox (see
-  // lib/outbox-retention.ts and docs/week14-outbox-retention.md). Note:
-  // lib/outbox-worker.ts's startOutboxWorker (Week 7) is deliberately still
-  // not called here - investigated this week and found there is no real
-  // consumer to wire its delivery semantics to (SSE reads this table
-  // directly via durableEventsSince, independent of delivery status; the
-  // separate webhook system carries entity payloads this bare table
-  // doesn't have). The actual bug - the table growing forever with nothing
-  // ever pruning it - is what this week's retention sweep fixes instead.
+  // lib/outbox-worker.ts's startOutboxWorker (Week 7) is now wired to
+  // lib/event-bus.ts's deliverPersistedEvent - a live consumer that
+  // broadcasts each delivered event to connected SSE subscribers,
+  // superseding this repo's own Week 14 conclusion (see
+  // docs/week14-outbox-retention.md) that no real consumer existed at the
+  // time. The retention sweep below stays alongside it: it prunes rows
+  // past OUTBOX_RETENTION_DAYS regardless of delivery outcome (including
+  // any that end up POISON), so the table still cannot grow unbounded
+  // even with a live consumer now attached.
+  startOutboxWorker(deliverPersistedEvent);
   startOutboxRetention();
   console.log('Invexa durable worker is running.');
 }
@@ -34,4 +38,4 @@ async function main() {
 void main().catch((error) => {
   console.error('Worker failed to start', error);
   process.exitCode = 1;
-});
+});

@@ -112,11 +112,11 @@ shallow stand-in.
   item; creating a brand-new lot as part of "opening stock" is not wired
   into this wizard (lot creation lives elsewhere in the existing item
   master flow).
-- **E2E/staging screenshots.** This session has no staging environment or
-  browser automation target to capture screenshots against; the live-server
-  smoke tests in this week's validation (real Postgres, real seeded data,
-  a real idempotent POST/retry pair) are the evidence produced instead -
-  documented here rather than substituted silently.
+- **Staging screenshots.** The automated browser journey is now part of CI
+  (`web/e2e/item-stock-detail.spec.js`): it signs in, proves the browser did
+  not persist the refresh credential, searches and selects an item with the
+  keyboard, loads stock detail, and posts an adjustment. Environment-specific
+  screenshots remain a deployment evidence item rather than source control.
 
 ## Validation performed
 
@@ -128,4 +128,5 @@ shallow stand-in.
 - `web`: 107 unmodified existing tests, all component tests passing
   together via `npm run test:components` (Week 9's toolkit plus this
   week's 8 new tests for `ItemSearchPanel`/`AdjustmentWizard`), clean
-  `npm run build`, no new lint errors.
+  `npm run build`, no new lint errors, and the Playwright browser journey
+  via `npm run test:e2e`.

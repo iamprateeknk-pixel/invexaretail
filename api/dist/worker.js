@@ -5,6 +5,8 @@ const order_scheduler_js_1 = require("./lib/order-scheduler.js");
 const distributed_lock_js_1 = require("./lib/distributed-lock.js");
 const import_worker_js_1 = require("./lib/import-worker.js");
 const outbox_retention_js_1 = require("./lib/outbox-retention.js");
+const outbox_worker_js_1 = require("./lib/outbox-worker.js");
+const event_bus_js_1 = require("./lib/event-bus.js");
 async function main() {
     if (process.env.REQUIRE_DATABASE === 'true' && !process.env.DATABASE_URL) {
         throw new Error('DATABASE_URL is mandatory for the production worker.');
@@ -13,21 +15,23 @@ async function main() {
         await (0, campaign_scheduler_js_1.campaignSchedulerTick)();
         await (0, order_scheduler_js_1.orderSweepTick)();
         await (0, import_worker_js_1.drainImportCommitsOnce)();
+        await (0, outbox_worker_js_1.drainOutboxOnce)(event_bus_js_1.deliverPersistedEvent);
         await (0, outbox_retention_js_1.pruneOutboxOnce)();
     });
     (0, campaign_scheduler_js_1.startCampaignScheduler)();
     (0, order_scheduler_js_1.startOrderScheduler)();
     // Week 11: the durable import-commit worker.
     (0, import_worker_js_1.startImportWorker)();
-    // Week 14: retention sweep for DomainEventOutbox (see
-    // lib/outbox-retention.ts and docs/week14-outbox-retention.md). Note:
-    // lib/outbox-worker.ts's startOutboxWorker (Week 7) is deliberately still
-    // not called here - investigated this week and found there is no real
-    // consumer to wire its delivery semantics to (SSE reads this table
-    // directly via durableEventsSince, independent of delivery status; the
-    // separate webhook system carries entity payloads this bare table
-    // doesn't have). The actual bug - the table growing forever with nothing
-    // ever pruning it - is what this week's retention sweep fixes instead.
+    // lib/outbox-worker.ts's startOutboxWorker (Week 7) is now wired to
+    // lib/event-bus.ts's deliverPersistedEvent - a live consumer that
+    // broadcasts each delivered event to connected SSE subscribers,
+    // superseding this repo's own Week 14 conclusion (see
+    // docs/week14-outbox-retention.md) that no real consumer existed at the
+    // time. The retention sweep below stays alongside it: it prunes rows
+    // past OUTBOX_RETENTION_DAYS regardless of delivery outcome (including
+    // any that end up POISON), so the table still cannot grow unbounded
+    // even with a live consumer now attached.
+    (0, outbox_worker_js_1.startOutboxWorker)(event_bus_js_1.deliverPersistedEvent);
     (0, outbox_retention_js_1.startOutboxRetention)();
     console.log('Invexa durable worker is running.');
 }
