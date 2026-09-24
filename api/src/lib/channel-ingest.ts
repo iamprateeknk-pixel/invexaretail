@@ -30,3 +30,36 @@ export type ChannelEventAudit = {
   outcome: 'CREATED' | 'DUPLICATE' | 'REJECTED_SIGNATURE' | 'REJECTED_INVALID' | 'REJECTED_NO_SKU_MATCH' | 'FAILED';
   orderId?: string;
 };
+
+/**
+ * `Order.createdById` is a real foreign key to `User`, so a webhook cannot use
+ * a made-up actor like the literal string 'connector' (it failed with an FK
+ * violation on every delivery against a real database). Each company gets one
+ * least-privilege, non-loginable service user that owns connector-created rows.
+ */
+export function connectorActorId(companyId: string): string {
+  return `connector-${companyId}`;
+}
+
+export async function ensureConnectorActor(
+  db: { user: { upsert: (args: never) => Promise<unknown> } },
+  companyId: string,
+): Promise<string> {
+  const id = connectorActorId(companyId);
+  await db.user.upsert({
+    where: { id },
+    update: {},
+    create: {
+      id,
+      name: 'Marketplace connector',
+      email: `${id}@system.invexa.local`,
+      // Not a valid bcrypt hash and the account is INACTIVE: it can never authenticate.
+      passwordHash: '!disabled-service-account',
+      role: 'AUDITOR',
+      status: 'INACTIVE',
+      assignedLocations: '[]',
+      companyId,
+    },
+  } as never);
+  return id;
+}

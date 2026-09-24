@@ -149,6 +149,13 @@ function timezoneOffsetMs(instant: Date, timezone: string): number {
   return asUtc - Math.floor(instant.getTime() / 1000) * 1000;
 }
 
+/** 00:00:00 local time on `dateOnly` in `timezone`, as an ISO instant. */
+export function startOfLocalDayIso(dateOnly: string, timezone: string): string {
+  const [year, month, day] = dateOnly.split('-').map(Number);
+  const guess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  return new Date(guess.getTime() - timezoneOffsetMs(guess, timezone)).toISOString();
+}
+
 /** 23:59:59 local time on `dateOnly` in `timezone`, as an ISO instant. */
 export function endOfLocalDayIso(dateOnly: string, timezone: string): string {
   const [year, month, day] = dateOnly.split('-').map(Number);

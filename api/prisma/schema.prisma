@@ -2327,3 +2327,25 @@ model DomainEventOutbox {
   @@index([occurredAt])
   @@index([status, availableAt])
 }
+
+// Guide Week 15: every delivery to the signed marketplace webhook is recorded
+// (provider, event id, payload checksum, processing state) so a duplicate or
+// replayed delivery is recognised by a database constraint - not only by the
+// order-level externalReference lookup - and is traceable from event to order.
+model ChannelWebhookEvent {
+  id              String    @id @default(cuid())
+  connectorId     String
+  companyId       String    @default("default-company")
+  provider        String
+  eventId         String
+  payloadChecksum String
+  state           String    @default("RECEIVED")
+  orderId         String?
+  error           String?   @db.Text
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+
+  @@unique([connectorId, eventId])
+  @@index([companyId, receivedAt])
+  @@index([orderId])
+}

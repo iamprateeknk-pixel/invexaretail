@@ -2,6 +2,8 @@ import { prisma } from './db.js';
 import { recordAudit } from './audit.js';
 import { persistAudit } from './persistence.js';
 import type { ExceptionCase } from '@prisma/client';
+import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
+import { DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
 
 // Blueprint Module H (Returns, Damage, Quarantine & Exception Management)
 // and section 18 "Exception Inbox": every damage, short/excess receipt,
@@ -147,31 +149,37 @@ export async function applyExceptionDisposition(
       const moveQty = Math.min(Number(exceptionCase.quantity), ledger.quarantine);
       if (moveQty <= 0) return;
 
-      const data: { quarantine: { decrement: number }; onHand?: { increment: number }; damaged?: { increment: number }; version: { increment: number } } = {
-        quarantine: { decrement: moveQty },
-        version: { increment: 1 },
-      };
-      if (RETURN_TO_STOCK.includes(disposition)) data.onHand = { increment: moveQty };
-      else data.damaged = { increment: moveQty };
-
-      await tx.stockLedger.update({ where: { id: ledger.id }, data });
-      await tx.stockMovement.create({
-        data: {
-          itemId: exceptionCase.itemId!,
-          lotId: exceptionCase.lotId,
-          locationId: exceptionCase.locationId!,
-          movementType: RETURN_TO_STOCK.includes(disposition) ? 'ADJUSTMENT' : 'DAMAGE',
-          qtyDelta: RETURN_TO_STOCK.includes(disposition) ? moveQty : -moveQty,
-          beforeBalance: RETURN_TO_STOCK.includes(disposition) ? ledger.onHand : ledger.quarantine,
-          afterBalance: RETURN_TO_STOCK.includes(disposition) ? ledger.onHand + moveQty : ledger.quarantine - moveQty,
-          sourceDocument: 'ExceptionCase',
-          sourceLineId: exceptionCase.id,
-          actor: actorId,
-          timestamp: new Date(),
-          reason: `Exception disposition: ${disposition}`,
-          metadata: { exceptionType: exceptionCase.type, disposition },
-        },
+      const restock = RETURN_TO_STOCK.includes(disposition);
+      // Quarantine and damaged are separate ledger buckets, not on-hand movements.
+      await tx.stockLedger.update({
+        where: { id: ledger.id },
+        data: { quarantine: { decrement: moveQty }, ...(restock ? {} : { damaged: { increment: moveQty } }), version: { increment: 1 } },
       });
+      if (restock) {
+        // Back to sellable: the on-hand leg goes through the canonical service in this transaction.
+        await postInventoryMovementInTransaction(tx, {
+          tenant: { companyId: exceptionCase.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+          itemId: exceptionCase.itemId!, lotId: exceptionCase.lotId!, locationId: exceptionCase.locationId!,
+          movementType: 'ADJUSTMENT', qtyDelta: moveQty,
+          idempotencyKey: `exception-disposition:${exceptionCase.id}`,
+          reason: `Exception disposition: ${disposition}`, sourceDocument: 'ExceptionCase', sourceLineId: exceptionCase.id,
+          metadata: { exceptionType: exceptionCase.type, disposition },
+        });
+      } else {
+        // On-hand does not change (the units were never sellable), so the journal row
+        // records the decision with a zero delta and the bucket move in metadata -
+        // otherwise journal-sum vs on-hand reconciliation would drift.
+        await tx.stockMovement.create({
+          data: {
+            itemId: exceptionCase.itemId!, lotId: exceptionCase.lotId, locationId: exceptionCase.locationId!,
+            movementType: 'DAMAGE', qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
+            sourceDocument: 'ExceptionCase', sourceLineId: exceptionCase.id, actor: actorId, timestamp: new Date(),
+            reason: `Exception disposition: ${disposition}`,
+            metadata: { exceptionType: exceptionCase.type, disposition, quarantineDelta: -moveQty, damagedDelta: moveQty },
+            companyId: exceptionCase.companyId,
+          } as never,
+        });
+      }
     });
   } catch (error) {
     console.error('applyExceptionDisposition failed (non-blocking):', error instanceof Error ? error.message : error);

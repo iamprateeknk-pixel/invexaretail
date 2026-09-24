@@ -106,3 +106,27 @@ integration('POST /expiry-alerts/:id/write-off: another company\'s expiry alert 
     assert.equal(unchanged.status, 'ACTIVE', 'the cross-tenant attempt must not have changed anything');
   });
 });
+
+// Week 6: an expiry write-off posts EXPIRY_WRITE_OFF through the canonical
+// service in the write-off transaction; a second write-off of the same alert
+// is rejected, and a later legitimate one is its own movement.
+integration('POST /expiry-alerts/:id/write-off posts one canonical journal row that matches the ledger', async () => {
+  const a = await makeFixture();
+  const alert = await makeAlert(a);
+  await prisma.stockLedger.create({ data: { itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, onHand: 10, companyId: a.companyId } });
+
+  await withServer(async (call) => {
+    const res = await call('POST', `/expiry-alerts/${alert.id}/write-off`, a.token, { reason: 'Expired on shelf', quantity: 4 });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const again = await call('POST', `/expiry-alerts/${alert.id}/write-off`, a.token, { reason: 'Expired on shelf', quantity: 4 });
+    assert.equal(again.status, 409, 'a resolved alert cannot be written off twice');
+  });
+  const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: a.itemId, locationId: a.locationId } });
+  assert.equal(ledger.onHand, 6);
+  const rows = await prisma.stockMovement.findMany({ where: { itemId: a.itemId } });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].movementType, 'EXPIRY_WRITE_OFF');
+  assert.equal(rows[0].qtyDelta, -4);
+  assert.equal(rows[0].companyId, a.companyId);
+  assert.equal(rows[0].afterBalance, 6);
+});

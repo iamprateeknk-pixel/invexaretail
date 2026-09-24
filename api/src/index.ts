@@ -24,6 +24,7 @@ import transferLogisticsRouter from './routes/transfer-logistics.js';
 import commandCenterRouter from './routes/command-center.js';
 import { requestMetricsMiddleware } from './lib/request-metrics.js';
 import marketplaceWebhookRouter from './routes/marketplace-webhook.js';
+import evidenceAccessRouter from './routes/evidence-access.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
@@ -274,6 +275,13 @@ app.use('/api/v1/auth', enterpriseAuthRouter);
 app.use('/api/v1/admin', enterpriseManagementRouter);
 app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
 
+// Credential-by-signature routes (marketplace webhook HMAC, signed evidence
+// links) must be mounted BEFORE every router that does `router.use(requireAuth)`:
+// those routers reject any request without a bearer token before route matching,
+// so mounted after them these endpoints answered 401 to every real caller.
+app.use('/api/v1', marketplaceWebhookRouter);
+app.use('/api/v1', evidenceAccessRouter);
+
 // Blueprint v4 §11: live event stream + payload-free mutation events. The
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', eventsRouter);
@@ -292,8 +300,6 @@ app.use('/api/v1', importsRouter);
 app.use('/api/v1', reportsRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
-
-app.use('/api/v1', marketplaceWebhookRouter);
 
 app.use('/api/v1', operationsExtensionRouter);
 

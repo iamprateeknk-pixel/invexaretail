@@ -7,7 +7,8 @@ import { databaseEnabled, persistAudit } from './persistence.js';
 import { listItems, listLocations, listStockLedger } from './repository.js';
 import { estimateDispatchAndDelivery } from './promise-engine.js';
 import { assertValidOrderTransition } from './domain-policies.js';
-import { DEFAULT_COMPANY_ID } from './saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
+import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
@@ -421,19 +422,18 @@ export async function fulfillOrder(orderId: string, actorId: string) {
       if (!ledger || ledger.onHand < line.requestedQty) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
       }
-      await tx.stockLedger.update({
-        where: { id: ledger.id },
-        data: { onHand: { decrement: line.requestedQty }, reserved: { decrement: line.requestedQty }, version: { increment: 1 } },
+      // onHand leaves through the canonical service (journal + ledger + audit + outbox in
+      // this transaction); the reservation counter is a separate dimension the service
+      // does not model, so it is released here in the same transaction.
+      await postInventoryMovementInTransaction(tx, {
+        tenant: { companyId: order.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+        itemId: line.itemId, lotId: line.lotId, locationId,
+        movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
+        idempotencyKey: `order-fulfill:${line.id}`,
+        reason: `Order fulfilled (${order.channel})`, sourceDocument: order.id, sourceLineId: line.id, correlationId: order.id,
+        metadata: { orderId: order.id, channel: order.channel },
       });
-      await tx.stockMovement.create({
-        data: {
-          itemId: line.itemId, lotId: line.lotId, locationId,
-          movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
-          beforeBalance: ledger.onHand, afterBalance: ledger.onHand - line.requestedQty,
-          sourceDocument: 'Order', sourceLineId: line.id, actor: actorId, timestamp: new Date(),
-          reason: `Order fulfilled (${order.channel})`, metadata: { orderId: order.id, channel: order.channel },
-        },
-      });
+      await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { decrement: line.requestedQty } } });
       await tx.orderLine.update({ where: { id: line.id }, data: { fulfilledQty: line.requestedQty } });
     }
     await tx.order.update({ where: { id: order.id }, data: { status: 'FULFILLED', fulfilledAt: new Date() } });

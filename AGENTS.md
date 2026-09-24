@@ -62,6 +62,8 @@ release candidate). The authoritative per-week status is
 [docs/release-evidence/release-scorecard.md](docs/release-evidence/release-scorecard.md).
 Where this file and `docs/guide-status.md` disagree, the latter wins.
 
+Since then (guide Week 6 follow-up): `postInventoryMovementInTransaction` in `lib/inventory-posting-service.ts` is the canonical way to post on-hand inside a caller's own transaction; most on-hand paths now use it (`docs/inventory-posting-coverage.md`). Signature-authenticated routers (`routes/marketplace-webhook.ts`, `routes/evidence-access.ts`) must be mounted *before* any router that does `router.use(requireAuth)` - guarded by `routes/public-route-order.test.ts`.
+
 Added since (guide Weeks 12-19): `lib/stock-take-campaign.ts`
 (`planFairAssignment`, the guide's exact assignment examples),
 `lib/offline-command-contract.ts` (versioned offline command/conflict

@@ -413,6 +413,15 @@ controlRouter.post('/integrations/api-keys/:keyId/revoke', requireLockedCompany,
   }
 });
 
+controlRouter.post('/integrations/api-keys/:keyId/rotate', requireLockedCompany, (req: Request, res: Response) => {
+  try {
+    const key = controlPlane.rotateApiKey(requireScope(req), param(req, 'keyId'));
+    res.status(201).json({ success: true, ...key });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 controlRouter.get('/integrations', requireLockedCompany, (req: Request, res: Response) => {
   const companyId = scopedCompany(req);
   res.json({

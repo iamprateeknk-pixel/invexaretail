@@ -24,7 +24,9 @@ import { matchThreeWay } from '../lib/three-way-match.js';
 import { recordAudit } from '../lib/audit.js';
 import { validatePrice } from '../lib/price-guardrails.js';
 import { resolvePrice } from '../lib/price-resolution.js';
-import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
+import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { applySavedViewFilter, type SavedViewFilterConfig } from '../lib/saved-view-filter.js';
 
 const router = Router();
@@ -371,11 +373,31 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
         });
         if (existingLot && !existingLot.expiryDate && expiry) await tx.lot.update({ where: { id: lot.id }, data: { expiryDate: expiry } });
         const quarantined = Math.round((posting.damagedQty + posting.excessQty) * 1000) / 1000;
-        const ledger = await tx.stockLedger.upsert({
-          where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } },
-          update: { onHand: { increment: posting.goodQty }, quarantine: { increment: quarantined }, version: { increment: 1 } },
-          create: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId, onHand: posting.goodQty, quarantine: quarantined, version: 1 },
-        });
+        // Quarantined (damaged/excess) quantity is a different ledger bucket, not an
+        // on-hand delta, so it stays a direct write; the sellable quantity goes
+        // through the canonical posting service *inside this same transaction*, so
+        // the journal row, ledger, audit and outbox commit with the receipt or not at all.
+        if (quarantined > 0) {
+          await tx.stockLedger.upsert({
+            where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } },
+            update: { quarantine: { increment: quarantined }, version: { increment: 1 } },
+            create: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId, onHand: 0, quarantine: quarantined, version: 1, companyId: order.companyId },
+          });
+        }
+        let afterBalance: number;
+        if (posting.goodQty > 0) {
+          const posted = await postInventoryMovementInTransaction(tx, {
+            tenant: { companyId: order.companyId, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as TenantContext['role'] },
+            itemId: posting.itemId, lotId: lot.id, locationId: order.locationId,
+            movementType: 'PURCHASE_RECEIPT', qtyDelta: posting.goodQty,
+            idempotencyKey: `po-receive:${requestId}:${posting.lineId}`,
+            reason: 'Purchase order receive', sourceDocument: order.number, sourceLineId: posting.lineId, correlationId: order.id,
+          });
+          afterBalance = posted.balance.onHand;
+        } else {
+          afterBalance = (await tx.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } } }))?.onHand ?? 0;
+        }
+        const ledger = { onHand: afterBalance };
         postedStock.push({
           itemId: posting.itemId, lotId: lot.id, lotNo: posting.lotNo, quantity: posting.goodQty, quarantined,
           beforeBalance: ledger.onHand - posting.goodQty, afterBalance: ledger.onHand,
@@ -411,24 +433,6 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     }
     if (receipt.quantity > 0) adjustStockLedger(receipt.itemId, receipt.lotId, order.locationId, receipt.quantity);
     if (receipt.quarantined > 0) adjustQuarantineLedger(receipt.itemId, receipt.lotId, order.locationId, receipt.quarantined);
-    if (receipt.quantity > 0) {
-      await prisma.stockMovement.create({
-        data: {
-          itemId: receipt.itemId,
-          lotId: receipt.lotId,
-          locationId: order.locationId,
-          movementType: 'PURCHASE_RECEIPT',
-          qtyDelta: receipt.quantity,
-          beforeBalance: receipt.beforeBalance,
-          afterBalance: receipt.afterBalance,
-          sourceDocument: order.number,
-          actor: req.user!.id,
-          timestamp: new Date(),
-          correlationId: order.id,
-          reason: 'Purchase order receive',
-        },
-      }).catch(() => undefined);
-    }
   }
   // Damage and excess are cases to resolve, not silent balance changes (blueprint §26).
   for (const posting of postings) {

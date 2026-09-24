@@ -13,6 +13,7 @@ import { hydrateActiveWorkflow } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
+import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 
 export const databaseEnabled = Boolean(resolveDatabaseUrl());
 
@@ -757,30 +758,21 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: count.itemId, lotId: count.lotId, locationId: count.locationId } },
       });
-      const beforeBalance = ledger?.onHand ?? count.bookQty;
-      const afterBalance = beforeBalance + variance;
-      await tx.stockLedger.upsert({
-        where: { itemId_lotId_locationId: { itemId: count.itemId, lotId: count.lotId, locationId: count.locationId } },
-        update: { onHand: { increment: variance }, version: { increment: 1 } },
-        create: { itemId: count.itemId, lotId: count.lotId, locationId: count.locationId, onHand: Math.max(0, afterBalance), version: 1 },
-      });
-      await tx.stockMovement.create({
-        data: {
-          itemId: count.itemId,
-          lotId: count.lotId,
-          locationId: count.locationId,
-          movementType: 'COUNT_VARIANCE',
-          qtyDelta: variance,
-          beforeBalance,
-          afterBalance,
-          sourceDocument: count.id,
-          sourceLineId: count.id,
-          actor: count.reviewedBy,
-          timestamp: count.reviewedAt ? new Date(count.reviewedAt) : new Date(),
-          correlationId: count.id,
-          reason: count.reviewReason,
-          metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty },
+      const owner = await tx.stockCount.findUnique({ where: { id: count.id }, select: { companyId: true } });
+      // Posted through the canonical service in this same transaction (journal + ledger +
+      // audit + outbox with the review). A count with no ledger row yet establishes stock
+      // at the physical quantity. The review claim above already guarantees one posting;
+      // the idempotency key is the second, independent guard.
+      await postInventoryMovementInTransaction(tx, {
+        tenant: {
+          companyId: owner?.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID,
+          userId: count.reviewedBy ?? 'system', role: (count.role ?? 'ADMIN') as Role,
         },
+        itemId: count.itemId, lotId: count.lotId, locationId: count.locationId,
+        movementType: 'COUNT_VARIANCE', qtyDelta: ledger ? variance : count.physicalQuantity,
+        idempotencyKey: `count-variance:${count.id}`,
+        reason: count.reviewReason ?? 'Approved stock count variance', sourceDocument: count.id, sourceLineId: count.id, correlationId: count.id,
+        metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty },
       });
     }
   });
@@ -956,6 +948,7 @@ export async function persistTransferStatus(transfer: TransferRecord): Promise<v
 export async function persistConfirmedPickAllocations(
   transferId: string,
   allocations: Array<{ itemId: string; lotId: string; locationId: string; quantity: number }>,
+  tenant?: import('./tenant-context.js').TenantContext,
 ): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
@@ -970,9 +963,13 @@ export async function persistConfirmedPickAllocations(
         where: { itemId_lotId_locationId: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId } },
       });
       if (!ledger || ledger.onHand < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
-      await tx.stockLedger.update({
-        where: { itemId_lotId_locationId: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId } },
-        data: { onHand: { decrement: allocation.quantity }, version: { increment: 1 } },
+      // Stock leaves the source through the canonical service, in this transaction.
+      await postInventoryMovementInTransaction(tx, {
+        tenant: tenant ?? { companyId: transfer.companyId, tenantId: DEFAULT_TENANT_ID, userId: 'system', role: 'ADMIN' as Role },
+        itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId,
+        movementType: 'TRANSFER_OUT', qtyDelta: -allocation.quantity,
+        idempotencyKey: `transfer-confirm:${transferId}:${allocation.itemId}:${allocation.lotId}:${allocation.locationId}`,
+        reason: 'Transfer pick confirmed', sourceDocument: transferId, correlationId: transferId,
       });
     }
     await tx.transfer.update({ where: { id: transferId }, data: { status: 'CONFIRMED' as any } });

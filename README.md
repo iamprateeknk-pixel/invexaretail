@@ -68,7 +68,7 @@ CI: `.github/workflows/ci.yml` (build, tests, architecture lint, contract, Postg
 
 - Float -> Decimal conversion for money/quantity is prepared ([docs/decimal-migration-plan.md](docs/decimal-migration-plan.md)) but **not executed**; landed cost and matching still use binary floats.
 - `core.ts` and `operations-extension.ts` are still large routers being extracted slice by slice.
-- Evidence uploads validate magic bytes and size but there is no malware scan, object storage or signed-URL access yet.
+- Evidence uploads validate magic bytes and size and are served through signed expiring links, but there is no malware scan or object storage yet (infrastructure).
 - Physical-device validation, load tests at agreed volume, failure drills and the canary/rollback rehearsal have not been run; they need a staging environment and people.
 - iOS: there is no iOS build or release path, so iOS is **not supported**. Whether it stays out of scope is an open owner decision (see guide-status).
 

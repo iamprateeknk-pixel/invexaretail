@@ -4,12 +4,12 @@
 
 | Dimension | Pass condition (guide) | State | Blocking evidence still needed |
 |---|---|---|---|
-| Data integrity | Zero unexplained stock delta; all mutation paths canonical | **Not met** | Transfer receipt, PO receipt, count approval and order paths still write stock outside `InventoryPostingService` (`docs/inventory-posting-coverage.md`); Float->Decimal not executed |
-| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | Partial | Replay/isolation suites exist and pass; a cross-tenant marketplace-ingest hole was found and fixed in this pass, which shows tenant review is not finished (`unscoped-tenant-query` baseline still tracked). Dependency-audit exceptions need owner acceptance (`docs/security-gates.md`) |
+| Data integrity | Zero unexplained stock delta; all mutation paths canonical | **Not met** (much closer) | On-hand paths for PO/transfer receipt, pick-confirm, counts, orders, expiry and returns now post canonically and atomically. Still open: `reserved`/`inTransit`/`quarantine` dimensions, legacy bulk-import writes, and Float->Decimal (`docs/inventory-posting-coverage.md`) |
+| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | Partial | Replay/isolation suites exist and pass; a cross-tenant marketplace-ingest hole and a webhook that answered 401 to every caller were found and fixed, which shows review is not finished (`unscoped-tenant-query` baseline still tracked). Dependency-audit exceptions need owner acceptance (`docs/security-gates.md`) |
 | Reliability | Backup/restore, migration rollback, worker replay pass | Partial | Local restore rehearsal only; no staging restore, rollback or replay drill |
 | Performance | p95 budgets pass at target volume | **Not measured** | No load test; budgets are proposals (`docs/slo-and-alerting.md`) |
 | UX | Five golden journeys pass desktop/tablet/mobile + keyboard | Partial | Item-search journey has Playwright coverage; the other four journeys have none |
-| Mobile | Signed build, secure storage, real offline DB, sync recovery | Partial | Real SQLite + secure storage in code and tested; **no signed build (no keystore secret), no device matrix, queue not yet drained to the server** |
+| Mobile | Signed build, secure storage, real offline DB, sync recovery | Partial | Real SQLite + secure storage in code and tested; **no signed build (no keystore secret) and no device matrix** |
 | Observability | Trace, logs, SLO alerts, business reconciliation visible | Partial | OpenTelemetry tracing is opt-in code; no collector, dashboard or alert routing |
 | Documentation | README, ADRs, API, deploy, rollback, incident docs current | Partial | README/security/SLO/offline docs rewritten this pass; no incident runbook, `AGENTS.md` week narratives predate the real guide (`docs/guide-status.md`) |
 | Governance | Protected main, review gates, evidence, release owner | Unverified | Branch protection, required reviewers, signed tag and SBOM cannot be checked from the repository |

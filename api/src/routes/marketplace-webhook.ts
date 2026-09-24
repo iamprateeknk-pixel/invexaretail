@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { recordAudit } from '../lib/audit.js';
-import { ownedByConnectorCompany, payloadChecksum, type ChannelEventAudit } from '../lib/channel-ingest.js';
+import { ensureConnectorActor, ownedByConnectorCompany, payloadChecksum, type ChannelEventAudit } from '../lib/channel-ingest.js';
 import { ownerOfItem, ownerOfLocation } from '../lib/saas/tenant-scope.js';
 
 // Week 15: signed marketplace webhook, extracted out of index.ts into its own
@@ -11,7 +11,16 @@ const router = Router();
 
 router.post('/webhooks/marketplaces/:connectorId', async (req: Request, res: Response) => {
   const receivedAt = new Date().toISOString();
+  let eventLog: { key: { connectorId_eventId: { connectorId: string; eventId: string } }; companyId: string } | null = null;
   let audit: Partial<ChannelEventAudit> = { connectorId: String(req.params.connectorId ?? ''), receivedAt };
+  const finish = async (state: 'PROCESSED' | 'REJECTED' | 'FAILED', orderId?: string, error?: string) => {
+    if (!eventLog) return;
+    const { prisma } = await import('../lib/db.js');
+    await prisma.channelWebhookEvent.update({
+      where: eventLog.key,
+      data: { state, orderId: orderId ?? null, error: error ?? null, processedAt: new Date() },
+    }).catch(() => undefined);
+  };
   const record = (outcome: ChannelEventAudit['outcome'], orderId?: string) => {
     recordAudit({
       actorId: 'connector',
@@ -51,10 +60,39 @@ router.post('/webhooks/marketplaces/:connectorId', async (req: Request, res: Res
       res.status(400).json({ message: invalid });
       return;
     }
+    // Durable event log (database mode): the (connector, event id) unique constraint
+    // recognises a replayed delivery - even one whose order was created by another
+    // process - and ties provider event -> order for traceability.
+    const eventId = (typeof req.headers['x-invexa-event-id'] === 'string' && req.headers['x-invexa-event-id'].trim())
+      || mapped.externalReference || String(audit.payloadChecksum);
+    const companyId = connector.tenantId;
+    if (databaseEnabled) {
+      const key = { connectorId_eventId: { connectorId: connector.id, eventId } };
+      const prior = await prisma.channelWebhookEvent.findUnique({ where: key });
+      if (prior?.state === 'PROCESSED') {
+        record('DUPLICATE', prior.orderId ?? undefined);
+        res.status(200).json({ duplicate: true, order: prior.orderId ? { id: prior.orderId } : null });
+        return;
+      }
+      if (prior?.state === 'RECEIVED') {
+        res.status(409).json({ message: 'This event is already being processed.' });
+        return;
+      }
+      try {
+        if (prior) await prisma.channelWebhookEvent.update({ where: key, data: { state: 'RECEIVED', error: null, payloadChecksum: String(audit.payloadChecksum) } });
+        else await prisma.channelWebhookEvent.create({ data: { connectorId: connector.id, companyId, provider: connector.platform, eventId, payloadChecksum: String(audit.payloadChecksum) } });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002') {
+          res.status(409).json({ message: 'This event is already being processed.' });
+          return;
+        }
+        throw error;
+      }
+      eventLog = { key, companyId };
+    }
     // Everything the order resolves - SKUs and fulfilment locations - must belong
     // to the connector's own company. Previously both lookups were unscoped, so a
     // connector could match another company's items and reserve its stock.
-    const companyId = connector.tenantId;
     const lines = [];
     for (const line of mapped.lines) {
       const item = databaseEnabled
@@ -64,6 +102,7 @@ router.post('/webhooks/marketplaces/:connectorId', async (req: Request, res: Res
     }
     if (!lines.length) {
       record('REJECTED_NO_SKU_MATCH');
+      await finish('REJECTED', undefined, 'No matching SKUs');
       res.status(409).json({ message: 'No matching SKUs for this marketplace order.' });
       return;
     }
@@ -77,17 +116,19 @@ router.post('/webhooks/marketplaces/:connectorId', async (req: Request, res: Res
       externalReference: mapped.externalReference,
       customerName: mapped.customerName,
       notes: mapped.notes,
-      createdById: 'connector',
+      createdById: databaseEnabled ? await ensureConnectorActor(prisma, companyId) : 'connector',
       companyId,
       allowSplit: true,
       candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
       lines,
     });
     markConnectorIngested(connector.id);
+    await finish('PROCESSED', order.id);
     record(order.duplicate ? 'DUPLICATE' : 'CREATED', order.id);
     res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
   } catch (error) {
     record('FAILED');
+    await finish('FAILED', undefined, error instanceof Error ? error.message : 'Unable to ingest marketplace order.');
     res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to ingest marketplace order.' });
   }
 });

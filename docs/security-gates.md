@@ -29,8 +29,8 @@ These were measured on 2026-09-25 with `npm audit --omit=dev` in each folder (`w
 ## Other controls already in code
 
 - Helmet CSP and `express-rate-limit` (`api/src/index.ts`); OTP and login abuse controls (`lib/otp-auth.ts`, `lib/session-store.ts`).
-- API keys are HMAC-hashed at rest, scoped, revocable and never re-displayed (`lib/saas/control-plane.ts`); **rotation is not a first-class operation yet** (revoke + create).
-- Evidence/photo uploads: magic-byte MIME check and 15 MB limit (`lib/transfer-evidence.ts`, `multer`). **Not done:** malware scanning, object storage, signed URLs.
+- API keys are HMAC-hashed at rest, scoped, revocable and never re-displayed (`lib/saas/control-plane.ts`); rotation is a first-class audited operation (`POST /control/v1/integrations/api-keys/:id/rotate`: the replacement is issued and the old key revoked in one step; the new token is shown once).
+- Evidence/photo uploads: magic-byte MIME check and 15 MB limit (`lib/transfer-evidence.ts`, `multer`). Evidence is served through short-lived (default 5 min, max 1 h), company-bound HMAC links (`routes/evidence-access.ts`, `lib/signed-access.ts`). **Not done:** malware scanning and object storage - both need infrastructure.
 - Marketplace webhooks: HMAC signature, and (Week 15) SKU and fulfilment-location resolution scoped to the connector's own company.
 
 ## Not verified here

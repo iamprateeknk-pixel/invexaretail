@@ -18,6 +18,7 @@ import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
 import { hashPassword } from '../lib/otp-auth.js';
 import {
   DEFAULT_COMPANY_ID,
+  DEFAULT_TENANT_ID,
   itemsForCompany,
   registerItemCompany,
   registerLocationCompany,
@@ -3112,7 +3113,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
   try {
-    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()]);
+    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
     for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
     const updated = updateTransferStatus(transfer.id, 'CONFIRMED');
     // Stock has just physically left the source (decremented above); the
@@ -3406,6 +3407,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
+      tenant: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role },
     });
 
     let status: TransferRecord['status'];

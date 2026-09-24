@@ -1,3 +1,4 @@
+import { resolveReportRange, ReportRangeError } from '../lib/report-range.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { databaseProbe, prisma } from '../lib/db.js';
@@ -76,27 +77,44 @@ router.get('/command-center', ...guard, async (req: Request, res: Response) => {
   return res.json({ commandCenter: center });
 });
 
+// One resolver for every report and export, so a screen and its download can
+// never disagree about which instants "2026-09-25" covers (guide Week 18).
+function rangeOf(req: Request, res: Response) {
+  try {
+    return resolveReportRange({ from: req.query.from, to: req.query.to, timezone: req.query.timezone });
+  } catch (error) {
+    if (error instanceof ReportRangeError) {
+      res.status(400).json({ message: error.message });
+      return null;
+    }
+    throw error;
+  }
+}
+
 router.get('/reports/transfer-cycle', ...guard, (req: Request, res: Response) => {
   if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
   const { companyId, allowed } = scope(req);
   const transfers = listTransfers().filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
-  const from = typeof req.query.from === 'string' ? req.query.from : undefined;
-  const to = typeof req.query.to === 'string' ? req.query.to : undefined;
-  return res.json({ report: transferCycleReport(transfers, companyAudit(companyId), { from, to }) });
+  const range = rangeOf(req, res);
+  if (!range) return;
+  return res.json({ timezone: range.timezone, report: transferCycleReport(transfers, companyAudit(companyId), { from: range.from, to: range.to }) });
 });
 
 router.get('/reports/count-accuracy', ...guard, (req: Request, res: Response) => {
   if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
   const groupBy = (['branch', 'user', 'category'].includes(String(req.query.groupBy)) ? String(req.query.groupBy) : 'branch') as AccuracyGroup;
   const { companyId, allowed } = scope(req);
+  const range = rangeOf(req, res);
+  if (!range) return;
   return res.json({
     groupBy,
+    timezone: range.timezone,
     rows: countAccuracyReport({
       counts: listCounts().filter((count) => allowed(count.locationId)),
       items: listItems(),
       groupBy,
       labels: { locations: new Map(listLocations().map((location) => [location.id, location.name])), users: new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name])) },
-      range: { from: typeof req.query.from === 'string' ? req.query.from : undefined, to: typeof req.query.to === 'string' ? req.query.to : undefined },
+      range: { from: range.from, to: range.to },
     }),
   });
 });
@@ -106,8 +124,10 @@ router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'The audit export requires Admin or Auditor access.' });
   const { companyId } = scope(req);
   const text = (key: string) => (typeof req.query[key] === 'string' && req.query[key] ? String(req.query[key]) : undefined);
+  const range = rangeOf(req, res);
+  if (!range) return;
   const events = filterAudit(companyAudit(companyId), {
-    actorId: text('actorId'), action: text('action'), entityType: text('entityType'), entityId: text('entityId'), from: text('from'), to: text('to'),
+    actorId: text('actorId'), action: text('action'), entityType: text('entityType'), entityId: text('entityId'), from: range.from, to: range.to,
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50_000);
   const names = new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name]));
   if (req.query.format === 'json') return res.json({ count: events.length, events });

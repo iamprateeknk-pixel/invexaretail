@@ -21,7 +21,7 @@ Version **1**. A device queues *commands*, not state. Each command is:
 - `REJECTED` - malformed, wrong version, or wrong tenant/actor;
 - `READY` - safe to apply through the normal domain service (which posts stock only via `InventoryPostingService`).
 
-**Status: contract + decision logic + tests only.** No HTTP route consumes it yet and there is no server-side `AppliedCommandStore`; wiring `POST /mobile/sync/commands` to the count/pick/receive/putaway services is the remaining Week 12/16 integration work.
+**Status: contract + decision logic + tests only - deliberately not wired.** In practice the app already syncs safely without it: each queued count/action carries a client `requestId` that the existing endpoints treat idempotently, and a 409 moves the item to the Conflict Center for a user decision (`sync_resolution.dart`, `p4_workflows_test.dart`). What this contract adds is a per-entity *version* check (stale-write detection) and one uniform envelope. Adopting it needs (a) a server route with a persisted applied-command store dispatching to the count/pick/receive/putaway services and (b) the screens enqueuing into `sync_commands`. Both change user-facing behaviour and should be verified on a device, so they were not switched on blind.
 
 ## Mobile store - `mobile/lib/services/native_database.dart`
 
@@ -40,6 +40,6 @@ On first launch after upgrade, an existing `invexa_drift.sqlite` that is really 
 
 ### Not done / not verified
 
-- The sync engine still applies mutations locally (`sync_engine.dart`); nothing drains `sync_commands` to the server yet.
+- `sync_commands` is built and tested but nothing enqueues into it yet (see above); the live queue is `queued_counts`/`queued_actions`, drained by `SessionController.flushQueue`.
 - Cold-start-offline, crash-during-transaction on a real device, camera permission flows and physical-device navigation tests were not run (no device in this environment). The native count/pick/receive/putaway/scan screens already existed; their behaviour on hardware is unverified.
 - Orders destination now shows a native read-only list from `GET /api/v1/orders` (it opened Transfers by mistake). The full-workspace WebView is pinned to trusted hosts and now grants **camera only**; every other permission request is denied.
