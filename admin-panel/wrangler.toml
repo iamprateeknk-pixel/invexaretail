@@ -9,5 +9,5 @@ not_found_handling = "single-page-application"
 run_worker_first = true
 
 [vars]
-VITE_API_BASE = "https://invexaretail-h1ps.onrender.com"
+VITE_API_BASE = "https://invexaretail-api-production.up.railway.app"
 VITE_WEB_APP_URL = "https://control.invexaretail.com"
