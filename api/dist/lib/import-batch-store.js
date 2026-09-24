@@ -189,6 +189,17 @@ async function countRowsByStatus(id) {
     }
     return counts;
 }
+/**
+ * Transitions a batch's status, guarded by a compare-and-swap on the status
+ * read at the start of this call: if another request has already changed
+ * the batch's status in the meantime (e.g. a double-click or client retry
+ * on the same "Confirm" action racing this one), this throws
+ * ConcurrentBatchTransitionError instead of silently overwriting the other
+ * request's result or bubbling a raw "Cannot move batch from POSTED to
+ * POSTED" state-machine error. Callers that do real work (posting stock,
+ * etc.) between reading the batch and calling this must treat that error as
+ * "already handled by the other request", not a crash.
+ */
 async function transitionBatch(id, to, metadataPatch) {
     const current = await getBatch(id);
     if (!current)
@@ -196,18 +207,24 @@ async function transitionBatch(id, to, metadataPatch) {
     (0, import_center_js_1.assertValidBatchTransition)(current.status, to);
     const nextMetadata = metadataPatch ? { ...(current.metadata ?? {}), ...metadataPatch } : current.metadata;
     if (!databaseEnabled()) {
-        const updated = { ...current, status: to, metadata: nextMetadata };
+        const stillCurrent = memoryBatches.get(id);
+        if (!stillCurrent || stillCurrent.status !== current.status)
+            throw new import_center_js_1.ConcurrentBatchTransitionError(id);
+        const updated = { ...stillCurrent, status: to, metadata: nextMetadata };
         memoryBatches.set(id, updated);
         return { ...updated, metadata: updated.metadata ? { ...updated.metadata } : null };
     }
-    const updated = await db_js_1.prisma.importBatch.update({
-        where: { id },
+    const result = await db_js_1.prisma.importBatch.updateMany({
+        where: { id, status: current.status },
         data: {
             status: to,
             metadata: (nextMetadata ?? client_1.Prisma.JsonNull),
         },
     });
-    return fromPrismaBatch(updated);
+    if (result.count === 0)
+        throw new import_center_js_1.ConcurrentBatchTransitionError(id);
+    const updated = await getBatch(id);
+    return updated;
 }
 async function findDuplicateBatch(input) {
     const branchId = input.branchId ?? null;

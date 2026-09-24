@@ -782,3 +782,30 @@ tracks how much of it):
   across the bare-id remediation's slices (all still passing), and
   `web/`'s `npm test` (107 passing) and `npm run test:components` (18
   passing).
+- Post-merge follow-up (`api/src/lib/import-center.ts`,
+  `lib/import-batch-store.ts`, `routes/core.ts`, no dedicated ADR - see
+  `docs/week33-import-commit-double-submit-fix.md`): fixes a real
+  production bug reported via the "Stock update" bulk-import screen - a
+  double-click (or client retry) on "Confirm N lot rows" sent two
+  concurrent `POST /imports/:batchToken/commit` requests that both read
+  the batch as `VALIDATED` before either transitioned it, both posted
+  stock (`persistOpeningStockImport`/`persistDailyMovementImport`), and
+  the loser's own `transitionBatch(..., 'POSTED')` call then crashed with
+  the confusing `Cannot move import batch from POSTED to POSTED` - a
+  symptom of the real problem (stock already double-posted by the time
+  that error surfaced), not just an ugly message. Fixed with two layers:
+  `routes/core.ts` now wraps the whole commit handler in
+  `withDistributedLock` (`lib/distributed-lock.ts`'s existing Postgres
+  advisory lock, already used by `worker.ts`), keyed per batch, so a
+  racing second request gets an immediate `409` before it can post
+  anything; and `import-batch-store.ts`'s `transitionBatch` is now itself
+  a compare-and-swap (`updateMany` gated on the status read at the start
+  of the call, or the memory-mode equivalent) throwing a new
+  `ConcurrentBatchTransitionError` if the batch moved under it, as
+  defense in depth for any other caller. Proven with a new memory-mode
+  test firing two genuinely concurrent `transitionBatch` calls via
+  `Promise.allSettled` and asserting exactly one wins. `npm test`: 566
+  passing, 0 failing; `architecture-lint`: 0 new violations (baseline
+  regenerated only for line-number shifts, same four pre-existing
+  `import-batch-store.ts` call sites); `contract:validate`/
+  `contract:check-drift`: both pass.

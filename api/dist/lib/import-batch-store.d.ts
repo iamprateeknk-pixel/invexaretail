@@ -49,6 +49,17 @@ export declare function createPreviewBatch(input: CreatePreviewBatchInput): Prom
 export declare function getBatch(id: string): Promise<ImportBatchRecord | undefined>;
 export declare function listRows(id: string, status?: StagedRowStatus): Promise<StagedImportRow[]>;
 export declare function countRowsByStatus(id: string): Promise<Record<StagedRowStatus, number>>;
+/**
+ * Transitions a batch's status, guarded by a compare-and-swap on the status
+ * read at the start of this call: if another request has already changed
+ * the batch's status in the meantime (e.g. a double-click or client retry
+ * on the same "Confirm" action racing this one), this throws
+ * ConcurrentBatchTransitionError instead of silently overwriting the other
+ * request's result or bubbling a raw "Cannot move batch from POSTED to
+ * POSTED" state-machine error. Callers that do real work (posting stock,
+ * etc.) between reading the batch and calling this must treat that error as
+ * "already handled by the other request", not a crash.
+ */
 export declare function transitionBatch(id: string, to: ImportBatchStatus, metadataPatch?: Record<string, unknown>): Promise<ImportBatchRecord>;
 export declare function findDuplicateBatch(input: {
     type: string;
