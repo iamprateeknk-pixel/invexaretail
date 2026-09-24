@@ -1,30 +1,46 @@
--- Invexa Drift local schema. Company-scoped sealed mutations and count
--- queues. Do not store stock ledger rows here.
--- Applied by NativeDatabase in lib/services/native_database.dart.
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  company_id TEXT NOT NULL,
-  token TEXT NOT NULL,
-  refresh_token TEXT,
-  user_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+-- Invexa local SQLite schema (Week 16). Mirrors `_migrations` in
+-- lib/services/native_database.dart; that file is authoritative and applies
+-- these in order, tracking the version in PRAGMA user_version.
+-- Sessions and refresh credentials are NOT stored here (secure storage only).
+-- Do not store stock ledger rows here.
 
-CREATE TABLE IF NOT EXISTS sealed_mutations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  envelope TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (company_id, seq)
-);
-
+-- v1
 CREATE TABLE IF NOT EXISTS queued_counts (
-  local_id TEXT PRIMARY KEY,
+  local_id TEXT NOT NULL,
   company_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  PRIMARY KEY (company_id, local_id)
+);
+CREATE TABLE IF NOT EXISTS queued_actions (
+  local_id TEXT PRIMARY KEY,
   payload_json TEXT NOT NULL,
   seq INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS queued_counts_company_idx ON queued_counts (company_id, seq);
 
-CREATE INDEX IF NOT EXISTS sealed_mutations_company_idx ON sealed_mutations (company_id);
-CREATE INDEX IF NOT EXISTS queued_counts_company_idx ON queued_counts (company_id);
+-- v2
+CREATE TABLE IF NOT EXISTS sync_commands (
+  command_id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  base_version INTEGER NOT NULL,
+  occurred_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  server_version INTEGER,
+  created_seq INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sync_commands_company_status_idx ON sync_commands (company_id, status, created_seq);
+CREATE TABLE IF NOT EXISTS entity_versions (
+  company_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  PRIMARY KEY (company_id, entity_type, entity_id)
+);

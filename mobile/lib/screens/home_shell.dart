@@ -8,6 +8,7 @@ import 'conflict_center_screen.dart';
 import 'count_screen.dart';
 import 'dashboard_screen.dart';
 import 'pick_screen.dart';
+import 'orders_screen.dart';
 import 'putaway_screen.dart';
 import 'receive_screen.dart';
 import 'scan_screen.dart';
@@ -115,7 +116,7 @@ class _HomeShellState extends State<HomeShell> {
       case 'scan':
         return ScanScreen(controller: controller);
       case 'orders':
-        return TransfersScreen(controller: controller);
+        return OrdersScreen(controller: controller);
       default:
         return DashboardScreen(controller: controller);
     }

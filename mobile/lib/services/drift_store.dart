@@ -5,8 +5,7 @@ import '../models/models.dart';
 import 'local_store.dart';
 import 'native_database.dart';
 
-/// Drift-shaped local store backed by [NativeDatabase] tables from
-/// `drift_schema.sql`. Tests use [DriftStore.inMemory]; the app opens a file.
+/// Local store backed by the real SQLite [NativeDatabase] (see `drift_schema.sql`). Tests use [DriftStore.inMemory]; the app opens a file.
 class DriftStore implements LocalStore {
   DriftStore.native(this._db);
 
@@ -26,39 +25,16 @@ class DriftStore implements LocalStore {
 
   void close() => _db.close();
 
+  // Refresh credentials and access tokens are never written to SQLite: they
+  // belong to Keychain/Keystore-backed secure storage (see SecureLocalStore).
   @override
-  Future<void> saveSession(PersistedSession session) async {
-    _db.upsertSession(
-      companyId: session.user.companyId ?? 'default-company',
-      token: session.token,
-      refreshToken: session.refreshToken,
-      userJson: jsonEncode(session.user.toJson()),
-    );
-  }
+  Future<void> saveSession(PersistedSession session) async {}
 
   @override
-  Future<PersistedSession?> loadSession() async {
-    final row = _db.loadSession();
-    if (row == null) return null;
-    final token = row['token']?.toString() ?? '';
-    if (token.isEmpty) return null;
-    try {
-      final user = AuthUser.fromJson(asMap(jsonDecode(row['user_json']?.toString() ?? '{}')));
-      final refresh = row['refresh_token']?.toString();
-      return PersistedSession(
-        token: token,
-        refreshToken: refresh == null || refresh.isEmpty ? null : refresh,
-        user: user,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<PersistedSession?> loadSession() async => null;
 
   @override
-  Future<void> clearSession() async {
-    _db.clearSession();
-  }
+  Future<void> clearSession() async {}
 
   @override
   Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']) async {
@@ -80,21 +56,6 @@ class DriftStore implements LocalStore {
   @override
   Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) async {
     _db.replaceCounts(companyId, items.map((item) => jsonEncode(item.toJson())).toList());
-  }
-
-  @override
-  Future<List<String>> loadSealedQueue(String companyId) async {
-    return _db.loadSealed(companyId);
-  }
-
-  @override
-  Future<void> saveSealedQueue(String companyId, List<String> envelopes) async {
-    _db.replaceSealed(companyId, envelopes);
-  }
-
-  @override
-  Future<void> clearSealedQueue(String companyId) async {
-    _db.clearSealed(companyId);
   }
 
   @override

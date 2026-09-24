@@ -1,4 +1,9 @@
-name: Build Invexa Retail Android APK
+name: Build Invexa Retail Android release
+
+# Week 17: the Android platform project is committed under mobile/android, so
+# this workflow builds exactly what is in the repository - it does not
+# regenerate the project or patch the manifest. Toolchain versions are pinned
+# below; a clean checkout must reproduce the artifact.
 
 on:
   workflow_dispatch:
@@ -8,7 +13,7 @@ on:
       - "mobile/**"
       - ".github/workflows/android-apk.yml"
   push:
-    branches: [main, build/android-apk]
+    branches: [main]
     paths:
       - "mobile/**"
       - ".github/workflows/android-apk.yml"
@@ -16,10 +21,16 @@ on:
 permissions:
   contents: read
 
+env:
+  FLUTTER_VERSION: "3.47.2"
+  JAVA_VERSION: "17"
+
 jobs:
   android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      INVEXA_KEYSTORE_BASE64: ${{ secrets.INVEXA_KEYSTORE_BASE64 }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -27,35 +38,48 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-      - name: Set up Flutter
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Set up Flutter (pinned)
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-      - name: Generate Android project
+      - name: Install dependencies from the committed lockfile
         working-directory: mobile
-        run: |
-          flutter create --platforms=android --org com.invexaretail --project-name invexaretail_mobile .
-          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' android/app/src/main/AndroidManifest.xml
-          sed -i 's/android:label="invexaretail_mobile"/android:label="Invexa Retail"/' android/app/src/main/AndroidManifest.xml
-      - name: Install dependencies
-        working-directory: mobile
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
       - name: Analyze
         working-directory: mobile
         run: flutter analyze --no-fatal-infos
       - name: Test
         working-directory: mobile
         run: flutter test
-      - name: Build release APK
+      - name: Decode release keystore (main/manual builds only; unsigned artifacts are never published)
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ -z "$INVEXA_KEYSTORE_BASE64" ]; then
+            echo "INVEXA_KEYSTORE_BASE64 secret is not configured; refusing to build an unsigned release." >&2
+            exit 1
+          fi
+          echo "$INVEXA_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/invexa-release.jks"
+          echo "INVEXA_KEYSTORE_FILE=$RUNNER_TEMP/invexa-release.jks" >> "$GITHUB_ENV"
+          echo "INVEXA_REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV"
+      - name: Build release AAB and APK
         working-directory: mobile
-        run: flutter build apk --release --build-name=1.3.0 --build-number=4
-      - name: Upload APK
+        env:
+          INVEXA_KEYSTORE_PASSWORD: ${{ secrets.INVEXA_KEYSTORE_PASSWORD }}
+          INVEXA_KEY_ALIAS: ${{ secrets.INVEXA_KEY_ALIAS }}
+          INVEXA_KEY_PASSWORD: ${{ secrets.INVEXA_KEY_PASSWORD }}
+        run: |
+          flutter build appbundle --release --build-name=1.3.0 --build-number=4
+          flutter build apk --release --build-name=1.3.0 --build-number=4
+      - name: Upload release artifacts
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: InvexaRetail-Android-1.3.0
-          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            mobile/build/app/outputs/bundle/release/app-release.aab
+            mobile/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30

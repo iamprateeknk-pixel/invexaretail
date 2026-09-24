@@ -1,0 +1,57 @@
+# Execution-guide status (real guide, Weeks 1-20)
+
+Source: `Invexa_Retail_20_Week_Developer_Execution_Guide.docx` (v1.0, 21 September 2026). Its rule: *a week is complete only when code, tests, evidence and owner acceptance agree - a merged PR alone is not completion.*
+
+Assessed 2026-09-25 by reading code, tests and docs and by running the suites named below. **Nothing here has staging, device, load or owner-acceptance evidence**, so no week is "accepted" - the columns say what exists in the repository.
+
+## Correction of the record
+
+`AGENTS.md` and the `docs/weekNN-*.md` files for Weeks 12-20 were written when this guide could not be found, so those weeks were *inferred* and do **not** match the guide:
+
+| Repo "Week N" doc | What it actually is | Guide's Week N |
+|---|---|---|
+| week12 reporting/exception dashboard | dashboard read model | Stock Count Campaigns + offline contract |
+| week13 contract catch-up | OpenAPI additions | Transfer / Warehouse / QC vertical slice |
+| week14 outbox retention | outbox pruning | Procurement, landed cost, 3-way match |
+| week15 tenant-scope lint | lint coverage | OMS ingest, returns, refunds |
+| week16 state-transition lint | lint rule | Real mobile offline DB + secure storage |
+| week17-19 tenant `companyId` slices | schema migrations | Android release / reporting-admin-docs / CI-security |
+| week20 retrospective | verification only | Release candidate, canary, sign-off |
+
+That work is real and useful (and stays), but it is not the guide's Weeks 12-20. Treat the table below as authoritative.
+
+## Status by guide week
+
+Legend: **Done** = implemented and tested in-repo · **Partial** = some of the scope · **Open** = not started · **Human/env** = needs staging, devices, or an owner decision that code cannot supply.
+
+| Wk | Guide outcome | Status | Evidence / what is missing |
+|---|---|---|---|
+| 1 | Containment, restore proof | Partial | `docs/release-evidence/week-01-containment/` (local restore rehearsal). **Human/env:** isolated *staging* restore, risk-owner assignment, baseline tag/milestone |
+| 2 | ADRs + repo rules | Done | ADR-001..006, `AGENTS.md`, `scripts/architecture-lint.mjs` (0 new violations, 91 tracked) |
+| 3 | Sessions, OTP, secrets | Done (in-repo) | `lib/session-store.ts` + Postgres replay test; mobile secure storage. Browser HttpOnly-cookie flow not re-verified in this pass |
+| 4 | Tenant repositories | Partial | Item repository is the reference; seven bare-id remediation slices done; `unscoped-tenant-query` still has tracked baseline violations. Identity/Organization repositories not migrated |
+| 5 | Schema authority, Decimal prep | Partial | Migrations authoritative, runtime DDL retired. **Decimal conversion not executed** (`docs/decimal-migration-plan.md`) |
+| 6 | Canonical stock journal | **Partial - largest integrity gap** | `InventoryPostingService` done and Postgres-tested, but only import commit, item adjust/reverse and one operations route post through it. Transfer receipt, PO receipt, count approval and orders still write stock via baseline paths (`docs/inventory-posting-coverage.md`) - the release scorecard's "all mutation paths canonical" is **not met** |
+| 7 | Atomic reservation, transitions, outbox | Done | `lib/reservation.ts`, `outbox-worker.ts`, `domain-policies.ts`, error catalog, Postgres suites |
+| 8 | API modularisation + contract | Partial | Transfers, Branches, Items, Imports, Reports extracted; `core.ts`/`operations-extension.ts` still large; `api/dist` still committed (Hostinger path) |
+| 9 | IA + design system | Done | `docs/web/*`, shared components + tests. Admin-panel token consolidation open |
+| 10 | Dashboard / item search / stock detail | Done | Postgres 5,200-item suite, Playwright journey |
+| 11 | ERP import lifecycle | Partial | Lifecycle, checkpoint, 5,000+ row Postgres suite done. **No import wizard UI** (guide requires one) |
+| 12 | Count campaigns + offline contract | Partial | **This pass:** `planFairAssignment` reproduces the guide's examples exactly (100/3 users -> 33/33/34; cap 20 -> 20/20/20, 20/20/20, 10/10) with duplicate/drop/determinism tests; `offline-command-contract.ts` + tests. **Not done:** `runCampaignDay` still uses the older top-up allocator (rollover semantics) rather than `planFairAssignment`; the guide's state names (submitted / variance-review / posted) differ from the campaign states; approved-variance single-post through `InventoryPostingService`, concurrent-approval and browser E2E not evidenced. The "final 10/10 to two users" tail rule is an *interpretation* of the example - **owner to confirm** |
+| 13 | Transfer / warehouse / QC slice | Partial (existing) | Lifecycle, picker, putaway, bins, waves, replenishment, thermal PDF, exceptions/QC, evidence rules all exist with unit/HTTP tests. Not evidenced: two-picker race, short/damaged source-in-transit-destination reconciliation, destination live document. Transfer stock movement is a baseline (non-canonical) path |
+| 14 | Procurement / landed cost / match | Partial (existing) | PO lifecycle, `landed-cost.ts`, `three-way-match.ts`, supplier score exist. Money is `Float` (Decimal not executed); PO approval threshold matrix not verified |
+| 15 | OMS ingest / returns / refunds | Partial | **This pass:** the signed webhook resolved SKUs and fulfilment locations with **no company filter** (a connector could order another company's items and reserve its stock) - fixed, extracted to `routes/marketplace-webhook.ts`, audited with payload checksum, 6 regression tests (memory mode). **Not done:** persisted event log with unique provider-event-id (needs a migration and Postgres verification), out-of-order handling, return-inspection/refund flow evidence |
+| 16 | Real mobile offline DB + secure storage | Partial | **This pass:** real SQLite with migrations/transactions, durable command queue, legacy-file migration, XOR `SyncVault` removed, Orders navigation fixed, WebView permissions restricted - `flutter test` 70 pass, analyze clean, release APK builds. **Human/env:** device tests. Not done: draining the queue to the server, native-flow wiring to `sync_commands`. Details in `docs/offline-contract-and-mobile-store.md` |
+| 17 | Android release + devices | Partial | **This pass:** CI no longer regenerates the project or `sed`-patches the manifest; Flutter 3.47.2/JDK 17 pinned; lockfile enforced; signing from secrets with a hard fail if unsigned on main; AAB + APK. **Human/env:** real keystore secrets, device matrix, install/upgrade evidence, **iOS decision (owner)** - no iOS build exists, so it is unsupported today |
+| 18 | Reporting, audit, admin, docs | Partial | **This pass:** README rewritten from the code (old one archived), security/SLO docs. Not done: report timezone handling and export-vs-UI parity proof, API-key rotation, evidence malware scan / object storage / signed URLs, Assets/Projects scope decision, audit completeness review, clean-developer rehearsal |
+| 19 | CI, security, observability, load, drills | Partial | **This pass:** `security.yml` (CodeQL, dependency audit, gitleaks, Trivy), OpenTelemetry tracing (opt-in), CI now runs *every* Postgres suite instead of a hand-kept list that had drifted by twelve suites (all 20 suites were run locally against Postgres 17 this pass and pass; running them together exposed an order dependence in `outbox-worker.postgres.test.ts`, which now clears the outbox first), SLO policy. **Human/env:** load test at approved volume, failure drills, dashboards/alert routing, cross-platform E2E |
+| 20 | Release candidate + sign-off | Open (Human) | `docs/release-evidence/release-scorecard.md` records the gate state; only the owner can sign go/no-go |
+
+## Decisions that need the owner
+
+1. Tail rule for the last partial count batch (10/10 across two users) - confirm or replace.
+2. Whether `planFairAssignment` should replace the daily top-up allocator in `runCampaignDay`, and whether "no daily cap" must become an explicit campaign setting (today `dailyItemsPerUser` is 1-500).
+3. iOS: supported now / later / out of scope.
+4. Approve or change the SLO numbers in `docs/slo-and-alerting.md`; choose the metrics/alerting backend.
+5. Accept or reject the time-boxed dependency-audit exceptions in `docs/security-gates.md`.
+6. Assets/Projects: keep (with tenant hardening) or archive.

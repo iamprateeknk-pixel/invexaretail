@@ -1,8 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing material lives outside the repository (Week 17): a local
+// key.properties (git-ignored) or, in CI, the same four values as environment
+// variables written by the release workflow from repository secrets.
+val keyProperties = Properties().apply {
+    val file = rootProject.file("key.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+fun signingValue(name: String, envName: String): String? =
+    keyProperties.getProperty(name) ?: System.getenv(envName)
+val releaseStoreFile = signingValue("storeFile", "INVEXA_KEYSTORE_FILE")
 
 android {
     namespace = "com.invexaretail.invexaretail_mobile"
@@ -29,11 +42,29 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = signingValue("storePassword", "INVEXA_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "INVEXA_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "INVEXA_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // CI sets INVEXA_REQUIRE_RELEASE_SIGNING so an unsigned/debug-signed
+            // artifact can never be published; local builds fall back to debug keys.
+            signingConfig = if (releaseStoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                check(System.getenv("INVEXA_REQUIRE_RELEASE_SIGNING") == null) {
+                    "Release signing is required but no keystore was provided."
+                }
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

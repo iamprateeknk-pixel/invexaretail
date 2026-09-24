@@ -12,6 +12,7 @@ import {
   parseDailyItemsPerUser,
   parsePriorityOrder,
   planDailyAllocation,
+  planFairAssignment,
   prioritizeItems,
   summarizeProgress,
   type AssignmentFact,
@@ -182,4 +183,34 @@ test('progress excludes EXCLUDED items from coverage', () => {
   assert.equal(summary.covered, 2);
   assert.equal(summary.coveragePercent, 67);
   assert.equal(summarizeProgress([]).coveragePercent, 100);
+});
+
+// ---- Week 12 guide acceptance examples -------------------------------------
+
+const ids = (n: number) => Array.from({ length: n }, (_, i) => `p${String(i + 1).padStart(3, '0')}`);
+const counts = (batch: { assignments: Array<{ itemIds: string[] }> }) => batch.assignments.map((a) => a.itemIds.length);
+
+test('week 12: 100 products across three users without a daily cap distributes 33/33/34', () => {
+  const plan = planFairAssignment(ids(100), ['u1', 'u2', 'u3']);
+  assert.equal(plan.length, 1);
+  assert.deepEqual(counts(plan[0]), [33, 33, 34]);
+});
+
+test('week 12: daily cap 20 -> 20/20/20, 20/20/20, then final 10/10 to two users', () => {
+  const plan = planFairAssignment(ids(140), ['u1', 'u2', 'u3'], 20);
+  assert.deepEqual(plan.map(counts), [[20, 20, 20], [20, 20, 20], [10, 10]]);
+});
+
+test('week 12: assignment never duplicates or drops a product, and is deterministic', () => {
+  for (const [n, users, cap] of [[100, 3, undefined], [140, 3, 20], [97, 4, 7], [5, 3, 20], [1, 5, undefined]] as const) {
+    const userIds = Array.from({ length: users }, (_, i) => `u${i + 1}`);
+    const plan = planFairAssignment(ids(n), userIds, cap);
+    const all = plan.flatMap((b) => b.assignments.flatMap((a) => a.itemIds));
+    assert.deepEqual(all, ids(n), `n=${n} users=${users} cap=${cap}`);
+    assert.deepEqual(planFairAssignment(ids(n), userIds, cap), plan);
+    if (cap !== undefined) for (const b of plan) for (const a of b.assignments) assert.ok(a.itemIds.length <= cap);
+  }
+  assert.deepEqual(planFairAssignment([], ['u1']), []);
+  assert.deepEqual(planFairAssignment(ids(3), []), []);
+  assert.throws(() => planFairAssignment(ids(3), ['u1'], 0), /dailyLimit/);
 });

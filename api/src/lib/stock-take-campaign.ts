@@ -238,6 +238,68 @@ export function planDailyAllocation(input: AllocationInput): Array<{ itemId: str
   return plan;
 }
 
+// ---- guide-exact fair partition (Week 12 acceptance contract) -------------
+
+export type FairBatch = {
+  batch: number;
+  assignments: Array<{ userId: string; itemIds: string[] }>;
+};
+
+/**
+ * Deterministic, duplicate-free partition of an already prioritised item list
+ * across users, in daily batches (Week 12 acceptance examples).
+ *
+ * - No cap: one batch, even split; the remainder goes to the LAST users, so
+ *   100 items / 3 users -> 33, 33, 34.
+ * - Cap N: every full batch gives each user exactly N items (20/20/20, then
+ *   20/20/20). The final short batch is split evenly over the fewest users
+ *   that keep each share at or below half a day's cap, so the last 20 items
+ *   with cap 20 go 10/10 to two users rather than 7/7/6 to three.
+ *
+ * Users are taken in the given order (callers pass a stable, sorted list);
+ * items are handed out in order, so the same input always yields the same plan.
+ */
+export function planFairAssignment(itemIds: string[], userIds: string[], dailyLimit?: number): FairBatch[] {
+  const users = [...new Set(userIds)];
+  if (!users.length || !itemIds.length) return [];
+  if (dailyLimit !== undefined && (!Number.isInteger(dailyLimit) || dailyLimit < 1)) {
+    throw new Error('dailyLimit must be a positive integer');
+  }
+
+  const batches: FairBatch[] = [];
+  let cursor = 0;
+  const take = (userId: string, count: number, out: FairBatch['assignments']) => {
+    if (count > 0) out.push({ userId, itemIds: itemIds.slice(cursor, cursor + count) });
+    cursor += count;
+  };
+  const evenSplit = (remaining: number, pool: string[], out: FairBatch['assignments']) => {
+    const base = Math.floor(remaining / pool.length);
+    const extra = remaining % pool.length;
+    pool.forEach((userId, index) => take(userId, base + (index >= pool.length - extra ? 1 : 0), out));
+  };
+
+  if (dailyLimit === undefined) {
+    const assignments: FairBatch['assignments'] = [];
+    evenSplit(itemIds.length, users, assignments);
+    return [{ batch: 1, assignments }];
+  }
+
+  const fullBatch = dailyLimit * users.length;
+  while (cursor < itemIds.length) {
+    const remaining = itemIds.length - cursor;
+    const assignments: FairBatch['assignments'] = [];
+    if (remaining >= fullBatch) {
+      for (const userId of users) take(userId, dailyLimit, assignments);
+    } else {
+      const share = Math.max(1, Math.ceil(dailyLimit / 2));
+      const pool = users.slice(0, Math.min(users.length, Math.ceil(remaining / share)));
+      evenSplit(remaining, pool, assignments);
+    }
+    batches.push({ batch: batches.length + 1, assignments });
+  }
+  return batches;
+}
+
 // ---- status derivation ----------------------------------------------------
 
 export type AssignmentFact = {

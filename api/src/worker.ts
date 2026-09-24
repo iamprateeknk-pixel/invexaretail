@@ -1,3 +1,4 @@
+import './lib/telemetry-bootstrap.js';
 import { startCampaignScheduler, campaignSchedulerTick } from './lib/campaign-scheduler.js';
 import { startOrderScheduler, orderSweepTick } from './lib/order-scheduler.js';
 import { withDistributedLock } from './lib/distributed-lock.js';

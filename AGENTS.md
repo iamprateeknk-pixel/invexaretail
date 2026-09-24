@@ -50,6 +50,28 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 `.jsx` component rendering via `@testing-library/react` + `jsdom` - see
 `web/test/jsx-loader.mjs`), `npm run test:all` (both), `npm run lint`.
 
+## Execution guide: found, and the Week 12-20 narratives below are superseded
+
+`Invexa_Retail_20_Week_Developer_Execution_Guide.docx` has been recovered. The
+"Week 12" to "Week 20" entries and `docs/week12-*` ... `docs/week20-*` files
+below were written *without* it and are inferred scope - they do not match the
+guide's Weeks 12-20 (count campaigns, transfer/warehouse/QC, procurement, OMS,
+mobile offline DB, Android release, reporting/admin/docs, CI/security,
+release candidate). The authoritative per-week status is
+[docs/guide-status.md](docs/guide-status.md); the release gate is
+[docs/release-evidence/release-scorecard.md](docs/release-evidence/release-scorecard.md).
+Where this file and `docs/guide-status.md` disagree, the latter wins.
+
+Added since (guide Weeks 12-19): `lib/stock-take-campaign.ts`
+(`planFairAssignment`, the guide's exact assignment examples),
+`lib/offline-command-contract.ts` (versioned offline command/conflict
+contract), `routes/marketplace-webhook.ts` + `lib/channel-ingest.ts` (signed
+webhook, company-scoped SKU/location resolution), `lib/telemetry.ts`
+(opt-in OpenTelemetry), `.github/workflows/security.yml`, and in `mobile/` a
+real SQLite store (`lib/services/native_database.dart`). See
+`docs/offline-contract-and-mobile-store.md`, `docs/security-gates.md`,
+`docs/slo-and-alerting.md`.
+
 ## Module ownership
 
 | Area | Owning files | Notes |
