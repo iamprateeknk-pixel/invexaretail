@@ -183,3 +183,83 @@ test('progress excludes EXCLUDED items from coverage', () => {
   assert.equal(summary.coveragePercent, 67);
   assert.equal(summarizeProgress([]).coveragePercent, 100);
 });
+
+// 20-Week Developer Execution Guide, Week 12 mandatory acceptance examples
+// (verbatim): "100 products/3 users without a daily cap distributes 33, 33
+// and 34" and "With daily cap 20, day/batch one assigns 20/20/20, next
+// assigns 20/20/20 ... with no duplicate or missing product." These were
+// never directly asserted before - only planDailyAllocation's general
+// shape (least-loaded, avoid-user, capacity) had coverage.
+test('Week 12 acceptance: 100 items across 3 users with no daily cap distributes 33/33/34', () => {
+  const candidates = Array.from({ length: 100 }, (_, i) => ({ itemId: `item-${i + 1}` }));
+  const plan = planDailyAllocation({
+    candidates,
+    userIds: ['u1', 'u2', 'u3'],
+    openLoad: new Map(),
+    dailyItemsPerUser: 100, // effectively unlimited for this run
+  });
+  assert.equal(plan.length, 100, 'every item must be assigned exactly once');
+  const perUser = new Map<string, number>();
+  for (const { userId } of plan) perUser.set(userId, (perUser.get(userId) ?? 0) + 1);
+  assert.deepEqual(new Set(perUser.keys()), new Set(['u1', 'u2', 'u3']), 'no user goes unassigned');
+  const counts = [...perUser.values()].sort((a, b) => a - b);
+  assert.deepEqual(counts, [33, 33, 34]);
+  const assignedIds = plan.map((row) => row.itemId);
+  assert.equal(new Set(assignedIds).size, 100, 'no duplicate product across users');
+});
+
+test('Week 12 acceptance: daily cap 20 assigns 20/20/20 on each of two consecutive days with no duplicate or missing product', () => {
+  const totalItems = 140;
+  const allItemIds = Array.from({ length: totalItems }, (_, i) => `item-${i + 1}`);
+  const userIds = ['u1', 'u2', 'u3'];
+  const assignedSoFar = new Set<string>();
+
+  function runDay(remainingItemIds: string[]) {
+    const candidates = remainingItemIds.map((itemId) => ({ itemId }));
+    // Each day starts everyone's open load at zero, matching how
+    // runCampaignDay only counts still-open rollover tasks, not
+    // already-completed ones - a finished prior day carries no load.
+    return planDailyAllocation({ candidates, userIds, openLoad: new Map(), dailyItemsPerUser: 20 });
+  }
+
+  // Day 1: 60 available of the 140-item pool, capped at 20/user -> exactly 20/20/20.
+  const day1Remaining = allItemIds.filter((id) => !assignedSoFar.has(id));
+  const day1Plan = runDay(day1Remaining);
+  for (const { itemId } of day1Plan) assignedSoFar.add(itemId);
+  const day1PerUser = new Map<string, number>();
+  for (const { userId } of day1Plan) day1PerUser.set(userId, (day1PerUser.get(userId) ?? 0) + 1);
+  assert.deepEqual([...day1PerUser.values()].sort(), [20, 20, 20]);
+
+  // Day 2: still 80 unassigned, capped at 20/user again -> another 20/20/20.
+  const day2Remaining = allItemIds.filter((id) => !assignedSoFar.has(id));
+  const day2Plan = runDay(day2Remaining);
+  for (const { itemId } of day2Plan) assignedSoFar.add(itemId);
+  const day2PerUser = new Map<string, number>();
+  for (const { userId } of day2Plan) day2PerUser.set(userId, (day2PerUser.get(userId) ?? 0) + 1);
+  assert.deepEqual([...day2PerUser.values()].sort(), [20, 20, 20]);
+
+  // No duplicate or missing product across the two days: exactly 120 of the
+  // 140 total assigned so far, each exactly once.
+  assert.equal(assignedSoFar.size, 120);
+  const allAssignedIds = [...day1Plan, ...day2Plan].map((row) => row.itemId);
+  assert.equal(new Set(allAssignedIds).size, 120, 'no product assigned twice across days');
+
+  // Day 3: the final 20 items remain, still 3 active users. This algorithm's
+  // real, honest behavior for 20 items over 3 users is the least-loaded
+  // round-robin (7/7/6), not the guide's "10/10 to two users" wording - that
+  // phrasing describes a user going unavailable that day (a separate,
+  // already-covered reassignment path via reassignWorkload/
+  // cancelOpenAssignments), not a property of planDailyAllocation itself.
+  // What the guide's "no duplicate or missing product" requirement asks for
+  // is checked directly: every remaining item assigned, none twice, none lost.
+  const day3Remaining = allItemIds.filter((id) => !assignedSoFar.has(id));
+  assert.equal(day3Remaining.length, 20);
+  const day3Plan = runDay(day3Remaining);
+  assert.equal(day3Plan.length, 20, 'the final day must not drop or duplicate any remaining product');
+  const day3PerUser = new Map<string, number>();
+  for (const { userId } of day3Plan) day3PerUser.set(userId, (day3PerUser.get(userId) ?? 0) + 1);
+  assert.deepEqual([...day3PerUser.values()].sort((a, b) => a - b), [6, 7, 7]);
+
+  const finalAllIds = [...day1Plan, ...day2Plan, ...day3Plan].map((row) => row.itemId);
+  assert.equal(new Set(finalAllIds).size, totalItems, 'every one of the 140 products was assigned exactly once across all three days');
+});
