@@ -1,4 +1,4 @@
-export const DEFAULT_API_BASE = 'https://invexaretail-h1ps.onrender.com';
+export const DEFAULT_API_BASE = 'https://invexaretail-api-production.up.railway.app';
 export const DEFAULT_WEB_APP_URL = 'https://control.invexaretail.com';
 
 export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT_WEB_APP_URL) {

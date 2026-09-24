@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:invexaretail_mobile/config/env.dart';
 
 void main() {
-  test('empty dart-define uses the production Render API', () {
+  test('empty dart-define uses the production Railway API', () {
     expect(resolveApiBase(), productionApiBase);
     expect(resolveApiBase(fromDefine: ''), productionApiBase);
     expect(resolveApiBase(fromDefine: '   '), productionApiBase);
