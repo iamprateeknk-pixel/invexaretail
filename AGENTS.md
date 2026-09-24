@@ -695,3 +695,23 @@ tracks how much of it):
   sites fixed - a further slice would be net-new scope (`core.ts`'s
   in-memory Transfer/StockCount records, or widening past
   `unscoped-tenant-query`'s current `TENANT_SCOPED_MODELS` list).
+- Post-Week-20 follow-up 11 (`api/src/lib/repository.ts`,
+  `routes/core.ts`, `lib/transfer-command-service.ts`, no dedicated ADR -
+  see `docs/week30-transfer-count-inmemory-companyid.md`): the eighth
+  slice, lower severity than 1-7 since it closes a structural gap rather
+  than an active leak - `core.ts` already uses `lib/inventory.ts`'s
+  stricter, company-aware `canAccessLocation`, confirmed sound in Week 26.
+  `lib/repository.ts`'s in-memory `TransferRecord`/`CountRecord` types
+  carried no `companyId` field at all, so `core.ts`'s bare-id lookups
+  depended entirely on the in-memory location-ownership map, with no
+  independent record-level fallback if that map is ever wrong or
+  incomplete. Both types gained an optional `companyId` field, threaded
+  from every production creation call site's own already-known
+  `companyId` - the same value each already passes to
+  `persistTransfer`/`persistCount` for the real Postgres write next to
+  it. `core.ts`'s ~17 bare-id lookups themselves are deliberately not
+  converted to filter by this field yet, since the check they sit behind
+  is already sound; that's the natural next increment for a future
+  slice. Proven with a unit test in `src/lib/repository.test.ts`; no
+  schema/migration change (these are in-memory types, not Prisma
+  models).

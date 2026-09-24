@@ -119,6 +119,7 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
       photos: saved.photos,
       notes: saved.notes,
       createdAt: saved.createdAt,
+      companyId: cmd.companyId,
     });
     await persistTransfer(saved, cmd.companyId);
     await persistAudit(recordAudit({

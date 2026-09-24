@@ -6,15 +6,58 @@ import {
   createCountAssignment,
   createCountRecord,
   createRecountAssignment,
+  createTransferRecord,
   findActiveAssignment,
   findPendingCountForLot,
   findStockLedgerEntry,
   findUserById,
   listCountAssignmentsFor,
+  listCounts,
   listStockMovements,
+  listTransfers,
   markAssignmentSubmitted,
   updateCountReview,
 } from './repository.js';
+
+// Bare-id call-site migration slice 8 (see docs/tenant-scope-coverage.md):
+// the in-memory Transfer/StockCount mirror carried no companyId field at
+// all before this slice, so core.ts's bare-id lookups depended entirely
+// on the separate in-memory location-ownership map for tenant isolation,
+// not a real field on the record itself. This proves the field round-trips
+// through both records' create/list functions, which is what every real
+// production creation call site (routes/core.ts, lib/transfer-command-service.ts)
+// now relies on.
+test('createTransferRecord and createCountRecord preserve a companyId, so a caller no longer has to rely on the location-ownership map alone', () => {
+  createTransferRecord({
+    id: 'transfer-companyid-test-1',
+    sourceLocationId: 'wh-1',
+    destinationLocationId: 'loc-1',
+    requestedBy: 'user-admin-1',
+    role: 'ADMIN',
+    status: 'REQUESTED',
+    lines: [{ itemId: 'item-1001', lotId: 'lot-1001', quantity: 1 }],
+    createdAt: new Date().toISOString(),
+    companyId: 'default-company',
+  });
+  const transfer = listTransfers().find((row) => row.id === 'transfer-companyid-test-1');
+  assert.equal(transfer?.companyId, 'default-company');
+
+  createCountRecord({
+    id: 'count-companyid-test-1',
+    itemId: 'item-test-companyid',
+    lotId: 'lot-test-companyid',
+    locationId: 'loc-test-companyid',
+    physicalQuantity: 1,
+    bookQty: 1,
+    mode: 'manual',
+    submittedBy: 'user-store-1',
+    role: 'STORE_USER',
+    createdAt: new Date().toISOString(),
+    companyId: 'default-company',
+  });
+  const count = listCounts().find((row) => row.id === 'count-companyid-test-1');
+  assert.equal(count?.companyId, 'default-company');
+});
 
 test('approving a count posts the variance to the stock ledger', () => {
   adjustStockLedger('item-test-1', 'lot-test-1', 'loc-test-1', 50);

@@ -953,6 +953,7 @@ async function commitLotCount(args: LotCountArgs) {
       createdAt: saved.createdAt,
       parentCountId: assignment?.parentCountId,
       requestId: args.requestId,
+      companyId: args.companyId,
     }),
     () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId),
     (record) => removeCountRecord(record.id),
@@ -1705,6 +1706,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     lines: allocation.allocations.map((line) => ({ itemId, lotId: line.lotId, quantity: line.quantity })),
     notes: `Created from replenishment recommendation. Request: ${requestId}`,
     createdAt: new Date().toISOString(),
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   };
   try {
     await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
@@ -2892,6 +2894,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
       lines: plan.mapped.flatMap(({ item, allocations }) => allocations.map((allocation) => ({ itemId: item.id, lotId: allocation.lotId, quantity: allocation.quantity }))),
       notes: `Imported from ${req.file.originalname}`,
       createdAt: new Date().toISOString(),
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     };
     createTransferRecord(transfer);
     await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);

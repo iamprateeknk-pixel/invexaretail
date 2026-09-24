@@ -359,6 +359,27 @@ scope: `core.ts`'s in-memory records, or widening past the
 `unscoped-tenant-query` rule's current `TENANT_SCOPED_MODELS` list toward
 the full `OPERATIONAL_TENANT_TABLES`.
 
+## Bare-id call-site migration - eighth slice: in-memory Transfer/StockCount companyId
+
+Eighth slice, lower severity than 1-7 (not an active leak - `core.ts`
+uses `lib/inventory.ts`'s stricter `canAccessLocation`, already confirmed
+sound in Week 26): `lib/repository.ts`'s in-memory `TransferRecord`/
+`CountRecord` types carried no `companyId` field at all, so `core.ts`'s
+bare-id lookups depended entirely on the in-memory location-ownership map
+for tenant isolation, with no independent record-level fallback. Both
+types gained an optional `companyId` field, threaded from every
+production creation call site's own already-known `companyId`
+(`routes/core.ts`'s replenishment-transfer and transfer-import-commit
+routes and `commitLotCount`, `lib/transfer-command-service.ts`'s
+`createTransfer`) - the same value each site already passes to
+`persistTransfer`/`persistCount` for the real Postgres write next to it.
+`core.ts`'s ~17 bare-id lookups themselves are deliberately not converted
+to filter by this field in this slice, since the check they already sit
+behind is sound; that's the natural next increment for a future slice
+wanting a second, independent layer. Proven with a unit test in
+`src/lib/repository.test.ts`. See
+`docs/week30-transfer-count-inmemory-companyid.md`.
+
 ## Control-plane elevation
 
 No generic bypass flag exists in `TenantContext` (`lib/tenant-context.ts`) -

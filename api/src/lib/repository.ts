@@ -75,6 +75,12 @@ export type CountRecord = {
   bookQtyOriginal?: number;
   lateDelta?: number;
   lateMovementKeys?: string[];
+  // Bare-id call-site migration slice 8: the in-memory mirror carried no
+  // company identifier at all, so core.ts's bare-id lookups depended
+  // entirely on the separate in-memory location-ownership map (via
+  // canAccessLocation) for tenant isolation, not a real field on the
+  // record itself - see docs/tenant-scope-coverage.md.
+  companyId?: string;
 };
 
 export type StockLedgerRecord = {
@@ -129,6 +135,12 @@ export type TransferRecord = {
   // Blueprint v4 §17: set at dispatch.
   dispatch?: { dispatchedAt: string; dispatchedById: string; carrier?: string; awb?: string; vehicleNo?: string; expectedArrivalAt?: string };
   createdAt: string;
+  // Bare-id call-site migration slice 8: the in-memory mirror carried no
+  // company identifier at all, so core.ts's bare-id lookups depended
+  // entirely on the separate in-memory location-ownership map (via
+  // canAccessLocation) for tenant isolation, not a real field on the
+  // record itself - see docs/tenant-scope-coverage.md.
+  companyId?: string;
 };
 
 import type { StockMovementRecord } from './stock-ledger.js';

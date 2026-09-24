@@ -805,6 +805,7 @@ async function commitLotCount(args) {
         createdAt: saved.createdAt,
         parentCountId: assignment?.parentCountId,
         requestId: args.requestId,
+        companyId: args.companyId,
     }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId), (record) => (0, repository_js_1.removeCountRecord)(record.id));
     const followUps = [
         (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
@@ -1552,6 +1553,7 @@ router.post('/replenishment-actions/transfer', async (req, res) => {
         lines: allocation.allocations.map((line) => ({ itemId, lotId: line.lotId, quantity: line.quantity })),
         notes: `Created from replenishment recommendation. Request: ${requestId}`,
         createdAt: new Date().toISOString(),
+        companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
     };
     try {
         await (0, reservation_js_1.reserveStockForTransfer)(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
@@ -2801,6 +2803,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req, res) 
             lines: plan.mapped.flatMap(({ item, allocations }) => allocations.map((allocation) => ({ itemId: item.id, lotId: allocation.lotId, quantity: allocation.quantity }))),
             notes: `Imported from ${req.file.originalname}`,
             createdAt: new Date().toISOString(),
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         };
         (0, repository_js_1.createTransferRecord)(transfer);
         await (0, persistence_js_1.persistTransfer)(transfer, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
