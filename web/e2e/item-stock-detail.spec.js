@@ -39,7 +39,7 @@ test('browser login keeps refresh credential HttpOnly and item search adjustment
   await page.getByLabel('Email').fill('admin@example.com');
   await page.getByLabel('Password').fill('password');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByText('Admin')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible();
 
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('invexaretail_session')));
   expect(stored.refreshToken).toBeUndefined();
@@ -51,10 +51,13 @@ test('browser login keeps refresh credential HttpOnly and item search adjustment
   await search.press('ArrowDown');
   await search.press('Enter');
   await expect(page.getByRole('heading', { name: 'Basmati Rice' })).toBeVisible();
-  await expect(page.getByText('Main Store')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Main Store' })).toBeVisible();
 
   await page.getByLabel('Quantity change').fill('2');
   await page.getByLabel('Reason').fill('Verified browser journey');
+  const adjustment = page.waitForRequest((request) => request.url().endsWith('/api/v1/items/item-1/adjust') && request.method() === 'POST');
   await page.getByRole('button', { name: 'Post adjustment' }).click();
-  await expect(page.getByRole('button', { name: 'Post adjustment' })).toBeEnabled();
+  await adjustment;
+  await expect(page.getByLabel('Quantity change')).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Post adjustment' })).toBeDisabled();
 });
