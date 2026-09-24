@@ -6,7 +6,7 @@ import {
   writePersistedSession,
 } from './session.js';
 
-export const API_BASE = import.meta.env?.VITE_API_BASE || 'https://invexaretail-h1ps.onrender.com';
+export const API_BASE = import.meta.env?.VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app';
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
