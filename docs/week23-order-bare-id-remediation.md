@@ -78,15 +78,22 @@ test that exercises these routes in memory mode. `architecture-lint`:
 `unscoped-tenant-query`'s baseline dropped from 121 to 112 (9 fixed, 0
 new). `contract:validate`/`contract:check-drift` both pass.
 
-**Honest gap**: no *new* automated test proves the cross-tenant denial
-directly (e.g. "Company A's admin gets 404 on Company B's order id").
-Doing that properly needs a real-Postgres HTTP-level test seeding two
-companies' users/orders and hitting the live route with each - a bigger
-lift than fits this slice, and this repo's existing `.http.test.ts` files
-for this router run in memory mode, which never touches the
-`companyId` column this fix depends on. Flagged here rather than silently
-claimed as covered; the next slice of this remediation should add that
-test infrastructure once, then reuse it for every subsequent slice.
+**Follow-up (closed): the cross-tenant denial itself is now proven.**
+`src/routes/operations-extension-orders.postgres.test.ts` (real Postgres,
+5/5 passing) is the HTTP-level harness this doc originally flagged as
+missing: `withServer`/`makeFixture` mount `operationsExtensionRouter`
+directly (it applies its own `extractToken`/`requireAuth` internally, so
+no external auth middleware is needed), seed two real companies each with
+a Postgres `User` row (for the `Order.createdById` FK) and an in-memory
+enhanced-user record (what `requireAuth` actually checks), and issue a
+real JWT per company via `generateJWT`. Five tests prove: a company B
+token gets 404 on `GET /orders/:id/pack`, `/shipment`, and `/returns` for
+a company A order (not 403 - it never reveals the order exists); the
+owning company can still read its own order normally; `GET /orders`'
+list only ever returns the caller's own company's orders; and
+`POST /shipments/:awb/cancel` 404s on a shipment belonging to another
+company. This harness is meant to be reused, not rewritten, for the next
+slice of this remediation - see "What's still pending" below.
 
 ## What's still pending
 

@@ -143,11 +143,12 @@ cross-tenant-access gap, not just a lint nag: `canAccessLocation` returns
 company check, so an admin given or guessing another company's order id
 could reach and pass that check. See
 `docs/week23-order-bare-id-remediation.md` for the full list of fixed
-routes and the one honest gap this slice left (no new automated
-cross-tenant-denial test - the existing `.http.test.ts` files for this
-router run in memory mode, which never touches the `companyId` column
-this fix depends on; a real-Postgres HTTP test harness for this router is
-needed once, then reusable for every subsequent slice).
+routes. The follow-up real-Postgres HTTP test harness
+(`src/routes/operations-extension-orders.postgres.test.ts`) now proves the
+fix: five tests confirm a cross-tenant order id resolves 404 (never 403 -
+which would confirm the row exists), while the owning company's own
+access is unaffected. Reuse this harness's `withServer`/`makeFixture`
+pattern for every subsequent slice rather than writing a new one.
 
 Remaining, not yet migrated: `PurchaseOrder`/`Transfer`/`ExceptionCase`/
 `ReturnRequest`/`StockCount`/`ExpiryAlert`/`Item` call sites across

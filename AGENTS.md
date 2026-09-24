@@ -187,6 +187,16 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
   reconnecting within the window can still replay every event through
   `durableEventsSince` after a prune has run -
   `outbox-retention.postgres.test.ts` is the reference.
+- Any bare-id call-site migration slice (adding a `companyId` filter to a
+  `routes/operations-extension.ts` or `routes/core.ts` query that
+  previously looked a row up by id alone) must be exercised against real
+  Postgres and prove the cross-tenant case resolves 404 (never 403 - a
+  403 would confirm the row exists) while the owning tenant's own access
+  is unaffected - `operations-extension-orders.postgres.test.ts` is the
+  reference, including its reusable `withServer`/`makeFixture` harness
+  (mounts the router directly since it applies its own auth middleware;
+  seeds a real Postgres `User` row for FKs alongside the in-memory
+  enhanced-user record `requireAuth` actually checks).
 
 ## Prohibited patterns
 
@@ -519,9 +529,17 @@ tracks how much of it):
   all, so a cross-tenant order id could pass it once looked up by bare
   id. Each fixed lookup now filters by `companyId` at the query itself, so
   a cross-tenant id resolves the same way a genuinely missing one does
-  (404), never revealing existence. Honest gap left open: no new
-  automated cross-tenant-denial test - this router's existing
-  `.http.test.ts` files run in memory mode, which never touches the
-  `companyId` column this fix depends on; a real-Postgres HTTP test
-  harness for this router is needed once, then reusable for every future
-  slice of this same remediation.
+  (404), never revealing existence.
+- Post-Week-20 follow-up 4 (`src/routes/operations-extension-orders.postgres.test.ts`,
+  no dedicated ADR - closes the honest gap follow-up 3 left open): the
+  real-Postgres HTTP test harness for `routes/operations-extension.ts`
+  that follow-up 3 said was needed. `withServer`/`makeFixture` mount
+  `operationsExtensionRouter` directly (it applies its own
+  `extractToken`/`requireAuth` internally), seed two real companies each
+  with a Postgres `User` row (for FKs like `Order.createdById`) plus an
+  in-memory enhanced-user record (what `requireAuth` actually checks), and
+  issue a real JWT per company. Five tests (all passing) prove the Week 23
+  fixes actually deny cross-tenant access with 404, not 403 - never
+  revealing that another company's row exists - while the owning company's
+  own access is unaffected. This harness is meant to be reused, not
+  rewritten, by the next slice of the bare-id remediation.
