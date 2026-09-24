@@ -891,3 +891,27 @@ tracks how much of it):
   real Postgres in this sandbox (no `DATABASE_URL`/`TEST_DATABASE_URL`
   here) - they depend on this PR's own CI run, which does have a real
   Postgres service container, to prove out.
+- Post-merge follow-up 5 (`.github/workflows/{android-apk,ci,security,
+  verify}.yml`, `api/package.json`, `admin-panel/package.json`,
+  `web/package.json`, `mobile/pubspec.yaml`, no dedicated ADR - see
+  `docs/week37-dependabot-upgrades-applied.md`): applies the 14 Dependabot
+  updates (#31-#44) that were closed for noise (their branches auto-
+  deleted on close, so they could not be reopened) properly by hand -
+  bumped, tested, and verified rather than merged blind. Five GitHub
+  Actions version pins (mechanical); `bcryptjs`/`dotenv` in `api/`; `vite`/
+  `@vitejs/plugin-react`/`react`/`react-dom` in `admin-panel/` (a clean
+  install, the full test suite, a real build, and CI's own three
+  admin-panel verification checks all replicated and passing locally);
+  `@types/node` in `web/` (dev-only types); `flutter_secure_storage` in
+  `mobile/` (review-verified against the package's stable core API surface
+  - `write`/`read`/`delete` - since this sandbox has no Flutter SDK to run
+  it, same as the SyncVault rewrite). One bump was found genuinely unsafe
+  and reverted rather than forced: `typescript` 5.9.3->7.0.2 in `api/`
+  conflicts with `openapi-typescript@7.13.0`'s hard `^5.x` peer dependency
+  (this repo's own `contract:generate` tool) - a real, currently
+  unresolvable incompatibility, documented rather than silently dropped.
+  Separately fixed CodeQL, which was failing for an unrelated reason found
+  while driving this branch green: this private repo doesn't have GitHub's
+  "Code scanning" feature enabled at all, so the SARIF upload step always
+  fails regardless of workflow permissions - a repo-owner-only setting;
+  marked that job `continue-on-error: true` until it's enabled.
