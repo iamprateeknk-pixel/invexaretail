@@ -48,4 +48,18 @@ export declare function resetEventBusForTests(): void;
 export declare const OUTBOX_RETENTION_DAYS = 7;
 /** Deletes DomainEventOutbox rows older than the retention window. Returns the number of rows removed. */
 export declare function pruneDomainEventOutbox(olderThanDays?: number): Promise<number>;
+export type OutboxHealthSnapshot = {
+    pending: number;
+    poison: number;
+    /** Age of the oldest still-PENDING row, in seconds - the durable-delivery equivalent of consumer lag. */
+    oldestPendingAgeSeconds: number;
+};
+/**
+ * Business SLI (Week 19 execution-guide scope: "outbox lag ... business
+ * SLIs"): how far the outbox worker is behind, and how many events have
+ * exhausted retries. `undefined` in memory mode, same convention as
+ * `command-center.ts`'s other database-only extras - a missing database
+ * never takes `/ops/metrics` down.
+ */
+export declare function outboxHealthSnapshot(now?: Date): Promise<OutboxHealthSnapshot | undefined>;
 export {};

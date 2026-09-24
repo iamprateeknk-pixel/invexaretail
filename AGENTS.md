@@ -832,3 +832,28 @@ tracks how much of it):
   change could not be run locally - it depends on `.github/workflows/
   ci.yml`'s existing `mobile` job (which does have a real Flutter
   toolchain) actually passing before it's trusted.
+- Post-merge follow-up 3 (`api/src/lib/event-bus.ts`,
+  `routes/command-center.ts`, no dedicated ADR - see
+  `docs/week35-outbox-lag-business-sli.md`): closes part of Week 19's
+  "queue lag ... business SLIs" scope. `GET /ops/metrics` already had
+  request-level RED metrics and process/database health but no visibility
+  into the durable outbox's own health. Added
+  `outboxHealthSnapshot()` (pending count, poison count, oldest-pending
+  age in seconds - all real Postgres counts, no schema change) and wired
+  it into `/ops/metrics` with an `slo` block (`breached` boolean against
+  inline, reasoned thresholds: 15 minutes of lag, or any POISON row at
+  all). Explicitly did not fabricate real alert routing - this repo has no
+  paging/alerting connector configured to route to, so the honest
+  deliverable is the queryable `breached` flag, not a fake "alerting
+  configured" claim. `npm test`: 567 passing (one new memory-mode test for
+  the `databaseEnabled` short-circuit); new
+  `event-bus-outbox-health.postgres.test.ts` per AGENTS.md's rule that
+  `event-bus.ts`'s outbox concerns need real-Postgres coverage;
+  `architecture-lint`: 0 new violations; `contract:validate`/
+  `contract:check-drift`: both pass (`/ops/metrics` isn't in the versioned
+  OpenAPI surface). Still open from Week 19, and not safely attemptable
+  without infrastructure this repo lacks: real OpenTelemetry trace export
+  (needs a collector), load testing at target volume, and failure drills
+  under real traffic - all need either a real staging environment or human
+  decisions (target volume, acceptable budgets) outside this session's
+  authority.
