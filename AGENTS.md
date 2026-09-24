@@ -809,3 +809,26 @@ tracks how much of it):
   regenerated only for line-number shifts, same four pre-existing
   `import-batch-store.ts` call sites); `contract:validate`/
   `contract:check-drift`: both pass.
+- Post-merge follow-up 2 (`.github/workflows/security.yml`,
+  `.github/dependabot.yml`, `mobile/pubspec.yaml`,
+  `mobile/lib/services/sync_vault.dart`, no dedicated ADR - see
+  `docs/week34-ci-security-scanning-and-syncvault-aead.md`): closes two
+  items the 20-Week Developer Execution Guide names directly and that were
+  still open - Week 19's CI security-scanning gate (no CodeQL/secret-scan/
+  dependency-audit existed at all) and Week 16's "replace custom
+  SyncVault/XOR design with standard authenticated encryption". Added a
+  `security.yml` workflow (CodeQL for JS/TS, gitleaks secret scan, a
+  non-blocking `npm audit --audit-level=high` matrix across `api`/`web`/
+  `admin-panel`, same baseline-first posture as `architecture-lint`) plus
+  Dependabot. Rewrote `SyncVault` from a hand-rolled HMAC-keystream
+  cipher + separate HMAC tag to AES-256-GCM via `pointycastle` (chosen for
+  its synchronous API, so no caller in `sync_engine.dart` needed to
+  change); the companyId stays bound as AEAD associated data, so a
+  cross-tenant open is still rejected before decryption is even attempted.
+  New `mobile/test/sync_vault_test.dart` adds the one property the old
+  suite never checked - ciphertext tampering is rejected by the
+  authentication tag, not just a same-secret round trip. Honest caveat:
+  this session's sandbox has no Flutter/Dart SDK at all, so this mobile
+  change could not be run locally - it depends on `.github/workflows/
+  ci.yml`'s existing `mobile` job (which does have a real Flutter
+  toolchain) actually passing before it's trusted.
