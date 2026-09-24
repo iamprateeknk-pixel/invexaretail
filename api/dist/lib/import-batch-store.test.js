@@ -131,6 +131,35 @@ const import_fixtures_js_1 = require("./import-fixtures.js");
     strict_1.default.equal(posted?.metadata?.committedRows, 1);
     await strict_1.default.rejects(() => (0, import_batch_store_js_1.transitionBatch)(batch.id, 'POSTED'), import_center_js_1.InvalidBatchTransitionError);
 });
+(0, node_test_1.default)('two concurrent commits racing the same VALIDATED batch: one wins, the other gets a distinguishable concurrency error, not a raw state-machine crash', async () => {
+    (0, import_batch_store_js_1.resetImportBatchStore)();
+    const batch = await (0, import_batch_store_js_1.createPreviewBatch)({
+        type: 'SALES',
+        fileName: 'sales.csv',
+        sourceFormat: 'daily-erp-export',
+        importedById: 'user-admin-1',
+        fileHash: (0, import_center_js_1.computeFileHash)(Buffer.from('race')),
+        totalRows: 1,
+        validRows: 1,
+        invalidRows: 0,
+        duplicateRows: 0,
+        rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
+    });
+    await (0, import_batch_store_js_1.transitionBatch)(batch.id, 'VALIDATED');
+    // Simulates two concurrent requests that both read the batch as VALIDATED
+    // (e.g. a double-click on "Confirm") before either has transitioned it.
+    const results = await Promise.allSettled([
+        (0, import_batch_store_js_1.transitionBatch)(batch.id, 'POSTED', { committedRows: 1 }),
+        (0, import_batch_store_js_1.transitionBatch)(batch.id, 'POSTED', { committedRows: 1 }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    strict_1.default.equal(fulfilled.length, 1, 'exactly one of the two racing commits must win');
+    strict_1.default.equal(rejected.length, 1, 'the other must fail instead of silently double-posting');
+    strict_1.default.ok(rejected[0].reason instanceof import_center_js_1.ConcurrentBatchTransitionError, 'the loser must get a distinguishable concurrency error, not InvalidBatchTransitionError');
+    const posted = await (0, import_batch_store_js_1.getBatch)(batch.id);
+    strict_1.default.equal(posted?.status, 'POSTED');
+});
 (0, node_test_1.default)('commit reconstructs one movement per staged allocation and keeps the previewed lot', async () => {
     const movements = (0, import_token_flow_js_1.movementsFromStagedDailyRows)('imp-1', 'user-admin-1', 'SALES', [{
             rowNumber: 2,

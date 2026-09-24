@@ -1,0 +1,105 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, independent of any PR - catches newly disclosed CVEs against
+    # dependencies that haven't otherwise changed.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL (JavaScript/TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # security-events:write covers uploading the SARIF results, but the
+    # analyze step also queries workflow-run metadata via the Actions API
+    # (to associate results with this run) - without actions:read that 403s
+    # with "Resource not accessible by integration" after the scan itself
+    # already completed successfully.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # gitleaks-action lists the PR's commits via the GitHub API on
+    # pull_request events (to scan just the new commits, not full history).
+    # The workflow-level `permissions: contents: read` alone doesn't grant
+    # that - it needs pull-requests:read too, or the API call 403s with
+    # "Resource not accessible by integration".
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  dependency-audit:
+    name: Dependency audit (npm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - api
+          - web
+          - admin-panel
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Advisory only: reports high/critical vulnerabilities without blocking
+      # the PR on transitive advisories the team hasn't triaged yet. Promote
+      # this to a hard failure once the current advisory backlog (if any) is
+      # triaged and tracked, matching how architecture-lint's baseline works.
+      - name: npm audit (high/critical, non-blocking)
+        run: npm audit --audit-level=high || echo "::warning::npm audit found high/critical advisories in ${{ matrix.package }} - review the job log."

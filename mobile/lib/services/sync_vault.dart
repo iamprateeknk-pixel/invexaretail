@@ -3,32 +3,34 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:pointycastle/export.dart';
 
-/// Company-scoped sealed queue for offline mutations. The envelope is bound to
-/// [companyId]; a grocery key cannot open a Jaipur payload.
+/// Company-scoped sealed queue for offline mutations, encrypted with
+/// AES-256-GCM (PointyCastle, a maintained pure-Dart AEAD implementation)
+/// instead of a hand-rolled stream cipher. The envelope is bound to
+/// [companyId] as additional authenticated data: a grocery key cannot open a
+/// Jaipur payload, and any tampering with the ciphertext or the companyId is
+/// rejected by the GCM authentication tag.
 class SyncVault {
   SyncVault({required this.companyId, required this.secret});
 
   final String companyId;
   final String secret;
 
+  static const int _keyLengthBytes = 32; // AES-256
+  static const int _nonceLengthBytes = 12; // Standard GCM nonce size
+  static const int _macLengthBits = 128;
+
   String seal(Map<String, Object?> payload) {
-    final iv = List<int>.generate(16, (_) => Random.secure().nextInt(256));
-    final body = utf8.encode(jsonEncode({'companyId': companyId, ...payload}));
-    final key = _streamKey(iv, body.length);
-    final cipher = Uint8List(body.length);
-    for (var i = 0; i < body.length; i++) {
-      cipher[i] = body[i] ^ key[i];
-    }
-    final mac = Hmac(sha256, utf8.encode(secret))
-        .convert([...utf8.encode(companyId), ...iv, ...cipher])
-        .bytes;
+    final nonce = _randomBytes(_nonceLengthBytes);
+    final plaintext = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    final aad = Uint8List.fromList(utf8.encode(companyId));
+    final ciphertextWithTag = _gcm(forEncryption: true, nonce: nonce, aad: aad).process(plaintext);
     return jsonEncode({
-      'v': 1,
+      'v': 2,
       'companyId': companyId,
-      'iv': base64Encode(iv),
-      'data': base64Encode(cipher),
-      'mac': base64Encode(mac),
+      'nonce': base64Encode(nonce),
+      'data': base64Encode(ciphertextWithTag),
     });
   }
 
@@ -37,47 +39,35 @@ class SyncVault {
     if (envelope['companyId'] != companyId) {
       throw StateError('SYNC_VAULT_COMPANY_MISMATCH');
     }
-    final iv = base64Decode(envelope['iv'] as String);
-    final cipher = base64Decode(envelope['data'] as String);
-    final mac = base64Decode(envelope['mac'] as String);
-    final expected = Hmac(sha256, utf8.encode(secret))
-        .convert([...utf8.encode(companyId), ...iv, ...cipher])
-        .bytes;
-    if (!_constantEquals(mac, expected)) {
+    final nonce = base64Decode(envelope['nonce'] as String);
+    final ciphertextWithTag = base64Decode(envelope['data'] as String);
+    final aad = Uint8List.fromList(utf8.encode(companyId));
+    final Uint8List plaintext;
+    try {
+      plaintext = _gcm(forEncryption: false, nonce: nonce, aad: aad).process(ciphertextWithTag);
+    } on InvalidCipherTextException {
       throw StateError('SYNC_VAULT_MAC_INVALID');
     }
-    final key = _streamKey(iv, cipher.length);
-    final plain = Uint8List(cipher.length);
-    for (var i = 0; i < cipher.length; i++) {
-      plain[i] = cipher[i] ^ key[i];
-    }
-    final decoded = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+    final decoded = jsonDecode(utf8.decode(plaintext)) as Map<String, dynamic>;
     return decoded.cast<String, Object?>();
   }
 
-  Uint8List _streamKey(List<int> iv, int length) {
-    final out = Uint8List(length);
-    var filled = 0;
-    var counter = 0;
-    while (filled < length) {
-      final block = Hmac(sha256, utf8.encode(secret))
-          .convert([...utf8.encode('enc|$companyId|$counter'), ...iv])
-          .bytes;
-      counter += 1;
-      for (final byte in block) {
-        if (filled >= length) break;
-        out[filled++] = byte;
-      }
-    }
-    return out;
+  GCMBlockCipher _gcm({required bool forEncryption, required Uint8List nonce, required Uint8List aad}) {
+    return GCMBlockCipher(AESEngine())
+      ..init(forEncryption, AEADParameters(KeyParameter(_deriveKey()), _macLengthBits, nonce, aad));
   }
 
-  bool _constantEquals(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    var diff = 0;
-    for (var i = 0; i < a.length; i++) {
-      diff |= a[i] ^ b[i];
-    }
-    return diff == 0;
+  /// Standard SHA-256 key derivation from the shared secret and companyId.
+  /// This is not the cipher itself - AES-GCM above provides the actual
+  /// confidentiality and integrity guarantee; this only turns an arbitrary
+  /// secret string into a fixed-length AES-256 key.
+  Uint8List _deriveKey() {
+    final digest = sha256.convert(utf8.encode('invexa-sync-vault-v2|$companyId|$secret'));
+    return Uint8List.fromList(digest.bytes.sublist(0, _keyLengthBytes));
+  }
+
+  Uint8List _randomBytes(int length) {
+    final random = Random.secure();
+    return Uint8List.fromList(List<int>.generate(length, (_) => random.nextInt(256)));
   }
 }

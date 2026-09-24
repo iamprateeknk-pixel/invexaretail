@@ -29,6 +29,21 @@ export class InvalidBatchTransitionError extends Error {
   }
 }
 
+/**
+ * Thrown when a transition's precondition (the batch's status at read time)
+ * no longer holds by the time the transition is applied - a concurrent
+ * request (e.g. a double-click on "Confirm" or a client retry) already moved
+ * the batch. Distinct from InvalidBatchTransitionError: the transition
+ * itself was legal, it just lost a race, so callers can treat it as "already
+ * handled" rather than a real state-machine violation.
+ */
+export class ConcurrentBatchTransitionError extends Error {
+  constructor(public readonly batchId: string) {
+    super(`Import batch ${batchId} was already updated by a concurrent request.`);
+    this.name = 'ConcurrentBatchTransitionError';
+  }
+}
+
 export function assertValidBatchTransition(from: ImportBatchStatus, to: ImportBatchStatus): void {
   if (!ALLOWED_TRANSITIONS[from].includes(to)) {
     throw new InvalidBatchTransitionError(from, to);

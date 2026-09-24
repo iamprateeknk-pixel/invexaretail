@@ -175,7 +175,8 @@ import {
 } from '../lib/industry-packs.js';
 import { matchImportLocation, parseDailyStockImport, type DailyImportPreview, type DailyStockRow } from '../lib/daily-stock-sync.js';
 import { listImportBatches, reverseImportBatch } from '../lib/import-reversal.js';
-import { computeFileHash, InvalidBatchTransitionError } from '../lib/import-center.js';
+import { computeFileHash, ConcurrentBatchTransitionError, InvalidBatchTransitionError } from '../lib/import-center.js';
+import { withDistributedLock } from '../lib/distributed-lock.js';
 import {
   countRowsByStatus,
   createPreviewBatch,
@@ -2183,8 +2184,22 @@ router.post('/imports/:batchToken/commit', async (req: Request, res: Response, n
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required to commit imports.' });
   try {
-    return await commitImportBatchToken(req, res, batchToken);
+    // commitImportBatchToken posts real stock movements before flipping the
+    // batch to POSTED; without a lock here, a double-click or client retry
+    // sends two concurrent commit requests that both pass the PREVIEWED/
+    // VALIDATED status check and both post - not just an ugly "POSTED to
+    // POSTED" transition error, but the underlying stock getting applied
+    // twice. Serialize commits per batch so the second request always sees
+    // the first one's already-POSTED result instead of racing it.
+    const outcome = await withDistributedLock(`import-batch-commit:${batchToken}`, () => commitImportBatchToken(req, res, batchToken));
+    if (outcome === null) {
+      return res.status(409).json({ message: 'This import is already being committed by another request. Please wait and refresh.' });
+    }
+    return outcome;
   } catch (error) {
+    if (error instanceof ConcurrentBatchTransitionError) {
+      return res.status(409).json({ message: 'This import was already committed by a concurrent request.' });
+    }
     if (error instanceof InvalidBatchTransitionError) return res.status(409).json({ message: error.message });
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit import.' });
   }

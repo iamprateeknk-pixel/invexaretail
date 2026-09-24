@@ -9,6 +9,7 @@ import { listCountAssignments, listCounts, listItems, listLocations, listSyncChe
 import { databaseEnabled } from '../lib/persistence.js';
 import { buildCommandCenter } from '../lib/command-center.js';
 import { metricsSnapshot } from '../lib/request-metrics.js';
+import { outboxHealthSnapshot } from '../lib/event-bus.js';
 import { stuckTransfers } from '../lib/command-center.js';
 import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type AccuracyGroup } from '../lib/report-builders.js';
 
@@ -116,6 +117,15 @@ router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
   return res.send(auditCsv(events, names));
 });
 
+// Week 19 execution-guide scope: SLO thresholds for the business SLIs below,
+// each with a "why this number" so a later change is a deliberate edit, not
+// a guess. These are read here rather than enforced by an external alerting
+// system - this repo has no paging/alerting connector to route to, so the
+// honest deliverable is a visible, queryable breach flag on this endpoint,
+// not a fabricated "alerts configured" claim.
+const OUTBOX_LAG_BREACH_SECONDS = 15 * 60; // Delivery/backoff retries every few seconds; 15 minutes stuck means the worker itself is stuck, not just backing off.
+const OUTBOX_POISON_BREACH_COUNT = 1; // Any POISON row is a silently-failing event by definition (Week 7); zero tolerance.
+
 // Blueprint v4 §40 Observability: request latency/error by route, sync health, stuck transfers.
 router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Operational metrics are for admins.' });
@@ -123,6 +133,10 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
   const database = databaseEnabled
     ? await databaseProbe().catch((error) => ({ ok: false as const, code: error instanceof Error ? error.name : 'DATABASE_PROBE_FAILED' }))
     : { ok: true as const, mode: 'memory' as const };
+  const outbox = await outboxHealthSnapshot().catch((error) => {
+    console.warn('[command-center] outbox health unavailable:', error instanceof Error ? error.message : error);
+    return undefined;
+  });
   return res.json({
     generatedAt: new Date().toISOString(),
     api: metricsSnapshot(),
@@ -130,6 +144,14 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     warehouse: { stuckTransfers: stuckTransfers(listTransfers(), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
     database: { connected: databaseEnabled, ...database },
+    outbox: outbox && {
+      ...outbox,
+      slo: {
+        lagBreachSeconds: OUTBOX_LAG_BREACH_SECONDS,
+        poisonBreachCount: OUTBOX_POISON_BREACH_COUNT,
+        breached: outbox.oldestPendingAgeSeconds >= OUTBOX_LAG_BREACH_SECONDS || outbox.poison >= OUTBOX_POISON_BREACH_COUNT,
+      },
+    },
   });
 });
 

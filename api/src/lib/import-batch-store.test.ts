@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFileHash, InvalidBatchTransitionError } from './import-center.js';
+import { computeFileHash, ConcurrentBatchTransitionError, InvalidBatchTransitionError } from './import-center.js';
 import {
   countRowsByStatus,
   createPreviewBatch,
@@ -138,6 +138,38 @@ test('posted batches cannot be posted a second time through the lifecycle', asyn
   assert.equal(posted?.status, 'POSTED');
   assert.equal(posted?.metadata?.committedRows, 1);
   await assert.rejects(() => transitionBatch(batch.id, 'POSTED'), InvalidBatchTransitionError);
+});
+
+test('two concurrent commits racing the same VALIDATED batch: one wins, the other gets a distinguishable concurrency error, not a raw state-machine crash', async () => {
+  resetImportBatchStore();
+  const batch = await createPreviewBatch({
+    type: 'SALES',
+    fileName: 'sales.csv',
+    sourceFormat: 'daily-erp-export',
+    importedById: 'user-admin-1',
+    fileHash: computeFileHash(Buffer.from('race')),
+    totalRows: 1,
+    validRows: 1,
+    invalidRows: 0,
+    duplicateRows: 0,
+    rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
+  });
+  await transitionBatch(batch.id, 'VALIDATED');
+
+  // Simulates two concurrent requests that both read the batch as VALIDATED
+  // (e.g. a double-click on "Confirm") before either has transitioned it.
+  const results = await Promise.allSettled([
+    transitionBatch(batch.id, 'POSTED', { committedRows: 1 }),
+    transitionBatch(batch.id, 'POSTED', { committedRows: 1 }),
+  ]);
+  const fulfilled = results.filter((r) => r.status === 'fulfilled');
+  const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+  assert.equal(fulfilled.length, 1, 'exactly one of the two racing commits must win');
+  assert.equal(rejected.length, 1, 'the other must fail instead of silently double-posting');
+  assert.ok(rejected[0].reason instanceof ConcurrentBatchTransitionError, 'the loser must get a distinguishable concurrency error, not InvalidBatchTransitionError');
+
+  const posted = await getBatch(batch.id);
+  assert.equal(posted?.status, 'POSTED');
 });
 
 test('commit reconstructs one movement per staged allocation and keeps the previewed lot', async () => {

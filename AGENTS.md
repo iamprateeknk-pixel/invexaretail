@@ -782,3 +782,78 @@ tracks how much of it):
   across the bare-id remediation's slices (all still passing), and
   `web/`'s `npm test` (107 passing) and `npm run test:components` (18
   passing).
+- Post-merge follow-up (`api/src/lib/import-center.ts`,
+  `lib/import-batch-store.ts`, `routes/core.ts`, no dedicated ADR - see
+  `docs/week33-import-commit-double-submit-fix.md`): fixes a real
+  production bug reported via the "Stock update" bulk-import screen - a
+  double-click (or client retry) on "Confirm N lot rows" sent two
+  concurrent `POST /imports/:batchToken/commit` requests that both read
+  the batch as `VALIDATED` before either transitioned it, both posted
+  stock (`persistOpeningStockImport`/`persistDailyMovementImport`), and
+  the loser's own `transitionBatch(..., 'POSTED')` call then crashed with
+  the confusing `Cannot move import batch from POSTED to POSTED` - a
+  symptom of the real problem (stock already double-posted by the time
+  that error surfaced), not just an ugly message. Fixed with two layers:
+  `routes/core.ts` now wraps the whole commit handler in
+  `withDistributedLock` (`lib/distributed-lock.ts`'s existing Postgres
+  advisory lock, already used by `worker.ts`), keyed per batch, so a
+  racing second request gets an immediate `409` before it can post
+  anything; and `import-batch-store.ts`'s `transitionBatch` is now itself
+  a compare-and-swap (`updateMany` gated on the status read at the start
+  of the call, or the memory-mode equivalent) throwing a new
+  `ConcurrentBatchTransitionError` if the batch moved under it, as
+  defense in depth for any other caller. Proven with a new memory-mode
+  test firing two genuinely concurrent `transitionBatch` calls via
+  `Promise.allSettled` and asserting exactly one wins. `npm test`: 566
+  passing, 0 failing; `architecture-lint`: 0 new violations (baseline
+  regenerated only for line-number shifts, same four pre-existing
+  `import-batch-store.ts` call sites); `contract:validate`/
+  `contract:check-drift`: both pass.
+- Post-merge follow-up 2 (`.github/workflows/security.yml`,
+  `.github/dependabot.yml`, `mobile/pubspec.yaml`,
+  `mobile/lib/services/sync_vault.dart`, no dedicated ADR - see
+  `docs/week34-ci-security-scanning-and-syncvault-aead.md`): closes two
+  items the 20-Week Developer Execution Guide names directly and that were
+  still open - Week 19's CI security-scanning gate (no CodeQL/secret-scan/
+  dependency-audit existed at all) and Week 16's "replace custom
+  SyncVault/XOR design with standard authenticated encryption". Added a
+  `security.yml` workflow (CodeQL for JS/TS, gitleaks secret scan, a
+  non-blocking `npm audit --audit-level=high` matrix across `api`/`web`/
+  `admin-panel`, same baseline-first posture as `architecture-lint`) plus
+  Dependabot. Rewrote `SyncVault` from a hand-rolled HMAC-keystream
+  cipher + separate HMAC tag to AES-256-GCM via `pointycastle` (chosen for
+  its synchronous API, so no caller in `sync_engine.dart` needed to
+  change); the companyId stays bound as AEAD associated data, so a
+  cross-tenant open is still rejected before decryption is even attempted.
+  New `mobile/test/sync_vault_test.dart` adds the one property the old
+  suite never checked - ciphertext tampering is rejected by the
+  authentication tag, not just a same-secret round trip. Honest caveat:
+  this session's sandbox has no Flutter/Dart SDK at all, so this mobile
+  change could not be run locally - it depends on `.github/workflows/
+  ci.yml`'s existing `mobile` job (which does have a real Flutter
+  toolchain) actually passing before it's trusted.
+- Post-merge follow-up 3 (`api/src/lib/event-bus.ts`,
+  `routes/command-center.ts`, no dedicated ADR - see
+  `docs/week35-outbox-lag-business-sli.md`): closes part of Week 19's
+  "queue lag ... business SLIs" scope. `GET /ops/metrics` already had
+  request-level RED metrics and process/database health but no visibility
+  into the durable outbox's own health. Added
+  `outboxHealthSnapshot()` (pending count, poison count, oldest-pending
+  age in seconds - all real Postgres counts, no schema change) and wired
+  it into `/ops/metrics` with an `slo` block (`breached` boolean against
+  inline, reasoned thresholds: 15 minutes of lag, or any POISON row at
+  all). Explicitly did not fabricate real alert routing - this repo has no
+  paging/alerting connector configured to route to, so the honest
+  deliverable is the queryable `breached` flag, not a fake "alerting
+  configured" claim. `npm test`: 567 passing (one new memory-mode test for
+  the `databaseEnabled` short-circuit); new
+  `event-bus-outbox-health.postgres.test.ts` per AGENTS.md's rule that
+  `event-bus.ts`'s outbox concerns need real-Postgres coverage;
+  `architecture-lint`: 0 new violations; `contract:validate`/
+  `contract:check-drift`: both pass (`/ops/metrics` isn't in the versioned
+  OpenAPI surface). Still open from Week 19, and not safely attemptable
+  without infrastructure this repo lacks: real OpenTelemetry trace export
+  (needs a collector), load testing at target volume, and failure drills
+  under real traffic - all need either a real staging environment or human
+  decisions (target volume, acceptable budgets) outside this session's
+  authority.

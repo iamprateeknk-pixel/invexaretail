@@ -26,25 +26,25 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/import-batch-store.ts",
-    "line": 222,
+    "line": 223,
     "snippet": "const row = await prisma.importBatch.findUnique({ where: { id } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/import-batch-store.ts",
-    "line": 231,
+    "line": 232,
     "snippet": "const rows = await prisma.importRow.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/import-batch-store.ts",
-    "line": 275,
-    "snippet": "const updated = await prisma.importBatch.update({"
+    "line": 289,
+    "snippet": "const result = await prisma.importBatch.updateMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/import-batch-store.ts",
-    "line": 306,
+    "line": 322,
     "snippet": "const row = await prisma.importBatch.findFirst({"
   },
   {

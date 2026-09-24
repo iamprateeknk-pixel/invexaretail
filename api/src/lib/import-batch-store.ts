@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import {
   assertValidBatchTransition,
+  ConcurrentBatchTransitionError,
   type ImportBatchStatus,
 } from './import-center.js';
 
@@ -262,24 +263,39 @@ export async function countRowsByStatus(id: string): Promise<Record<StagedRowSta
   return counts;
 }
 
+/**
+ * Transitions a batch's status, guarded by a compare-and-swap on the status
+ * read at the start of this call: if another request has already changed
+ * the batch's status in the meantime (e.g. a double-click or client retry
+ * on the same "Confirm" action racing this one), this throws
+ * ConcurrentBatchTransitionError instead of silently overwriting the other
+ * request's result or bubbling a raw "Cannot move batch from POSTED to
+ * POSTED" state-machine error. Callers that do real work (posting stock,
+ * etc.) between reading the batch and calling this must treat that error as
+ * "already handled by the other request", not a crash.
+ */
 export async function transitionBatch(id: string, to: ImportBatchStatus, metadataPatch?: Record<string, unknown>): Promise<ImportBatchRecord> {
   const current = await getBatch(id);
   if (!current) throw new Error('Import batch was not found.');
   assertValidBatchTransition(current.status, to);
   const nextMetadata = metadataPatch ? { ...(current.metadata ?? {}), ...metadataPatch } : current.metadata;
   if (!databaseEnabled()) {
-    const updated: ImportBatchRecord = { ...current, status: to, metadata: nextMetadata };
+    const stillCurrent = memoryBatches.get(id);
+    if (!stillCurrent || stillCurrent.status !== current.status) throw new ConcurrentBatchTransitionError(id);
+    const updated: ImportBatchRecord = { ...stillCurrent, status: to, metadata: nextMetadata };
     memoryBatches.set(id, updated);
     return { ...updated, metadata: updated.metadata ? { ...updated.metadata } : null };
   }
-  const updated = await prisma.importBatch.update({
-    where: { id },
+  const result = await prisma.importBatch.updateMany({
+    where: { id, status: current.status },
     data: {
       status: to,
       metadata: (nextMetadata ?? Prisma.JsonNull) as Prisma.InputJsonValue,
     },
   });
-  return fromPrismaBatch(updated);
+  if (result.count === 0) throw new ConcurrentBatchTransitionError(id);
+  const updated = await getBatch(id);
+  return updated!;
 }
 
 export async function findDuplicateBatch(input: {
