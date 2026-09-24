@@ -643,3 +643,28 @@ tracks how much of it):
   (2/2 passing, including a fail-safe-if-unknown regression test), plus
   all 19 of slices 1-4's existing Postgres tests re-run and still passing
   unchanged.
+- Post-Week-20 follow-up 9 (`api/prisma/schema.prisma`,
+  `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, no
+  dedicated ADR - see `docs/week28-item-supplier-bare-id-remediation.md`):
+  the sixth slice of the bare-id remediation - `Item`'s remaining
+  route-level call sites, and `Supplier`, which needed its own migration
+  first (`20261030090000_supplier_company_scope`) since it had no
+  per-company scoping column at all - the same complete gap
+  `ExceptionCase` had before Week 12. `GET /suppliers` had the same
+  `_req`-unused-parameter, no-filter-of-any-kind shape as Week 24's `GET
+  /purchase-orders`. With no `Location` to backfill Supplier from (and
+  this very gap having already let a supplier collect purchase orders
+  from more than one company), every existing row defaults to
+  `'default-company'`, the same fallback this migration series already
+  uses when no better source exists. Also fixed: `POST /purchase-orders`
+  never verified an item id actually resolved to a real item at all,
+  only checking `ACTIVE` status for ones that did - an unresolved or
+  cross-tenant item id would silently become a real order line; it now
+  rejects the request explicitly. Two adjacent findings fixed in the same
+  slice: `GET /saved-views/:id/items` had a completely unfiltered
+  `item.findMany()` (every company's whole catalog) behind an unscoped
+  `SavedView` lookup; `POST /connectors/:id/ingest` had the bare-id gap on
+  `MarketplaceConnector` in *both* its in-memory and Postgres lookup paths
+  (the in-memory one wins via `??`, so fixing only the Postgres branch
+  would have left it open) and on its per-line SKU-to-Item lookup. Proven
+  with two new real-Postgres test files (7/7 and 2/2 passing).

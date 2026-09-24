@@ -683,7 +683,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     });
     const onOrder = openLines.reduce((sum, line) => sum + Math.max(0, line.quantity - line.receivedQty), 0);
     const suggestion = (0, demand_forecast_js_1.suggestReplenishment)({ onHand, onOrder, demand, averageLeadTimeDays: leadTimeDays, servicePercent });
-    const item = await db_js_1.prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });
+    const item = await db_js_1.prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, select: { name: true } });
     const lots = await db_js_1.prisma.lot.findMany({
         where: { itemId: req.params.itemId, stock: { some: { locationId, onHand: { gt: 0 } } } },
         include: { stock: { where: { locationId } } },
@@ -1210,7 +1210,7 @@ router.post('/items/:itemId/serials', async (req, res) => {
     const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
     if (locationId && !canAccessLocation(req, locationId))
         return res.status(403).json({ message: 'Location access denied.' });
-    const item = await db_js_1.prisma.item.findUnique({ where: { id: itemId } });
+    const item = await db_js_1.prisma.item.findFirst({ where: { id: itemId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!item)
         return res.status(404).json({ message: 'Item was not found.' });
     const movement = (0, serial_tracking_js_1.planSerialMovement)({
@@ -2193,7 +2193,7 @@ router.post('/qc-inspections', async (req, res) => {
     try {
         let itemCategory = null;
         if (req.body.itemId) {
-            const item = await db_js_1.prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });
+            const item = await db_js_1.prisma.item.findFirst({ where: { id: String(req.body.itemId), companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, select: { category: true } });
             itemCategory = item?.category ?? null;
         }
         let branchId = null;
@@ -2517,8 +2517,9 @@ router.post('/connectors', async (req, res) => {
 router.post('/connectors/:id/ingest', async (req, res) => {
     if (!requireAdmin(req, res))
         return;
-    const connector = (0, connectors_js_1.findConnector)(req.params.id)
-        ?? (persistence_js_1.databaseEnabled ? await db_js_1.prisma.marketplaceConnector.findUnique({ where: { id: req.params.id } }) : null);
+    const memoryConnector = (0, connectors_js_1.findConnector)(req.params.id);
+    const connector = (memoryConnector && memoryConnector.tenantId === (req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID) ? memoryConnector : undefined)
+        ?? (persistence_js_1.databaseEnabled ? await db_js_1.prisma.marketplaceConnector.findFirst({ where: { id: req.params.id, tenantId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }) : null);
     if (!connector)
         return res.status(404).json({ message: 'Connector not found.' });
     if (!(0, saas_js_1.tenantAllows)(req.user.companyId ?? 'default-company', 'connectors') && !(0, saas_js_1.tenantAllows)('default-company', 'connectors')) {
@@ -2540,7 +2541,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
             const memoryItem = (0, repository_js_1.listItems)().find((entry) => entry.code === line.sku || entry.id === line.sku);
             const item = !persistence_js_1.databaseEnabled
                 ? memoryItem
-                : await db_js_1.prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;
+                : await db_js_1.prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }], companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }).catch(() => null) ?? memoryItem;
             if (!item) {
                 errors.push({ reference: mapped.externalReference, message: `Unknown SKU ${line.sku}` });
                 continue;

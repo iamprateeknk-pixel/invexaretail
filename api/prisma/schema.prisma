@@ -1073,8 +1073,17 @@ model Supplier {
   updatedAt DateTime @updatedAt
   purchaseOrders PurchaseOrder[]
   tenantId    String   @default("tenant-invexa")
+  // Bare-id call-site migration slice 6: real per-company scoping, added
+  // after finding this model had none at all (GET /suppliers had no
+  // filter of any kind - every company saw every supplier). No
+  // Location/single-owner relation exists to backfill from, so existing
+  // rows default to the same 'default-company' constant used elsewhere in
+  // this migration series when no better source exists - see the
+  // migration's own comment and docs/week28-item-supplier-bare-id-remediation.md.
+  companyId   String   @default("default-company")
 
   @@index([tenantId])
+  @@index([companyId])
 
 }
 

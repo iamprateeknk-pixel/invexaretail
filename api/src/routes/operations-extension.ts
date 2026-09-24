@@ -692,7 +692,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
 
   const suggestion = suggestReplenishment({ onHand, onOrder, demand, averageLeadTimeDays: leadTimeDays, servicePercent });
 
-  const item = await prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });
+  const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { name: true } });
   const lots = await prisma.lot.findMany({
     where: { itemId: req.params.itemId, stock: { some: { locationId, onHand: { gt: 0 } } } },
     include: { stock: { where: { locationId } } },
@@ -1201,7 +1201,7 @@ router.post('/items/:itemId/serials', async (req, res) => {
   if (!serial) return res.status(400).json({ message: 'Serial number is required.' });
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const item = await prisma.item.findUnique({ where: { id: itemId } });
+  const item = await prisma.item.findFirst({ where: { id: itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!item) return res.status(404).json({ message: 'Item was not found.' });
   const movement = planSerialMovement({
     currentStatus: 'IN_STOCK',
@@ -2114,7 +2114,7 @@ router.post('/qc-inspections', async (req, res) => {
   try {
     let itemCategory: string | null = null;
     if (req.body.itemId) {
-      const item = await prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });
+      const item = await prisma.item.findFirst({ where: { id: String(req.body.itemId), companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { category: true } });
       itemCategory = item?.category ?? null;
     }
     let branchId: string | null = null;
@@ -2427,8 +2427,9 @@ router.post('/connectors', async (req, res) => {
 
 router.post('/connectors/:id/ingest', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const connector = findConnector(req.params.id)
-    ?? (databaseEnabled ? await prisma.marketplaceConnector.findUnique({ where: { id: req.params.id } }) : null);
+  const memoryConnector = findConnector(req.params.id);
+  const connector = (memoryConnector && memoryConnector.tenantId === (req.companyId ?? DEFAULT_COMPANY_ID) ? memoryConnector : undefined)
+    ?? (databaseEnabled ? await prisma.marketplaceConnector.findFirst({ where: { id: req.params.id, tenantId: req.companyId ?? DEFAULT_COMPANY_ID } }) : null);
   if (!connector) return res.status(404).json({ message: 'Connector not found.' });
   if (!tenantAllows(req.user!.companyId ?? 'default-company', 'connectors') && !tenantAllows('default-company', 'connectors')) {
     return res.status(403).json({ message: 'Marketplace connectors are not on the current plan.' });
@@ -2446,7 +2447,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
       const memoryItem = listItems().find((entry) => entry.code === line.sku || entry.id === line.sku);
       const item = !databaseEnabled
         ? memoryItem
-        : await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;
+        : await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }], companyId: req.companyId ?? DEFAULT_COMPANY_ID } }).catch(() => null) ?? memoryItem;
       if (!item) { errors.push({ reference: mapped.externalReference, message: `Unknown SKU ${line.sku}` }); continue; }
       lines.push({ itemId: item.id, quantity: line.quantity });
     }

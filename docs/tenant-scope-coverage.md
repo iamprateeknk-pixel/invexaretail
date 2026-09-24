@@ -264,17 +264,60 @@ an unregistered location's request still succeeds unchanged, and all 19
 of slices 1-4's existing Postgres tests continue passing. See
 `docs/week27-canaccesslocation-centralized-fix.md`.
 
-Remaining, not yet migrated: `ExpiryAlert`/`Item`/`Supplier`/`ReorderRule`
-call sites across `routes/operations-extension.ts`,
-`routes/catalog-procurement.ts`, `lib/orders.ts`, `lib/persistence.ts`, and
-various import-lifecycle internals (many of the latter are already scoped
-one level up by their caller and are lower priority than direct route
-handlers). `core.ts`'s in-memory `TransferRecord`/`CountRecord` types
-still carry no `companyId` field, relying entirely on the in-memory
-ownership map rather than a real column - and auditing whether that map
-is reliably populated for every location-creation path in the codebase
-(not just `routes/core.ts`'s) is itself a worthwhile follow-up, since this
-slice's fix is only as complete as that map's coverage.
+## Supplier - real companyId added (bare-id call-site migration, sixth slice)
+
+`Supplier` had no per-company scoping column at all before this slice -
+the same complete gap `ExceptionCase` had before Week 12: `GET /suppliers`
+had no filter of any kind (the `_req` unused-parameter tell, same as Week
+24's `GET /purchase-orders`), returning every company's suppliers to any
+authenticated user. Migration `20261030090000_supplier_company_scope`
+adds a real `companyId` column. Unlike the five originally-`tenantId`-only
+models, `Supplier` has no `Location` (or other single-owner relation) to
+backfill from - and this very gap already let a supplier accumulate
+purchase orders from more than one company - so every existing row is
+backfilled to the same `'default-company'` constant this migration series
+uses whenever no better source exists, a documented approximation.
+
+## Bare-id call-site migration - sixth slice: Item and Supplier routes
+
+Sixth slice: every remaining route-level `Item` call site in
+`routes/operations-extension.ts`/`routes/catalog-procurement.ts`, and
+every `Supplier` call site in `routes/catalog-procurement.ts` (see the
+Supplier section above for the schema side). Fixed: `GET /suppliers`,
+`POST /suppliers` (now stamps a real companyId instead of the schema
+default), `PUT /suppliers/:id`, `GET /suppliers/:id/score`, the supplier
+lookups in `GET /purchase-orders/plan`/`POST /purchase-orders/plan/draft`;
+`POST /purchase-orders`'s item-line lookup (which also gained an explicit
+check that every requested itemId actually resolved to a real item -
+previously an unresolved or cross-tenant id would silently become a real
+order line, checked only for `ACTIVE` status if it *did* resolve); `POST
+/items/:itemId/prices`, `GET /items/:itemId/forecast`, `POST
+/items/:itemId/serials`, `POST /qc-inspections`'s item lookups. Two
+directly-adjacent findings fixed in the same slice: `GET
+/saved-views/:id/items` had a completely unfiltered
+`prisma.item.findMany()` (every company's whole item catalog, through any
+saved view) behind its own unscoped `SavedView` lookup - also fixed `GET
+/saved-views`'s unscoped `isShared` branch and `DELETE /saved-views/:id`;
+and `POST /connectors/:id/ingest` had the same bare-id gap on both
+`MarketplaceConnector` (in *both* its in-memory and Postgres lookup paths
+- the in-memory one was tried first via `??`, so fixing only the Postgres
+branch would have left it open) and the per-line SKU-to-Item lookup.
+Proven with
+`src/routes/catalog-procurement-item-supplier.postgres.test.ts` (7/7
+passing) and `src/routes/operations-extension-connectors.postgres.test.ts`
+(2/2 passing). See `docs/week28-item-supplier-bare-id-remediation.md`.
+
+Remaining, not yet migrated: `ExpiryAlert`/`ReorderRule` call sites across
+`routes/operations-extension.ts`, `routes/catalog-procurement.ts`,
+`lib/orders.ts`, `lib/persistence.ts`, and various import-lifecycle
+internals (many of the latter are already scoped one level up by their
+caller and are lower priority than direct route handlers). `core.ts`'s
+in-memory `TransferRecord`/`CountRecord` types still carry no `companyId`
+field, relying entirely on the in-memory ownership map rather than a real
+column - and auditing whether that map is reliably populated for every
+location-creation path in the codebase (not just `routes/core.ts`'s) is
+itself a worthwhile follow-up, since Week 27's fix is only as complete as
+that map's coverage.
 
 ## Control-plane elevation
 

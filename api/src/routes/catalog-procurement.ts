@@ -159,8 +159,8 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
   return res.json({ rule });
 });
 
-router.get('/suppliers', async (_req, res) => {
-  const suppliers = await prisma.supplier.findMany({ orderBy: { name: 'asc' } });
+router.get('/suppliers', async (req, res) => {
+  const suppliers = await prisma.supplier.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { name: 'asc' } });
   return res.json({ suppliers: suppliers.map(presentSupplier) });
 });
 
@@ -168,7 +168,7 @@ router.post('/suppliers', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
     const fields = parseSupplierFields(req.body ?? {}, true);
-    const supplier = await prisma.supplier.create({ data: fields as never });
+    const supplier = await prisma.supplier.create({ data: { ...fields, companyId: req.companyId ?? DEFAULT_COMPANY_ID } as never });
     return res.status(201).json({ supplier: presentSupplier(supplier) });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
@@ -180,7 +180,7 @@ router.put('/suppliers/:id', async (req, res) => {
   try {
     const fields = parseSupplierFields(req.body ?? {}, false);
     if (!Object.keys(fields).length) return res.status(400).json({ message: 'Nothing to update.' });
-    const existing = await prisma.supplier.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
     if (!existing) return res.status(404).json({ message: 'Supplier not found.' });
     const supplier = await prisma.supplier.update({ where: { id: existing.id }, data: fields as never });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'SUPPLIER_UPDATED', entityType: 'Supplier', entityId: supplier.id, metadata: { fields: Object.keys(fields) } }));
@@ -192,7 +192,7 @@ router.put('/suppliers/:id', async (req, res) => {
 
 router.get('/suppliers/:id/score', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
-  const supplier = await prisma.supplier.findUnique({ where: { id: req.params.id } });
+  const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
 
   const orders = await prisma.purchaseOrder.findMany({
@@ -263,11 +263,13 @@ router.post('/purchase-orders', async (req, res) => {
   if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
     return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
   }
-  const supplier = await prisma.supplier.findUnique({ where: { id: String(req.body.supplierId) } });
+  const supplier = await prisma.supplier.findFirst({ where: { id: String(req.body.supplierId), companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
   if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} is ${String((supplier as { status?: string }).status).toLowerCase()} and cannot receive new purchase orders.` });
   const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
-  const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });
+  const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true, code: true, status: true } });
+  const missing = normalized.map((line) => line.itemId).filter((itemId) => !lineItems.some((row) => row.id === itemId));
+  if (missing.length) return res.status(400).json({ message: `Item ${missing[0]} was not found.` });
   const inactive = lineItems.find((row) => (row as { status?: string }).status && (row as { status?: string }).status !== 'ACTIVE');
   if (inactive) return res.status(400).json({ message: `Item ${inactive.code} is ${String((inactive as { status?: string }).status).toLowerCase()} and cannot be ordered.` });
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
@@ -557,7 +559,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
       select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
       orderBy: { createdAt: 'desc' },
     }),
-    prisma.supplier.findMany(),
+    prisma.supplier.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }),
   ]);
   const sum = <T,>(rows: T[], pick: (row: T) => [string, number]) => {
     const totals = new Map<string, number>();
@@ -599,7 +601,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
     const lines = (group.lines ?? []).map((line) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), unitCost: Number(line.unitCost ?? 0) }));
     if (!group.supplierId) return res.status(400).json({ message: 'Choose a supplier for every group before creating draft orders.' });
     if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) return res.status(400).json({ message: 'Every line needs an item and a positive quantity.' });
-    const supplier = await prisma.supplier.findUnique({ where: { id: group.supplierId } });
+    const supplier = await prisma.supplier.findFirst({ where: { id: group.supplierId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
     if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
     if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} cannot receive new purchase orders.` });
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
@@ -720,7 +722,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
     return res.status(400).json({ message: 'A price type and a positive price are required.' });
   }
 
-  const item = await prisma.item.findUnique({ where: { id: req.params.itemId } });
+  const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!item) return res.status(404).json({ message: 'Item not found.' });
 
   const effectiveFrom = req.body.effectiveFrom ? String(req.body.effectiveFrom) : null;
@@ -806,7 +808,7 @@ router.delete('/saved-reports/:id', async (req, res) => {
 // snapshot of item ids.
 router.get('/saved-views', async (req, res) => {
   const savedViews = await prisma.savedView.findMany({
-    where: { OR: [{ ownerId: req.user!.id }, { isShared: true }] },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user!.id }, { isShared: true }] },
     orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
   });
   return res.json({ savedViews });
@@ -830,7 +832,7 @@ router.post('/saved-views', async (req, res) => {
 });
 
 router.delete('/saved-views/:id', async (req, res) => {
-  const savedView = await prisma.savedView.findUnique({ where: { id: req.params.id } });
+  const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && savedView.ownerId !== req.user!.id) {
     return res.status(403).json({ message: 'Only the view owner or an Admin can delete this view.' });
@@ -840,12 +842,12 @@ router.delete('/saved-views/:id', async (req, res) => {
 });
 
 router.get('/saved-views/:id/items', async (req, res) => {
-  const savedView = await prisma.savedView.findUnique({ where: { id: req.params.id } });
+  const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
   if (!savedView.isShared && savedView.ownerId !== req.user!.id && !['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
     return res.status(403).json({ message: 'This saved view is private to its owner.' });
   }
-  const items = await prisma.item.findMany({ include: { tags: true } });
+  const items = await prisma.item.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { tags: true } });
   const filterableItems = items.map((item) => ({
     id: item.id, name: item.name, code: item.code, category: item.category, subcategory: item.subcategory,
     tagIds: item.tags.map((t) => t.tagId),

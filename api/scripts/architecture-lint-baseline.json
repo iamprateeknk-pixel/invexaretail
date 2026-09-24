@@ -344,37 +344,19 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 270,
-    "snippet": "const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) } }, select: { id: true, code: true, status: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 322,
+    "line": 324,
     "snippet": "const itemRows = await prisma.item.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 510,
+    "line": 512,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 723,
-    "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 848,
-    "snippet": "const items = await prisma.item.findMany({ include: { tags: true } });"
   },
   {
     "rule": "bare-status-write",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 510,
+    "line": 512,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
@@ -400,18 +382,6 @@
     "file": "src/routes/operations-extension.ts",
     "line": 596,
     "snippet": "const alert = await prisma.expiryAlert.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 695,
-    "snippet": "const item = await prisma.item.findUnique({ where: { id: req.params.itemId }, select: { name: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1204,
-    "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId } });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -458,12 +428,6 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2117,
-    "snippet": "const item = await prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
     "line": 2168,
     "snippet": "const cases = await prisma.exceptionCase.findMany({"
   },
@@ -478,12 +442,6 @@
     "file": "src/routes/operations-extension.ts",
     "line": 2268,
     "snippet": "const updated = await prisma.exceptionCase.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 2449,
-    "snippet": ": await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;"
   },
   {
     "rule": "bare-status-write",
@@ -530,67 +488,67 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1110,
+    "line": 1119,
     "snippet": "totalAmount Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1114,
+    "line": 1123,
     "snippet": "freightCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1115,
+    "line": 1124,
     "snippet": "customsCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1116,
+    "line": 1125,
     "snippet": "insuranceCost Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1117,
+    "line": 1126,
     "snippet": "handlingCost  Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1143,
+    "line": 1152,
     "snippet": "unitCost        Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1165,
+    "line": 1174,
     "snippet": "totalAmount     Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1185,
+    "line": 1194,
     "snippet": "unitCost          Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1203,
+    "line": 1212,
     "snippet": "price         Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1806,
+    "line": 1815,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1936,
+    "line": 1945,
     "snippet": "value           Float?"
   }
 ]
