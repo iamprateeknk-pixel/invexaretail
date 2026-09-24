@@ -620,3 +620,26 @@ tracks how much of it):
   `companyId` column at all; `core.ts`'s in-memory Transfer/StockCount
   records carry no `companyId` field, relying entirely on the in-memory
   ownership map rather than a real column.
+- Post-Week-20 follow-up 8 (`routes/operations-extension.ts`, no
+  dedicated ADR - see `docs/week27-canaccesslocation-centralized-fix.md`):
+  the fifth slice of the bare-id remediation, and the first to fix a
+  shared root cause instead of another individual query. Fixed
+  `operations-extension.ts`'s own local `canAccessLocation` (the
+  permissive one, different from `lib/inventory.ts`'s stricter version
+  `core.ts` already uses) to deny outright when a location's company
+  ownership is known (via the same in-memory
+  `ownerOfLocation`/`companyOwnsLocation` map
+  `enforceOperationalCompanyScope` already relies on globally) and
+  mismatches the caller's company, before its role check runs; a location
+  not yet tracked in the map falls through to the original check
+  unchanged - the same fail-safe-if-unknown shape already trusted
+  elsewhere in this codebase, chosen over a harder check (false-deny risk
+  on untracked data) or an async Postgres lookup (would require
+  converting ~38 call sites to `await`). One function change closes the
+  access gate for every route that calls it; every prior slice's
+  query-level `companyId` filter stays in place as an independent second
+  layer. Proven with
+  `src/routes/operations-extension-canaccesslocation.postgres.test.ts`
+  (2/2 passing, including a fail-safe-if-unknown regression test), plus
+  all 19 of slices 1-4's existing Postgres tests re-run and still passing
+  unchanged.

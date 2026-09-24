@@ -79,13 +79,28 @@ import {
   setWebhookSubscriptionStatus,
 } from '../lib/webhook-store.js';
 import { replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
-import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides, respondWhenMemoryUnavailable);
 
+// Centralized fix (see docs/tenant-scope-coverage.md's bare-id call-site
+// migration, slice 5): the role-only check below let ADMIN/ADMIN_USER/
+// AUDITOR through for ANY locationId, including one belonging to a
+// different company - the root cause behind most of the cross-tenant
+// findings in slices 1-4. A location whose company ownership is known
+// (registered via registerLocationCompany, or hydrated at boot) and
+// mismatches the caller's own company is now always denied, before the
+// role check runs, same fail-safe-if-unknown pattern already trusted
+// globally by enforceOperationalCompanyScope. A location not yet tracked
+// in the in-memory ownership map falls through to the original role/
+// assignment check unchanged, so this closes the verified vulnerability
+// class without risking a false-deny on data the map hasn't seen yet.
 function canAccessLocation(req: Request, locationId: string): boolean {
+  if (req.companyId && ownerOfLocation(locationId) && !companyOwnsLocation(req.companyId, locationId)) {
+    return false;
+  }
   return ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role) || (req.user!.locationIds ?? []).includes(locationId);
 }
 

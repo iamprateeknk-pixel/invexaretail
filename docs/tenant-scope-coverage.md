@@ -235,13 +235,46 @@ so their protection depends entirely on the in-memory
 `companyOwnsLocation` ownership map staying correct, not a real column.
 See `docs/week26-transfer-stockcount-bare-id-remediation.md`.
 
+## Bare-id call-site migration - fifth slice: centralized canAccessLocation fix
+
+Fifth slice: instead of continuing to patch individual query call sites,
+fixed the shared root cause Week 26 named -
+`routes/operations-extension.ts`'s own local `canAccessLocation`, which
+granted `ADMIN`/`ADMIN_USER`/`AUDITOR` unconditional access to any
+`locationId` with no company check at all (unlike `lib/inventory.ts`'s
+stricter version already used by `core.ts`). The function now denies
+outright when a location's company ownership is *known* (via
+`ownerOfLocation`/`companyOwnsLocation` from `lib/saas/tenant-scope.ts` -
+the same in-memory map `enforceOperationalCompanyScope` already relies on
+globally) and mismatches the caller's company, before the role check
+runs; a location not yet tracked in the map falls through to the original
+role/assignment check unchanged - the same fail-safe-if-unknown shape
+`enforceOperationalCompanyScope` itself already uses, chosen over a
+harder "deny unless proven owned" check (which risks false-denies for
+data the map hasn't seen) or an async real-Postgres lookup (which would
+require converting all ~38 call sites to `await`, a far larger change).
+One function change closes the access gate for every route that calls it,
+with every prior slice's query-level `companyId` filter left in place as
+an independent second layer of defense. Proven with
+`src/routes/operations-extension-canaccesslocation.postgres.test.ts`
+(2/2 passing): a cross-company admin is denied 403 once the location is
+registered in the ownership map (the same registration
+`routes/core.ts`'s real location-creation route already performs), while
+an unregistered location's request still succeeds unchanged, and all 19
+of slices 1-4's existing Postgres tests continue passing. See
+`docs/week27-canaccesslocation-centralized-fix.md`.
+
 Remaining, not yet migrated: `ExpiryAlert`/`Item`/`Supplier`/`ReorderRule`
 call sites across `routes/operations-extension.ts`,
 `routes/catalog-procurement.ts`, `lib/orders.ts`, `lib/persistence.ts`, and
 various import-lifecycle internals (many of the latter are already scoped
 one level up by their caller and are lower priority than direct route
-handlers). `operations-extension.ts`'s permissive `canAccessLocation` is
-the standing, highest-priority structural fix behind most of these.
+handlers). `core.ts`'s in-memory `TransferRecord`/`CountRecord` types
+still carry no `companyId` field, relying entirely on the in-memory
+ownership map rather than a real column - and auditing whether that map
+is reliably populated for every location-creation path in the codebase
+(not just `routes/core.ts`'s) is itself a worthwhile follow-up, since this
+slice's fix is only as complete as that map's coverage.
 
 ## Control-plane elevation
 
