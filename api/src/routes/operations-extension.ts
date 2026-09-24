@@ -390,6 +390,7 @@ async function syncExpiryAlerts(locationId?: string): Promise<void> {
         quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
         status: 'ACTIVE', recommendedAction: recommendedExpiryAction(days),
         metadata: { severity: expirySeverity(days) },
+        companyId: row.companyId,
       },
       update: {
         quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
@@ -523,6 +524,7 @@ router.post('/expiry-write-off', async (req, res) => {
           quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
           status: 'ACTIVE', recommendedAction: recommendedExpiryAction(days),
           metadata: { severity: lot.expiryDate ? expirySeverity(days) : 'MISSING' },
+          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         },
         update: {
           quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,

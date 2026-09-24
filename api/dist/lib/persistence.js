@@ -641,7 +641,7 @@ async function persistCountDeletion(id) {
     requireDatabase();
     await db_js_1.prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
-async function persistCount(count) {
+async function persistCount(count, companyId) {
     if (!exports.databaseEnabled)
         return;
     requireDatabase();
@@ -664,6 +664,7 @@ async function persistCount(count) {
             submittedById: count.submittedBy,
             parentCountId: count.parentCountId ?? null,
             requestId: count.requestId ?? null,
+            companyId: companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         },
     });
 }

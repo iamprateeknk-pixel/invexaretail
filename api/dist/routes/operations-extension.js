@@ -362,6 +362,7 @@ async function syncExpiryAlerts(locationId) {
                 quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
                 status: 'ACTIVE', recommendedAction: (0, expiry_alerts_js_1.recommendedExpiryAction)(days),
                 metadata: { severity: (0, expiry_alerts_js_1.expirySeverity)(days) },
+                companyId: row.companyId,
             },
             update: {
                 quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
@@ -503,6 +504,7 @@ router.post('/expiry-write-off', async (req, res) => {
                     quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
                     status: 'ACTIVE', recommendedAction: (0, expiry_alerts_js_1.recommendedExpiryAction)(days),
                     metadata: { severity: lot.expiryDate ? (0, expiry_alerts_js_1.expirySeverity)(days) : 'MISSING' },
+                    companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 },
                 update: {
                     quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,

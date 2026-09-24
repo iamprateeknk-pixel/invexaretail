@@ -7,22 +7,15 @@
 // the whole point of naming it as a decision, not a fact.
 //
 // Every export takes a required TenantContext (ADR-002) and scopes its
-// query to ctx.companyId. StockCount/ExpiryAlert still only carry the
-// pre-ADR-002 constant `tenantId` field, not a real `companyId` column
-// (the same baseline gap AGENTS.md's Tenant scope row already documents
-// for Identity/Organization) - this module closes that gap for its own
-// queries the same way Week 10/11 did for their own new code: by scoping
-// through each row's Location, which does carry a real companyId, via
-// `companyLocationIds`. ExceptionCase, PurchaseOrder, Order and Transfer
-// got real `companyId` columns instead - ExceptionCase because its
-// `locationId` is optional (a case with no location would fall outside any
-// location-based scope entirely); PurchaseOrder, Order and Transfer as
-// successive slices of actually migrating the remaining tenantId-only
-// models named above, rather than perpetually working around them.
-// Transfer's `companyId` is backfilled from its `sourceLocation` (the
-// location that authorized the transfer out) and set at creation from the
-// request's own resolved company, not derived from either location at
-// read time - see `persistTransfer` in `lib/persistence.ts`.
+// query to ctx.companyId. All five queue/exception models this module
+// reads (ExceptionCase, PurchaseOrder, Order, Transfer, StockCount,
+// ExpiryAlert) now carry a real `companyId` column - the last two
+// (StockCount, ExpiryAlert) got theirs in the same migration that added
+// this comment, closing out the location-join workaround this module used
+// to need. ExceptionCase got its column first (Week 12) because its
+// `locationId` is optional (a case with no location would fall outside
+// any location-based scope entirely); the rest were migrated one model at
+// a time afterward, documented in `docs/tenant-scope-coverage.md`.
 import { prisma } from './db.js';
 import type { TenantContext } from './tenant-context.js';
 
@@ -46,12 +39,6 @@ const OPEN_COUNT_REVIEW_STATUSES = ['PENDING_REVIEW', 'RECOUNT'] as const;
 
 function hoursAgo(hours: number): Date {
   return new Date(Date.now() - hours * 60 * 60 * 1000);
-}
-
-/** Location ids belonging to this company - the scoping join for models that only carry the constant tenantId, not a real companyId column. */
-async function companyLocationIds(ctx: TenantContext): Promise<string[]> {
-  const locations = await prisma.location.findMany({ where: { companyId: ctx.companyId }, select: { id: true } });
-  return locations.map((l) => l.id);
 }
 
 export type ExceptionQueueSummary = {
@@ -151,11 +138,7 @@ export async function getStockRiskSummary(ctx: TenantContext): Promise<StockRisk
   const [stockouts, quarantined, activeExpiryAlerts] = await Promise.all([
     prisma.stockLedger.count({ where: { companyId: ctx.companyId, onHand: { lte: 0 } } }),
     prisma.stockLedger.count({ where: { companyId: ctx.companyId, quarantine: { gt: 0 } } }),
-    (async () => {
-      const ids = await companyLocationIds(ctx);
-      if (!ids.length) return 0;
-      return prisma.expiryAlert.count({ where: { locationId: { in: ids }, status: 'ACTIVE' } });
-    })(),
+    prisma.expiryAlert.count({ where: { companyId: ctx.companyId, status: 'ACTIVE' } }),
   ]);
   return { stockouts, quarantined, activeExpiryAlerts };
 }
@@ -171,9 +154,6 @@ export type QueueBacklogSummary = {
 
 /** Pending/breached counts for the six domain-policy queues (QcInspection excluded - it has no status/queue concept, see domain-policies.ts). */
 export async function getQueueBacklogSummary(ctx: TenantContext): Promise<QueueBacklogSummary> {
-  const locationIds = await companyLocationIds(ctx);
-  const inCompanyLocations = locationIds.length ? { in: locationIds } : { in: [] as string[] };
-
   const [
     transfersPending, transfersBreached,
     poPending, poBreached,
@@ -201,9 +181,9 @@ export async function getQueueBacklogSummary(ctx: TenantContext): Promise<QueueB
     prisma.returnRequest.count({
       where: { companyId: ctx.companyId, status: { in: [...OPEN_RETURN_STATUSES] }, createdAt: { lt: hoursAgo(RETURN_SLA_HOURS) } },
     }),
-    prisma.stockCount.count({ where: { locationId: inCompanyLocations, reviewStatus: { in: [...OPEN_COUNT_REVIEW_STATUSES] } } }),
+    prisma.stockCount.count({ where: { companyId: ctx.companyId, reviewStatus: { in: [...OPEN_COUNT_REVIEW_STATUSES] } } }),
     prisma.stockCount.count({
-      where: { locationId: inCompanyLocations, reviewStatus: { in: [...OPEN_COUNT_REVIEW_STATUSES] }, countDate: { lt: hoursAgo(STOCK_COUNT_REVIEW_SLA_HOURS) } },
+      where: { companyId: ctx.companyId, reviewStatus: { in: [...OPEN_COUNT_REVIEW_STATUSES] }, countDate: { lt: hoursAgo(STOCK_COUNT_REVIEW_SLA_HOURS) } },
     }),
   ]);
 

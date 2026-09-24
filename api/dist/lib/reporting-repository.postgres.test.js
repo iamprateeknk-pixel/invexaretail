@@ -88,10 +88,10 @@ integration('stock risk summary counts stockouts, quarantined lines and active e
     const otherLot = await db_js_1.prisma.lot.create({ data: { itemId, lotNo: `LOT-${(0, node_crypto_1.randomUUID)().slice(0, 8)}` } });
     await db_js_1.prisma.stockLedger.create({ data: { itemId, lotId: otherLot.id, locationId, onHand: 10, quarantine: 4, companyId: tenant.companyId } });
     await db_js_1.prisma.expiryAlert.create({
-        data: { itemId, lotId, locationId, quantity: 5, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE' },
+        data: { itemId, lotId, locationId, quantity: 5, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE', companyId: tenant.companyId },
     });
     await db_js_1.prisma.expiryAlert.create({
-        data: { itemId, lotId: otherLot.id, locationId, quantity: 2, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'RESOLVED' },
+        data: { itemId, lotId: otherLot.id, locationId, quantity: 2, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'RESOLVED', companyId: tenant.companyId },
     });
     const summary = await (0, reporting_repository_js_1.getStockRiskSummary)(tenant);
     strict_1.default.equal(summary.stockouts, 1);
@@ -124,7 +124,7 @@ integration('queue backlog summary counts pending and SLA-breached items across 
     });
     // Stock count: pending review, submitted long enough ago to breach the fixed SLA window.
     await db_js_1.prisma.stockCount.create({
-        data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, reviewStatus: 'PENDING_REVIEW', countDate: hoursAgo(48) },
+        data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, companyId: tenant.companyId, reviewStatus: 'PENDING_REVIEW', countDate: hoursAgo(48) },
     });
     const summary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(tenant);
     strict_1.default.equal(summary.transfers.pending, 1);
@@ -191,4 +191,30 @@ integration('Transfer queue backlog is scoped by its real companyId column, not 
     const otherSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(other.tenant);
     strict_1.default.equal(ownSummary.transfers.pending, 0, 'a transfer whose companyId belongs to another tenant must not count here, even sharing the same source location');
     strict_1.default.equal(otherSummary.transfers.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+integration('StockCount queue backlog is scoped by its real companyId column, not by location join', async () => {
+    const { tenant, itemId, locationId, lotId, userId } = await makeFixture();
+    const other = await makeFixture();
+    // Same real Location.companyId (tenant.companyId), but the StockCount's
+    // own companyId column belongs to a different company.
+    await db_js_1.prisma.stockCount.create({
+        data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, companyId: other.tenant.companyId, reviewStatus: 'PENDING_REVIEW' },
+    });
+    const ownSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(tenant);
+    const otherSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(other.tenant);
+    strict_1.default.equal(ownSummary.stockCounts.pending, 0, 'a stock count whose companyId belongs to another tenant must not count here, even sharing the same location');
+    strict_1.default.equal(otherSummary.stockCounts.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+integration('active ExpiryAlert count is scoped by its real companyId column, not by location join', async () => {
+    const { tenant, itemId, locationId, lotId } = await makeFixture();
+    const other = await makeFixture();
+    // Same real Location.companyId (tenant.companyId), but the ExpiryAlert's
+    // own companyId column belongs to a different company.
+    await db_js_1.prisma.expiryAlert.create({
+        data: { itemId, lotId, locationId, quantity: 3, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE', companyId: other.tenant.companyId },
+    });
+    const ownSummary = await (0, reporting_repository_js_1.getStockRiskSummary)(tenant);
+    const otherSummary = await (0, reporting_repository_js_1.getStockRiskSummary)(other.tenant);
+    strict_1.default.equal(ownSummary.activeExpiryAlerts, 0, 'an expiry alert whose companyId belongs to another tenant must not count here, even sharing the same location');
+    strict_1.default.equal(otherSummary.activeExpiryAlerts, 1, 'the identical row must count for the tenant its own companyId names');
 });

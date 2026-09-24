@@ -650,7 +650,7 @@ export async function persistCountDeletion(id: string): Promise<void> {
   await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
 }
 
-export async function persistCount(count: CountRecord): Promise<void> {
+export async function persistCount(count: CountRecord, companyId?: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.stockCount.upsert({
@@ -672,6 +672,7 @@ export async function persistCount(count: CountRecord): Promise<void> {
       submittedById: count.submittedBy,
       parentCountId: count.parentCountId ?? null,
       requestId: count.requestId ?? null,
+      companyId: companyId ?? DEFAULT_COMPANY_ID,
     } as never,
   });
 }

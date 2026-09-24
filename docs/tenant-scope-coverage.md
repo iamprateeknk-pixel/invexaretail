@@ -103,8 +103,33 @@ queue-backlog counts filter on it directly, the last of `PurchaseOrder`/
 See `docs/week21-transfer-tenant-scope.md`. The bare-id `findUnique`/
 `update` call sites for Transfer in `routes/operations-extension.ts` and
 `routes/core.ts` are **not yet migrated** - still in the
-`unscoped-tenant-query` lint baseline. `StockCount` and `ExpiryAlert`
-remain `tenantId`-only - the two models left of the original five.
+`unscoped-tenant-query` lint baseline. `StockCount` and `ExpiryAlert` got
+the same treatment next - see below.
+
+## StockCount and ExpiryAlert - real companyId added
+
+Migration `20261027090000_stockcount_expiryalert_company_scope` added a
+real `companyId` column to both, backfilled from each row's own
+`Location.companyId`. Same "trace the real write" lesson as Transfer:
+`lib/repository.ts`'s `createCountRecord` is memory-cache-only; the real
+write is `lib/persistence.ts`'s `persistCount`, called from
+`routes/core.ts`'s `commitLotCount` right after it. `persistCount` now
+takes an optional `companyId`, threaded through both `commitLotCount` call
+sites. `ExpiryAlert` has no such indirection - both its real write sites
+(`routes/operations-extension.ts`, one live via the expiry write-off
+route, one dead code via `syncExpiryAlerts`) now set `companyId` directly
+(the latter via `StockLedger.companyId`, already real, with no extra
+join needed). `lib/reporting-repository.ts`'s stock-risk and queue-backlog
+queries for both models filter on the new column directly; the
+`companyLocationIds` join-workaround helper is now fully removed (no
+remaining callers). See `docs/week22-stockcount-expiryalert-tenant-scope.md`.
+
+**All five models named across Weeks 12/15/19/20 now carry a real
+`companyId` column.** What remains is the call-site migration: the many
+bare-id `findUnique`/`update` lookups for these models scattered across
+`routes/operations-extension.ts` and `routes/core.ts` that don't filter by
+the column that now exists - still tracked in the `unscoped-tenant-query`
+lint baseline, a multi-week god-router remediation of its own.
 
 ## Control-plane elevation
 

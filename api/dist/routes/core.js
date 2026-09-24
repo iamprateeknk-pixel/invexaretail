@@ -805,7 +805,7 @@ async function commitLotCount(args) {
         createdAt: saved.createdAt,
         parentCountId: assignment?.parentCountId,
         requestId: args.requestId,
-    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }), (record) => (0, repository_js_1.removeCountRecord)(record.id));
+    }), () => (0, persistence_js_1.persistCount)({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId), (record) => (0, repository_js_1.removeCountRecord)(record.id));
     const followUps = [
         (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
     ];
@@ -873,6 +873,7 @@ router.post('/stock-counts', async (req, res) => {
         const { saved, bookQty } = await commitLotCount({
             userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId: validated.locationId,
             physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         });
         (0, event_bus_js_1.publishEvent)({ topic: 'count.changed', companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
         if (assignment)
@@ -949,6 +950,7 @@ router.post('/stock-counts/weight', async (req, res) => {
                 saved.push(await commitLotCount({
                     userId: req.user.id, userRole: req.user.role, role: context.role, item, lot, locationId,
                     physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+                    companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                 }));
             }
         }

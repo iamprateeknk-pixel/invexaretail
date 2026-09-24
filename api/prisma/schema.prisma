@@ -855,8 +855,13 @@ model StockCount {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Real per-company scoping, the fourth slice of the migration Weeks
+  // 17/19 started for PurchaseOrder/Order/Transfer. Backfilled from the
+  // count's own Location.
+  companyId   String   @default("default-company")
 
   @@index([tenantId])
+  @@index([companyId])
   @@index([reconciliationRequired])
   @@index([submittedById, requestId])
 
@@ -1939,7 +1944,12 @@ model ExpiryAlert {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // Real per-company scoping, the fifth and last slice of the migration
+  // Weeks 17/19 started for PurchaseOrder/Order/Transfer/StockCount.
+  // Backfilled from the alert's own Location.
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([status, locationId, expiryDate])

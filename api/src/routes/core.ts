@@ -919,6 +919,7 @@ type LotCountArgs = {
   mode: 'scan' | 'manual' | 'weight';
   requestId?: string;
   assignment?: ReturnType<typeof findActiveAssignment>;
+  companyId?: string;
   // 'auto' closes the assignment once every lot with stock is counted (scan
   // counts); weight counts close it themselves after allocating the item total.
   closeAssignment: 'auto' | 'never';
@@ -953,7 +954,7 @@ async function commitLotCount(args: LotCountArgs) {
       parentCountId: assignment?.parentCountId,
       requestId: args.requestId,
     }),
-    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }),
+    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId),
     (record) => removeCountRecord(record.id),
   );
   const followUps: Promise<unknown>[] = [
@@ -1031,6 +1032,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     const { saved, bookQty } = await commitLotCount({
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
@@ -1105,6 +1107,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
         saved.push(await commitLotCount({
           userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
           physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
+          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         }));
       }
     } catch (error) {

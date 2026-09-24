@@ -101,10 +101,10 @@ integration('stock risk summary counts stockouts, quarantined lines and active e
   const otherLot = await prisma.lot.create({ data: { itemId, lotNo: `LOT-${randomUUID().slice(0, 8)}` } });
   await prisma.stockLedger.create({ data: { itemId, lotId: otherLot.id, locationId, onHand: 10, quarantine: 4, companyId: tenant.companyId } });
   await prisma.expiryAlert.create({
-    data: { itemId, lotId, locationId, quantity: 5, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE' },
+    data: { itemId, lotId, locationId, quantity: 5, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE', companyId: tenant.companyId },
   });
   await prisma.expiryAlert.create({
-    data: { itemId, lotId: otherLot.id, locationId, quantity: 2, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'RESOLVED' },
+    data: { itemId, lotId: otherLot.id, locationId, quantity: 2, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'RESOLVED', companyId: tenant.companyId },
   });
 
   const summary = await getStockRiskSummary(tenant);
@@ -144,7 +144,7 @@ integration('queue backlog summary counts pending and SLA-breached items across 
 
   // Stock count: pending review, submitted long enough ago to breach the fixed SLA window.
   await prisma.stockCount.create({
-    data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, reviewStatus: 'PENDING_REVIEW', countDate: hoursAgo(48) },
+    data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, companyId: tenant.companyId, reviewStatus: 'PENDING_REVIEW', countDate: hoursAgo(48) },
   });
 
   const summary = await getQueueBacklogSummary(tenant);
@@ -220,4 +220,34 @@ integration('Transfer queue backlog is scoped by its real companyId column, not 
   const otherSummary = await getQueueBacklogSummary(other.tenant);
   assert.equal(ownSummary.transfers.pending, 0, 'a transfer whose companyId belongs to another tenant must not count here, even sharing the same source location');
   assert.equal(otherSummary.transfers.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+
+integration('StockCount queue backlog is scoped by its real companyId column, not by location join', async () => {
+  const { tenant, itemId, locationId, lotId, userId } = await makeFixture();
+  const other = await makeFixture();
+  // Same real Location.companyId (tenant.companyId), but the StockCount's
+  // own companyId column belongs to a different company.
+  await prisma.stockCount.create({
+    data: { itemId, lotId, locationId, physicalQty: 5, submittedById: userId, companyId: other.tenant.companyId, reviewStatus: 'PENDING_REVIEW' },
+  });
+
+  const ownSummary = await getQueueBacklogSummary(tenant);
+  const otherSummary = await getQueueBacklogSummary(other.tenant);
+  assert.equal(ownSummary.stockCounts.pending, 0, 'a stock count whose companyId belongs to another tenant must not count here, even sharing the same location');
+  assert.equal(otherSummary.stockCounts.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+
+integration('active ExpiryAlert count is scoped by its real companyId column, not by location join', async () => {
+  const { tenant, itemId, locationId, lotId } = await makeFixture();
+  const other = await makeFixture();
+  // Same real Location.companyId (tenant.companyId), but the ExpiryAlert's
+  // own companyId column belongs to a different company.
+  await prisma.expiryAlert.create({
+    data: { itemId, lotId, locationId, quantity: 3, expiryDate: new Date(Date.now() + 86400000), daysUntilExpiry: 1, status: 'ACTIVE', companyId: other.tenant.companyId },
+  });
+
+  const ownSummary = await getStockRiskSummary(tenant);
+  const otherSummary = await getStockRiskSummary(other.tenant);
+  assert.equal(ownSummary.activeExpiryAlerts, 0, 'an expiry alert whose companyId belongs to another tenant must not count here, even sharing the same location');
+  assert.equal(otherSummary.activeExpiryAlerts, 1, 'the identical row must count for the tenant its own companyId names');
 });

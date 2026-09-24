@@ -55,7 +55,7 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 | Area | Owning files | Notes |
 |---|---|---|
 | Inventory posting | `api/src/lib/inventory-posting-service.ts` (canonical - `postInventoryMovement`, `reverseInventoryMovement`), `scripts/reconcile-stock-journal.mjs` (drift check); baseline: `lib/persistence.ts`, `lib/transfer-receipt.ts`, `lib/import-reversal.ts`, `lib/reservation.ts`, `lib/orders.ts`, `lib/exceptions.ts`, `routes/catalog-procurement.ts`, `routes/operations-extension.ts`, `routes/foundation.ts` (dead code, unmounted) | `InventoryPostingService` shipped Week 6 (ADR-001), targets `StockLedger` (the live projection - `StockBalance` has no real readers, see ADR-001 addendum). Baseline files not yet migrated - see `docs/inventory-posting-coverage.md` for the per-file reason. New direct `StockLedger`/`StockMovement`/`StockBalance` writes outside this table fail `architecture-lint.mjs`. |
-| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. `PurchaseOrder` (Week 17), `Order` (Week 19) and `Transfer` (see `docs/week21-transfer-tenant-scope.md`) got a real `companyId` column; `StockCount`/`ExpiryAlert` are still `tenantId`-only. |
+| Tenant scope | `api/src/lib/tenant-context.ts` (`TenantContext`, fails closed), `lib/repositories/*.ts` (scoped repositories - `item-repository.ts` is the reference), `lib/saas/tenant-scope.ts` (`enforceOperationalCompanyScope` middleware) | A repository function's *type signature* must require `TenantContext` - middleware alone is not enough (ADR-002). Coverage matrix: `docs/tenant-scope-coverage.md`. All five originally-`tenantId`-only models now carry a real `companyId` column: `PurchaseOrder` (Week 17), `Order` (Week 19), `Transfer` (`docs/week21-transfer-tenant-scope.md`), `StockCount`/`ExpiryAlert` (`docs/week22-stockcount-expiryalert-tenant-scope.md`). The read/write call-site migration for each (the many bare-id lookups in `operations-extension.ts`/`core.ts`) is still outstanding - tracked in the `unscoped-tenant-query` lint baseline. |
 | Database schema | `api/prisma/schema.prisma` + `api/prisma/migrations/`, `lib/schema-version.ts` (startup verification, read-only) | Only path to schema change (ADR-004). Drift report: `docs/schema-drift-report.md`. Float->Decimal plan (not yet executed): `docs/decimal-migration-plan.md`. |
 | Auth / sessions | `api/src/lib/otp-auth.ts` (access tokens, bcrypt), `lib/session-store.ts` (refresh sessions, OTP), `routes/enterprise-auth.ts`, `lib/saas/control-plane.ts` | bcrypt for passwords, `jsonwebtoken` for access tokens, persisted rotating refresh sessions; no custom crypto (ADR-003). |
 | Event bus / outbox / API contract | `api/src/lib/event-bus.ts`, `routes/events.ts`, `lib/outbox-worker.ts` (idempotent delivery worker - shipped Week 7, deliberately still not wired to any handler - see Week 14 note below), `lib/outbox-retention.ts` (`startOutboxRetention`/`pruneOutboxOnce`, Week 14, wired into `worker.ts`) | Durable outbox is the source of truth in database mode (ADR-006). A business write that needs its outbox row atomic with itself uses `recordOutboxEventInTransaction`, not `publishEvent`. `DomainEventOutbox` rows are pruned after `OUTBOX_RETENTION_DAYS` (7) - see `docs/week14-outbox-retention.md`. |
@@ -487,3 +487,24 @@ tracks how much of it):
   `companyLocationIds` join workaround. Proven with the same negative-test
   pattern as Weeks 17/19. `StockCount` and `ExpiryAlert` remain
   `tenantId`-only.
+- Post-Week-20 follow-up 2 (`api/prisma/schema.prisma`,
+  `lib/persistence.ts`, `routes/core.ts`, `routes/operations-extension.ts`,
+  `lib/reporting-repository.ts`, no dedicated ADR - see
+  `docs/week22-stockcount-expiryalert-tenant-scope.md`): closes out the
+  tenant-scope migration - `StockCount` and `ExpiryAlert`, the last two of
+  the original five `tenantId`-only models. Same "memory-cache write vs.
+  real DB write" lesson as Transfer: `lib/repository.ts`'s
+  `createCountRecord` is memory-only; the real write is
+  `lib/persistence.ts`'s `persistCount`, called from `routes/core.ts`'s
+  `commitLotCount` right after it. `ExpiryAlert` has no such indirection -
+  one live write site (the expiry write-off route) and one dead-code write
+  site (`syncExpiryAlerts`, defined but never called anywhere in `src/` -
+  fixed anyway, using `StockLedger.companyId` directly since that row is
+  already in scope with no extra join needed). Both models' real
+  `companyId` columns are backfilled from their own `Location`;
+  `reporting-repository.ts`'s stock-risk and queue-backlog queries for
+  both now filter on it directly, and the `companyLocationIds` join
+  workaround helper - with no callers left - was removed entirely. All
+  five originally-named models now carry a real `companyId` column; the
+  bare-id call-site migration for each remains the standing,
+  `unscoped-tenant-query`-tracked follow-up.
