@@ -173,12 +173,37 @@ New finding, not fixed this slice: `GET /suppliers/:id/score` looks a
 tenant-scope migration is a prerequisite, out of scope for a
 "PurchaseOrder routes" slice.
 
-Remaining, not yet migrated: `Transfer`/`ExceptionCase`/`ReturnRequest`/
-`StockCount`/`ExpiryAlert`/`Item`/`Supplier` call sites across
-`routes/operations-extension.ts`, `routes/catalog-procurement.ts`,
-`lib/orders.ts`, `lib/persistence.ts`, and various import-lifecycle
-internals (many of the latter are already scoped one level up by their
-caller and are lower priority than direct route handlers).
+## Bare-id call-site migration - third slice: ReturnRequest and ExceptionCase routes
+
+Third slice: every `ReturnRequest`-model call site in
+`routes/operations-extension.ts` (`PATCH /returns/:id/status`, `POST
+/returns/:id/lines/:lineId/disposition`, `PATCH /returns/:id/refund`), its
+`ExceptionCase` call sites (`GET /exceptions`, `PATCH /exceptions/:id`,
+`POST /exceptions/:id/resolve`), and `lib/exceptions.ts`'s
+`createExceptionCase()` - the single choke point every case-opening call
+site in the codebase funnels through. `GET /exceptions` had the same
+complete-list-leak shape as Week 24's `GET /purchase-orders` (a
+manager/auditor role with no `locationId` query param got an unfiltered
+`{}` scope); `createExceptionCase()` never set `companyId` at all, so
+every exception case ever opened silently landed under the schema's
+`"default-company"` default regardless of the reporting user's real
+company - a quieter, deeper version of the same bug, fixed by adding a
+required `companyId` field to its input type and threading a real value
+through all eight call sites (`operations-extension.ts`,
+`transfer-logistics.ts`, `catalog-procurement.ts`, `core.ts`,
+`qc-inspection.ts`). Proven with
+`src/routes/operations-extension-returns-exceptions.postgres.test.ts`
+(7/7 passing), reusing the Week 23/24 harness, including a regression test
+that a newly created exception case is stamped with the caller's real
+companyId rather than the schema default. See
+`docs/week25-returnrequest-exceptioncase-bare-id-remediation.md`.
+
+Remaining, not yet migrated: `Transfer`/`StockCount`/`ExpiryAlert`/`Item`/
+`Supplier` call sites across `routes/operations-extension.ts`,
+`routes/catalog-procurement.ts`, `lib/orders.ts`, `lib/persistence.ts`, and
+various import-lifecycle internals (many of the latter are already scoped
+one level up by their caller and are lower priority than direct route
+handlers).
 
 ## Control-plane elevation
 

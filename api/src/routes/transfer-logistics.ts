@@ -7,7 +7,7 @@ import { canManageTransferDispatch } from '../lib/transfer-lifecycle.js';
 import { validateTransferStatusChange } from '../lib/inventory.js';
 import type { Role } from '../lib/inventory.js';
 import type { ExpectedPackLine } from '../lib/pack-verification.js';
-import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
+import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import {
   addTransferCarton, listItems, listTransferCartons, listTransfers, setTransferCartonStatus, setTransferLogistics, updateTransferStatus,
   type TransferRecord,
@@ -144,6 +144,7 @@ router.post('/transfers/:transferId/cartons', ...guard, async (req: Request, res
       title: `Pack mismatch on transfer ${transfer.id}`,
       description: mismatches.map((row) => `${row.itemId}/${row.lotId}: ${row.kind === 'OVER' ? `${row.quantity} packed, only ${row.remaining} left to pack` : `${row.quantity} packed but not on this transfer`}`).join('; '),
       locationId: transfer.sourceLocationId, sourceDocument: transfer.id, reportedById: req.user!.id,
+      companyId: req.user!.companyId ?? DEFAULT_COMPANY_ID,
     });
     return res.status(409).json({ message: 'This carton does not match what was picked for the transfer, so it was not sealed. A discrepancy case was opened.', mismatches });
   }
@@ -185,6 +186,7 @@ router.post('/transfers/:transferId/pack/complete', ...guard, async (req: Reques
       title: `Packing incomplete on transfer ${transfer.id}`,
       description: state.verification.lines.filter((line) => line.status !== 'MATCHED').map((line) => `${line.itemId}/${line.lotId}: packed ${line.scannedQty} of ${line.requestedQty}`).join('; '),
       locationId: transfer.sourceLocationId, sourceDocument: transfer.id, reportedById: req.user!.id,
+      companyId: req.user!.companyId ?? DEFAULT_COMPANY_ID,
     });
     return res.status(409).json({ message: 'Every picked line must be fully packed into sealed cartons before packing can be completed.', ...state });
   }

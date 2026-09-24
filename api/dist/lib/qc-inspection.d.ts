@@ -62,6 +62,7 @@ export type RecordQcInspectionInput = {
     results: Record<string, QcCheckResult>;
     notes?: string | null;
     inspectedById: string;
+    companyId: string;
 };
 /**
  * Records a filled-in checklist and, on FAIL, opens the same QC_FAIL

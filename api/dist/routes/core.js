@@ -2999,6 +2999,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
                 itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
                 quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
                 reportedById: req.user.id,
+                companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             });
         }
         const nextStatus = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
@@ -3445,6 +3446,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                     if (line.shortageQty > 0) {
@@ -3455,6 +3457,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                     if (Number(line.excessQty ?? 0) > 0) {
@@ -3469,6 +3472,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
                             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
                             quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
                             reportedById: req.user.id,
+                            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
                         });
                     }
                 }

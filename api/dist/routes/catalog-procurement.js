@@ -432,7 +432,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     for (const posting of postings) {
         const line = order.lines.find((row) => row.id === posting.lineId);
         const lotId = postedStock.find((row) => row.itemId === posting.itemId && row.lotNo === posting.lotNo)?.lotId ?? null;
-        const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user.id };
+        const base = { itemId: posting.itemId, lotId, locationId: order.locationId, sourceDocument: order.number, sourceLineId: posting.lineId, reportedById: req.user.id, companyId: order.companyId };
         if (posting.damagedQty > 0) {
             void (0, exceptions_js_1.createExceptionCase)({ ...base, type: 'DAMAGE', title: `Damaged receipt on ${order.number}`, description: `${posting.damagedQty} unit(s) arrived damaged or failed QC.`, quantity: posting.damagedQty });
         }

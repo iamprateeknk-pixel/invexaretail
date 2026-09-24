@@ -65,6 +65,7 @@ async function createExceptionCase(input) {
                 sourceLineId: input.sourceLineId ?? null,
                 ownerId: input.ownerId ?? null,
                 reportedById: input.reportedById,
+                companyId: input.companyId,
                 dueAt,
             },
         });

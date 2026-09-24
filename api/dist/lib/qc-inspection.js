@@ -158,6 +158,7 @@ async function recordQcInspection(input) {
             sourceDocument: input.sourceDocument ?? null,
             sourceLineId: input.sourceLineId ?? null,
             reportedById: input.inspectedById,
+            companyId: input.companyId,
         });
         if (exceptionCase) {
             await db_js_1.prisma.qcInspection.update({ where: { id: inspection.id }, data: { exceptionCaseId: exceptionCase.id } });

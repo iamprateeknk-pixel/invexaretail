@@ -20,7 +20,7 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/exceptions.ts",
-    "line": 80,
+    "line": 81,
     "snippet": "const exceptionCase = await prisma.exceptionCase.create({"
   },
   {
@@ -452,97 +452,67 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 1670,
-    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1735,
+    "line": 1736,
     "snippet": "const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 1746,
-    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1786,
+    "line": 1787,
     "snippet": "await prisma.exceptionCase.updateMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 1794,
+    "line": 1795,
     "snippet": "const refreshed = await prisma.returnRequest.findUnique({ where: { id: returnRequest.id }, include: { lines: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 1803,
-    "snippet": "const returnRequest = await prisma.returnRequest.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1806,
+    "line": 1807,
     "snippet": "const updated = await prisma.returnRequest.update({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2101,
+    "line": 2102,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: String(req.body.itemId) }, select: { category: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2150,
+    "line": 2153,
     "snippet": "const cases = await prisma.exceptionCase.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2207,
-    "snippet": "const existing = await prisma.exceptionCase.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 2228,
+    "line": 2232,
     "snippet": "const updated = await prisma.exceptionCase.update({ where: { id: existing.id }, data });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2237,
-    "snippet": "const existing = await prisma.exceptionCase.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 2249,
+    "line": 2253,
     "snippet": "const updated = await prisma.exceptionCase.update({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2306,
+    "line": 2310,
     "snippet": "const transfer = await prisma.transfer.findUnique({ where: { id: transferId }, include: { lines: true } }).catch(() => null);"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 2430,
+    "line": 2434,
     "snippet": ": await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }).catch(() => null) ?? memoryItem;"
   },
   {
     "rule": "bare-status-write",
     "file": "src/routes/operations-extension.ts",
-    "line": 1735,
+    "line": 1736,
     "snippet": "const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });"
   },
   {

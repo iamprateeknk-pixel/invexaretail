@@ -35,6 +35,7 @@ export type CreateExceptionCaseInput = {
   sourceLineId?: string | null;
   ownerId?: string | null;
   reportedById: string;
+  companyId: string;
   /** SLA window; defaults to 24h so nothing sits unowned overnight. */
   dueHours?: number;
 };
@@ -93,6 +94,7 @@ export async function createExceptionCase(input: CreateExceptionCaseInput) {
         sourceLineId: input.sourceLineId ?? null,
         ownerId: input.ownerId ?? null,
         reportedById: input.reportedById,
+        companyId: input.companyId,
         dueAt,
       },
     });

@@ -562,3 +562,33 @@ tracks how much of it):
   `Supplier` up by bare id, and `Supplier` has no `companyId` column at
   all - its own tenant-scope migration is a prerequisite, out of scope
   here.
+- Post-Week-20 follow-up 6 (`routes/operations-extension.ts`,
+  `lib/exceptions.ts`, `routes/transfer-logistics.ts`,
+  `routes/catalog-procurement.ts`, `routes/core.ts`,
+  `lib/qc-inspection.ts`, no dedicated ADR - see
+  `docs/week25-returnrequest-exceptioncase-bare-id-remediation.md`): the
+  third slice of the bare-id remediation - every `ReturnRequest` call site
+  in `routes/operations-extension.ts` (`PATCH /returns/:id/status`, `POST
+  /returns/:id/lines/:lineId/disposition`, `PATCH /returns/:id/refund`)
+  and its `ExceptionCase` call sites (`GET /exceptions`, `PATCH
+  /exceptions/:id`, `POST /exceptions/:id/resolve`). `GET /exceptions` had
+  the same complete-list-leak shape as follow-up 5's `GET
+  /purchase-orders` finding: a manager/auditor role with no `locationId`
+  query param got an unfiltered `{}` scope, seeing every company's
+  exception cases. A deeper, quieter bug found while fixing it:
+  `lib/exceptions.ts`'s `createExceptionCase()` - the single function
+  every case-opening call site in the codebase (receiving discrepancies,
+  transfer pack mismatches, pick exceptions, QC failures, and `POST
+  /exceptions` itself) funnels through - never set `companyId` on the row
+  it created, so every exception case ever opened silently landed under
+  the schema's `"default-company"` default regardless of the reporting
+  user's real company. Fixed by making `companyId` a required field on
+  `CreateExceptionCaseInput` and threading a real value through all eight
+  call sites. `unscoped-tenant-query` baseline dropped by 5 real fixes (the
+  `GET /exceptions` and `createExceptionCase()` fixes are real but
+  invisible to the lint rule's fixed-line-window regex, proven instead by
+  this slice's own tests). Proven with
+  `src/routes/operations-extension-returns-exceptions.postgres.test.ts`
+  (7/7 passing, including a regression test that a newly created exception
+  case is stamped with the caller's real companyId, not the schema
+  default), reusing follow-up 4's harness.

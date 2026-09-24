@@ -1707,7 +1707,7 @@ async function returnLot(returnRequestId, itemId) {
 router.patch('/returns/:id/status', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId))
@@ -1766,6 +1766,7 @@ router.patch('/returns/:id/status', async (req, res) => {
                     description: plan.note ?? null,
                     itemId: line.itemId, lotId: lot.id, locationId, quantity: line.quantity,
                     sourceDocument: returnRequest.id, sourceLineId: line.id, reportedById: req.user.id,
+                    companyId: returnRequest.companyId,
                 });
             }
             await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
@@ -1785,7 +1786,7 @@ router.patch('/returns/:id/status', async (req, res) => {
 router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id }, include: { lines: true, order: true } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId))
@@ -1850,7 +1851,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
     const decision = (0, returns_rma_js_1.parseRefundDecision)(req.body.status);
     if (!decision)
         return res.status(400).json({ message: 'Refund status must be REFUNDED or DENIED.' });
-    const returnRequest = await db_js_1.prisma.returnRequest.findUnique({ where: { id: req.params.id } });
+    const returnRequest = await db_js_1.prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!returnRequest)
         return res.status(404).json({ message: 'Return request not found.' });
     if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status))
@@ -2197,6 +2198,7 @@ router.post('/qc-inspections', async (req, res) => {
             results,
             notes: req.body.notes || null,
             inspectedById: req.user.id,
+            companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         });
         return res.status(201).json({ inspection, exceptionCase });
     }
@@ -2218,11 +2220,12 @@ router.get('/exceptions', async (req, res) => {
     const mine = req.query.mine === 'true';
     if (locationId && !canAccessLocation(req, locationId))
         return res.status(403).json({ message: 'Location access denied.' });
+    const companyId = req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID;
     const scope = mine
-        ? { ownerId: req.user.id }
+        ? { ownerId: req.user.id, companyId }
         : EXCEPTION_MANAGER_ROLES.includes(req.user.role) || req.user.role === 'AUDITOR'
-            ? (locationId ? { locationId } : {})
-            : { locationId: { in: req.user.locationIds ?? [] } };
+            ? (locationId ? { locationId, companyId } : { companyId })
+            : { locationId: { in: req.user.locationIds ?? [] }, companyId };
     const cases = await db_js_1.prisma.exceptionCase.findMany({
         where: {
             ...scope,
@@ -2273,6 +2276,7 @@ router.post('/exceptions', async (req, res) => {
         sourceLineId: req.body.sourceLineId || null,
         ownerId: req.body.ownerId || null,
         reportedById: req.user.id,
+        companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
         dueHours: Number.isFinite(Number(req.body.dueHours)) ? Number(req.body.dueHours) : undefined,
     });
     if (!exceptionCase)
@@ -2280,7 +2284,7 @@ router.post('/exceptions', async (req, res) => {
     return res.status(201).json({ case: exceptionCase });
 });
 router.patch('/exceptions/:id', async (req, res) => {
-    const existing = await db_js_1.prisma.exceptionCase.findUnique({ where: { id: req.params.id } });
+    const existing = await db_js_1.prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!existing)
         return res.status(404).json({ message: 'Exception case not found.' });
     const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user.role);
@@ -2314,7 +2318,7 @@ router.patch('/exceptions/:id', async (req, res) => {
     return res.json({ case: updated });
 });
 router.post('/exceptions/:id/resolve', async (req, res) => {
-    const existing = await db_js_1.prisma.exceptionCase.findUnique({ where: { id: req.params.id } });
+    const existing = await db_js_1.prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!existing)
         return res.status(404).json({ message: 'Exception case not found.' });
     const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user.role);

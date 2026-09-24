@@ -3067,6 +3067,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
         itemId: exception.itemId ?? null, lotId: exception.lotId ?? null, locationId: transfer.sourceLocationId,
         quantity: Number(exception.quantity) || null, sourceDocument: transfer.id,
         reportedById: req.user!.id,
+        companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       });
     }
 
@@ -3479,6 +3480,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.damagedQty, sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
         if (line.shortageQty > 0) {
@@ -3489,6 +3491,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.shortageQty, sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
         if (Number(line.excessQty ?? 0) > 0) {
@@ -3503,6 +3506,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: Number(line.excessQty), sourceDocument: transferId, sourceLineId: line.lineId,
             reportedById: req.user!.id,
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           });
         }
       }
