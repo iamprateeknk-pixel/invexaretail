@@ -84,9 +84,27 @@ directly. The many bare-id `findUnique`/`update` call sites elsewhere in
 `Transfer`'s creation path was investigated as the natural next slice and
 found more tangled than PurchaseOrder's or Order's: `lib/repository.ts`'s
 `createTransferRecord` is purely in-memory (`transfers.push(input)`, no
-Prisma call at all), so how a transfer actually reaches `StockLedger` in
-database mode needs its own investigation before a companyId migration
-there is safe - deferred to its own week rather than rushed.
+Prisma call at all). The real database write turned out to be a separate
+function, `persistTransfer` in `lib/persistence.ts`, called right after -
+see below, resolved.
+
+## Transfer - real companyId added
+
+Migration `20261024090000_transfer_company_scope` added a real `companyId`
+column, backfilled from each transfer's own `sourceLocation.companyId`
+(the location that authorized the transfer out). `lib/persistence.ts`'s
+`persistTransfer` now takes an optional `companyId` parameter, set on
+creation by all three production call sites
+(`transfer-command-service.ts`'s `createTransfer`, and two in
+`routes/core.ts` - a replenishment-recommendation transfer and a bulk
+transfer-file import); `lib/reporting-repository.ts`'s transfer
+queue-backlog counts filter on it directly, the last of `PurchaseOrder`/
+`Order`/`Transfer` to move off the `companyLocationIds` join workaround.
+See `docs/week21-transfer-tenant-scope.md`. The bare-id `findUnique`/
+`update` call sites for Transfer in `routes/operations-extension.ts` and
+`routes/core.ts` are **not yet migrated** - still in the
+`unscoped-tenant-query` lint baseline. `StockCount` and `ExpiryAlert`
+remain `tenantId`-only - the two models left of the original five.
 
 ## Control-plane elevation
 

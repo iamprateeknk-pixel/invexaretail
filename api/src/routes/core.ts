@@ -1707,7 +1707,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
     // Commit first so a database failure cannot leave a phantom transfer in
     // the process mirror. The deterministic ID makes request retries safe.
-    await persistTransfer(transfer);
+    await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     createTransferRecord(transfer);
     await persistAudit(recordAudit({
       actorId: req.user!.id, actorRole: req.user!.role,
@@ -2891,7 +2891,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
       createdAt: new Date().toISOString(),
     };
     createTransferRecord(transfer);
-    await persistTransfer(transfer);
+    await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_IMPORTED', entityType: 'Transfer', entityId: transfer.id, metadata: { fileName: req.file.originalname, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId, rows: preview.totalRows, duplicateRows: preview.duplicateRows, mergeDuplicates: req.body.mergeDuplicates !== 'false' } }));
     return res.status(201).json({ message: `Transfer ${transfer.id} released to picker with ${transfer.lines.length} FEFO lot allocations.`, transfer });
   } catch (error) {

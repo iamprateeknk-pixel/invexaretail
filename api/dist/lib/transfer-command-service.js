@@ -113,7 +113,7 @@ async function createTransfer(cmd) {
             notes: saved.notes,
             createdAt: saved.createdAt,
         });
-        await (0, persistence_js_1.persistTransfer)(saved);
+        await (0, persistence_js_1.persistTransfer)(saved, cmd.companyId);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
             actorId: cmd.actorId,
             actorRole: cmd.actorRole,

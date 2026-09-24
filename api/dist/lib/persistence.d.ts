@@ -82,7 +82,7 @@ export declare function persistCountAssignment(assignment: CountAssignmentRecord
 export declare function persistCountAssignmentUpdate(assignment: CountAssignmentRecord): Promise<void>;
 export declare function persistCountAssignmentDelete(assignmentId: string): Promise<void>;
 export declare function persistAssignmentSubmitted(assignmentId: string, countId: string): Promise<void>;
-export declare function persistTransfer(transfer: TransferRecord): Promise<void>;
+export declare function persistTransfer(transfer: TransferRecord, companyId?: string): Promise<void>;
 export declare function persistTransferReplacement(current: TransferRecord, next: TransferRecord): Promise<void>;
 export declare function persistTransferDeletion(transfer: TransferRecord): Promise<void>;
 export declare function persistTransferCarton(carton: import('./transfer-packing.js').TransferCartonRecord): Promise<void>;

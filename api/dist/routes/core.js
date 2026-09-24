@@ -1555,7 +1555,7 @@ router.post('/replenishment-actions/transfer', async (req, res) => {
         await (0, reservation_js_1.reserveStockForTransfer)(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
         // Commit first so a database failure cannot leave a phantom transfer in
         // the process mirror. The deterministic ID makes request retries safe.
-        await (0, persistence_js_1.persistTransfer)(transfer);
+        await (0, persistence_js_1.persistTransfer)(transfer, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         (0, repository_js_1.createTransferRecord)(transfer);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
             actorId: req.user.id, actorRole: req.user.role,
@@ -2801,7 +2801,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req, res) 
             createdAt: new Date().toISOString(),
         };
         (0, repository_js_1.createTransferRecord)(transfer);
-        await (0, persistence_js_1.persistTransfer)(transfer);
+        await (0, persistence_js_1.persistTransfer)(transfer, req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID);
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'TRANSFER_IMPORTED', entityType: 'Transfer', entityId: transfer.id, metadata: { fileName: req.file.originalname, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId, rows: preview.totalRows, duplicateRows: preview.duplicateRows, mergeDuplicates: req.body.mergeDuplicates !== 'false' } }));
         return res.status(201).json({ message: `Transfer ${transfer.id} released to picker with ${transfer.lines.length} FEFO lot allocations.`, transfer });
     }

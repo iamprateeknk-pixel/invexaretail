@@ -15,18 +15,22 @@ exports.getDashboardSummary = getDashboardSummary;
 // the whole point of naming it as a decision, not a fact.
 //
 // Every export takes a required TenantContext (ADR-002) and scopes its
-// query to ctx.companyId. Transfer/StockCount/ExpiryAlert still only carry
-// the pre-ADR-002 constant `tenantId` field, not a real `companyId` column
+// query to ctx.companyId. StockCount/ExpiryAlert still only carry the
+// pre-ADR-002 constant `tenantId` field, not a real `companyId` column
 // (the same baseline gap AGENTS.md's Tenant scope row already documents
 // for Identity/Organization) - this module closes that gap for its own
 // queries the same way Week 10/11 did for their own new code: by scoping
 // through each row's Location, which does carry a real companyId, via
-// `companyLocationIds`. ExceptionCase (Week 12), PurchaseOrder (Week 17)
-// and Order (Week 19) got real `companyId` columns instead - ExceptionCase
-// because its `locationId` is optional (a case with no location would fall
-// outside any location-based scope entirely); PurchaseOrder and Order as
+// `companyLocationIds`. ExceptionCase, PurchaseOrder, Order and Transfer
+// got real `companyId` columns instead - ExceptionCase because its
+// `locationId` is optional (a case with no location would fall outside any
+// location-based scope entirely); PurchaseOrder, Order and Transfer as
 // successive slices of actually migrating the remaining tenantId-only
 // models named above, rather than perpetually working around them.
+// Transfer's `companyId` is backfilled from its `sourceLocation` (the
+// location that authorized the transfer out) and set at creation from the
+// request's own resolved company, not derived from either location at
+// read time - see `persistTransfer` in `lib/persistence.ts`.
 const db_js_1 = require("./db.js");
 // This week's product decision on "at risk"/"SLA" per queue. Transfer and
 // ReturnRequest have no due-date field in the schema, so their breach
@@ -132,10 +136,10 @@ async function getQueueBacklogSummary(ctx) {
     const locationIds = await companyLocationIds(ctx);
     const inCompanyLocations = locationIds.length ? { in: locationIds } : { in: [] };
     const [transfersPending, transfersBreached, poPending, poBreached, ordersPending, ordersBreached, returnsPending, returnsBreached, countsPending, countsBreached,] = await Promise.all([
-        db_js_1.prisma.transfer.count({ where: { sourceLocationId: inCompanyLocations, status: { in: [...NON_TERMINAL_TRANSFER_STATUSES] } } }),
+        db_js_1.prisma.transfer.count({ where: { companyId: ctx.companyId, status: { in: [...NON_TERMINAL_TRANSFER_STATUSES] } } }),
         db_js_1.prisma.transfer.count({
             where: {
-                sourceLocationId: inCompanyLocations,
+                companyId: ctx.companyId,
                 status: { in: [...NON_TERMINAL_TRANSFER_STATUSES] },
                 createdAt: { lt: hoursAgo(exports.TRANSFER_SLA_HOURS) },
             },

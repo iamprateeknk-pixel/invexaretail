@@ -836,7 +836,7 @@ export async function persistAssignmentSubmitted(assignmentId: string, countId: 
   await prisma.countAssignment.update({ where: { id: assignmentId }, data: { status: 'SUBMITTED', countId } });
 }
 
-export async function persistTransfer(transfer: TransferRecord): Promise<void> {
+export async function persistTransfer(transfer: TransferRecord, companyId?: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
@@ -851,6 +851,7 @@ export async function persistTransfer(transfer: TransferRecord): Promise<void> {
       status: status as any,
       notes: transfer.notes,
       cartonCount: transfer.cartonCount ?? null,
+      companyId: companyId ?? DEFAULT_COMPANY_ID,
       lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
     },
   });

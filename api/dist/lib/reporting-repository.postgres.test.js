@@ -103,10 +103,10 @@ integration('queue backlog summary counts pending and SLA-breached items across 
     const destLocation = await db_js_1.prisma.location.create({ data: { id: `report-test-dest-${(0, node_crypto_1.randomUUID)()}`, code: `dest-${(0, node_crypto_1.randomUUID)()}`, name: 'Dest', type: 'store', companyId: tenant.companyId } });
     // Transfer: non-terminal, created long enough ago to breach the fixed SLA window.
     await db_js_1.prisma.transfer.create({
-        data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, createdAt: hoursAgo(reporting_repository_js_1.TRANSFER_SLA_HOURS + 1) },
+        data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, companyId: tenant.companyId, createdAt: hoursAgo(reporting_repository_js_1.TRANSFER_SLA_HOURS + 1) },
     });
     await db_js_1.prisma.transfer.create({
-        data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'CLOSED', requestedById: userId, createdAt: hoursAgo(reporting_repository_js_1.TRANSFER_SLA_HOURS + 1) },
+        data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'CLOSED', requestedById: userId, companyId: tenant.companyId, createdAt: hoursAgo(reporting_repository_js_1.TRANSFER_SLA_HOURS + 1) },
     });
     // Purchase order: open and past its own expectedAt due date.
     const supplier = await db_js_1.prisma.supplier.create({ data: { id: `report-test-supplier-${(0, node_crypto_1.randomUUID)()}`, name: 'Test Supplier' } });
@@ -177,4 +177,18 @@ integration('Order queue backlog is scoped by its real companyId column (Week 19
     const otherSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(other.tenant);
     strict_1.default.equal(ownSummary.orders.pending, 0, 'an order whose companyId belongs to another tenant must not count here, even sharing the same fulfillment location');
     strict_1.default.equal(otherSummary.orders.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+integration('Transfer queue backlog is scoped by its real companyId column, not by location join', async () => {
+    const { tenant, locationId, userId } = await makeFixture();
+    const other = await makeFixture();
+    const destLocation = await db_js_1.prisma.location.create({ data: { id: `report-test-dest-${(0, node_crypto_1.randomUUID)()}`, code: `dest-${(0, node_crypto_1.randomUUID)()}`, name: 'Dest', type: 'store', companyId: tenant.companyId } });
+    // Same real sourceLocation.companyId (tenant.companyId), but the
+    // Transfer's own companyId column belongs to a different company.
+    await db_js_1.prisma.transfer.create({
+        data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, companyId: other.tenant.companyId },
+    });
+    const ownSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(tenant);
+    const otherSummary = await (0, reporting_repository_js_1.getQueueBacklogSummary)(other.tenant);
+    strict_1.default.equal(ownSummary.transfers.pending, 0, 'a transfer whose companyId belongs to another tenant must not count here, even sharing the same source location');
+    strict_1.default.equal(otherSummary.transfers.pending, 1, 'the identical row must count for the tenant its own companyId names');
 });

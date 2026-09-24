@@ -120,7 +120,7 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
       notes: saved.notes,
       createdAt: saved.createdAt,
     });
-    await persistTransfer(saved);
+    await persistTransfer(saved, cmd.companyId);
     await persistAudit(recordAudit({
       actorId: cmd.actorId,
       actorRole: cmd.actorRole,

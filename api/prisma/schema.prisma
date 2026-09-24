@@ -913,8 +913,13 @@ model Transfer {
   lines                 TransferLine[]
   cartons               TransferCarton[]
   tenantId    String   @default("tenant-invexa")
-
+  // Real per-company scoping, the third slice of the migration Weeks 17/19
+  // started for PurchaseOrder/Order. Backfilled from the transfer's own
+  // sourceLocation.companyId (the location that authorized the transfer
+  // out, the more natural tenant owner than the destination).
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 }
 

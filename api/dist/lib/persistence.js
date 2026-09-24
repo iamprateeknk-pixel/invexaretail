@@ -818,7 +818,7 @@ async function persistAssignmentSubmitted(assignmentId, countId) {
     requireDatabase();
     await db_js_1.prisma.countAssignment.update({ where: { id: assignmentId }, data: { status: 'SUBMITTED', countId } });
 }
-async function persistTransfer(transfer) {
+async function persistTransfer(transfer, companyId) {
     if (!exports.databaseEnabled)
         return;
     requireDatabase();
@@ -834,6 +834,7 @@ async function persistTransfer(transfer) {
             status: status,
             notes: transfer.notes,
             cartonCount: transfer.cartonCount ?? null,
+            companyId: companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
             lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
         },
     });

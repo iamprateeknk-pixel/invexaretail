@@ -119,10 +119,10 @@ integration('queue backlog summary counts pending and SLA-breached items across 
 
   // Transfer: non-terminal, created long enough ago to breach the fixed SLA window.
   await prisma.transfer.create({
-    data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, createdAt: hoursAgo(TRANSFER_SLA_HOURS + 1) },
+    data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, companyId: tenant.companyId, createdAt: hoursAgo(TRANSFER_SLA_HOURS + 1) },
   });
   await prisma.transfer.create({
-    data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'CLOSED', requestedById: userId, createdAt: hoursAgo(TRANSFER_SLA_HOURS + 1) },
+    data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'CLOSED', requestedById: userId, companyId: tenant.companyId, createdAt: hoursAgo(TRANSFER_SLA_HOURS + 1) },
   });
 
   // Purchase order: open and past its own expectedAt due date.
@@ -204,4 +204,20 @@ integration('Order queue backlog is scoped by its real companyId column (Week 19
   const otherSummary = await getQueueBacklogSummary(other.tenant);
   assert.equal(ownSummary.orders.pending, 0, 'an order whose companyId belongs to another tenant must not count here, even sharing the same fulfillment location');
   assert.equal(otherSummary.orders.pending, 1, 'the identical row must count for the tenant its own companyId names');
+});
+
+integration('Transfer queue backlog is scoped by its real companyId column, not by location join', async () => {
+  const { tenant, locationId, userId } = await makeFixture();
+  const other = await makeFixture();
+  const destLocation = await prisma.location.create({ data: { id: `report-test-dest-${randomUUID()}`, code: `dest-${randomUUID()}`, name: 'Dest', type: 'store', companyId: tenant.companyId } });
+  // Same real sourceLocation.companyId (tenant.companyId), but the
+  // Transfer's own companyId column belongs to a different company.
+  await prisma.transfer.create({
+    data: { sourceLocationId: locationId, destinationLocationId: destLocation.id, status: 'REQUESTED', requestedById: userId, companyId: other.tenant.companyId },
+  });
+
+  const ownSummary = await getQueueBacklogSummary(tenant);
+  const otherSummary = await getQueueBacklogSummary(other.tenant);
+  assert.equal(ownSummary.transfers.pending, 0, 'a transfer whose companyId belongs to another tenant must not count here, even sharing the same source location');
+  assert.equal(otherSummary.transfers.pending, 1, 'the identical row must count for the tenant its own companyId names');
 });
