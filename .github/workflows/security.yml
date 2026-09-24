@@ -23,9 +23,15 @@ jobs:
     name: CodeQL (JavaScript/TypeScript)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # security-events:write covers uploading the SARIF results, but the
+    # analyze step also queries workflow-run metadata via the Actions API
+    # (to associate results with this run) - without actions:read that 403s
+    # with "Resource not accessible by integration" after the scan itself
+    # already completed successfully.
     permissions:
       contents: read
       security-events: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
