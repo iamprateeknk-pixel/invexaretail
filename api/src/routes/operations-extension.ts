@@ -1291,7 +1291,7 @@ router.get('/orders', async (req, res) => {
       ? {}
       : { fulfillmentLocationId: { in: req.user!.locationIds ?? [] } };
   const orders = await prisma.order.findMany({
-    where: { ...scope, ...(status ? { status } : {}) },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, ...scope, ...(status ? { status } : {}) },
     include: {
       lines: { include: { item: { select: { id: true, code: true, name: true } }, lot: { select: { id: true, lotNo: true } } } },
       fulfillmentLocation: { select: { id: true, code: true, name: true } },
@@ -1418,7 +1418,7 @@ async function packVerificationFor(orderId: string, session: { id: string }) {
 
 router.post('/orders/:id/pack/start', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   let session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
@@ -1431,7 +1431,7 @@ router.post('/orders/:id/pack/start', async (req, res) => {
 
 router.get('/orders/:id/pack', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
@@ -1445,7 +1445,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
   const itemId = typeof req.body.itemId === 'string' ? req.body.itemId : '';
   const quantity = Number(req.body.quantity ?? 1);
   if (!itemId || !Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: 'itemId and a positive quantity are required.' });
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
@@ -1459,7 +1459,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
 
 router.post('/orders/:id/pack/seal', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
@@ -1490,7 +1490,7 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
 
 router.post('/orders/:id/ship', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'SEALED' }, orderBy: { sealedAt: 'desc' } });
@@ -1532,7 +1532,7 @@ router.post('/orders/:id/ship', async (req, res) => {
 
 router.get('/orders/:id/shipment', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const shipment = await prisma.shipment.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
@@ -1544,9 +1544,9 @@ router.get('/orders/:id/shipment', async (req, res) => {
 
 router.post('/shipments/:awb/cancel', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const shipment = await prisma.shipment.findUnique({ where: { awbNumber: req.params.awb } });
+  const shipment = await prisma.shipment.findFirst({ where: { awbNumber: req.params.awb, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!shipment) return res.status(404).json({ message: 'Shipment not found.' });
-  if (!canAccessLocation(req, (await prisma.order.findUnique({ where: { id: shipment.orderId } }))?.fulfillmentLocationId ?? '')) {
+  if (!canAccessLocation(req, (await prisma.order.findFirst({ where: { id: shipment.orderId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } }))?.fulfillmentLocationId ?? '')) {
     return res.status(403).json({ message: 'Location access denied.' });
   }
   try {
@@ -1569,7 +1569,7 @@ router.post('/shipments/:awb/cancel', async (req, res) => {
 // on a RESTOCK-disposition line ever posts stock back onto the ledger.
 router.post('/orders/:id/returns', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
 
@@ -1622,7 +1622,7 @@ router.post('/orders/:id/returns', async (req, res) => {
 
 router.get('/orders/:id/returns', async (req, res) => {
   if (!requirePacker(req, res)) return;
-  const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id }, include: { lines: true }, orderBy: { createdAt: 'desc' } });

@@ -131,6 +131,31 @@ bare-id `findUnique`/`update` lookups for these models scattered across
 the column that now exists - still tracked in the `unscoped-tenant-query`
 lint baseline, a multi-week god-router remediation of its own.
 
+## Bare-id call-site migration - first slice: Order routes
+
+Started this remediation one coherent group at a time, same discipline as
+the schema migration. First slice: every `Order`-model call site in
+`routes/operations-extension.ts` (the order/pack/ship/returns routes and
+the order-listing endpoint) - nine call sites fixed, `unscoped-tenant-query`
+baseline dropped from 121 to 112. This was a real, reachable
+cross-tenant-access gap, not just a lint nag: `canAccessLocation` returns
+`true` unconditionally for `ADMIN`/`ADMIN_USER`/`AUDITOR` roles with no
+company check, so an admin given or guessing another company's order id
+could reach and pass that check. See
+`docs/week23-order-bare-id-remediation.md` for the full list of fixed
+routes and the one honest gap this slice left (no new automated
+cross-tenant-denial test - the existing `.http.test.ts` files for this
+router run in memory mode, which never touches the `companyId` column
+this fix depends on; a real-Postgres HTTP test harness for this router is
+needed once, then reusable for every subsequent slice).
+
+Remaining, not yet migrated: `PurchaseOrder`/`Transfer`/`ExceptionCase`/
+`ReturnRequest`/`StockCount`/`ExpiryAlert`/`Item` call sites across
+`routes/operations-extension.ts`, `routes/catalog-procurement.ts`,
+`lib/orders.ts`, `lib/persistence.ts`, and various import-lifecycle
+internals (many of the latter are already scoped one level up by their
+caller and are lower priority than direct route handlers).
+
 ## Control-plane elevation
 
 No generic bypass flag exists in `TenantContext` (`lib/tenant-context.ts`) -

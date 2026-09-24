@@ -458,62 +458,8 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/operations-extension.ts",
-    "line": 1293,
-    "snippet": "const orders = await prisma.order.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
     "line": 1410,
     "snippet": "prisma.order.findUnique({ where: { id: orderId }, include: { lines: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1434,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1448,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1462,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1493,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1535,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1549,
-    "snippet": "if (!canAccessLocation(req, (await prisma.order.findUnique({ where: { id: shipment.orderId } }))?.fulfillmentLocationId ?? '')) {"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1572,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { lines: true } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/operations-extension.ts",
-    "line": 1625,
-    "snippet": "const order = await prisma.order.findUnique({ where: { id: req.params.id } });"
   },
   {
     "rule": "unscoped-tenant-query",

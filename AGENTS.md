@@ -508,3 +508,20 @@ tracks how much of it):
   five originally-named models now carry a real `companyId` column; the
   bare-id call-site migration for each remains the standing,
   `unscoped-tenant-query`-tracked follow-up.
+- Post-Week-20 follow-up 3 (`routes/operations-extension.ts`, no dedicated
+  ADR - see `docs/week23-order-bare-id-remediation.md`): the first slice
+  of the bare-id call-site remediation itself - every `Order`-model call
+  site in `routes/operations-extension.ts` (the order/pack/ship/returns
+  routes plus the order-listing endpoint), nine sites fixed,
+  `unscoped-tenant-query` baseline dropped from 121 to 112. A real,
+  reachable gap, not just a lint nag: `canAccessLocation` grants
+  `ADMIN`/`ADMIN_USER`/`AUDITOR` roles access with no company check at
+  all, so a cross-tenant order id could pass it once looked up by bare
+  id. Each fixed lookup now filters by `companyId` at the query itself, so
+  a cross-tenant id resolves the same way a genuinely missing one does
+  (404), never revealing existence. Honest gap left open: no new
+  automated cross-tenant-denial test - this router's existing
+  `.http.test.ts` files run in memory mode, which never touches the
+  `companyId` column this fix depends on; a real-Postgres HTTP test
+  harness for this router is needed once, then reusable for every future
+  slice of this same remediation.

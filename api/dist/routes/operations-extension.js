@@ -1300,7 +1300,7 @@ router.get('/orders', async (req, res) => {
             ? {}
             : { fulfillmentLocationId: { in: req.user.locationIds ?? [] } };
     const orders = await db_js_1.prisma.order.findMany({
-        where: { ...scope, ...(status ? { status } : {}) },
+        where: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, ...scope, ...(status ? { status } : {}) },
         include: {
             lines: { include: { item: { select: { id: true, code: true, name: true } }, lot: { select: { id: true, lotNo: true } } } },
             fulfillmentLocation: { select: { id: true, code: true, name: true } },
@@ -1433,7 +1433,7 @@ async function packVerificationFor(orderId, session) {
 router.post('/orders/:id/pack/start', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1448,7 +1448,7 @@ router.post('/orders/:id/pack/start', async (req, res) => {
 router.get('/orders/:id/pack', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1466,7 +1466,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
     const quantity = Number(req.body.quantity ?? 1);
     if (!itemId || !Number.isFinite(quantity) || quantity <= 0)
         return res.status(400).json({ message: 'itemId and a positive quantity are required.' });
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1483,7 +1483,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
 router.post('/orders/:id/pack/seal', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1517,7 +1517,7 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
 router.post('/orders/:id/ship', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1562,7 +1562,7 @@ router.post('/orders/:id/ship', async (req, res) => {
 router.get('/orders/:id/shipment', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1577,10 +1577,10 @@ router.get('/orders/:id/shipment', async (req, res) => {
 router.post('/shipments/:awb/cancel', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const shipment = await db_js_1.prisma.shipment.findUnique({ where: { awbNumber: req.params.awb } });
+    const shipment = await db_js_1.prisma.shipment.findFirst({ where: { awbNumber: req.params.awb, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!shipment)
         return res.status(404).json({ message: 'Shipment not found.' });
-    if (!canAccessLocation(req, (await db_js_1.prisma.order.findUnique({ where: { id: shipment.orderId } }))?.fulfillmentLocationId ?? '')) {
+    if (!canAccessLocation(req, (await db_js_1.prisma.order.findFirst({ where: { id: shipment.orderId, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } }))?.fulfillmentLocationId ?? '')) {
         return res.status(403).json({ message: 'Location access denied.' });
     }
     try {
@@ -1604,7 +1604,7 @@ router.post('/shipments/:awb/cancel', async (req, res) => {
 router.post('/orders/:id/returns', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID }, include: { lines: true } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
@@ -1658,7 +1658,7 @@ router.post('/orders/:id/returns', async (req, res) => {
 router.get('/orders/:id/returns', async (req, res) => {
     if (!requirePacker(req, res))
         return;
-    const order = await db_js_1.prisma.order.findUnique({ where: { id: req.params.id } });
+    const order = await db_js_1.prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID } });
     if (!order)
         return res.status(404).json({ message: 'Order not found.' });
     if (!canAccessLocation(req, order.fulfillmentLocationId))
