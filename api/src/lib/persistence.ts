@@ -93,7 +93,14 @@ function logisticsOf(transfer: unknown): Pick<TransferRecord, 'packing' | 'dispa
 export async function hydrateRepositoryFromDatabase(): Promise<void> {
   if (!databaseEnabled) return;
 
-  const companyIds = (await prisma.companyProfile.findMany({ select: { id: true } })).map((company) => company.id);
+  // `CompanyProfile` predates multi-tenant operational data and production's
+  // singleton row is still keyed as `default`, while Location/User/Item rows
+  // use `default-company`.  Treating profile ids as the complete tenant list
+  // therefore emptied every operational in-memory mirror after a restart.
+  // Keep profile-backed tenants, but always hydrate the canonical legacy/default
+  // operational tenant as well.
+  const profileCompanyIds = (await prisma.companyProfile.findMany({ select: { id: true } })).map((company) => company.id);
+  const companyIds = [...new Set([DEFAULT_COMPANY_ID, ...profileCompanyIds])];
 
   const [dbLocations, dbItems, dbCounts, dbTransfers, dbStockLedger, dbAssignments, dbUsers] = await Promise.all([
     prisma.location.findMany({ where: { companyId: { in: companyIds } } }),
