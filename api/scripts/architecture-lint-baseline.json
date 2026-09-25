@@ -296,26 +296,14 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 202,
+    "line": 203,
     "snippet": "const orders = await prisma.purchaseOrder.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/routes/catalog-procurement.ts",
-    "line": 328,
+    "line": 329,
     "snippet": "const itemRows = await prisma.item.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 518,
-    "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
-  },
-  {
-    "rule": "bare-status-write",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 518,
-    "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
   },
   {
     "rule": "unscoped-tenant-query",

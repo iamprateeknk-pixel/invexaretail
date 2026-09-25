@@ -129,6 +129,33 @@ export async function assertValidPurchaseOrderTransition(
   throw new InvalidTransitionError('PurchaseOrder', from, to, traceId);
 }
 
+type PurchaseOrderTransitionData = Omit<Prisma.PurchaseOrderUncheckedUpdateInput, 'status'>;
+
+/** Tenant-scoped, compare-and-set PurchaseOrder status writer. */
+export async function transitionPurchaseOrderStatus(input: {
+  entityId: string;
+  companyId: string;
+  to: PoStatus;
+  actorId: string;
+  actorRole: string;
+  data?: PurchaseOrderTransitionData;
+}) {
+  const current = await prisma.purchaseOrder.findFirst({
+    where: { id: input.entityId, companyId: input.companyId },
+    select: { status: true },
+  });
+  if (!current) throw new DomainError('NOT_FOUND', 'Purchase order was not found in this company.');
+  const from = current.status as PoStatus;
+  await assertValidPurchaseOrderTransition(from, input.to, input.entityId, {
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+  });
+  return prisma.purchaseOrder.update({
+    where: { id: input.entityId, companyId: input.companyId, status: current.status },
+    data: { ...(input.data ?? {}), status: input.to },
+  });
+}
+
 export { PO_STATUSES };
 
 // --- ReturnRequest --------------------------------------------------------

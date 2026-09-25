@@ -28,6 +28,7 @@ import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.
 import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { applySavedViewFilter, type SavedViewFilterConfig } from '../lib/saved-view-filter.js';
+import { transitionPurchaseOrderStatus } from '../lib/domain-policies.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides, respondWhenMemoryUnavailable);
@@ -515,10 +516,13 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
     if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
   }
   const now = new Date();
-  const purchaseOrder = await prisma.purchaseOrder.update({
-    where: { id: order.id },
+  const purchaseOrder = await transitionPurchaseOrderStatus({
+    entityId: order.id,
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+    to,
+    actorId: req.user!.id,
+    actorRole: req.user!.role,
     data: {
-      status: to,
       ...(to === 'APPROVED' ? { approvedAt: now, approvedById: req.user!.id } : {}),
       ...(to === 'SENT' ? { sentAt: now } : {}),
       ...(to === 'CLOSED' ? { closedAt: now, closeNote: note || null } : {}),

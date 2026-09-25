@@ -30,6 +30,40 @@ export declare function transitionTransferStatus(input: {
     reason?: string;
 }): Promise<void>;
 export declare function assertValidPurchaseOrderTransition(from: PoStatus, to: PoStatus, entityId: string, ctx: AuditContext, traceId?: string): Promise<void>;
+type PurchaseOrderTransitionData = Omit<Prisma.PurchaseOrderUncheckedUpdateInput, 'status'>;
+/** Tenant-scoped, compare-and-set PurchaseOrder status writer. */
+export declare function transitionPurchaseOrderStatus(input: {
+    entityId: string;
+    companyId: string;
+    to: PoStatus;
+    actorId: string;
+    actorRole: string;
+    data?: PurchaseOrderTransitionData;
+}): Promise<{
+    number: string;
+    companyId: string;
+    id: string;
+    createdAt: Date;
+    updatedAt: Date;
+    tenantId: string;
+    status: string;
+    locationId: string;
+    approvedById: string | null;
+    approvedAt: Date | null;
+    notes: string | null;
+    createdById: string;
+    closedAt: Date | null;
+    supplierId: string;
+    expectedAt: Date | null;
+    sentAt: Date | null;
+    closeNote: string | null;
+    totalAmount: number;
+    freightCost: number | null;
+    customsCost: number | null;
+    insuranceCost: number | null;
+    handlingCost: number | null;
+    landedCostMethod: string | null;
+}>;
 export { PO_STATUSES };
 export declare function assertValidReturnTransition(from: ReturnStatus, action: ReturnAction, entityId: string, ctx: AuditContext, traceId?: string): Promise<ReturnStatus>;
 export type CountReviewStatus = 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RECOUNT';

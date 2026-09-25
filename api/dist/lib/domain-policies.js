@@ -4,6 +4,7 @@ exports.ORDER_STATUSES = exports.COUNT_REVIEW_STATUSES = exports.PO_STATUSES = e
 exports.assertValidTransferTransitionAudited = assertValidTransferTransitionAudited;
 exports.transitionTransferStatus = transitionTransferStatus;
 exports.assertValidPurchaseOrderTransition = assertValidPurchaseOrderTransition;
+exports.transitionPurchaseOrderStatus = transitionPurchaseOrderStatus;
 exports.assertValidReturnTransition = assertValidReturnTransition;
 exports.allowedCountReviewMoves = allowedCountReviewMoves;
 exports.assertValidCountReviewTransition = assertValidCountReviewTransition;
@@ -118,6 +119,24 @@ async function assertValidPurchaseOrderTransition(from, to, entityId, ctx, trace
         return;
     await logRejection('PurchaseOrder', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('PurchaseOrder', from, to, traceId);
+}
+/** Tenant-scoped, compare-and-set PurchaseOrder status writer. */
+async function transitionPurchaseOrderStatus(input) {
+    const current = await db_js_1.prisma.purchaseOrder.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Purchase order was not found in this company.');
+    const from = current.status;
+    await assertValidPurchaseOrderTransition(from, input.to, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.actorRole,
+    });
+    return db_js_1.prisma.purchaseOrder.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { ...(input.data ?? {}), status: input.to },
+    });
 }
 // --- ReturnRequest --------------------------------------------------------
 // Delegates to returns-rma.ts's existing action-keyed TRANSITIONS table.

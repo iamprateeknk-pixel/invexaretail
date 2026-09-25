@@ -98,6 +98,10 @@ integration('PATCH /purchase-orders/:id/status: another company\'s purchase orde
 
     const unchanged = await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: poA.id } });
     assert.equal(unchanged.status, 'DRAFT', 'the cross-tenant attempt must not have changed anything');
+
+    const own = await call('PATCH', `/purchase-orders/${poA.id}/status`, a.token, { status: 'CANCELLED' });
+    assert.equal(own.status, 200, JSON.stringify(own.body));
+    assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: poA.id } })).status, 'CANCELLED');
   });
 });
 
