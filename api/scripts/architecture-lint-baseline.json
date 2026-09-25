@@ -49,48 +49,6 @@
   },
   {
     "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 98,
-    "snippet": "prisma.item.findMany({ include: { lots: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 99,
-    "snippet": "prisma.stockCount.findMany(),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 100,
-    "snippet": "prisma.transfer.findMany({ include: { lines: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 657,
-    "snippet": "await prisma.stockCount.upsert({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 709,
-    "snippet": "await prisma.stockCount.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 836,
-    "snippet": "await prisma.transfer.upsert({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 935,
-    "snippet": "await prisma.transfer.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
     "file": "src/lib/putaway.ts",
     "line": 82,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, select: { category: true } });"

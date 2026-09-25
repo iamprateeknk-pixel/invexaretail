@@ -192,7 +192,7 @@ router.post('/transfers/:transferId/pack/complete', ...guard, async (req: Reques
   }
   const cartonCount = activeCartons(listTransferCartons(transfer.id)).length;
   const updated = setTransferLogistics(transfer.id, { cartonCount, packing: { completedAt: new Date().toISOString(), completedById: req.user!.id, cartonCount } });
-  await persistTransferLogistics(updated);
+  await persistTransferLogistics(updated, req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_PACKED', entityType: 'Transfer', entityId: transfer.id, metadata: { cartonCount } }));
   return res.json({ success: true, ...(await packState(updated)) });
 });
@@ -222,7 +222,7 @@ router.post('/transfers/:transferId/dispatch', ...guard, async (req: Request, re
     role: req.user!.role as Role,
     companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
   });
-  await persistTransferLogistics(updated);
+  await persistTransferLogistics(updated, req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DISPATCHED', entityType: 'Transfer', entityId: transfer.id, metadata: { ...details } }));
   return res.json({ success: true, transfer: updated });
 });

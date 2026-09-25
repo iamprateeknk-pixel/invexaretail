@@ -894,7 +894,7 @@ router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, re
   const stored = countsStore.find((candidate) => candidate.id === count.id)!;
   stored.reconciliationRequired = false;
   stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user!.id}: ${note}`.trim();
-  await persistCountReconciliation(stored);
+  await persistCountReconciliation(stored, req.companyId ?? DEFAULT_COMPANY_ID);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'COUNT_RECONCILIATION_RESOLVED', entityType: 'StockCount', entityId: count.id, metadata: { note, lateDelta: stored.lateDelta } }));
   publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
   return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
@@ -1125,7 +1125,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
     } catch (error) {
       for (const row of saved) {
         removeCountRecord(row.saved.id);
-        await persistCountDeletion(row.saved.id).catch(() => undefined);
+        await persistCountDeletion(row.saved.id, req.companyId ?? DEFAULT_COMPANY_ID).catch(() => undefined);
       }
       throw error;
     } finally {
@@ -1178,7 +1178,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason });
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason }, req.companyId ?? DEFAULT_COMPANY_ID);
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
@@ -1651,7 +1651,7 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
       if (blocked) return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
     }
     const next: TransferRecord = { ...current, sourceLocationId: validated.sourceLocationId, destinationLocationId: validated.destinationLocationId, lines: validated.lines, cartonCount, notes: validated.notes };
-    await persistTransferReplacement(current, next);
+    await persistTransferReplacement(current, next, req.companyId ?? DEFAULT_COMPANY_ID);
     const updated = replaceTransferRecord(current.id, next);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_EDITED', entityType: 'Transfer', entityId: current.id }));
     return res.json({ success: true, transfer: updated });
@@ -1668,7 +1668,7 @@ router.delete('/transfers/:transferId', async (req: Request, res: Response) => {
   if (!canModifyTransfer(context, req.user!.id, transfer)) return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
   if (activeCartons(listTransferCartons(transfer.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
   try {
-    await persistTransferDeletion(transfer);
+    await persistTransferDeletion(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     removeTransferRecord(transfer.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DELETED', entityType: 'Transfer', entityId: transfer.id }));
     return res.json({ success: true, transferId: transfer.id });

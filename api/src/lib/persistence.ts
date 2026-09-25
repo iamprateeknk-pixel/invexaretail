@@ -93,14 +93,16 @@ function logisticsOf(transfer: unknown): Pick<TransferRecord, 'packing' | 'dispa
 export async function hydrateRepositoryFromDatabase(): Promise<void> {
   if (!databaseEnabled) return;
 
+  const companyIds = (await prisma.companyProfile.findMany({ select: { id: true } })).map((company) => company.id);
+
   const [dbLocations, dbItems, dbCounts, dbTransfers, dbStockLedger, dbAssignments, dbUsers] = await Promise.all([
-    prisma.location.findMany(),
-    prisma.item.findMany({ include: { lots: true } }),
-    prisma.stockCount.findMany(),
-    prisma.transfer.findMany({ include: { lines: true } }),
-    prisma.stockLedger.findMany(),
-    prisma.countAssignment.findMany(),
-    prisma.user.findMany(),
+    prisma.location.findMany({ where: { companyId: { in: companyIds } } }),
+    prisma.item.findMany({ where: { companyId: { in: companyIds } }, include: { lots: true } }),
+    prisma.stockCount.findMany({ where: { companyId: { in: companyIds } } }),
+    prisma.transfer.findMany({ where: { companyId: { in: companyIds } }, include: { lines: true } }),
+    prisma.stockLedger.findMany({ where: { companyId: { in: companyIds } } }),
+    prisma.countAssignment.findMany({ where: { location: { companyId: { in: companyIds } } } }),
+    prisma.user.findMany({ where: { companyId: { in: companyIds } } }),
   ]);
 
   locations.splice(0, locations.length, ...dbLocations.map((location) => ({
@@ -645,17 +647,17 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
 }
 
 /** Best-effort removal of a count whose sibling lots failed to save (weight counts are all-or-nothing). */
-export async function persistCountDeletion(id: string): Promise<void> {
+export async function persistCountDeletion(id: string, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  await prisma.stockCount.delete({ where: { id } }).catch(() => undefined);
+  await prisma.stockCount.delete({ where: { id, companyId } }).catch(() => undefined);
 }
 
-export async function persistCount(count: CountRecord, companyId?: string): Promise<void> {
+export async function persistCount(count: CountRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.stockCount.upsert({
-    where: { id: count.id },
+    where: { id: count.id, companyId },
     update: {
       physicalQty: count.physicalQuantity,
       bookQty: count.bookQty,
@@ -673,7 +675,7 @@ export async function persistCount(count: CountRecord, companyId?: string): Prom
       submittedById: count.submittedBy,
       parentCountId: count.parentCountId ?? null,
       requestId: count.requestId ?? null,
-      companyId: companyId ?? DEFAULT_COMPANY_ID,
+      companyId,
     } as never,
   });
 }
@@ -703,11 +705,11 @@ export async function listStockFromDatabase(locationId: string): Promise<Persist
  * count status and the on-hand quantity can never disagree.
  */
 /** Writes the reconciliation state (and a recomputed book quantity) of a count. */
-export async function persistCountReconciliation(count: CountRecord): Promise<void> {
+export async function persistCountReconciliation(count: CountRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.stockCount.update({
-    where: { id: count.id },
+    where: { id: count.id, companyId },
     data: {
       bookQty: count.bookQty,
       reconciliationRequired: count.reconciliationRequired ?? false,
@@ -720,7 +722,7 @@ export async function persistCountReconciliation(count: CountRecord): Promise<vo
   });
 }
 
-export async function persistCountReview(count: CountRecord): Promise<void> {
+export async function persistCountReview(count: CountRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
 
@@ -739,7 +741,7 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
 
   await prisma.$transaction(async (tx) => {
     const claimed = await tx.stockCount.updateMany({
-      where: { id: count.id, reviewStatus: 'PENDING_REVIEW' },
+      where: { id: count.id, companyId, reviewStatus: 'PENDING_REVIEW' },
       data: {
         approvedById: count.status === 'APPROVED' ? count.reviewedBy : null,
         approvedAt: (count.status === 'APPROVED' || count.status === 'REJECTED' || count.status === 'RECOUNT') && count.reviewedAt
@@ -758,14 +760,13 @@ export async function persistCountReview(count: CountRecord): Promise<void> {
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: count.itemId, lotId: count.lotId, locationId: count.locationId } },
       });
-      const owner = await tx.stockCount.findUnique({ where: { id: count.id }, select: { companyId: true } });
       // Posted through the canonical service in this same transaction (journal + ledger +
       // audit + outbox with the review). A count with no ledger row yet establishes stock
       // at the physical quantity. The review claim above already guarantees one posting;
       // the idempotency key is the second, independent guard.
       await postInventoryMovementInTransaction(tx, {
         tenant: {
-          companyId: owner?.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID,
+          companyId, tenantId: DEFAULT_TENANT_ID,
           userId: count.reviewedBy ?? 'system', role: (count.role ?? 'ADMIN') as Role,
         },
         itemId: count.itemId, lotId: count.lotId, locationId: count.locationId,
@@ -829,12 +830,12 @@ export async function persistAssignmentSubmitted(assignmentId: string, countId: 
   await prisma.countAssignment.update({ where: { id: assignmentId }, data: { status: 'SUBMITTED', countId } });
 }
 
-export async function persistTransfer(transfer: TransferRecord, companyId?: string): Promise<void> {
+export async function persistTransfer(transfer: TransferRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
   await prisma.transfer.upsert({
-    where: { id: transfer.id },
+    where: { id: transfer.id, companyId },
     update: { status: status as any, notes: transfer.notes, cartonCount: transfer.cartonCount ?? null },
     create: {
       id: transfer.id,
@@ -844,7 +845,7 @@ export async function persistTransfer(transfer: TransferRecord, companyId?: stri
       status: status as any,
       notes: transfer.notes,
       cartonCount: transfer.cartonCount ?? null,
-      companyId: companyId ?? DEFAULT_COMPANY_ID,
+      companyId,
       lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
     },
   });
@@ -861,7 +862,7 @@ function transferReservationTotals(transfer: TransferRecord): Map<string, { item
   return totals;
 }
 
-export async function persistTransferReplacement(current: TransferRecord, next: TransferRecord): Promise<void> {
+export async function persistTransferReplacement(current: TransferRecord, next: TransferRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
@@ -885,7 +886,7 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
     }
     await tx.transferLine.deleteMany({ where: { transferId: current.id } });
     await tx.transfer.update({
-      where: { id: current.id },
+      where: { id: current.id, companyId },
       data: {
         sourceLocationId: next.sourceLocationId,
         destinationLocationId: next.destinationLocationId,
@@ -897,7 +898,7 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
   });
 }
 
-export async function persistTransferDeletion(transfer: TransferRecord): Promise<void> {
+export async function persistTransferDeletion(transfer: TransferRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
@@ -910,7 +911,7 @@ export async function persistTransferDeletion(transfer: TransferRecord): Promise
       }
     }
     await tx.transferLine.deleteMany({ where: { transferId: transfer.id } });
-    await tx.transfer.delete({ where: { id: transfer.id } });
+    await tx.transfer.delete({ where: { id: transfer.id, companyId } });
   });
 }
 
@@ -929,11 +930,11 @@ export async function persistTransferCarton(carton: import('./transfer-packing.j
 }
 
 /** Packing completion / dispatch details / carton count for a transfer. */
-export async function persistTransferLogistics(transfer: TransferRecord): Promise<void> {
+export async function persistTransferLogistics(transfer: TransferRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.transfer.update({
-    where: { id: transfer.id },
+    where: { id: transfer.id, companyId },
     data: { cartonCount: transfer.cartonCount ?? null, logistics: { packing: transfer.packing ?? null, dispatch: transfer.dispatch ?? null } as never },
   });
 }
@@ -956,12 +957,12 @@ export async function persistTransferStatus(
 export async function persistConfirmedPickAllocations(
   transferId: string,
   allocations: Array<{ itemId: string; lotId: string; locationId: string; quantity: number }>,
-  tenant?: import('./tenant-context.js').TenantContext,
+  tenant: import('./tenant-context.js').TenantContext,
 ): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    const transfer = await tx.transfer.findUnique({ where: { id: transferId } });
+    const transfer = await tx.transfer.findFirst({ where: { id: transferId, companyId: tenant.companyId } });
     if (!transfer) throw new Error('Transfer was not found.');
     if (['CONFIRMED', 'DISPATCHED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED'].includes(String(transfer.status))) {
       throw new Error('Transfer is already confirmed and stock cannot be deducted twice.');
@@ -973,14 +974,14 @@ export async function persistConfirmedPickAllocations(
       if (!ledger || ledger.onHand < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
       // Stock leaves the source through the canonical service, in this transaction.
       await postInventoryMovementInTransaction(tx, {
-        tenant: tenant ?? { companyId: transfer.companyId, tenantId: DEFAULT_TENANT_ID, userId: 'system', role: 'ADMIN' as Role },
+        tenant,
         itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId,
         movementType: 'TRANSFER_OUT', qtyDelta: -allocation.quantity,
         idempotencyKey: `transfer-confirm:${transferId}:${allocation.itemId}:${allocation.lotId}:${allocation.locationId}`,
         reason: 'Transfer pick confirmed', sourceDocument: transferId, correlationId: transferId,
       });
     }
-    await tx.transfer.update({ where: { id: transferId }, data: { status: 'CONFIRMED' as any } });
+    await tx.transfer.update({ where: { id: transferId, companyId: tenant.companyId }, data: { status: 'CONFIRMED' as any } });
   }, { maxWait: 10_000, timeout: 60_000 });
 }
 

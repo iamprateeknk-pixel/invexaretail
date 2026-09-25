@@ -37,8 +37,11 @@ async function pendingCount(f: Awaited<ReturnType<typeof fixture>>, physical: nu
 integration('an approved count variance posts one COUNT_VARIANCE journal row that matches the ledger; a second review cannot post again', async () => {
   const f = await fixture(10);
   const count = await pendingCount(f, 7, 10);
-  await persistCountReview(count);
-  await assert.rejects(persistCountReview(count), 'a second review of the same count must not post again');
+  const other = await fixture(1);
+  await assert.rejects(persistCountReview(count, other.companyId));
+  assert.equal((await prisma.stockCount.findUniqueOrThrow({ where: { id: count.id } })).reviewStatus, 'PENDING_REVIEW');
+  await persistCountReview(count, f.companyId);
+  await assert.rejects(persistCountReview(count, f.companyId), 'a second review of the same count must not post again');
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
   assert.equal(ledger.onHand, 7);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: f.item.id } });
@@ -51,7 +54,7 @@ integration('an approved count variance posts one COUNT_VARIANCE journal row tha
 
 integration('a count on a lot with no ledger row yet establishes stock at the physical quantity', async () => {
   const f = await fixture(null);
-  await persistCountReview(await pendingCount(f, 6, 0));
+  await persistCountReview(await pendingCount(f, 6, 0), f.companyId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
   assert.equal(ledger.onHand, 6);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
@@ -63,8 +66,12 @@ integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock
     data: { sourceLocationId: f.loc.id, destinationLocationId: f.dst.id, status: 'REQUESTED', requestedById: f.userId, companyId: f.companyId },
   });
   const tenant = { companyId: f.companyId, tenantId: 'tenant-invexa', userId: f.userId, role: 'ADMIN' as const };
+  const other = await fixture(1);
+  const otherTenant = { companyId: other.companyId, tenantId: 'tenant-invexa', userId: other.userId, role: 'ADMIN' as const };
   const alloc = (quantity: number) => [{ itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id, quantity }];
 
+  await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(1), otherTenant), /not found/i);
+  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand, 10);
   await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(99), tenant), /Insufficient/);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 0, 'nothing posted on a rejected confirm');
 

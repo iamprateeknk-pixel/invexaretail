@@ -42,7 +42,7 @@ export async function applyLateMovements(movements: DailyMovementRecord[], actor
     const sources = [...new Set(movements.filter((movement) => outcome.keys.includes(movement.dedupeKey)).map((movement) => movement.sourceType.toLowerCase()))].join('/') || 'import';
     count.reconciliationNote = reconciliationNote(outcome, before, count.bookQty, sources);
     touchedLocations.add(count.locationId);
-    await persistCountReconciliation(count);
+    await persistCountReconciliation(count, ownerOfLocation(count.locationId) ?? DEFAULT_COMPANY_ID);
     await persistAudit(recordAudit({
       actorId,
       actorRole: 'SYSTEM',
