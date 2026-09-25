@@ -8,6 +8,8 @@ exports.allowedCountReviewMoves = allowedCountReviewMoves;
 exports.assertValidCountReviewTransition = assertValidCountReviewTransition;
 exports.allowedOrderMoves = allowedOrderMoves;
 exports.assertValidOrderTransition = assertValidOrderTransition;
+exports.transitionOrderStatus = transitionOrderStatus;
+exports.transitionOrderStatusInTransaction = transitionOrderStatusInTransaction;
 exports.assertInspectionResultImmutable = assertInspectionResultImmutable;
 // ADR-006 / Week 7: one place that says which state transitions are legal
 // for the six entities the guide names (Transfer, StockCount, PurchaseOrder,
@@ -129,6 +131,20 @@ async function assertValidOrderTransition(from, to, entityId, ctx, traceId = (0,
         return;
     await logRejection('Order', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('Order', from, to, traceId);
+}
+/**
+ * The only non-transactional write path for an Order status. Keeping the
+ * policy assertion and the write together prevents callers from validating
+ * one transition and then accidentally persisting a different status.
+ */
+async function transitionOrderStatus(entityId, companyId, from, to, ctx, data = {}) {
+    await assertValidOrderTransition(from, to, entityId, ctx);
+    await db_js_1.prisma.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
+}
+/** Transaction-bound variant used when stock, lines and the status must commit atomically. */
+async function transitionOrderStatusInTransaction(tx, entityId, companyId, from, to, ctx, data = {}) {
+    await assertValidOrderTransition(from, to, entityId, ctx);
+    await tx.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
 }
 // --- QcInspection -----------------------------------------------------
 // Not a state machine: the Prisma model has no `.status` field, only a

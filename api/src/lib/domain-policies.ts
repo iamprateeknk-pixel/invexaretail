@@ -23,6 +23,7 @@ import type { Role, TransferStatus } from './inventory.js';
 import { allowedTransferTransitions } from './transfer-lifecycle.js';
 import { PO_STATUSES, allowedPoMoves, type PoStatus } from './po-lifecycle.js';
 import { nextReturnStatus, type ReturnStatus, type ReturnAction } from './returns-rma.js';
+import type { Prisma } from '@prisma/client';
 
 export class InvalidTransitionError extends DomainError {
   constructor(
@@ -174,6 +175,39 @@ export async function assertValidOrderTransition(
   if (allowedOrderMoves(from).includes(to)) return;
   await logRejection('Order', entityId, from, to, ctx, traceId);
   throw new InvalidTransitionError('Order', from, to, traceId);
+}
+
+type OrderTransitionData = Omit<Prisma.OrderUncheckedUpdateInput, 'status'>;
+
+/**
+ * The only non-transactional write path for an Order status. Keeping the
+ * policy assertion and the write together prevents callers from validating
+ * one transition and then accidentally persisting a different status.
+ */
+export async function transitionOrderStatus(
+  entityId: string,
+  companyId: string,
+  from: OrderStatus,
+  to: OrderStatus,
+  ctx: AuditContext,
+  data: OrderTransitionData = {},
+): Promise<void> {
+  await assertValidOrderTransition(from, to, entityId, ctx);
+  await prisma.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
+}
+
+/** Transaction-bound variant used when stock, lines and the status must commit atomically. */
+export async function transitionOrderStatusInTransaction(
+  tx: Prisma.TransactionClient,
+  entityId: string,
+  companyId: string,
+  from: OrderStatus,
+  to: OrderStatus,
+  ctx: AuditContext,
+  data: OrderTransitionData = {},
+): Promise<void> {
+  await assertValidOrderTransition(from, to, entityId, ctx);
+  await tx.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
 }
 
 // --- QcInspection -----------------------------------------------------

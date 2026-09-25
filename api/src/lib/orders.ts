@@ -6,7 +6,11 @@ import { recordAudit } from './audit.js';
 import { databaseEnabled, persistAudit } from './persistence.js';
 import { listItems, listLocations, listStockLedger } from './repository.js';
 import { estimateDispatchAndDelivery } from './promise-engine.js';
-import { assertValidOrderTransition } from './domain-policies.js';
+import {
+  assertValidOrderTransition,
+  transitionOrderStatus,
+  transitionOrderStatusInTransaction,
+} from './domain-policies.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 
@@ -185,11 +189,12 @@ export async function expireStaleReservations(): Promise<number> {
     });
     for (const order of stale) {
       try {
-        await assertValidOrderTransition(order.status as never, 'EXPIRED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed' });
         await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
           itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
         })));
-        await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });
+        await transitionOrderStatus(order.id, order.companyId, order.status as never, 'EXPIRED', {
+          actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed',
+        }, { expiredAt: new Date() });
         await persistAudit(recordAudit({
           actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_RESERVATION_EXPIRED',
           entityType: 'Order', entityId: order.id, metadata: { channel: order.channel, reservedAt: order.reservedAt },
@@ -241,11 +246,9 @@ export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEF
 
     const remaining = await prisma.orderLine.count({ where: { orderId: order.id, lotId: null, requestedQty: { gt: 0 } } });
     if (remaining === 0) {
-      await assertValidOrderTransition(order.status as never, 'RESERVED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated' });
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { status: 'RESERVED', reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) },
-      });
+      await transitionOrderStatus(order.id, order.companyId, order.status as never, 'RESERVED', {
+        actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated',
+      }, { reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) });
       await persistAudit(recordAudit({
         actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_BACKORDER_FILLED', entityType: 'Order', entityId: order.id,
       }));
@@ -410,8 +413,6 @@ export async function fulfillOrder(orderId: string, actorId: string) {
   await expireStaleReservations();
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
-  await assertValidOrderTransition(order.status as never, 'FULFILLED', order.id, { actorId, actorRole: 'SYSTEM' });
-
   await prisma.$transaction(async (tx) => {
     for (const line of order.lines) {
       if (!line.lotId) continue;
@@ -436,7 +437,15 @@ export async function fulfillOrder(orderId: string, actorId: string) {
       await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { decrement: line.requestedQty } } });
       await tx.orderLine.update({ where: { id: line.id }, data: { fulfilledQty: line.requestedQty } });
     }
-    await tx.order.update({ where: { id: order.id }, data: { status: 'FULFILLED', fulfilledAt: new Date() } });
+    await transitionOrderStatusInTransaction(
+      tx,
+      order.id,
+      order.companyId,
+      order.status as never,
+      'FULFILLED',
+      { actorId, actorRole: 'SYSTEM' },
+      { fulfilledAt: new Date() },
+    );
   });
 
   await persistAudit(recordAudit({
@@ -452,14 +461,16 @@ export async function cancelOrder(orderId: string, actorId: string) {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
   if (order.status === 'CANCELLED' || order.status === 'EXPIRED') return order;
+  // Cancellation releases reservation state outside a broader transaction,
+  // so reject an illegal terminal-state move before touching stock. The
+  // centralized writer validates again immediately before persisting.
   await assertValidOrderTransition(order.status as never, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
-
   await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
     itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
   })));
-  const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });
+  await transitionOrderStatus(order.id, order.companyId, order.status as never, 'CANCELLED', { actorId, actorRole: 'SYSTEM' }, { cancelledAt: new Date() });
   await persistAudit(recordAudit({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
-  return updated;
+  return prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });
 }
 
 // Blueprint v4 §23: "Connector ingestion must be idempotent on platform +

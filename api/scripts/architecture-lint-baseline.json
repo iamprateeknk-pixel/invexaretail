@@ -176,98 +176,68 @@
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 66,
+    "line": 70,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, include: { lots: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 182,
+    "line": 186,
     "snippet": "const stale = await prisma.order.findMany({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 192,
-    "snippet": "await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/orders.ts",
-    "line": 220,
+    "line": 225,
     "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 245,
-    "snippet": "await prisma.order.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/orders.ts",
-    "line": 256,
+    "line": 259,
     "snippet": "return prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 269,
+    "line": 272,
     "snippet": "const backordered = await prisma.order.findMany({ where: { status: 'BACKORDERED' }, orderBy: { createdAt: 'asc' }, select: { id: true } });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 363,
+    "line": 366,
     "snippet": "const order = await prisma.order.create({"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 411,
+    "line": 414,
     "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 446,
+    "line": 455,
     "snippet": "return prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 452,
+    "line": 461,
     "snippet": "const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 460,
-    "snippet": "const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });"
+    "line": 473,
+    "snippet": "return prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
     "file": "src/lib/orders.ts",
-    "line": 484,
+    "line": 495,
     "snippet": "return prisma.order.findFirst({"
-  },
-  {
-    "rule": "bare-status-write",
-    "file": "src/lib/orders.ts",
-    "line": 192,
-    "snippet": "await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });"
-  },
-  {
-    "rule": "bare-status-write",
-    "file": "src/lib/orders.ts",
-    "line": 245,
-    "snippet": "await prisma.order.update({"
-  },
-  {
-    "rule": "bare-status-write",
-    "file": "src/lib/orders.ts",
-    "line": 460,
-    "snippet": "const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });"
   },
   {
     "rule": "unscoped-tenant-query",
@@ -358,12 +328,6 @@
     "file": "src/routes/catalog-procurement.ts",
     "line": 518,
     "snippet": "const purchaseOrder = await prisma.purchaseOrder.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/imports.ts",
-    "line": 71,
-    "snippet": "const existing = await prisma.importBatch.findUnique({ where: { id: error.existingBatchId } });"
   },
   {
     "rule": "unscoped-tenant-query",

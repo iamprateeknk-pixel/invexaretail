@@ -2,6 +2,7 @@ import { DomainError } from './errors.js';
 import type { Role, TransferStatus } from './inventory.js';
 import { PO_STATUSES, type PoStatus } from './po-lifecycle.js';
 import { type ReturnStatus, type ReturnAction } from './returns-rma.js';
+import type { Prisma } from '@prisma/client';
 export declare class InvalidTransitionError extends DomainError {
     readonly entity: string;
     readonly from: string;
@@ -26,4 +27,13 @@ export type OrderStatus = 'RESERVED' | 'BACKORDERED' | 'FULFILLED' | 'CANCELLED'
 export declare const ORDER_STATUSES: readonly OrderStatus[];
 export declare function allowedOrderMoves(from: OrderStatus): OrderStatus[];
 export declare function assertValidOrderTransition(from: OrderStatus, to: OrderStatus, entityId: string, ctx: AuditContext, traceId?: string): Promise<void>;
+type OrderTransitionData = Omit<Prisma.OrderUncheckedUpdateInput, 'status'>;
+/**
+ * The only non-transactional write path for an Order status. Keeping the
+ * policy assertion and the write together prevents callers from validating
+ * one transition and then accidentally persisting a different status.
+ */
+export declare function transitionOrderStatus(entityId: string, companyId: string, from: OrderStatus, to: OrderStatus, ctx: AuditContext, data?: OrderTransitionData): Promise<void>;
+/** Transaction-bound variant used when stock, lines and the status must commit atomically. */
+export declare function transitionOrderStatusInTransaction(tx: Prisma.TransactionClient, entityId: string, companyId: string, from: OrderStatus, to: OrderStatus, ctx: AuditContext, data?: OrderTransitionData): Promise<void>;
 export declare function assertInspectionResultImmutable(existingResult: string | null | undefined, entityId: string, traceId?: string): void;
