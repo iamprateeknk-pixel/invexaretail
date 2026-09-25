@@ -1,4 +1,5 @@
 import { newDocumentNumber } from '../lib/document-number.js';
+import { suggestReorderRule } from '../lib/reorder-suggestion.js';
 import { sellableParts } from '../lib/sellable-stock.js';
 import { type Request, type Response, Router } from 'express';
 
@@ -137,6 +138,46 @@ router.get('/reorder-rules', async (req, res) => {
   }
   const rules = await prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'asc' } });
   return res.json({ rules });
+});
+
+router.get('/reorder-rules/suggestions', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
+  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  const windowDays = Number(req.query.windowDays) > 0 ? Math.min(365, Number(req.query.windowDays)) : 60;
+  const leadTimeDays = Number(req.query.leadTimeDays) > 0 ? Number(req.query.leadTimeDays) : 7;
+  const servicePercent = Number(req.query.servicePercent) > 0 ? Number(req.query.servicePercent) : 95;
+  if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const movements = await prisma.stockMovement.findMany({
+    where: { locationId, movementType: { in: ['SALES_DEDUCTION', 'SALES_RETURN'] }, timestamp: { gte: since } },
+    select: { itemId: true, qtyDelta: true, timestamp: true, movementType: true },
+    take: 50_000,
+  });
+  const byItem = new Map<string, Map<string, number>>();
+  for (const m of movements) {
+    const days = byItem.get(m.itemId) ?? new Map<string, number>();
+    const day = m.timestamp.toISOString().slice(0, 10);
+    days.set(day, (days.get(day) ?? 0) + (m.movementType === 'SALES_RETURN' ? -Math.abs(m.qtyDelta) : Math.abs(m.qtyDelta)));
+    byItem.set(m.itemId, days);
+  }
+  const [items, rules] = await Promise.all([
+    prisma.item.findMany({ where: { companyId, id: { in: [...byItem.keys()] } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
+    prisma.reorderRule.findMany({ where: { locationId, companyId } }),
+  ]);
+  const ruleByItem = new Map(rules.map((rule) => [rule.itemId, rule]));
+  const suggestions = items.flatMap((item) => {
+    const days = byItem.get(item.id)!;
+    const dailyDemand = Array.from({ length: windowDays }, (_, offset) => days.get(new Date(since.getTime() + offset * 86_400_000).toISOString().slice(0, 10)) ?? 0);
+    const rule = ruleByItem.get(item.id);
+    const suggestion = suggestReorderRule({ itemId: item.id, dailyDemand, leadTimeDays, servicePercent, decimal: item.decimalQuantity, currentMin: rule?.minQty, currentTarget: rule?.targetQty });
+    return suggestion ? [{ ...suggestion, code: item.code, name: item.name }] : [];
+  }).filter((entry) => entry.change !== 'OK').sort((a, b) => a.code.localeCompare(b.code));
+  return res.json({ windowDays, leadTimeDays, servicePercent, suggestions });
 });
 
 router.put('/reorder-rules/:itemId', async (req, res) => {

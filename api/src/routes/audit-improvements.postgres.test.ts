@@ -186,3 +186,25 @@ integration('inventory health: valuation, turns, dead stock - company scoped, un
     assert.equal(other.status, 404, 'another company cannot read this location');
   });
 });
+
+integration('reorder suggestions are derived from sales history, tenant scoped, and skip items with no demand', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const sold = await prisma.item.create({ data: { code: `SUG-${randomUUID().slice(0, 8)}`, name: 'Sold', companyId: a.companyId } });
+  const idle = await prisma.item.create({ data: { code: `IDL-${randomUUID().slice(0, 8)}`, name: 'Idle', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: sold.id, lotNo: `L-${randomUUID().slice(0, 6)}` } });
+  for (let d = 1; d <= 20; d += 1) {
+    await prisma.stockMovement.create({ data: { itemId: sold.id, lotId: lot.id, locationId: a.loc.id, movementType: 'SALES_DEDUCTION', qtyDelta: -10, beforeBalance: 500, afterBalance: 490, actor: a.userId, timestamp: new Date(Date.now() - d * 86_400_000), companyId: a.companyId } });
+  }
+  await withServer(async (call) => {
+    const res = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const ids = res.body.suggestions.map((s: { itemId: string }) => s.itemId);
+    assert.ok(ids.includes(sold.id));
+    assert.ok(!ids.includes(idle.id), 'no demand history: no suggestion');
+    const s = res.body.suggestions.find((x: { itemId: string }) => x.itemId === sold.id);
+    assert.equal(s.change, 'NEW');
+    assert.ok(s.suggestedMin > 0 && s.suggestedTarget >= s.suggestedMin);
+    assert.equal((await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}`, b.token)).status, 404);
+  });
+});

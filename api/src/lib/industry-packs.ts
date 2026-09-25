@@ -64,7 +64,7 @@ export const INDUSTRY_PACKS: Record<IndustryKey, IndustryPack> = {
     hide: ['assets'],
     dashboardKpis: ['expiry_risk', 'low_stock', 'pending_counts', 'transfers', 'discrepancy', 'pending_approvals'],
     allocationStrategy: 'FEFO',
-    expiryBlocking: false,
+    expiryBlocking: true, // perishables: lapsed lots must not stay pickable (audit S-3)
     tags: [
       { name: 'Fresh', color: 'emerald' },
       { name: 'Chilled', color: 'cyan' },

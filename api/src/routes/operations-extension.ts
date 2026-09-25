@@ -411,46 +411,6 @@ router.patch('/notification-inbox/:id/read', async (req, res) => {
   return res.json({ notification });
 });
 
-async function syncExpiryAlerts(companyId: string, locationId?: string): Promise<void> {
-  const cutoff = new Date(Date.now() + 90 * 86_400_000);
-  const ledger = await prisma.stockLedger.findMany({
-    where: {
-      ...(locationId ? { locationId } : {}),
-      companyId,
-      onHand: { gt: 0 },
-      lot: { expiryDate: { not: null, lte: cutoff } },
-    },
-    include: { lot: true },
-  });
-  const activeIds: string[] = [];
-  for (const row of ledger) {
-    if (!row.lot.expiryDate) continue;
-    const days = daysUntilExpiry(row.lot.expiryDate);
-    const id = `expiry-${createHash('sha1').update(`${row.itemId}|${row.lotId}|${row.locationId}`).digest('hex').slice(0, 24)}`;
-    activeIds.push(id);
-    await prisma.expiryAlert.upsert({
-      where: { id },
-      create: {
-        id, itemId: row.itemId, lotId: row.lotId, locationId: row.locationId,
-        quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
-        status: 'ACTIVE', recommendedAction: recommendedExpiryAction(days),
-        metadata: { severity: expirySeverity(days) },
-        companyId: row.companyId,
-      },
-      update: {
-        quantity: row.onHand, expiryDate: row.lot.expiryDate, daysUntilExpiry: days,
-        recommendedAction: recommendedExpiryAction(days), metadata: { severity: expirySeverity(days) },
-      },
-    });
-  }
-  if (locationId) {
-    await prisma.expiryAlert.updateMany({
-      where: { companyId, locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] }, ...(activeIds.length ? { id: { notIn: activeIds } } : {}) },
-      data: { status: 'RESOLVED', resolvedAt: new Date() },
-    });
-  }
-}
-
 router.get('/expiry-alerts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
