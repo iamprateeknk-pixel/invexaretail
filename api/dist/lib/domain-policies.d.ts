@@ -66,6 +66,38 @@ export declare function transitionPurchaseOrderStatus(input: {
 }>;
 export { PO_STATUSES };
 export declare function assertValidReturnTransition(from: ReturnStatus, action: ReturnAction, entityId: string, ctx: AuditContext, traceId?: string): Promise<ReturnStatus>;
+/** Tenant-scoped, compare-and-set ReturnRequest status writer. */
+export declare function transitionReturnStatus(input: {
+    entityId: string;
+    companyId: string;
+    action: ReturnAction;
+    actorId: string;
+    actorRole: string;
+}): Promise<{
+    lines: {
+        id: string;
+        createdAt: Date;
+        itemId: string;
+        quantity: number;
+        disposition: string | null;
+        returnRequestId: string;
+        orderLineId: string;
+    }[];
+} & {
+    companyId: string;
+    id: string;
+    createdAt: Date;
+    updatedAt: Date;
+    tenantId: string;
+    status: string;
+    createdById: string;
+    reason: string | null;
+    orderId: string;
+    refundStatus: string;
+    refundNote: string | null;
+    refundedAt: Date | null;
+    refundedById: string | null;
+}>;
 export type CountReviewStatus = 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RECOUNT';
 export declare const COUNT_REVIEW_STATUSES: readonly CountReviewStatus[];
 export declare function allowedCountReviewMoves(from: CountReviewStatus): CountReviewStatus[];

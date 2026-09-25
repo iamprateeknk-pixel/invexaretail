@@ -29,6 +29,7 @@ const pick_face_replenishment_js_1 = require("../lib/pick-face-replenishment.js"
 const pack_verification_js_1 = require("../lib/pack-verification.js");
 const carrier_adapter_js_1 = require("../lib/carrier-adapter.js");
 const returns_rma_js_1 = require("../lib/returns-rma.js");
+const domain_policies_js_1 = require("../lib/domain-policies.js");
 const qc_gate_js_1 = require("../lib/qc-gate.js");
 const qc_inspection_js_2 = require("../lib/qc-inspection.js");
 const demand_forecast_js_1 = require("../lib/demand-forecast.js");
@@ -42,8 +43,12 @@ const otp_auth_js_1 = require("../lib/otp-auth.js");
 const webhook_store_js_1 = require("../lib/webhook-store.js");
 const webhook_dispatcher_js_2 = require("../lib/webhook-dispatcher.js");
 const tenant_scope_js_1 = require("../lib/saas/tenant-scope.js");
+const inventory_posting_service_js_1 = require("../lib/inventory-posting-service.js");
 const serial_tracking_js_1 = require("../lib/serial-tracking.js");
 const router = (0, express_1.Router)();
+function tenantContextOf(req) {
+    return { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, userId: req.user.id, role: req.user.role };
+}
 router.use(enterprise_auth_js_1.extractToken, enterprise_auth_js_1.requireAuth, access_control_js_1.enforcePermissionOverrides, memory_mode_js_1.respondWhenMemoryUnavailable);
 // Centralized fix (see docs/tenant-scope-coverage.md's bare-id call-site
 // migration, slice 5): the role-only check below let ADMIN/ADMIN_USER/
@@ -215,9 +220,12 @@ router.post('/jobs/:id/consume', async (req, res) => {
             });
             if (!ledger || ledger.onHand < pick.quantity)
                 throw new Error(`Insufficient stock for lot ${pick.lotNo}.`);
-            await tx.stockLedger.update({
-                where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId } },
-                data: { onHand: { decrement: pick.quantity }, version: { increment: 1 } },
+            await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                tenant: tenantContextOf(req), itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId,
+                movementType: 'ADJUSTMENT', qtyDelta: -pick.quantity,
+                // One consume request = one movement per lot; the line's running issuedQty makes each request distinct.
+                idempotencyKey: `job-consume:${line.id}:${line.issuedQty}:${pick.lotId}`,
+                reason: 'Job consumption', sourceDocument: job.id, sourceLineId: line.id, correlationId: job.id,
             });
         }
         return tx.jobLine.update({
@@ -534,17 +542,16 @@ router.post('/expiry-write-off', async (req, res) => {
             if (claimed.count !== 1)
                 throw new Error('Expiry alert was already processed.');
             const afterBalance = ledger.onHand - quantity;
-            await tx.stockLedger.update({
-                where: { itemId_lotId_locationId: { itemId, lotId, locationId } },
-                data: { onHand: { decrement: quantity }, version: { increment: 1 } },
+            // Canonical posting inside this transaction (journal + ledger + audit + outbox).
+            // The key carries the ledger version so a later, legitimate write-off of the same
+            // lot (the alert id is deterministic per item/lot/location) is a new movement.
+            const { movement } = await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                tenant: tenantContextOf(req), itemId, lotId, locationId,
+                movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
+                idempotencyKey: `expiry-writeoff:${alertId}:${ledger.version}`,
+                reason, sourceDocument: alertId, correlationId: alertId,
+                metadata: { expiryDate: lot.expiryDate?.toISOString() ?? null, alertId },
             });
-            const movement = await tx.stockMovement.create({ data: {
-                    itemId, lotId, locationId,
-                    movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
-                    beforeBalance: ledger.onHand, afterBalance, sourceDocument: alertId,
-                    actor: req.user.id, timestamp: new Date(), correlationId: alertId, reason,
-                    metadata: { expiryDate: lot.expiryDate?.toISOString() ?? null, alertId },
-                } });
             await tx.auditLog.create({ data: {
                     actorId: req.user.id, actorRole: req.user.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
                     entityType: 'ExpiryAlert', entityId: alertId,
@@ -624,17 +631,13 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
             if (claimed.count !== 1)
                 throw new Error('Expiry alert was already processed.');
             const afterBalance = ledger.onHand - quantity;
-            await tx.stockLedger.update({
-                where: { itemId_lotId_locationId: { itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId } },
-                data: { onHand: { decrement: quantity }, version: { increment: 1 } },
+            const { movement } = await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                tenant: tenantContextOf(req), itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId,
+                movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
+                idempotencyKey: `expiry-writeoff:${alert.id}:${ledger.version}`,
+                reason, sourceDocument: alert.id, correlationId: alert.id,
+                metadata: { expiryDate: alert.expiryDate.toISOString(), alertId: alert.id },
             });
-            const movement = await tx.stockMovement.create({ data: {
-                    itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId,
-                    movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
-                    beforeBalance: ledger.onHand, afterBalance, sourceDocument: alert.id,
-                    actor: req.user.id, timestamp: new Date(), correlationId: alert.id, reason,
-                    metadata: { expiryDate: alert.expiryDate.toISOString(), alertId: alert.id },
-                } });
             await tx.auditLog.create({ data: {
                     actorId: req.user.id, actorRole: req.user.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
                     entityType: 'ExpiryAlert', entityId: alert.id,
@@ -1752,20 +1755,13 @@ router.patch('/returns/:id/status', async (req, res) => {
             await db_js_1.prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
             const lot = await returnLot(returnRequest.id, line.itemId);
             if (plan.action === 'RESTOCK') {
-                const ledger = await db_js_1.prisma.stockLedger.upsert({
-                    where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } },
-                    update: { onHand: { increment: line.quantity }, version: { increment: 1 } },
-                    create: { itemId: line.itemId, lotId: lot.id, locationId, onHand: line.quantity, version: 1 },
-                });
+                await db_js_1.prisma.$transaction((tx) => (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                    tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+                    movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+                    idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
+                    reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+                }));
                 (0, repository_js_1.adjustStockLedger)(line.itemId, lot.id, locationId, line.quantity);
-                await db_js_1.prisma.stockMovement.create({
-                    data: {
-                        itemId: line.itemId, lotId: lot.id, locationId, movementType: 'SALES_RETURN', qtyDelta: line.quantity,
-                        beforeBalance: ledger.onHand - line.quantity, afterBalance: ledger.onHand,
-                        sourceDocument: returnRequest.id, actor: req.user.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-                        reason: 'Customer return restocked after inspection',
-                    },
-                }).catch(() => undefined);
             }
             else if (plan.action === 'HOLD') {
                 // Physically back in the building but not sellable: quarantine until a disposition is decided.
@@ -1790,7 +1786,13 @@ router.patch('/returns/:id/status', async (req, res) => {
             }));
         }
     }
-    const updated = await db_js_1.prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });
+    const updated = await (0, domain_policies_js_1.transitionReturnStatus)({
+        entityId: returnRequest.id,
+        companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+        action,
+        actorId: req.user.id,
+        actorRole: req.user.role,
+    });
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
         actorId: req.user.id, actorRole: req.user.role, action: `RETURN_${action}`,
         entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: returnRequest.orderId, status: nextStatus },
@@ -1825,28 +1827,40 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
     if (!ledger || ledger.quarantine + 1e-8 < line.quantity)
         return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
     const restock = plan.action === 'RESTOCK';
-    await db_js_1.prisma.stockLedger.update({
-        where: { id: ledger.id },
-        data: {
-            quarantine: { decrement: line.quantity },
-            ...(restock ? { onHand: { increment: line.quantity } } : {}),
-            ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
-            version: { increment: 1 },
-        },
+    await db_js_1.prisma.$transaction(async (tx) => {
+        await tx.stockLedger.update({
+            where: { id: ledger.id },
+            data: {
+                quarantine: { decrement: line.quantity },
+                ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
+                version: { increment: 1 },
+            },
+        });
+        if (restock) {
+            await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+                movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+                idempotencyKey: `return-disposition:${returnRequest.id}:${line.id}`,
+                reason: `Return disposition: ${plan.disposition}`, sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+            });
+        }
+        else {
+            // Quarantine -> damaged/other is a bucket move, not an on-hand change: zero-delta journal row.
+            await tx.stockMovement.create({
+                data: {
+                    itemId: line.itemId, lotId: lot.id, locationId, movementType: plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
+                    qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
+                    sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user.id, timestamp: new Date(), correlationId: returnRequest.orderId,
+                    reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -line.quantity },
+                    companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+                },
+            });
+        }
     });
     (0, repository_js_1.adjustQuarantineLedger)(line.itemId, lot.id, locationId, -line.quantity);
     if (restock)
         (0, repository_js_1.adjustStockLedger)(line.itemId, lot.id, locationId, line.quantity);
     await db_js_1.prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
-    await db_js_1.prisma.stockMovement.create({
-        data: {
-            itemId: line.itemId, lotId: lot.id, locationId, movementType: restock ? 'SALES_RETURN' : plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
-            qtyDelta: restock ? line.quantity : -line.quantity, beforeBalance: restock ? ledger.onHand : ledger.quarantine,
-            afterBalance: restock ? ledger.onHand + line.quantity : ledger.quarantine - line.quantity,
-            sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-            reason: `Return disposition: ${plan.disposition}`,
-        },
-    }).catch(() => undefined);
     // The quarantine case opened at receipt is decided by this action.
     await db_js_1.prisma.exceptionCase.updateMany({
         where: { sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },

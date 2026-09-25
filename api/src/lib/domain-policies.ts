@@ -174,6 +174,31 @@ export async function assertValidReturnTransition(
   throw new InvalidTransitionError('ReturnRequest', from, action, traceId);
 }
 
+/** Tenant-scoped, compare-and-set ReturnRequest status writer. */
+export async function transitionReturnStatus(input: {
+  entityId: string;
+  companyId: string;
+  action: ReturnAction;
+  actorId: string;
+  actorRole: string;
+}) {
+  const current = await prisma.returnRequest.findFirst({
+    where: { id: input.entityId, companyId: input.companyId },
+    select: { status: true },
+  });
+  if (!current) throw new DomainError('NOT_FOUND', 'Return request was not found in this company.');
+  const from = current.status as ReturnStatus;
+  const to = await assertValidReturnTransition(from, input.action, input.entityId, {
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+  });
+  return prisma.returnRequest.update({
+    where: { id: input.entityId, companyId: input.companyId, status: current.status },
+    data: { status: to },
+    include: { lines: true },
+  });
+}
+
 // --- StockCount (review workflow) -----------------------------------------
 // New this week: `StockCount.reviewStatus` had no transition map before -
 // `lib/persistence.ts`'s `persistCountReview` only guarded with an

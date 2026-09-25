@@ -6,6 +6,7 @@ exports.transitionTransferStatus = transitionTransferStatus;
 exports.assertValidPurchaseOrderTransition = assertValidPurchaseOrderTransition;
 exports.transitionPurchaseOrderStatus = transitionPurchaseOrderStatus;
 exports.assertValidReturnTransition = assertValidReturnTransition;
+exports.transitionReturnStatus = transitionReturnStatus;
 exports.allowedCountReviewMoves = allowedCountReviewMoves;
 exports.assertValidCountReviewTransition = assertValidCountReviewTransition;
 exports.allowedOrderMoves = allowedOrderMoves;
@@ -146,6 +147,25 @@ async function assertValidReturnTransition(from, action, entityId, ctx, traceId 
         return to;
     await logRejection('ReturnRequest', entityId, from, action, ctx, traceId);
     throw new InvalidTransitionError('ReturnRequest', from, action, traceId);
+}
+/** Tenant-scoped, compare-and-set ReturnRequest status writer. */
+async function transitionReturnStatus(input) {
+    const current = await db_js_1.prisma.returnRequest.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Return request was not found in this company.');
+    const from = current.status;
+    const to = await assertValidReturnTransition(from, input.action, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.actorRole,
+    });
+    return db_js_1.prisma.returnRequest.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { status: to },
+        include: { lines: true },
+    });
 }
 exports.COUNT_REVIEW_STATUSES = ['PENDING_REVIEW', 'APPROVED', 'REJECTED', 'RECOUNT'];
 const COUNT_REVIEW_MOVES = {

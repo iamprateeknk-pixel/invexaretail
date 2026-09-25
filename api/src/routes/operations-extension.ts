@@ -44,6 +44,7 @@ import { planPickFaceReplenishment } from '../lib/pick-face-replenishment.js';
 import { verifyPackScan } from '../lib/pack-verification.js';
 import { getCarrierAdapter } from '../lib/carrier-adapter.js';
 import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, type ReturnAction } from '../lib/returns-rma.js';
+import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { findTemplateForCategory } from '../lib/qc-inspection.js';
 import { computeDemandStats, suggestReplenishment } from '../lib/demand-forecast.js';
@@ -1745,7 +1746,13 @@ router.patch('/returns/:id/status', async (req, res) => {
     }
   }
 
-  const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });
+  const updated = await transitionReturnStatus({
+    entityId: returnRequest.id,
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+    action,
+    actorId: req.user!.id,
+    actorRole: req.user!.role,
+  });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: `RETURN_${action}`,
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: returnRequest.orderId, status: nextStatus },
