@@ -1755,7 +1755,11 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
     validateTransferStatusChange(context.role, transfer.status, nextStatus);
     const wasTerminal = (TERMINAL_TRANSFER_STATUSES as readonly string[]).includes(transfer.status);
     const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     // Release the request-time reservation the first time this transfer
     // reaches a terminal state (CONFIRMED is released separately at the
     // dedicated /confirm endpoint, alongside the actual stock decrement).
@@ -3077,7 +3081,11 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
 
     const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
     const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
@@ -3670,7 +3678,11 @@ router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
     });
 
     const updated = updateTransferStatus(transfer.id, 'PICKED');
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,

@@ -212,7 +212,11 @@ router.post('/transfers/:transferId/dispatch', ...guard, async (req, res) => {
     }
     (0, repository_js_1.updateTransferStatus)(transfer.id, 'DISPATCHED');
     const updated = (0, repository_js_1.setTransferLogistics)(transfer.id, { dispatch: { dispatchedAt: new Date().toISOString(), dispatchedById: req.user.id, ...details } });
-    await (0, persistence_js_1.persistTransferStatus)(updated);
+    await (0, persistence_js_1.persistTransferStatus)(updated, {
+        id: req.user.id,
+        role: req.user.role,
+        companyId: req.companyId ?? req.user.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+    });
     await (0, persistence_js_1.persistTransferLogistics)(updated);
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId: req.user.id, actorRole: req.user.role, action: 'TRANSFER_DISPATCHED', entityType: 'Transfer', entityId: transfer.id, metadata: { ...details } }));
     return res.json({ success: true, transfer: updated });

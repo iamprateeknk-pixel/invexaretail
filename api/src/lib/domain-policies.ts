@@ -79,6 +79,41 @@ export async function assertValidTransferTransitionAudited(
   throw new InvalidTransitionError('Transfer', from, to, traceId);
 }
 
+/**
+ * Persist a tenant-scoped Transfer status only after validating the live
+ * database state. The status predicate in the update also turns a race into
+ * a failed write instead of silently overwriting a concurrent transition.
+ */
+export async function transitionTransferStatus(input: {
+  entityId: string;
+  companyId: string;
+  to: TransferStatus;
+  role: Role;
+  actorId: string;
+  reason?: string;
+}): Promise<void> {
+  const current = await prisma.transfer.findFirst({
+    where: { id: input.entityId, companyId: input.companyId },
+    select: { status: true },
+  });
+  if (!current) throw new DomainError('NOT_FOUND', 'Transfer was not found in this company.');
+  const from = current.status as TransferStatus;
+  const to = (input.to === 'SUBMITTED'
+    ? 'REQUESTED'
+    : input.to === 'PARTIALLY_RECEIVED'
+      ? 'PARTIAL_RECEIVED'
+      : input.to) as TransferStatus;
+  await assertValidTransferTransitionAudited(input.role, from, to, input.entityId, {
+    actorId: input.actorId,
+    actorRole: input.role,
+    reason: input.reason,
+  });
+  await prisma.transfer.update({
+    where: { id: input.entityId, companyId: input.companyId, status: current.status },
+    data: { status: to as never },
+  });
+}
+
 // --- PurchaseOrder --------------------------------------------------------
 // Delegates to po-lifecycle.ts's existing MOVES table.
 

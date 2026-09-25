@@ -16,6 +16,19 @@ type AuditContext = {
     correlationId?: string;
 };
 export declare function assertValidTransferTransitionAudited(role: Role, from: TransferStatus, to: TransferStatus, entityId: string, ctx: AuditContext, traceId?: string): Promise<void>;
+/**
+ * Persist a tenant-scoped Transfer status only after validating the live
+ * database state. The status predicate in the update also turns a race into
+ * a failed write instead of silently overwriting a concurrent transition.
+ */
+export declare function transitionTransferStatus(input: {
+    entityId: string;
+    companyId: string;
+    to: TransferStatus;
+    role: Role;
+    actorId: string;
+    reason?: string;
+}): Promise<void>;
 export declare function assertValidPurchaseOrderTransition(from: PoStatus, to: PoStatus, entityId: string, ctx: AuditContext, traceId?: string): Promise<void>;
 export { PO_STATUSES };
 export declare function assertValidReturnTransition(from: ReturnStatus, action: ReturnAction, entityId: string, ctx: AuditContext, traceId?: string): Promise<ReturnStatus>;

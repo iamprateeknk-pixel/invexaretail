@@ -11,7 +11,7 @@ import { aggregateOpeningStock, type StockImportPreview } from './stock-import.j
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { hydrateActiveWorkflow } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
-import { assertValidCountReviewTransition, type CountReviewStatus } from './domain-policies.js';
+import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 
@@ -938,11 +938,19 @@ export async function persistTransferLogistics(transfer: TransferRecord): Promis
   });
 }
 
-export async function persistTransferStatus(transfer: TransferRecord): Promise<void> {
+export async function persistTransferStatus(
+  transfer: TransferRecord,
+  actor: { id: string; role: Role; companyId: string },
+): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
-  await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });
+  await transitionTransferStatus({
+    entityId: transfer.id,
+    companyId: actor.companyId,
+    to: transfer.status,
+    role: actor.role,
+    actorId: actor.id,
+  });
 }
 
 export async function persistConfirmedPickAllocations(

@@ -283,18 +283,6 @@
   },
   {
     "rule": "unscoped-tenant-query",
-    "file": "src/lib/persistence.ts",
-    "line": 945,
-    "snippet": "await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });"
-  },
-  {
-    "rule": "bare-status-write",
-    "file": "src/lib/persistence.ts",
-    "line": 945,
-    "snippet": "await prisma.transfer.update({ where: { id: transfer.id }, data: { status: status as any } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
     "file": "src/lib/putaway.ts",
     "line": 82,
     "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, select: { category: true } });"

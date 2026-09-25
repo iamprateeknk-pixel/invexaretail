@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ORDER_STATUSES = exports.COUNT_REVIEW_STATUSES = exports.PO_STATUSES = exports.InvalidTransitionError = void 0;
 exports.assertValidTransferTransitionAudited = assertValidTransferTransitionAudited;
+exports.transitionTransferStatus = transitionTransferStatus;
 exports.assertValidPurchaseOrderTransition = assertValidPurchaseOrderTransition;
 exports.assertValidReturnTransition = assertValidReturnTransition;
 exports.allowedCountReviewMoves = allowedCountReviewMoves;
@@ -81,6 +82,34 @@ async function assertValidTransferTransitionAudited(role, from, to, entityId, ct
         return;
     await logRejection('Transfer', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('Transfer', from, to, traceId);
+}
+/**
+ * Persist a tenant-scoped Transfer status only after validating the live
+ * database state. The status predicate in the update also turns a race into
+ * a failed write instead of silently overwriting a concurrent transition.
+ */
+async function transitionTransferStatus(input) {
+    const current = await db_js_1.prisma.transfer.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Transfer was not found in this company.');
+    const from = current.status;
+    const to = (input.to === 'SUBMITTED'
+        ? 'REQUESTED'
+        : input.to === 'PARTIALLY_RECEIVED'
+            ? 'PARTIAL_RECEIVED'
+            : input.to);
+    await assertValidTransferTransitionAudited(input.role, from, to, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.role,
+        reason: input.reason,
+    });
+    await db_js_1.prisma.transfer.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { status: to },
+    });
 }
 // --- PurchaseOrder --------------------------------------------------------
 // Delegates to po-lifecycle.ts's existing MOVES table.
