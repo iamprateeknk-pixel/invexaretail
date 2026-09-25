@@ -25,11 +25,13 @@ import { ExceptionsPage } from './pages/ExceptionsPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { AdminPage } from './pages/AdminPage';
+import { ImportWizardPage } from './pages/ImportWizardPage';
 import { EmptyState, PermissionDeniedState } from '@/components/ui/feedback-states';
 
 const SECTION_PAGES = {
   dashboard: DashboardPage,
   'stock-update': StockUpdatePage,
+  'import-wizard': ImportWizardPage,
   inventory: InventoryPage,
   'item-search': ItemStockDetailPage,
   catalog: CatalogPage,
