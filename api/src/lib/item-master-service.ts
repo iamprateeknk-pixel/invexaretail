@@ -140,7 +140,7 @@ export async function deleteItemPermanently(ctx: TenantContext, itemId: string):
         prisma.customFieldValue.deleteMany({ where: { itemId } }),
         prisma.reorderRule.deleteMany({ where: { itemId } }),
         prisma.priceList.deleteMany({ where: { itemId } }),
-        prisma.expiryAlert.deleteMany({ where: { itemId } }),
+        prisma.expiryAlert.deleteMany({ where: { itemId, companyId } }),
         prisma.replenishmentSuggestion.deleteMany({ where: { itemId } }),
         prisma.binStock.deleteMany({ where: { itemId } }),
         prisma.stockBalance.deleteMany({ where: { itemId } }),
@@ -149,7 +149,7 @@ export async function deleteItemPermanently(ctx: TenantContext, itemId: string):
         prisma.serialNumber.deleteMany({ where: { itemId } }),
         prisma.openingStockSnapshot.deleteMany({ where: { itemId } }),
         prisma.lot.deleteMany({ where: { itemId } }),
-        prisma.item.delete({ where: { id: itemId } }),
+        prisma.item.delete({ where: { id: itemId, companyId } }),
       ]);
     } catch (error) {
       // A foreign key we did not anticipate means there is history after all.

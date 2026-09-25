@@ -2137,7 +2137,7 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Import history access denied.' });
   }
   try {
-    const batches = await listImportBatches(Number(req.query.limit ?? 100));
+    const batches = await listImportBatches(req.companyId ?? DEFAULT_COMPANY_ID, Number(req.query.limit ?? 100));
     // Blueprint v4 §10.1: a batch is reversible while it is POSTED and is not itself a reversal.
     return res.json({ batches: batches.map((batch) => ({ ...batch, reversible: batch.status === 'POSTED' && !String(batch.type).includes('REVERS') })) });
   } catch (error) {
@@ -2211,6 +2211,7 @@ router.post('/imports/:batchId/reverse', async (req: Request, res: Response) => 
   try {
     const result = await reverseImportBatch({
       batchId,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       actorId: req.user!.id,
       reason: typeof req.body.reason === 'string' ? req.body.reason : '',
     });
@@ -3487,6 +3488,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
         // received stock sitting at the dock indefinitely.
         if (line.receivedQty > 0) {
           void createPutawayTask({
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
           });

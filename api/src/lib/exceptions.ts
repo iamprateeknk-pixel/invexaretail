@@ -87,6 +87,7 @@ export async function createExceptionCase(input: CreateExceptionCaseInput) {
     const dueAt = new Date(Date.now() + (input.dueHours ?? 24) * 3_600_000);
     const exceptionCase = await prisma.exceptionCase.create({
       data: {
+        companyId: input.companyId,
         type: input.type,
         title: input.title,
         description: input.description ?? null,
@@ -101,7 +102,6 @@ export async function createExceptionCase(input: CreateExceptionCaseInput) {
         sourceLineId: input.sourceLineId ?? null,
         ownerId: input.ownerId ?? null,
         reportedById: input.reportedById,
-        companyId: input.companyId,
         dueAt,
       },
     });

@@ -201,7 +201,7 @@ router.get('/suppliers/:id/score', async (req, res) => {
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
 
   const orders = await prisma.purchaseOrder.findMany({
-    where: { supplierId: supplier.id, status: { notIn: ['DRAFT', 'CANCELLED'] } },
+    where: { supplierId: supplier.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     include: { lines: true },
   });
   // Completion is when the last goods arrived, not when finance later closed the order.
@@ -327,7 +327,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     expiryDate: typeof line.expiryDate === 'string' && line.expiryDate ? line.expiryDate : null,
   }));
   const itemRows = await prisma.item.findMany({
-    where: { id: { in: order.lines.map((line) => line.itemId) } },
+    where: { id: { in: order.lines.map((line) => line.itemId) }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     select: { id: true, code: true, category: true, lotRequired: true, expiryRequired: true },
   });
   const rules = new Map<string, ItemRules>(itemRows.map((row) => [row.id, { code: row.code, lotRequired: row.lotRequired ?? false, expiryRequired: row.expiryRequired ?? false }]));

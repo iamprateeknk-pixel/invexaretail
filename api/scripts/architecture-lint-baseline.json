@@ -1,12 +1,6 @@
 [
   {
     "rule": "unscoped-tenant-query",
-    "file": "src/lib/exceptions.ts",
-    "line": 88,
-    "snippet": "const exceptionCase = await prisma.exceptionCase.create({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
     "file": "src/lib/import-batch-store.ts",
     "line": 222,
     "snippet": "const row = await prisma.importBatch.findUnique({ where: { id } });"
@@ -30,46 +24,10 @@
     "snippet": "const row = await prisma.importBatch.findFirst({"
   },
   {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/import-reversal.ts",
-    "line": 58,
-    "snippet": "return prisma.importBatch.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/item-master-service.ts",
-    "line": 143,
-    "snippet": "prisma.expiryAlert.deleteMany({ where: { itemId } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/item-master-service.ts",
-    "line": 152,
-    "snippet": "prisma.item.delete({ where: { id: itemId } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/putaway.ts",
-    "line": 82,
-    "snippet": "const item = await prisma.item.findUnique({ where: { id: itemId }, select: { category: true } });"
-  },
-  {
     "rule": "runtime-ddl",
     "file": "src/lib/schema-version.ts",
     "line": 2,
     "snippet": "// Runtime DDL (CREATE/ALTER TABLE at boot) was retired in Week 2 - this is"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 203,
-    "snippet": "const orders = await prisma.purchaseOrder.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/routes/catalog-procurement.ts",
-    "line": 329,
-    "snippet": "const itemRows = await prisma.item.findMany({"
   },
   {
     "rule": "float-money",
