@@ -30,9 +30,9 @@ test('forecastDemand scales average demand linearly by days', () => {
   assert.equal(forecastDemand(4, 7), 28);
 });
 
-test('a higher service level uses a larger z-score, and an unknown level falls back to 95%', () => {
+test('a higher service level uses a larger z-score, and an out-of-range level is rejected (no silent 95% fallback)', () => {
   assert.ok(serviceLevelZ(99) > serviceLevelZ(90));
-  assert.equal(serviceLevelZ(12345), serviceLevelZ(95));
+  assert.throws(() => serviceLevelZ(12345), RangeError);
 });
 
 test('safety stock grows with demand variability and with lead time', () => {
@@ -96,4 +96,20 @@ test('on-order stock reduces the suggested order quantity', () => {
     averageLeadTimeDays: 7,
   });
   assert.ok(withOnOrder.suggestedOrderQty < withoutOnOrder.suggestedOrderQty);
+});
+
+// Audit P1-4: any service level outside the five tabulated values silently became 95%.
+test('service level z-scores are computed for every level, matching the tabulated ones', () => {
+  assert.ok(Math.abs(serviceLevelZ(95) - 1.6449) < 1e-4);
+  assert.ok(Math.abs(serviceLevelZ(97) - 1.8808) < 1e-3, '97% is not 95%');
+  assert.ok(Math.abs(serviceLevelZ(99.9) - 3.0902) < 1e-3);
+  assert.ok(Math.abs(serviceLevelZ(90) - 1.2816) < 1e-4);
+  assert.ok(serviceLevelZ(97) > serviceLevelZ(95) && serviceLevelZ(99.9) > serviceLevelZ(99.5));
+  assert.throws(() => serviceLevelZ(101), RangeError);
+  assert.throws(() => serviceLevelZ(20), RangeError);
+});
+
+test('a higher service level yields strictly more safety stock', () => {
+  const base = { averageDailyDemand: 10, stdDevDailyDemand: 4, averageLeadTimeDays: 9 };
+  assert.ok(computeSafetyStock({ ...base, servicePercent: 97 }) > computeSafetyStock({ ...base, servicePercent: 95 }));
 });

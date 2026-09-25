@@ -5,6 +5,7 @@ import { type Request, type Response, Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
+import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import {
   createBranch,
   updateBranch,
@@ -21,6 +22,8 @@ function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? '');
 }
 
+const companyOf = (req: Request) => req.companyId ?? DEFAULT_COMPANY_ID;
+
 const ADMIN_ROLES = ['ADMIN', 'ADMIN_USER'];
 function requireAdmin(req: Request, res: Response): boolean {
   if (!ADMIN_ROLES.includes(req.user!.role)) {
@@ -30,8 +33,8 @@ function requireAdmin(req: Request, res: Response): boolean {
   return true;
 }
 
-router.get('/branches', async (_req: Request, res: Response) => {
-  const branches = await prisma.branch.findMany({ orderBy: { code: 'asc' }, include: { locations: true } });
+router.get('/branches', async (req: Request, res: Response) => {
+  const branches = await prisma.branch.findMany({ where: { companyId: companyOf(req) }, orderBy: { code: 'asc' }, include: { locations: true } });
   return res.json({ branches });
 });
 
@@ -42,7 +45,7 @@ router.post('/branches', async (req: Request, res: Response) => {
   if (!code || !name) return res.status(400).json({ message: 'Branch code and name are required.' });
 
   try {
-    const branch = await createBranch({
+    const branch = await createBranch(companyOf(req), {
       code, name, type: req.body.type, address: req.body.address, phone: req.body.phone,
       email: req.body.email, managerId: req.body.managerId, workingHours: req.body.workingHours,
     });
@@ -57,7 +60,7 @@ router.patch('/branches/:id', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   try {
     const { code: _ignoredCode, ...rest } = req.body;
-    const branch = await updateBranch(firstParam(req.params.id), rest);
+    const branch = await updateBranch(companyOf(req), firstParam(req.params.id), rest);
     return res.json({ branch });
   } catch (error) {
     if (error instanceof BranchNotFoundError) return res.status(404).json({ message: error.message });
@@ -68,7 +71,7 @@ router.patch('/branches/:id', async (req: Request, res: Response) => {
 router.post('/branches/:id/archive', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const branch = await archiveBranch(firstParam(req.params.id));
+    const branch = await archiveBranch(companyOf(req), firstParam(req.params.id));
     return res.json({ branch });
   } catch (error) {
     if (error instanceof BranchNotFoundError) return res.status(404).json({ message: error.message });

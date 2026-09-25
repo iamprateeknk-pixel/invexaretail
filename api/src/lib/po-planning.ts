@@ -44,6 +44,9 @@ export type Suggestion = {
 
 export type PlanResult = { suggestions: Suggestion[]; skipped: Array<{ itemId: string; reason: string }> };
 
+/** Purchase orders whose remaining quantity is still on its way: approved and awaiting, sent to the supplier, or part-received. */
+export const OPEN_PO_STATUSES = ['SUBMITTED', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'] as const;
+
 export const DEFAULT_LEAD_TIME_DAYS = 7;
 export const DEFAULT_COVER_DAYS = 7;
 

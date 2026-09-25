@@ -86,3 +86,33 @@ test('PCS requires a matching scan and KG allows 3 decimal manual entry', () => 
   assert.doesNotThrow(() => validatePickInput({ unit: 'KG', quantity: 12.375, inputMethod: 'MANUAL', itemCode: 'DF001', lotNo: 'L1' }));
   assert.throws(() => validatePickInput({ unit: 'KG', quantity: 1.2345, inputMethod: 'MANUAL', itemCode: 'DF001', lotNo: 'L1' }), /3 decimal/);
 });
+
+// Audit P0-1: nothing sweeps a lot to EXPIRED when its date passes, and FEFO sorts
+// the earliest expiry first - so a lapsed lot still marked AVAILABLE used to be the
+// FIRST lot allocated to orders, jobs and transfers.
+const auditToday = new Date('2026-09-26T06:30:00Z');
+test('FEFO never allocates a lot whose expiry date has passed, even if its status still says AVAILABLE', () => {
+  const lots = [
+    { lotId: 'lapsed', lotNo: 'L0', expiryDate: '2026-09-20T00:00:00.000Z', available: 10, status: 'AVAILABLE' as const },
+    { lotId: 'fresh', lotNo: 'L1', expiryDate: '2026-12-01T00:00:00.000Z', available: 10, status: 'AVAILABLE' as const },
+  ];
+  const result = allocateLots(lots, 5, 'FEFO', { today: auditToday });
+  assert.deepEqual(result.allocations.map((a) => a.lotId), ['fresh']);
+  assert.deepEqual(allocateFefo(lots, 5, auditToday).allocations.map((a) => a.lotId), ['fresh']);
+  assert.deepEqual(allocateLots(lots, 5, 'FIFO', { today: auditToday }).allocations.map((a) => a.lotId), ['fresh']);
+});
+
+test('a lot expiring today is still allocatable today (usable through its expiry date); the day after it is not', () => {
+  const lots = [{ lotId: 'a', lotNo: 'L', expiryDate: '2026-09-26T00:00:00.000Z', available: 4, status: 'AVAILABLE' as const }];
+  assert.equal(allocateLots(lots, 4, 'FEFO', { today: auditToday }).shortage, 0);
+  assert.equal(allocateLots(lots, 4, 'FEFO', { today: new Date('2026-09-27T06:30:00Z') }).shortage, 4);
+});
+
+test('when only lapsed lots exist the request is a shortage, and a manual override cannot pull a lapsed lot', () => {
+  const lots = [{ lotId: 'a', lotNo: 'L', expiryDate: '2026-09-01T00:00:00.000Z', available: 9, status: 'AVAILABLE' as const }];
+  assert.equal(allocateLots(lots, 3, 'FEFO', { today: auditToday }).shortage, 3);
+  assert.throws(
+    () => allocateLots(lots, 3, 'MANUAL', { manualLines: [{ lotId: 'a', quantity: 3 }], overrideReason: 'Needed', today: auditToday }),
+    /cannot be allocated/,
+  );
+});

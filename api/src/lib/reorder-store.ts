@@ -1,9 +1,10 @@
-import { routeReplenishment } from './replenishment.js';
+import { planRuleReplenishment } from './replenishment.js';
 import {
   listCounts,
   listItems,
   listLocations,
   listStockLedger,
+  listTransfers,
 } from './repository.js';
 import { seedReorderRules } from './seed.js';
 
@@ -84,12 +85,29 @@ export function buildReplenishmentIntelligence(locationId: string) {
     network.set(entry.itemId, byLocation);
   }
 
+  // Stock already on its way here (dispatched, not yet received) counts toward the position.
+  const incoming = new Map<string, number>();
+  for (const transfer of listTransfers()) {
+    if (transfer.destinationLocationId !== locationId || !['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(String(transfer.status))) continue;
+    for (const line of transfer.lines) {
+      const outstanding = Math.max(0, line.quantity - Number((line as { receivedQty?: number }).receivedQty ?? 0));
+      incoming.set(line.itemId, (incoming.get(line.itemId) ?? 0) + outstanding);
+    }
+  }
+  // Every location's own minimum for the item, so a donor is never drained below it.
+  const minimumAt = (itemId: string, donorLocationId: string) => rules.find((row) => row.itemId === itemId && row.locationId === donorLocationId)?.minQty ?? 0;
+
   const recommendations = locationRules.map((rule) => {
     const item = items.find((entry) => entry.id === rule.itemId);
     const stock = quantities.get(rule.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
-    const available = stock.onHand - stock.reserved + stock.inTransit;
-    const suggestedOrderQty = Math.max(0, rule.targetQty - available);
-    const route = routeReplenishment(locationId, suggestedOrderQty, [...(network.get(rule.itemId)?.values() ?? [])]);
+    const available = stock.onHand - stock.reserved;
+    const network_ = [...(network.get(rule.itemId)?.values() ?? [])].map((row) => ({ ...row, protectedQty: minimumAt(rule.itemId, row.locationId) }));
+    const plan = planRuleReplenishment({
+      destinationLocationId: locationId, availableHere: available, incoming: incoming.get(rule.itemId) ?? 0,
+      minQty: rule.minQty, targetQty: rule.targetQty, network: network_,
+    });
+    const suggestedOrderQty = plan.suggestedOrderQty;
+    const route = plan.route;
     const history = counts.filter((count) => count.itemId === rule.itemId);
     const meanVariance = history.length
       ? history.reduce((sum, count) => sum + Math.abs(count.physicalQuantity - count.bookQty), 0) / history.length
@@ -97,7 +115,7 @@ export function buildReplenishmentIntelligence(locationId: string) {
     return {
       itemId: rule.itemId,
       itemName: item?.name ?? rule.itemId,
-      available,
+      available: plan.position,
       minQty: rule.minQty,
       targetQty: rule.targetQty,
       suggestedOrderQty,
@@ -106,7 +124,7 @@ export function buildReplenishmentIntelligence(locationId: string) {
       sourceLocationName: route.sourceLocationName,
       suggestedTransferQty: route.suggestedTransferQty,
       actionReason: route.reason,
-      risk: available <= 0 ? 'CRITICAL' : available <= rule.minQty ? 'HIGH' : 'HEALTHY',
+      risk: plan.risk,
       confidence: history.length >= 3 && meanVariance <= Math.max(1, rule.minQty * 0.1) ? 'HIGH' : history.length ? 'MEDIUM' : 'LOW',
     };
   }).sort((a, b) => b.suggestedOrderQty - a.suggestedOrderQty);

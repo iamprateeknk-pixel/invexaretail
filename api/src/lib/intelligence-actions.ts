@@ -5,6 +5,8 @@
 // can attach them without a new persistence model - dismiss still goes
 // through IntelligenceDismissal with the new type strings.
 
+import { daysUntilExpiryDate, isExpiredOn } from './expiry-date.js';
+
 export type LotBlockRecommendation = {
   type: 'LOT_BLOCK';
   itemId: string;
@@ -60,14 +62,10 @@ export type LotBlockInput = {
 };
 
 export function buildLotBlockRecommendations(lots: LotBlockInput[], today = new Date()): LotBlockRecommendation[] {
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   return lots
     .filter((lot) => lot.onHand > 0)
     .flatMap((lot) => {
-      const expired =
-        lot.expiryDate && !Number.isNaN(Date.parse(lot.expiryDate))
-          ? new Date(lot.expiryDate) < start
-          : false;
+      const expired = isExpiredOn(lot.expiryDate, today);
       if (lot.status === 'BLOCKED' || lot.status === 'QUARANTINE') {
         return [{
           type: 'LOT_BLOCK' as const,
@@ -101,11 +99,7 @@ export function buildLotBlockRecommendations(lots: LotBlockInput[], today = new 
 }
 
 export function daysToExpiry(expiryDate: string | null | undefined, today = new Date()): number | null {
-  if (!expiryDate || Number.isNaN(Date.parse(expiryDate))) return null;
-  const start = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  const expiry = new Date(expiryDate);
-  const end = Date.UTC(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
-  return Math.round((end - start) / 86_400_000);
+  return daysUntilExpiryDate(expiryDate, today);
 }
 
 export function buildExpiryActionRecommendations(lots: LotBlockInput[], today = new Date()): ExpiryActionRecommendation[] {

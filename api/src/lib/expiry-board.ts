@@ -1,3 +1,5 @@
+import { daysUntilExpiryDate } from './expiry-date.js';
+
 export type ExpiryHorizon = 'EXPIRED' | 'CRITICAL' | 'WARNING' | 'UPCOMING' | 'DATED' | 'MISSING';
 
 export interface ExpiryBoardLot {
@@ -96,13 +98,7 @@ export function emptyExpiryBoard(): ExpiryBoard {
 }
 
 export function calendarDaysUntilExpiry(expiryDate: string | Date | null | undefined, now = new Date()): number | null {
-  if (!expiryDate) return null;
-  const expiry = expiryDate instanceof Date ? new Date(expiryDate) : new Date(expiryDate);
-  if (Number.isNaN(expiry.getTime())) return null;
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  expiry.setHours(0, 0, 0, 0);
-  return Math.ceil((expiry.getTime() - start.getTime()) / 86_400_000);
+  return daysUntilExpiryDate(expiryDate, now);
 }
 
 export function classifyExpiryHorizon(daysUntilExpiry: number | null): ExpiryHorizon {

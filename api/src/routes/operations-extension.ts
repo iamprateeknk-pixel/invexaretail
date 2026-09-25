@@ -1,3 +1,4 @@
+import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
 
@@ -5,7 +6,7 @@ import { prisma } from '../lib/db.js';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { recordAudit } from '../lib/audit.js';
-import { routeReplenishment } from '../lib/replenishment.js';
+import { planRuleReplenishment } from '../lib/replenishment.js';
 import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib/expiry-alerts.js';
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
 import {
@@ -48,6 +49,7 @@ import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { findTemplateForCategory } from '../lib/qc-inspection.js';
 import { computeDemandStats, suggestReplenishment } from '../lib/demand-forecast.js';
+import { OPEN_PO_STATUSES } from '../lib/po-planning.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
 import {
   buildExpiryActionRecommendations,
@@ -177,7 +179,7 @@ router.post('/jobs', async (req, res) => {
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   if (name.length < 2 || !req.body.locationId) return res.status(400).json({ message: 'Job name and location are required.' });
   const job = await prisma.job.create({ data: {
-    number: `JOB-${Date.now().toString().slice(-8)}`,
+    number: newDocumentNumber('JOB'),
     name,
     locationId: req.body.locationId,
     createdById: req.user!.id,
@@ -671,6 +673,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
   const windowDays = Number(req.query.windowDays) > 0 ? Number(req.query.windowDays) : 30;
   const leadTimeDays = Number(req.query.leadTimeDays) > 0 ? Number(req.query.leadTimeDays) : 7;
   const servicePercent = Number(req.query.servicePercent) > 0 ? Number(req.query.servicePercent) : 95;
+  if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
   const movements = await prisma.stockMovement.findMany({
@@ -692,7 +695,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
   const ledgerRows = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId } });
   const onHand = ledgerRows.reduce((sum, row) => sum + row.onHand, 0);
   const openLines = await prisma.purchaseOrderLine.findMany({
-    where: { itemId: req.params.itemId, purchaseOrder: { locationId, status: { in: ['SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED'] } } },
+    where: { itemId: req.params.itemId, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
   });
   const onOrder = openLines.reduce((sum, line) => sum + Math.max(0, line.quantity - line.receivedQty), 0);
 
@@ -826,11 +829,35 @@ router.get('/intelligence/:locationId', async (req, res) => {
     byLocation.set(entry.locationId, source);
     network.set(entry.itemId, byLocation);
   }
+  // StockLedger.inTransit is never written (dispatch does not post to it), so stock already
+  // on its way is read from the Transfer table - the same source the purchase plan uses.
+  const inboundTransfers = await prisma.transfer.findMany({
+    where: { destinationLocationId: req.params.locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    include: { lines: true },
+  });
+  const incoming = new Map<string, number>();
+  for (const line of inboundTransfers.flatMap((transfer) => transfer.lines)) {
+    incoming.set(line.itemId, (incoming.get(line.itemId) ?? 0) + Math.max(0, line.requestedQty - line.receivedQty - line.damagedQty - line.shortageQty));
+  }
+  // A donor keeps its own reorder minimum for the item.
+  const donorRules = await prisma.reorderRule.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: { in: rules.map((rule) => rule.itemId) } },
+    select: { itemId: true, locationId: true, minQty: true },
+  });
+  const minimumAt = (itemId: string, donorLocationId: string) => donorRules.find((row) => row.itemId === itemId && row.locationId === donorLocationId)?.minQty ?? 0;
+
   const recommendations = rules.map((rule) => {
     const stock = quantities.get(rule.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
-    const available = stock.onHand - stock.reserved + stock.inTransit;
-    const suggestedOrderQty = Math.max(0, rule.targetQty - available);
-    const route = routeReplenishment(req.params.locationId, suggestedOrderQty, [...(network.get(rule.itemId)?.values() ?? [])]);
+    const plan = planRuleReplenishment({
+      destinationLocationId: req.params.locationId,
+      availableHere: stock.onHand - stock.reserved,
+      incoming: incoming.get(rule.itemId) ?? 0,
+      minQty: rule.minQty, targetQty: rule.targetQty,
+      network: [...(network.get(rule.itemId)?.values() ?? [])].map((row) => ({ ...row, protectedQty: minimumAt(rule.itemId, row.locationId) })),
+    });
+    const available = plan.position;
+    const suggestedOrderQty = plan.suggestedOrderQty;
+    const route = plan.route;
     const history = counts.filter((count) => count.itemId === rule.itemId);
     const meanVariance = history.length ? history.reduce((sum, count) => sum + Math.abs(count.physicalQty - count.bookQty), 0) / history.length : 0;
     return {
@@ -845,7 +872,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       sourceLocationName: route.sourceLocationName,
       suggestedTransferQty: route.suggestedTransferQty,
       actionReason: route.reason,
-      risk: available <= 0 ? 'CRITICAL' : available <= rule.minQty ? 'HIGH' : 'HEALTHY',
+      risk: plan.risk,
       confidence: history.length >= 3 && meanVariance <= Math.max(1, rule.minQty * 0.1) ? 'HIGH' : history.length ? 'MEDIUM' : 'LOW',
     };
   }).filter((entry) => !dismissedItemIds.has(entry.itemId)).sort((a, b) => b.suggestedOrderQty - a.suggestedOrderQty);

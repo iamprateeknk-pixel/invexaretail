@@ -1,11 +1,10 @@
+import { daysUntilExpiryDate } from './expiry-date.js';
+
 export type ExpirySeverity = 'EXPIRED' | 'CRITICAL' | 'WARNING' | 'UPCOMING';
 
+/** Whole calendar days to expiry in the business timezone (see expiry-date.ts); Infinity when undated. */
 export function daysUntilExpiry(expiryDate: Date, now = new Date()): number {
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  const end = new Date(expiryDate);
-  end.setUTCHours(0, 0, 0, 0);
-  return Math.ceil((end.getTime() - start.getTime()) / 86_400_000);
+  return daysUntilExpiryDate(expiryDate, now) ?? Number.POSITIVE_INFINITY;
 }
 
 export function expirySeverity(days: number): ExpirySeverity {

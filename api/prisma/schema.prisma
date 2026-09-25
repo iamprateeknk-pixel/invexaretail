@@ -202,7 +202,7 @@ model User {
 
 model Branch {
   id              String   @id @default(cuid())
-  code            String   @unique
+  code            String
   name            String
   type            String   @default("WAREHOUSE")
   status          String   @default("ACTIVE")
@@ -225,11 +225,13 @@ model Branch {
   @@index([code, status])
   @@index([companyId])
   @@index([tenantId])
+
+  @@unique([companyId, code])
 }
 
 model Location {
   id                    String   @id @default(cuid())
-  code                  String   @unique
+  code                  String
   name                  String
   type                  String
   locationType          String?  @default("STANDARD")
@@ -273,6 +275,10 @@ model Location {
   @@index([code, branchId, status])
   @@index([companyId])
   @@index([tenantId])
+
+  // Audit P0-3: identity is per company. `code` used to be globally unique, so two
+  // customers could not both have a location (or SKU, or branch) with the same code.
+  @@unique([companyId, code])
 }
 
 // Blueprint Module B / section 6 (Location/WMS): warehouse -> zone -> aisle
@@ -674,7 +680,7 @@ model ApprovalRequest {
 
 model Item {
   id          String   @id @default(cuid())
-  code        String   @unique
+  code        String
   name        String
   category    String?
   subcategory String?
@@ -752,6 +758,8 @@ model Item {
   @@index([tenantId])
   @@index([status])
   @@index([barcode])
+
+  @@unique([companyId, code])
 }
 
 model Lot {

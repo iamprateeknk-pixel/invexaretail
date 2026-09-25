@@ -89,6 +89,7 @@ import {
   listItems,
   listDailyMovements,
   listLocations,
+  listStockLedger,
   listStockLedgerForLocation,
   listSyncCheckpoints,
   listTransfers,
@@ -1490,6 +1491,7 @@ function cycleCountPlanForLocation(locationId: string, now = new Date()) {
     items: listItems(),
     stock: listStockLedgerForLocation(locationId),
     assignments: listCountAssignments(),
+    counts: listCounts(),
     now,
   });
 }
@@ -1963,6 +1965,8 @@ router.get('/dashboard', (req: Request, res: Response) => {
       canAccessLocation(context, transfer.sourceLocationId) && canAccessLocation(context, transfer.destinationLocationId),
     ),
     items: itemsForCompany(companyId, listItems()),
+    // Expiry KPIs count only lots that still hold stock in a location this user can see.
+    stock: listStockLedger().filter((row) => canAccessLocation(context, row.locationId)),
   });
   return res.json({ dashboard: summary });
 });

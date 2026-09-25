@@ -1,3 +1,4 @@
+import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 
 import { prisma } from '../lib/db.js';
@@ -14,7 +15,7 @@ import { computeVendorScore, computePriceVariance } from '../lib/vendor-score.js
 import { canOrderFrom, parseSupplierFields, presentSupplier } from '../lib/supplier-master.js';
 import { checkPoMove, isPoStatus, isReceivablePo, type PoStatus } from '../lib/po-lifecycle.js';
 import { planPoReceipt, statusAfterReceipt, type ItemRules, type ReceiptLineInput } from '../lib/po-receipt.js';
-import { groupBySupplier, planPurchases, type PlanInput } from '../lib/po-planning.js';
+import { groupBySupplier, OPEN_PO_STATUSES, planPurchases, type PlanInput } from '../lib/po-planning.js';
 import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { evaluateInspection, type QcCheckResult } from '../lib/qc-inspection.js';
@@ -280,7 +281,7 @@ router.post('/purchase-orders', async (req, res) => {
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
   const purchaseOrder = await prisma.purchaseOrder.create({
     data: {
-      number: `PO-${Date.now().toString().slice(-8)}`,
+      number: newDocumentNumber('PO'),
       supplierId: req.body.supplierId,
       locationId: req.body.locationId,
       createdById: req.user!.id,
@@ -553,7 +554,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
     prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
     prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true } }),
     prisma.purchaseOrderLine.findMany({
-      where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: ['SUBMITTED', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'] } } },
+      where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
       select: { itemId: true, quantity: true, receivedQty: true },
     }),
     prisma.transfer.findMany({
@@ -617,7 +618,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
     const purchaseOrder = await prisma.purchaseOrder.create({
       data: {
-        number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
+        number: newDocumentNumber('PO'),
         supplierId: supplier.id, locationId, createdById: req.user!.id,
         companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,

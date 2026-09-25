@@ -36,7 +36,11 @@ export class BranchHasActiveWorkError extends Error {
   }
 }
 
-export async function createBranch(input: {
+// Audit P0-3 / tenant isolation: every function below takes the caller's companyId.
+// Branch had a companyId column but this service never used it, so GET /branches
+// listed every company's branches and update/archive worked on any company's
+// branch by bare id; branch `code` was also unique across ALL companies.
+export async function createBranch(companyId: string, input: {
   code: string;
   name: string;
   type?: string;
@@ -46,10 +50,11 @@ export async function createBranch(input: {
   managerId?: string | null;
   workingHours?: string | null;
 }) {
-  const existing = await prisma.branch.findUnique({ where: { code: input.code } });
+  const existing = await prisma.branch.findUnique({ where: { companyId_code: { companyId, code: input.code } } });
   if (existing) throw new BranchCodeConflictError(input.code);
   return prisma.branch.create({
     data: {
+      companyId,
       code: input.code,
       name: input.name,
       type: input.type || 'WAREHOUSE',
@@ -62,10 +67,10 @@ export async function createBranch(input: {
   });
 }
 
-export async function updateBranch(id: string, patch: {
+export async function updateBranch(companyId: string, id: string, patch: {
   name?: string; address?: string; phone?: string; email?: string; managerId?: string; workingHours?: string; status?: string;
 }) {
-  const branch = await prisma.branch.findUnique({ where: { id } });
+  const branch = await prisma.branch.findFirst({ where: { id, companyId } });
   if (!branch) throw new BranchNotFoundError(id);
   // Branch code is immutable after first transaction (blueprint §11); the
   // caller is expected to have already stripped `code` from the patch.
@@ -83,8 +88,8 @@ export async function updateBranch(id: string, patch: {
   });
 }
 
-export async function archiveBranch(id: string) {
-  const branch = await prisma.branch.findUnique({ where: { id }, include: { locations: true } });
+export async function archiveBranch(companyId: string, id: string) {
+  const branch = await prisma.branch.findFirst({ where: { id, companyId }, include: { locations: true } });
   if (!branch) throw new BranchNotFoundError(id);
 
   const locationIds = branch.locations.map((l) => l.id);
