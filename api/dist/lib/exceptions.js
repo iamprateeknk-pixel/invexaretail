@@ -7,6 +7,8 @@ exports.applyExceptionDisposition = applyExceptionDisposition;
 const db_js_1 = require("./db.js");
 const audit_js_1 = require("./audit.js");
 const persistence_js_1 = require("./persistence.js");
+const inventory_posting_service_js_1 = require("./inventory-posting-service.js");
+const tenant_scope_js_1 = require("./saas/tenant-scope.js");
 // Priority mirrors the blueprint's own approval thresholds (section 16.2:
 // "stock variance > 2% or > ₹5,000 -> recount + manager approval").
 function priorityForValue(value) {
@@ -22,12 +24,12 @@ function priorityForValue(value) {
 // Best-effort value-at-risk: latest known purchase cost for the item times
 // the exception quantity. Returns null (never throws) when no cost history
 // exists yet, so priority safely falls back to LOW rather than blocking.
-async function estimateValueAtRisk(itemId, quantity) {
+async function estimateValueAtRisk(tenant, itemId, quantity) {
     if (!itemId || !quantity)
         return null;
     try {
         const line = await db_js_1.prisma.purchaseOrderLine.findFirst({
-            where: { itemId, unitCost: { gt: 0 } },
+            where: { itemId, unitCost: { gt: 0 }, purchaseOrder: { companyId: tenant.companyId } },
             orderBy: { createdAt: 'desc' },
         });
         if (!line)
@@ -46,7 +48,7 @@ async function estimateValueAtRisk(itemId, quantity) {
  */
 async function createExceptionCase(input) {
     try {
-        const valueAtRisk = await estimateValueAtRisk(input.itemId, input.quantity);
+        const valueAtRisk = await estimateValueAtRisk({ companyId: input.companyId }, input.itemId, input.quantity);
         const priority = priorityForValue(valueAtRisk);
         const dueAt = new Date(Date.now() + (input.dueHours ?? 24) * 3_600_000);
         const exceptionCase = await db_js_1.prisma.exceptionCase.create({
@@ -112,32 +114,38 @@ async function applyExceptionDisposition(exceptionCase, disposition, actorId) {
             const moveQty = Math.min(Number(exceptionCase.quantity), ledger.quarantine);
             if (moveQty <= 0)
                 return;
-            const data = {
-                quarantine: { decrement: moveQty },
-                version: { increment: 1 },
-            };
-            if (RETURN_TO_STOCK.includes(disposition))
-                data.onHand = { increment: moveQty };
-            else
-                data.damaged = { increment: moveQty };
-            await tx.stockLedger.update({ where: { id: ledger.id }, data });
-            await tx.stockMovement.create({
-                data: {
-                    itemId: exceptionCase.itemId,
-                    lotId: exceptionCase.lotId,
-                    locationId: exceptionCase.locationId,
-                    movementType: RETURN_TO_STOCK.includes(disposition) ? 'ADJUSTMENT' : 'DAMAGE',
-                    qtyDelta: RETURN_TO_STOCK.includes(disposition) ? moveQty : -moveQty,
-                    beforeBalance: RETURN_TO_STOCK.includes(disposition) ? ledger.onHand : ledger.quarantine,
-                    afterBalance: RETURN_TO_STOCK.includes(disposition) ? ledger.onHand + moveQty : ledger.quarantine - moveQty,
-                    sourceDocument: 'ExceptionCase',
-                    sourceLineId: exceptionCase.id,
-                    actor: actorId,
-                    timestamp: new Date(),
-                    reason: `Exception disposition: ${disposition}`,
-                    metadata: { exceptionType: exceptionCase.type, disposition },
-                },
+            const restock = RETURN_TO_STOCK.includes(disposition);
+            // Quarantine and damaged are separate ledger buckets, not on-hand movements.
+            await tx.stockLedger.update({
+                where: { id: ledger.id },
+                data: { quarantine: { decrement: moveQty }, ...(restock ? {} : { damaged: { increment: moveQty } }), version: { increment: 1 } },
             });
+            if (restock) {
+                // Back to sellable: the on-hand leg goes through the canonical service in this transaction.
+                await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                    tenant: { companyId: exceptionCase.companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+                    itemId: exceptionCase.itemId, lotId: exceptionCase.lotId, locationId: exceptionCase.locationId,
+                    movementType: 'ADJUSTMENT', qtyDelta: moveQty,
+                    idempotencyKey: `exception-disposition:${exceptionCase.id}`,
+                    reason: `Exception disposition: ${disposition}`, sourceDocument: 'ExceptionCase', sourceLineId: exceptionCase.id,
+                    metadata: { exceptionType: exceptionCase.type, disposition },
+                });
+            }
+            else {
+                // On-hand does not change (the units were never sellable), so the journal row
+                // records the decision with a zero delta and the bucket move in metadata -
+                // otherwise journal-sum vs on-hand reconciliation would drift.
+                await tx.stockMovement.create({
+                    data: {
+                        itemId: exceptionCase.itemId, lotId: exceptionCase.lotId, locationId: exceptionCase.locationId,
+                        movementType: 'DAMAGE', qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
+                        sourceDocument: 'ExceptionCase', sourceLineId: exceptionCase.id, actor: actorId, timestamp: new Date(),
+                        reason: `Exception disposition: ${disposition}`,
+                        metadata: { exceptionType: exceptionCase.type, disposition, quarantineDelta: -moveQty, damagedDelta: moveQty },
+                        companyId: exceptionCase.companyId,
+                    },
+                });
+            }
         });
     }
     catch (error) {

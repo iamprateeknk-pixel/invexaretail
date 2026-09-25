@@ -30,12 +30,12 @@ function findTriggeredEvidenceRule(rules, ctx) {
  * any internal error, same fail-open posture as checkApprovalGate /
  * getCountRecommendation elsewhere in this app.
  */
-async function requireEvidenceForDamage(input) {
+async function requireEvidenceForDamage(tenant, input) {
     try {
         const [item, rules, damagedValue] = await Promise.all([
-            db_js_1.prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),
-            db_js_1.prisma.evidenceRule.findMany({ where: { triggerType: input.triggerType, active: true } }),
-            (0, exceptions_js_1.estimateValueAtRisk)(input.itemId, input.damagedQty),
+            db_js_1.prisma.item.findFirst({ where: { id: input.itemId, companyId: tenant.companyId }, select: { category: true } }),
+            db_js_1.prisma.evidenceRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: tenant.companyId } } }),
+            (0, exceptions_js_1.estimateValueAtRisk)(tenant, input.itemId, input.damagedQty),
         ]);
         if (rules.length === 0)
             return { blocked: false };

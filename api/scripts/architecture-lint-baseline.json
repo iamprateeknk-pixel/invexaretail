@@ -1,26 +1,8 @@
 [
   {
     "rule": "unscoped-tenant-query",
-    "file": "src/lib/count-tolerance.ts",
-    "line": 77,
-    "snippet": "prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/count-tolerance.ts",
-    "line": 80,
-    "snippet": "prisma.stockCount.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/evidence-rules.ts",
-    "line": 65,
-    "snippet": "prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),"
-  },
-  {
-    "rule": "unscoped-tenant-query",
     "file": "src/lib/exceptions.ts",
-    "line": 83,
+    "line": 88,
     "snippet": "const exceptionCase = await prisma.exceptionCase.create({"
   },
   {

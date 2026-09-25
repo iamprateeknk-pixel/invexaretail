@@ -31,20 +31,20 @@ function evaluateTolerance(rules, ctx) {
  * recommended (no rule triggered and no repeated-variance pattern), so
  * callers can omit the field entirely rather than show a false negative.
  */
-async function getCountRecommendation(input) {
+async function getCountRecommendation(tenant, input) {
     try {
         const variance = input.physicalQty - input.bookQty;
         const varianceAbs = Math.abs(variance);
         if (varianceAbs <= 1e-8)
             return null;
         const variancePercent = input.bookQty > 0 ? (varianceAbs / input.bookQty) * 100 : 100;
-        const varianceValue = (await (0, exceptions_js_1.estimateValueAtRisk)(input.itemId, varianceAbs)) ?? 0;
+        const varianceValue = (await (0, exceptions_js_1.estimateValueAtRisk)(tenant, input.itemId, varianceAbs)) ?? 0;
         const [item, location, rules, recentCounts] = await Promise.all([
-            db_js_1.prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),
-            db_js_1.prisma.location.findUnique({ where: { id: input.locationId }, select: { branchId: true } }),
-            db_js_1.prisma.toleranceRule.findMany({ where: { active: true } }),
+            db_js_1.prisma.item.findFirst({ where: { id: input.itemId, companyId: tenant.companyId }, select: { category: true } }),
+            db_js_1.prisma.location.findFirst({ where: { id: input.locationId, companyId: tenant.companyId }, select: { branchId: true } }),
+            db_js_1.prisma.toleranceRule.findMany({ where: { active: true, createdBy: { companyId: tenant.companyId } } }),
             db_js_1.prisma.stockCount.findMany({
-                where: { itemId: input.itemId, locationId: input.locationId, reviewStatus: { in: ['APPROVED', 'RECOUNT'] } },
+                where: { companyId: tenant.companyId, itemId: input.itemId, locationId: input.locationId, reviewStatus: { in: ['APPROVED', 'RECOUNT'] } },
                 orderBy: { createdAt: 'desc' },
                 take: 3,
                 select: { physicalQty: true, bookQty: true },

@@ -196,6 +196,7 @@ import {
 import type { DailyMovementRecord, LotRecord } from '../lib/repository.js';
 import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 
 const router = Router();
 
@@ -209,6 +210,15 @@ const INVENTORY_ROLES: readonly string[] = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAG
 function accessContext(user: EnhancedUserRecord): AccessContext {
   const role = INVENTORY_ROLES.includes(user.role) ? (user.role as Role) : 'STORE_USER';
   return { role, assignedLocationIds: user.locationIds ?? [], companyId: user.companyId };
+}
+
+function tenantContext(req: Request): TenantContext {
+  return {
+    companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    userId: req.user!.id,
+    role: req.user!.role as TenantContext['role'],
+  };
 }
 
 function csvEscape(value: unknown): string {
@@ -859,7 +869,7 @@ router.get('/counts', async (req: Request, res: Response) => {
   const counts = await Promise.all(visible.map(async (count) => {
     const variance = count.physicalQuantity - count.bookQty;
     const toleranceRecommendation = count.status === 'PENDING_REVIEW'
-      ? await getCountRecommendation({ itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
+      ? await getCountRecommendation(tenantContext(req), { itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
       : null;
     return { ...count, variance, toleranceRecommendation };
   }));
@@ -2360,7 +2370,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     // high-value category." Gated on the same requestId the client already
     // sends for idempotency, so resubmitting the identical form after
     // approval both finds the APPROVED request and proceeds.
-    const adjustmentValue = (await estimateValueAtRisk(item.id, Math.abs(qtyDelta))) ?? 0;
+    const adjustmentValue = (await estimateValueAtRisk(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0;
     const adjustmentLocation = await prisma.location.findUnique({ where: { id: location.id }, select: { branchId: true } }).catch(() => null);
     const gate = await checkApprovalGate({
       triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
@@ -3111,7 +3121,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   // Gate before touching stock - a confirmed allocation's total value
   // decides whether a configured ApprovalRule blocks this attempt.
   const totalValue = (await Promise.all(
-    [...allocations.values()].map((allocation) => estimateValueAtRisk(allocation.itemId, allocation.quantity)),
+    [...allocations.values()].map((allocation) => estimateValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
   )).reduce((sum, value) => sum + (value ?? 0), 0);
   const sourceLocation = await prisma.location.findUnique({ where: { id: transfer.sourceLocationId }, select: { branchId: true } }).catch(() => null);
   const gate = await checkApprovalGate({
@@ -3372,7 +3382,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   if (damagedLines.length > 0) {
     const destinationLocation = await prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
     for (const line of damagedLines) {
-      const gate = await requireEvidenceForDamage({
+      const gate = await requireEvidenceForDamage(tenantContext(req), {
         transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
         branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
       });

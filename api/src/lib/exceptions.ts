@@ -4,6 +4,7 @@ import { persistAudit } from './persistence.js';
 import type { ExceptionCase } from '@prisma/client';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 import { DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
+import type { TenantContext } from './tenant-context.js';
 
 // Blueprint Module H (Returns, Damage, Quarantine & Exception Management)
 // and section 18 "Exception Inbox": every damage, short/excess receipt,
@@ -55,11 +56,15 @@ export function priorityForValue(value: number | null | undefined): ExceptionPri
 // Best-effort value-at-risk: latest known purchase cost for the item times
 // the exception quantity. Returns null (never throws) when no cost history
 // exists yet, so priority safely falls back to LOW rather than blocking.
-export async function estimateValueAtRisk(itemId: string | null | undefined, quantity: number | null | undefined): Promise<number | null> {
+export async function estimateValueAtRisk(
+  tenant: Pick<TenantContext, 'companyId'>,
+  itemId: string | null | undefined,
+  quantity: number | null | undefined,
+): Promise<number | null> {
   if (!itemId || !quantity) return null;
   try {
     const line = await prisma.purchaseOrderLine.findFirst({
-      where: { itemId, unitCost: { gt: 0 } },
+      where: { itemId, unitCost: { gt: 0 }, purchaseOrder: { companyId: tenant.companyId } },
       orderBy: { createdAt: 'desc' },
     });
     if (!line) return null;
@@ -77,7 +82,7 @@ export async function estimateValueAtRisk(itemId: string | null | undefined, qua
  */
 export async function createExceptionCase(input: CreateExceptionCaseInput) {
   try {
-    const valueAtRisk = await estimateValueAtRisk(input.itemId, input.quantity);
+    const valueAtRisk = await estimateValueAtRisk({ companyId: input.companyId }, input.itemId, input.quantity);
     const priority = priorityForValue(valueAtRisk);
     const dueAt = new Date(Date.now() + (input.dueHours ?? 24) * 3_600_000);
     const exceptionCase = await prisma.exceptionCase.create({

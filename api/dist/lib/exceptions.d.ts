@@ -1,4 +1,5 @@
 import type { ExceptionCase } from '@prisma/client';
+import type { TenantContext } from './tenant-context.js';
 export type ExceptionCaseType = 'DAMAGE' | 'SHORT_RECEIPT' | 'EXCESS_RECEIPT' | 'WRONG_ITEM' | 'EXPIRED' | 'MISSING_STOCK' | 'QC_FAIL' | 'TRANSFER_DISCREPANCY' | 'COUNT_VARIANCE' | 'QUARANTINE';
 export type ExceptionPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type CreateExceptionCaseInput = {
@@ -19,7 +20,7 @@ export type CreateExceptionCaseInput = {
     dueHours?: number;
 };
 export declare function priorityForValue(value: number | null | undefined): ExceptionPriority;
-export declare function estimateValueAtRisk(itemId: string | null | undefined, quantity: number | null | undefined): Promise<number | null>;
+export declare function estimateValueAtRisk(tenant: Pick<TenantContext, 'companyId'>, itemId: string | null | undefined, quantity: number | null | undefined): Promise<number | null>;
 /**
  * Opens a new exception case. Never throws for a missing/legacy table on
  * older Hostinger databases that predate the Exception Inbox migration -
