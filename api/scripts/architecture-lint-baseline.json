@@ -1,29 +1,5 @@
 [
   {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/import-batch-store.ts",
-    "line": 222,
-    "snippet": "const row = await prisma.importBatch.findUnique({ where: { id } });"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/import-batch-store.ts",
-    "line": 231,
-    "snippet": "const rows = await prisma.importRow.findMany({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/import-batch-store.ts",
-    "line": 275,
-    "snippet": "const updated = await prisma.importBatch.update({"
-  },
-  {
-    "rule": "unscoped-tenant-query",
-    "file": "src/lib/import-batch-store.ts",
-    "line": 306,
-    "snippet": "const row = await prisma.importBatch.findFirst({"
-  },
-  {
     "rule": "runtime-ddl",
     "file": "src/lib/schema-version.ts",
     "line": 2,

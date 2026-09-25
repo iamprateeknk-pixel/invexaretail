@@ -14,9 +14,12 @@ import { movementsFromStagedDailyRows, stageDailyImport } from './import-token-f
 import { parseDailyStockImport } from './daily-stock-sync.js';
 import { salesCsvBuffer } from './import-fixtures.js';
 
+const COMPANY_ID = 'import-store-test-company';
+
 test('preview creates a PREVIEWED batch with staged rows', async () => {
   resetImportBatchStore();
   const batch = await createPreviewBatch({
+    companyId: COMPANY_ID,
     type: 'SALES',
     fileName: 'sales.csv',
     sourceFormat: 'daily-erp-export',
@@ -35,15 +38,16 @@ test('preview creates a PREVIEWED batch with staged rows', async () => {
     ],
   });
   assert.equal(batch.status, 'PREVIEWED');
-  const counts = await countRowsByStatus(batch.id);
+  const counts = await countRowsByStatus(COMPANY_ID, batch.id);
   assert.equal(counts.VALID, 1);
   assert.equal(counts.INVALID, 1);
-  assert.equal((await listRows(batch.id, 'INVALID'))[0].errors?.[0], 'Item Name is required.');
+  assert.equal((await listRows(COMPANY_ID, batch.id, 'INVALID'))[0].errors?.[0], 'Item Name is required.');
 });
 
 test('a merely-previewed batch never blocks re-uploading the same file (nothing was applied to stock yet)', async () => {
   resetImportBatchStore();
   const fingerprint = {
+    companyId: COMPANY_ID,
     type: 'SALES',
     fileHash: computeFileHash(Buffer.from('same-bytes')),
     branchId: null,
@@ -71,6 +75,7 @@ test('a merely-previewed batch never blocks re-uploading the same file (nothing 
 test('the same file hash, type and date range cannot start a second live batch once POSTED', async () => {
   resetImportBatchStore();
   const fingerprint = {
+    companyId: COMPANY_ID,
     type: 'SALES',
     fileHash: computeFileHash(Buffer.from('same-bytes')),
     branchId: null,
@@ -88,8 +93,8 @@ test('the same file hash, type and date range cannot start a second live batch o
     duplicateRows: 0,
     rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
   });
-  await transitionBatch(first.id, 'VALIDATED');
-  await transitionBatch(first.id, 'POSTED', { committedRows: 1 });
+  await transitionBatch(COMPANY_ID, first.id, 'VALIDATED');
+  await transitionBatch(COMPANY_ID, first.id, 'POSTED', { committedRows: 1 });
   const duplicate = await findDuplicateBatch(fingerprint);
   assert.equal(duplicate?.id, first.id);
 });
@@ -97,6 +102,7 @@ test('the same file hash, type and date range cannot start a second live batch o
 test('abandoning a preview frees the fingerprint so the file can be uploaded again', async () => {
   resetImportBatchStore();
   const fingerprint = {
+    companyId: COMPANY_ID,
     type: 'PURCHASE',
     fileHash: computeFileHash(Buffer.from('purchase-bytes')),
     branchId: 'wh-1',
@@ -114,13 +120,14 @@ test('abandoning a preview frees the fingerprint so the file can be uploaded aga
     duplicateRows: 0,
     rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
   });
-  await transitionBatch(batch.id, 'FAILED');
+  await transitionBatch(COMPANY_ID, batch.id, 'FAILED');
   assert.equal(await findDuplicateBatch(fingerprint), undefined);
 });
 
 test('posted batches cannot be posted a second time through the lifecycle', async () => {
   resetImportBatchStore();
   const batch = await createPreviewBatch({
+    companyId: COMPANY_ID,
     type: 'SALES',
     fileName: 'sales.csv',
     sourceFormat: 'daily-erp-export',
@@ -132,12 +139,33 @@ test('posted batches cannot be posted a second time through the lifecycle', asyn
     duplicateRows: 0,
     rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
   });
-  await transitionBatch(batch.id, 'VALIDATED');
-  await transitionBatch(batch.id, 'POSTED', { committedRows: 1 });
-  const posted = await getBatch(batch.id);
+  await transitionBatch(COMPANY_ID, batch.id, 'VALIDATED');
+  await transitionBatch(COMPANY_ID, batch.id, 'POSTED', { committedRows: 1 });
+  const posted = await getBatch(COMPANY_ID, batch.id);
   assert.equal(posted?.status, 'POSTED');
   assert.equal(posted?.metadata?.committedRows, 1);
-  await assert.rejects(() => transitionBatch(batch.id, 'POSTED'), InvalidBatchTransitionError);
+  await assert.rejects(() => transitionBatch(COMPANY_ID, batch.id, 'POSTED'), InvalidBatchTransitionError);
+});
+
+test('preview batches, staged rows, duplicate checks, and transitions fail closed across companies', async () => {
+  resetImportBatchStore();
+  const ownerCompanyId = 'import-owner-company';
+  const otherCompanyId = 'import-other-company';
+  const batch = await createPreviewBatch({
+    companyId: ownerCompanyId,
+    type: 'SALES', fileName: 'tenant.csv', sourceFormat: 'daily-erp-export', importedById: 'user-owner',
+    fileHash: computeFileHash(Buffer.from('tenant-file')), totalRows: 1, validRows: 1, invalidRows: 0, duplicateRows: 0,
+    rows: [{ rowNumber: 2, status: 'VALID', rawData: { itemName: 'Rice' } }],
+  });
+
+  assert.equal(await getBatch(otherCompanyId, batch.id), undefined);
+  assert.deepEqual(await listRows(otherCompanyId, batch.id), []);
+  assert.deepEqual(await countRowsByStatus(otherCompanyId, batch.id), { VALID: 0, INVALID: 0, DUPLICATE: 0 });
+  await assert.rejects(() => transitionBatch(otherCompanyId, batch.id, 'FAILED'), /not found/i);
+  assert.equal(await findDuplicateBatch({ companyId: otherCompanyId, type: batch.type, fileHash: batch.fileHash!, branchId: null }), undefined);
+
+  await transitionBatch(ownerCompanyId, batch.id, 'VALIDATED');
+  assert.equal((await getBatch(ownerCompanyId, batch.id))?.status, 'VALIDATED');
 });
 
 test('commit reconstructs one movement per staged allocation and keeps the previewed lot', async () => {

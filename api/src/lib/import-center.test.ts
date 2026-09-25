@@ -86,6 +86,7 @@ test('duplicate detection is case-insensitive on branch code but distinguishes d
 test('store-backed duplicate lookup only blocks a POSTED batch - PREVIEWED/VALIDATED have not touched real stock', async () => {
   resetImportBatchStore();
   const fingerprint = {
+    companyId: 'import-center-test-company',
     type: 'SALES',
     fileHash: computeFileHash(Buffer.from('store-backed-sales')),
     branchId: 'loc-1',
@@ -107,16 +108,17 @@ test('store-backed duplicate lookup only blocks a POSTED batch - PREVIEWED/VALID
   // fresh, not reuse a stale staged batch.
   assert.equal(await findDuplicateBatch(fingerprint), undefined);
 
-  await transitionBatch(batch.id, 'VALIDATED');
+  await transitionBatch(fingerprint.companyId, batch.id, 'VALIDATED');
   assert.equal(await findDuplicateBatch(fingerprint), undefined);
 
-  await transitionBatch(batch.id, 'POSTED');
+  await transitionBatch(fingerprint.companyId, batch.id, 'POSTED');
   assert.equal((await findDuplicateBatch(fingerprint))?.status, 'POSTED');
 });
 
 test('store-backed duplicate lookup ignores FAILED batches so the same file can be previewed again', async () => {
   resetImportBatchStore();
   const fingerprint = {
+    companyId: 'import-center-test-company',
     type: 'PURCHASE',
     fileHash: computeFileHash(Buffer.from('abandoned-purchase')),
     branchId: 'wh-1',
@@ -134,7 +136,7 @@ test('store-backed duplicate lookup ignores FAILED batches so the same file can 
     duplicateRows: 0,
     rows: [{ rowNumber: 2, status: 'VALID', rawData: {} }],
   });
-  await transitionBatch(batch.id, 'FAILED');
+  await transitionBatch(fingerprint.companyId, batch.id, 'FAILED');
   assert.equal(await findDuplicateBatch(fingerprint), undefined);
 });
 

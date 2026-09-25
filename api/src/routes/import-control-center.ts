@@ -32,7 +32,7 @@ router.get('/imports/control-center', extractToken, requireAuth, async (req: Req
     const window = dayWindow(date, timezone);
     const activity = (await loadMovementActivity(window.from, window.to)).filter((row) => visible.has(row.locationId));
     const batchIds = activity.flatMap((row) => row.batchIds);
-    const rejected = await loadRejectedRows(batchIds, locations);
+    const rejected = await loadRejectedRows(companyId, batchIds, locations);
     const report = buildControlCenter({
       date, timezone, locations, activity,
       rejectedByLocation: rejected.byLocation,

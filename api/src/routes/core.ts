@@ -2154,7 +2154,7 @@ router.get('/imports/:batchToken/errors', async (req: Request, res: Response, ne
   const batchToken = firstParam(req.params.batchToken);
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role) && req.user!.role !== 'AUDITOR') return res.status(403).json({ message: 'Import access denied.' });
-  const csv = await buildErrorCsv(batchToken);
+  const csv = await buildErrorCsv(req.companyId ?? DEFAULT_COMPANY_ID, batchToken);
   if (csv === undefined) return res.status(404).json({ message: 'Import batch was not found.' });
   if (String(req.query.format ?? 'csv').toLowerCase() === 'json') {
     return res.json({ batchToken, csv });
@@ -2166,7 +2166,7 @@ router.get('/imports/:batchToken', async (req: Request, res: Response, next: Nex
   const batchToken = firstParam(req.params.batchToken);
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role) && req.user!.role !== 'AUDITOR') return res.status(403).json({ message: 'Import access denied.' });
-  const preview = await buildBatchPreviewPayload(batchToken);
+  const preview = await buildBatchPreviewPayload(req.companyId ?? DEFAULT_COMPANY_ID, batchToken);
   if (!preview) return res.status(404).json({ message: 'Import batch was not found.' });
   return res.json(preview);
 });
@@ -2178,12 +2178,13 @@ router.post('/imports/:batchToken/abandon', async (req: Request, res: Response, 
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required to abandon an import.' });
   try {
-    const batch = await getBatch(batchToken);
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    const batch = await getBatch(companyId, batchToken);
     if (!batch) return res.status(404).json({ message: 'Import batch was not found.' });
     if (batch.importedById !== req.user!.id && req.user!.role !== 'ADMIN') {
       return res.status(403).json({ message: 'Only the importer or Main Admin can abandon this preview.' });
     }
-    const updated = await transitionBatch(batch.id, 'FAILED', { abandonedBy: req.user!.id, abandonedAt: new Date().toISOString() });
+    const updated = await transitionBatch(companyId, batch.id, 'FAILED', { abandonedBy: req.user!.id, abandonedAt: new Date().toISOString() });
     return res.json({ message: 'Preview abandoned. You can upload this file again.', batchToken: updated.id, status: updated.status });
   } catch (error) {
     if (error instanceof InvalidBatchTransitionError) return res.status(409).json({ message: error.message });
@@ -2257,15 +2258,17 @@ router.post('/imports/opening-stock/preview', upload.single('file'), async (req:
     const preview = await readUploadedStockFile(req);
     const fileHash = computeFileHash(req.file!.buffer);
     const existing = await findDuplicateBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: 'OPENING_STOCK',
       fileHash,
       branchId: null,
       sourceDateFrom: preview.snapshotAt,
       sourceDateTo: preview.snapshotAt,
     });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const staged = stageOpeningStock(preview);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: 'OPENING_STOCK',
       fileName: req.file!.originalname,
       sourceFormat: preview.format,
@@ -2396,11 +2399,12 @@ router.post('/stock-adjustments/import/preview', upload.single('file'), async (r
     const mode = validatedStockUpdateMode(req.body.mode);
     const preview = await readUploadedStockFile(req);
     const fileHash = computeFileHash(req.file!.buffer);
-    const existing = await findDuplicateBatch({ type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    const existing = await findDuplicateBatch({ companyId: req.companyId ?? DEFAULT_COMPANY_ID, type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const plan = planStockUpdate(preview, mode);
     const staged = stageStockAdjustment(preview, plan, mode);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: `ADJUSTMENT_${mode}`,
       fileName: req.file!.originalname,
       sourceFormat: preview.format,
@@ -2527,10 +2531,10 @@ function planDailyImport(preview: DailyImportPreview, importedBy: string) {
   return { errors, prepared, warehouse };
 }
 
-async function duplicateFileResponse(res: Response, existingId: string) {
-  const existing = await getBatch(existingId);
+async function duplicateFileResponse(res: Response, companyId: string, existingId: string) {
+  const existing = await getBatch(companyId, existingId);
   if (!existing) return res.status(409).json({ message: 'This file was already imported.' });
-  const preview = await buildBatchPreviewPayload(existing.id);
+  const preview = await buildBatchPreviewPayload(companyId, existing.id);
   return res.status(409).json({
     message: duplicateConflictMessage(existing),
     batchToken: existing.id,
@@ -2559,7 +2563,8 @@ function checkpointsFor(importType: 'SALES' | 'PURCHASE', batchId: string, movem
 }
 
 async function commitImportBatchToken(req: Request, res: Response, batchToken: string) {
-  const batch = await getBatch(batchToken);
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const batch = await getBatch(companyId, batchToken);
   if (!batch) return res.status(404).json({ message: 'Import batch was not found.' });
   if (batch.importedById !== req.user!.id && req.user!.role !== 'ADMIN') {
     return res.status(403).json({ message: 'Only the importer or Main Admin can commit this preview.' });
@@ -2575,12 +2580,12 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
   if (batch.status !== 'PREVIEWED' && batch.status !== 'VALIDATED') {
     return res.status(400).json({ message: `Batch ${batch.id} cannot be committed from ${batch.status}.` });
   }
-  const counts = await countRowsByStatus(batch.id);
+  const counts = await countRowsByStatus(companyId, batch.id);
   if (counts.INVALID > 0 || counts.VALID === 0) {
     return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', invalidRows: counts.INVALID, validRows: counts.VALID });
   }
-  if (batch.status === 'PREVIEWED') await transitionBatch(batch.id, 'VALIDATED');
-  const validRows = await listRows(batch.id, 'VALID');
+  if (batch.status === 'PREVIEWED') await transitionBatch(companyId, batch.id, 'VALIDATED');
+  const validRows = await listRows(companyId, batch.id, 'VALID');
 
   if (batch.type === 'SALES' || batch.type === 'PURCHASE') {
     const importType = batch.type;
@@ -2607,7 +2612,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
     // Movements dated before an existing count make that count's book quantity stale.
     await applyLateMovementsQuietly(movements, req.user!.id);
-    await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2640,11 +2645,11 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
         if (result.created) created += 1;
         else updated += 1;
       }
-      await transitionBatch(batch.id, 'POSTED', { committedRows: imported.length });
+      await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: imported.length });
       return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
-    await transitionBatch(batch.id, 'POSTED', { committedRows: result.stockRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2717,7 +2722,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       sourceFormat: batch.sourceFormat,
     });
     await applyDailyLedger(movements, lots, [], persisted.committedRows);
-    await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batch.id, metadata: { fileName: batch.fileName, mode, rows: persisted.committedRows, fileHash } }));
     return res.status(201).json({
       message: persisted.committedRows ? `Updated ${persisted.committedRows} branch/item/lot stock rows.` : 'This exact file and mode were already applied; stock was not changed again.',
@@ -2738,16 +2743,18 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
     const fileHash = computeFileHash(req.file.buffer);
     const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') });
     const existing = await findDuplicateBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
       fileHash,
       branchId: importType === 'PURCHASE' ? warehouse?.id ?? null : null,
       sourceDateFrom: preview.transactionFrom ?? null,
       sourceDateTo: preview.transactionTo ?? null,
     });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const plan = planDailyImport(preview, req.user!.id);
     const staged = stageDailyImport(preview, plan);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
       fileName: req.file.originalname,
       sourceFormat: 'daily-erp-export',

@@ -53,7 +53,7 @@ export function buildOpeningSnapshotReversalPlan(
 export async function listImportBatches(companyId: string, limit = 100) {
   if (!databaseEnabled) {
     const { listStoredBatches } = await import('./import-batch-store.js');
-    return listStoredBatches(limit);
+    return listStoredBatches(companyId, limit);
   }
   return prisma.importBatch.findMany({
     where: { companyId },
