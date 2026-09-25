@@ -2,12 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ORDER_STATUSES = exports.COUNT_REVIEW_STATUSES = exports.PO_STATUSES = exports.InvalidTransitionError = void 0;
 exports.assertValidTransferTransitionAudited = assertValidTransferTransitionAudited;
+exports.transitionTransferStatus = transitionTransferStatus;
 exports.assertValidPurchaseOrderTransition = assertValidPurchaseOrderTransition;
+exports.transitionPurchaseOrderStatus = transitionPurchaseOrderStatus;
 exports.assertValidReturnTransition = assertValidReturnTransition;
+exports.transitionReturnStatus = transitionReturnStatus;
 exports.allowedCountReviewMoves = allowedCountReviewMoves;
 exports.assertValidCountReviewTransition = assertValidCountReviewTransition;
 exports.allowedOrderMoves = allowedOrderMoves;
 exports.assertValidOrderTransition = assertValidOrderTransition;
+exports.transitionOrderStatus = transitionOrderStatus;
+exports.transitionOrderStatusInTransaction = transitionOrderStatusInTransaction;
 exports.assertInspectionResultImmutable = assertInspectionResultImmutable;
 // ADR-006 / Week 7: one place that says which state transitions are legal
 // for the six entities the guide names (Transfer, StockCount, PurchaseOrder,
@@ -80,6 +85,34 @@ async function assertValidTransferTransitionAudited(role, from, to, entityId, ct
     await logRejection('Transfer', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('Transfer', from, to, traceId);
 }
+/**
+ * Persist a tenant-scoped Transfer status only after validating the live
+ * database state. The status predicate in the update also turns a race into
+ * a failed write instead of silently overwriting a concurrent transition.
+ */
+async function transitionTransferStatus(input) {
+    const current = await db_js_1.prisma.transfer.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Transfer was not found in this company.');
+    const from = current.status;
+    const to = (input.to === 'SUBMITTED'
+        ? 'REQUESTED'
+        : input.to === 'PARTIALLY_RECEIVED'
+            ? 'PARTIAL_RECEIVED'
+            : input.to);
+    await assertValidTransferTransitionAudited(input.role, from, to, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.role,
+        reason: input.reason,
+    });
+    await db_js_1.prisma.transfer.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { status: to },
+    });
+}
 // --- PurchaseOrder --------------------------------------------------------
 // Delegates to po-lifecycle.ts's existing MOVES table.
 async function assertValidPurchaseOrderTransition(from, to, entityId, ctx, traceId = (0, errors_js_1.newTraceId)()) {
@@ -87,6 +120,24 @@ async function assertValidPurchaseOrderTransition(from, to, entityId, ctx, trace
         return;
     await logRejection('PurchaseOrder', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('PurchaseOrder', from, to, traceId);
+}
+/** Tenant-scoped, compare-and-set PurchaseOrder status writer. */
+async function transitionPurchaseOrderStatus(input) {
+    const current = await db_js_1.prisma.purchaseOrder.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Purchase order was not found in this company.');
+    const from = current.status;
+    await assertValidPurchaseOrderTransition(from, input.to, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.actorRole,
+    });
+    return db_js_1.prisma.purchaseOrder.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { ...(input.data ?? {}), status: input.to },
+    });
 }
 // --- ReturnRequest --------------------------------------------------------
 // Delegates to returns-rma.ts's existing action-keyed TRANSITIONS table.
@@ -96,6 +147,25 @@ async function assertValidReturnTransition(from, action, entityId, ctx, traceId 
         return to;
     await logRejection('ReturnRequest', entityId, from, action, ctx, traceId);
     throw new InvalidTransitionError('ReturnRequest', from, action, traceId);
+}
+/** Tenant-scoped, compare-and-set ReturnRequest status writer. */
+async function transitionReturnStatus(input) {
+    const current = await db_js_1.prisma.returnRequest.findFirst({
+        where: { id: input.entityId, companyId: input.companyId },
+        select: { status: true },
+    });
+    if (!current)
+        throw new errors_js_1.DomainError('NOT_FOUND', 'Return request was not found in this company.');
+    const from = current.status;
+    const to = await assertValidReturnTransition(from, input.action, input.entityId, {
+        actorId: input.actorId,
+        actorRole: input.actorRole,
+    });
+    return db_js_1.prisma.returnRequest.update({
+        where: { id: input.entityId, companyId: input.companyId, status: current.status },
+        data: { status: to },
+        include: { lines: true },
+    });
 }
 exports.COUNT_REVIEW_STATUSES = ['PENDING_REVIEW', 'APPROVED', 'REJECTED', 'RECOUNT'];
 const COUNT_REVIEW_MOVES = {
@@ -129,6 +199,20 @@ async function assertValidOrderTransition(from, to, entityId, ctx, traceId = (0,
         return;
     await logRejection('Order', entityId, from, to, ctx, traceId);
     throw new InvalidTransitionError('Order', from, to, traceId);
+}
+/**
+ * The only non-transactional write path for an Order status. Keeping the
+ * policy assertion and the write together prevents callers from validating
+ * one transition and then accidentally persisting a different status.
+ */
+async function transitionOrderStatus(entityId, companyId, from, to, ctx, data = {}) {
+    await assertValidOrderTransition(from, to, entityId, ctx);
+    await db_js_1.prisma.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
+}
+/** Transaction-bound variant used when stock, lines and the status must commit atomically. */
+async function transitionOrderStatusInTransaction(tx, entityId, companyId, from, to, ctx, data = {}) {
+    await assertValidOrderTransition(from, to, entityId, ctx);
+    await tx.order.update({ where: { id: entityId, companyId }, data: { ...data, status: to } });
 }
 // --- QcInspection -----------------------------------------------------
 // Not a state machine: the Prisma model has no `.status` field, only a

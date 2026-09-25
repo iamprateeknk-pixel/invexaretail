@@ -23,7 +23,7 @@
 // checked up front and by catching the unique-constraint race if two
 // identical retries land concurrently.
 import { randomUUID } from 'node:crypto';
-import type { StockMovement } from '@prisma/client';
+import type { Prisma, StockMovement } from '@prisma/client';
 import { prisma } from './db.js';
 import type { TenantContext } from './tenant-context.js';
 
@@ -218,6 +218,76 @@ export async function postInventoryMovement(cmd: PostMovementCommand): Promise<P
   }
 
   throw new Error('Failed to post stock movement after concurrent-write retries; please retry the request.');
+}
+
+/**
+ * Same posting, but joined to a transaction the caller already owns, so the
+ * journal row, the StockLedger projection, the audit entry and the outbox row
+ * commit or roll back *together with the caller's business state* (a PO
+ * receipt, a transfer receipt...). Concurrency is handled by the database: the
+ * ledger change is one atomic `onHand + delta` upsert, so there is no
+ * read-then-write gap and no retry loop to nest inside an outer transaction.
+ *
+ * Failures (negative stock under BLOCK, a duplicate idempotency key racing in)
+ * throw, which rolls the caller's whole transaction back - a caller that wants
+ * duplicate-tolerant behaviour checks `findMovementByIdempotencyKey` first.
+ */
+export async function postInventoryMovementInTransaction(
+  tx: Prisma.TransactionClient,
+  cmd: PostMovementCommand,
+): Promise<PostMovementResult> {
+  if (!cmd.idempotencyKey) throw new Error('idempotencyKey is required to post an inventory movement.');
+  if (!cmd.lotId) throw new Error('lotId is required to post an inventory movement (StockLedger is lot-tracked).');
+  if (!cmd.reason && !cmd.sourceDocument) throw new Error('A reason or sourceDocument is required to post an inventory movement.');
+
+  const existing = await tx.stockMovement.findFirst({ where: { companyId: cmd.tenant.companyId, idempotencyKey: cmd.idempotencyKey } });
+  if (existing) return { duplicate: true, movement: existing, balance: { onHand: existing.afterBalance } };
+
+  const config = await tx.workflowConfiguration.findFirst({ where: { type: 'STOCK_POSTING', scopeId: cmd.locationId } });
+  const policy: NegativeStockPolicy = (NEGATIVE_STOCK_POLICIES as readonly string[]).includes(config?.negativeStockRule ?? '')
+    ? (config!.negativeStockRule as NegativeStockPolicy)
+    : 'BLOCK';
+
+  const ledger = await tx.stockLedger.upsert({
+    where: { itemId_lotId_locationId: { itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
+    update: { onHand: { increment: cmd.qtyDelta }, version: { increment: 1 } },
+    create: {
+      itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId, onHand: cmd.qtyDelta, version: 1,
+      companyId: cmd.tenant.companyId, tenantId: cmd.tenant.tenantId,
+    },
+  });
+  const afterBalance = ledger.onHand;
+  const beforeBalance = afterBalance - cmd.qtyDelta;
+  if (afterBalance < 0) {
+    if (policy === 'BLOCK') {
+      throw new NegativeStockBlockedError(
+        `Movement blocked: posting ${cmd.qtyDelta} would take stock to ${afterBalance} for item ${cmd.itemId}.`,
+      );
+    }
+    if (policy === 'WARN') console.warn(`Negative stock warning: item ${cmd.itemId} location ${cmd.locationId} -> ${afterBalance}`);
+  }
+
+  const correlationId = cmd.correlationId ?? randomUUID();
+  const movement = await tx.stockMovement.create({
+    data: {
+      itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId,
+      movementType: cmd.movementType as never, qtyDelta: cmd.qtyDelta, beforeBalance, afterBalance,
+      sourceDocument: cmd.sourceDocument, sourceLineId: cmd.sourceLineId, actor: cmd.tenant.userId,
+      timestamp: new Date(), correlationId, reason: cmd.reason, metadata: cmd.metadata as never,
+      companyId: cmd.tenant.companyId, tenantId: cmd.tenant.tenantId, idempotencyKey: cmd.idempotencyKey,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      id: randomUUID(), actorId: cmd.tenant.userId, actorRole: cmd.tenant.role, action: 'STOCK_MOVEMENT_POSTED',
+      entityType: 'StockMovement', entityId: movement.id, correlationId, reason: cmd.reason, tenantId: cmd.tenant.tenantId,
+      metadata: { movementType: cmd.movementType, qtyDelta: cmd.qtyDelta, itemId: cmd.itemId, locationId: cmd.locationId } as never,
+    },
+  });
+  await tx.domainEventOutbox.create({
+    data: { topic: 'stock.changed', companyId: cmd.tenant.companyId, locationIds: [cmd.locationId], actorId: cmd.tenant.userId },
+  });
+  return { duplicate: false, movement, balance: { onHand: afterBalance } };
 }
 
 /**

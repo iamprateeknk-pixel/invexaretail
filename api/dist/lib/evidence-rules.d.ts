@@ -1,3 +1,4 @@
+import type { TenantContext } from './tenant-context.js';
 export type EvidenceRuleLike = {
     id: string;
     label: string;
@@ -31,7 +32,7 @@ export type EvidenceGateResult = {
  * any internal error, same fail-open posture as checkApprovalGate /
  * getCountRecommendation elsewhere in this app.
  */
-export declare function requireEvidenceForDamage(input: {
+export declare function requireEvidenceForDamage(tenant: TenantContext, input: {
     transferId: string;
     triggerType: string;
     itemId: string;

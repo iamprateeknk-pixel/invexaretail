@@ -6,8 +6,13 @@ import { recordAudit } from './audit.js';
 import { databaseEnabled, persistAudit } from './persistence.js';
 import { listItems, listLocations, listStockLedger } from './repository.js';
 import { estimateDispatchAndDelivery } from './promise-engine.js';
-import { assertValidOrderTransition } from './domain-policies.js';
-import { DEFAULT_COMPANY_ID } from './saas/tenant-scope.js';
+import {
+  assertValidOrderTransition,
+  transitionOrderStatus,
+  transitionOrderStatusInTransaction,
+} from './domain-policies.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
+import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
@@ -61,8 +66,8 @@ export class OrderShortageError extends Error {
 
 export type OrderLineInput = { itemId: string; quantity: number };
 
-async function fefoLotsForItem(itemId: string, locationId: string): Promise<FefoLot[]> {
-  const item = await prisma.item.findUnique({ where: { id: itemId }, include: { lots: true } });
+async function fefoLotsForItem(companyId: string, itemId: string, locationId: string): Promise<FefoLot[]> {
+  const item = await prisma.item.findFirst({ where: { id: itemId, companyId }, include: { lots: true } });
   if (!item) throw new Error(`Item ${itemId} was not found.`);
   const ledgerRows = await prisma.stockLedger.findMany({ where: { itemId, locationId } });
   const ledgerByLot = new Map(ledgerRows.map((row) => [row.lotId, row]));
@@ -88,11 +93,11 @@ type Shortage = { itemId: string; requestedQty: number; availableQty: number };
 type AllocationOutcome = { resolved: ResolvedLine[]; shortages: null } | { resolved: null; shortages: Shortage[] };
 
 /** Resolves every line to a specific lot by FEFO at one location. Never throws - reports a shortage instead, so a router can try the next candidate location. */
-async function tryAllocateAtLocation(lines: OrderLineInput[], locationId: string): Promise<AllocationOutcome> {
+async function tryAllocateAtLocation(companyId: string, lines: OrderLineInput[], locationId: string): Promise<AllocationOutcome> {
   const resolved: ResolvedLine[] = [];
   const shortages: Shortage[] = [];
   for (const line of lines) {
-    const lots = await fefoLotsForItem(line.itemId, locationId);
+    const lots = await fefoLotsForItem(companyId, line.itemId, locationId);
     const allocation = allocateLots(lots, line.quantity, 'FEFO');
     if (allocation.shortage > 1e-8) {
       const totalAvailable = lots.reduce((sum, lot) => sum + lot.available, 0);
@@ -116,11 +121,11 @@ type PartialAllocationOutcome = { resolved: ResolvedLine[]; backordered: Backord
  * and the only one routeOrder uses (routing + backorder together would be
  * split fulfilment, still out of scope).
  */
-async function partialAllocateAtLocation(lines: OrderLineInput[], locationId: string): Promise<PartialAllocationOutcome> {
+async function partialAllocateAtLocation(companyId: string, lines: OrderLineInput[], locationId: string): Promise<PartialAllocationOutcome> {
   const resolved: ResolvedLine[] = [];
   const backordered: BackorderLine[] = [];
   for (const line of lines) {
-    const lots = await fefoLotsForItem(line.itemId, locationId);
+    const lots = await fefoLotsForItem(companyId, line.itemId, locationId);
     const allocation = allocateLots(lots, line.quantity, 'FEFO');
     for (const pick of allocation.allocations) resolved.push({ itemId: line.itemId, lotId: pick.lotId, quantity: pick.quantity });
     if (allocation.shortage > 1e-8) backordered.push({ itemId: line.itemId, quantity: allocation.shortage });
@@ -137,11 +142,11 @@ async function partialAllocateAtLocation(lines: OrderLineInput[], locationId: st
  * top-ranked candidate reported, so the caller has something concrete to
  * show rather than a bare "no route found."
  */
-async function itemAvailabilityByLocation(itemIds: string[], locationIds: string[]): Promise<LocationAvailability> {
+async function itemAvailabilityByLocation(companyId: string, itemIds: string[], locationIds: string[]): Promise<LocationAvailability> {
   const map: LocationAvailability = new Map();
   if (!itemIds.length || !locationIds.length) return map;
   const rows = await prisma.stockLedger.findMany({
-    where: { itemId: { in: itemIds }, locationId: { in: locationIds } },
+    where: { companyId, itemId: { in: itemIds }, locationId: { in: locationIds } },
     select: { itemId: true, locationId: true, onHand: true, reserved: true },
   });
   for (const row of rows) {
@@ -153,6 +158,7 @@ async function itemAvailabilityByLocation(itemIds: string[], locationIds: string
 }
 
 export async function routeOrder(
+  companyId: string,
   lines: OrderLineInput[],
   candidates: LocationCandidate[],
   ctx: RoutingContext = {},
@@ -160,7 +166,7 @@ export async function routeOrder(
   const ranked = rankOrderCandidates(candidates, ctx);
   let bestShortage: Shortage[] = [];
   for (const candidate of ranked) {
-    const outcome = await tryAllocateAtLocation(lines, candidate.locationId);
+    const outcome = await tryAllocateAtLocation(companyId, lines, candidate.locationId);
     if (outcome.resolved !== null) return { locationId: candidate.locationId, resolved: outcome.resolved, shortages: null };
     if (!bestShortage.length) bestShortage = outcome.shortages;
   }
@@ -174,21 +180,22 @@ export async function routeOrder(
  * (an availability check, a list view) triggered this sweep. Returns the
  * number of orders expired.
  */
-export async function expireStaleReservations(): Promise<number> {
+export async function expireStaleReservations(companyId: string): Promise<number> {
   if (!databaseEnabled) return 0;
   let expiredCount = 0;
   try {
     const stale = await prisma.order.findMany({
-      where: { status: 'RESERVED', reservationExpiresAt: { lt: new Date() } },
+      where: { companyId, status: 'RESERVED', reservationExpiresAt: { lt: new Date() } },
       include: ORDER_INCLUDE,
     });
     for (const order of stale) {
       try {
-        await assertValidOrderTransition(order.status as never, 'EXPIRED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed' });
         await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
           itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
         })));
-        await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });
+        await transitionOrderStatus(order.id, order.companyId, order.status as never, 'EXPIRED', {
+          actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed',
+        }, { expiredAt: new Date() });
         await persistAudit(recordAudit({
           actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_RESERVATION_EXPIRED',
           entityType: 'Order', entityId: order.id, metadata: { channel: order.channel, reservedAt: order.reservedAt },
@@ -215,13 +222,13 @@ export async function expireStaleReservations(): Promise<number> {
  * been ticking since the order sat unfulfillable. Never throws - returns
  * the order unchanged on any internal failure.
  */
-export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEFAULT_RESERVATION_TTL_MINUTES) {
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+export async function retryBackorderAllocation(companyId: string, orderId: string, ttlMinutes = DEFAULT_RESERVATION_TTL_MINUTES) {
+  const order = await prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
   if (!order || order.status !== 'BACKORDERED') return order;
   try {
     const openLines = order.lines.filter((line) => !line.lotId && line.requestedQty > 0);
     for (const line of openLines) {
-      const lots = await fefoLotsForItem(line.itemId, line.fulfillmentLocationId || order.fulfillmentLocationId);
+      const lots = await fefoLotsForItem(companyId, line.itemId, line.fulfillmentLocationId || order.fulfillmentLocationId);
       const allocation = allocateLots(lots, line.requestedQty, 'FEFO');
       if (!allocation.allocations.length) continue;
       await reserveStockForTransfer(allocation.allocations.map((pick) => ({
@@ -240,11 +247,9 @@ export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEF
 
     const remaining = await prisma.orderLine.count({ where: { orderId: order.id, lotId: null, requestedQty: { gt: 0 } } });
     if (remaining === 0) {
-      await assertValidOrderTransition(order.status as never, 'RESERVED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated' });
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { status: 'RESERVED', reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) },
-      });
+      await transitionOrderStatus(order.id, order.companyId, order.status as never, 'RESERVED', {
+        actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated',
+      }, { reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) });
       await persistAudit(recordAudit({
         actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_BACKORDER_FILLED', entityType: 'Order', entityId: order.id,
       }));
@@ -252,7 +257,7 @@ export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEF
   } catch (error) {
     console.error(`retryBackorderAllocation failed for order ${order.id} (non-blocking):`, error instanceof Error ? error.message : error);
   }
-  return prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+  return prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
 }
 
 /**
@@ -261,13 +266,13 @@ export async function retryBackorderAllocation(orderId: string, ttlMinutes = DEF
  * fail-open posture as expireStaleReservations. Returns how many orders
  * became fully RESERVED as a result.
  */
-export async function retryBackorderedOrders(): Promise<number> {
+export async function retryBackorderedOrders(companyId: string): Promise<number> {
   if (!databaseEnabled) return 0;
   let filledCount = 0;
   try {
-    const backordered = await prisma.order.findMany({ where: { status: 'BACKORDERED' }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+    const backordered = await prisma.order.findMany({ where: { companyId, status: 'BACKORDERED' }, orderBy: { createdAt: 'asc' }, select: { id: true } });
     for (const { id } of backordered) {
-      const updated = await retryBackorderAllocation(id);
+      const updated = await retryBackorderAllocation(companyId, id);
       if (updated?.status === 'RESERVED') filledCount += 1;
     }
   } catch (error) {
@@ -306,7 +311,22 @@ async function createOrderInner(input: {
   companyId?: string;
 }) {
   if (!databaseEnabled) return createMemoryReservedOrder(input);
-  await expireStaleReservations();
+  const companyId = input.companyId;
+  if (!companyId) throw new Error('companyId is required for database-backed orders.');
+  const itemIds = [...new Set(input.lines.map((line) => line.itemId))];
+  const requestedLocationIds = [...new Set([
+    ...(input.fulfillmentLocationId ? [input.fulfillmentLocationId] : []),
+    ...(input.candidateLocations ?? []).map((location) => location.locationId),
+  ])];
+  const [ownedItems, ownedLocations, actor] = await Promise.all([
+    prisma.item.count({ where: { companyId, id: { in: itemIds } } }),
+    prisma.location.count({ where: { companyId, id: { in: requestedLocationIds } } }),
+    prisma.user.findFirst({ where: { id: input.createdById, companyId }, select: { id: true } }),
+  ]);
+  if (ownedItems !== itemIds.length) throw new Error('One or more order items were not found.');
+  if (ownedLocations !== requestedLocationIds.length) throw new Error('One or more fulfillment locations were not found.');
+  if (!actor) throw new Error('Order creator was not found.');
+  await expireStaleReservations(companyId);
   let fulfillmentLocationId = input.fulfillmentLocationId ?? null;
   const resolved: Array<ResolvedLine & { locationId: string }> = [];
   let backordered: BackorderLine[] = [];
@@ -314,26 +334,26 @@ async function createOrderInner(input: {
 
   if (fulfillmentLocationId) {
     if (input.allowBackorder) {
-      const outcome = await partialAllocateAtLocation(input.lines, fulfillmentLocationId);
+      const outcome = await partialAllocateAtLocation(companyId, input.lines, fulfillmentLocationId);
       resolved.push(...outcome.resolved.map((line) => ({ ...line, locationId: fulfillmentLocationId! })));
       backordered = outcome.backordered;
     } else {
-      const outcome = await tryAllocateAtLocation(input.lines, fulfillmentLocationId);
+      const outcome = await tryAllocateAtLocation(companyId, input.lines, fulfillmentLocationId);
       if (outcome.resolved === null) throw new OrderShortageError(outcome.shortages);
       resolved.push(...outcome.resolved.map((line) => ({ ...line, locationId: fulfillmentLocationId! })));
     }
   } else {
     const candidates = input.candidateLocations ?? [];
-    const routed = await routeOrder(input.lines, candidates, routingCtx);
+    const routed = await routeOrder(companyId, input.lines, candidates, routingCtx);
     if (routed.locationId !== null && routed.resolved !== null) {
       fulfillmentLocationId = routed.locationId;
       resolved.push(...routed.resolved.map((line) => ({ ...line, locationId: routed.locationId! })));
     } else if (input.allowSplit !== false && candidates.length) {
       const ranked = rankOrderCandidates(candidates, routingCtx);
-      const availability = await itemAvailabilityByLocation(input.lines.map((line) => line.itemId), ranked.map((row) => row.locationId));
+      const availability = await itemAvailabilityByLocation(companyId, input.lines.map((line) => line.itemId), ranked.map((row) => row.locationId));
       const split = splitLinesAcrossLocations(input.lines, ranked, availability);
       for (const slice of split.splits) {
-        const partial = await partialAllocateAtLocation(slice.lines, slice.locationId);
+        const partial = await partialAllocateAtLocation(companyId, slice.lines, slice.locationId);
         resolved.push(...partial.resolved.map((line) => ({ ...line, locationId: slice.locationId })));
         backordered.push(...partial.backordered);
       }
@@ -361,6 +381,7 @@ async function createOrderInner(input: {
   try {
     const order = await prisma.order.create({
       data: {
+        companyId,
         channel: input.channel,
         externalReference: input.externalReference ?? null,
         status,
@@ -368,7 +389,6 @@ async function createOrderInner(input: {
         customerName: input.customerName ?? null,
         notes: input.notes ?? null,
         createdById: input.createdById,
-        companyId: input.companyId ?? DEFAULT_COMPANY_ID,
         reservedAt,
         reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000),
         estimatedDispatchAt: new Date(promise.estimatedDispatchAt),
@@ -405,12 +425,10 @@ async function createOrderInner(input: {
  * releases the reservation - stock has now physically left, the same
  * sequencing already used for transfer confirmation.
  */
-export async function fulfillOrder(orderId: string, actorId: string) {
-  await expireStaleReservations();
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+export async function fulfillOrder(companyId: string, orderId: string, actorId: string) {
+  await expireStaleReservations(companyId);
+  const order = await prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
-  await assertValidOrderTransition(order.status as never, 'FULFILLED', order.id, { actorId, actorRole: 'SYSTEM' });
-
   await prisma.$transaction(async (tx) => {
     for (const line of order.lines) {
       if (!line.lotId) continue;
@@ -421,45 +439,54 @@ export async function fulfillOrder(orderId: string, actorId: string) {
       if (!ledger || ledger.onHand < line.requestedQty) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
       }
-      await tx.stockLedger.update({
-        where: { id: ledger.id },
-        data: { onHand: { decrement: line.requestedQty }, reserved: { decrement: line.requestedQty }, version: { increment: 1 } },
+      // onHand leaves through the canonical service (journal + ledger + audit + outbox in
+      // this transaction); the reservation counter is a separate dimension the service
+      // does not model, so it is released here in the same transaction.
+      await postInventoryMovementInTransaction(tx, {
+        tenant: { companyId: order.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+        itemId: line.itemId, lotId: line.lotId, locationId,
+        movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
+        idempotencyKey: `order-fulfill:${line.id}`,
+        reason: `Order fulfilled (${order.channel})`, sourceDocument: order.id, sourceLineId: line.id, correlationId: order.id,
+        metadata: { orderId: order.id, channel: order.channel },
       });
-      await tx.stockMovement.create({
-        data: {
-          itemId: line.itemId, lotId: line.lotId, locationId,
-          movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
-          beforeBalance: ledger.onHand, afterBalance: ledger.onHand - line.requestedQty,
-          sourceDocument: 'Order', sourceLineId: line.id, actor: actorId, timestamp: new Date(),
-          reason: `Order fulfilled (${order.channel})`, metadata: { orderId: order.id, channel: order.channel },
-        },
-      });
+      await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { decrement: line.requestedQty } } });
       await tx.orderLine.update({ where: { id: line.id }, data: { fulfilledQty: line.requestedQty } });
     }
-    await tx.order.update({ where: { id: order.id }, data: { status: 'FULFILLED', fulfilledAt: new Date() } });
+    await transitionOrderStatusInTransaction(
+      tx,
+      order.id,
+      order.companyId,
+      order.status as never,
+      'FULFILLED',
+      { actorId, actorRole: 'SYSTEM' },
+      { fulfilledAt: new Date() },
+    );
   });
 
   await persistAudit(recordAudit({
     actorId, actorRole: 'SYSTEM', action: 'ORDER_FULFILLED', entityType: 'Order', entityId: order.id,
     metadata: { channel: order.channel, lines: order.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty })) },
   }));
-  return prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });
+  return prisma.order.findFirst({ where: { id: order.id, companyId }, include: ORDER_INCLUDE });
 }
 
 /** Releases the reservation and marks the order cancelled. Refuses to cancel a fulfilled order (stock has already shipped). Idempotent for an order that already expired or was already cancelled - its reservation was already released, so it is returned as-is rather than released a second time. */
-export async function cancelOrder(orderId: string, actorId: string) {
-  await expireStaleReservations();
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+export async function cancelOrder(companyId: string, orderId: string, actorId: string) {
+  await expireStaleReservations(companyId);
+  const order = await prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
   if (order.status === 'CANCELLED' || order.status === 'EXPIRED') return order;
+  // Cancellation releases reservation state outside a broader transaction,
+  // so reject an illegal terminal-state move before touching stock. The
+  // centralized writer validates again immediately before persisting.
   await assertValidOrderTransition(order.status as never, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
-
   await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
     itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
   })));
-  const updated = await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });
+  await transitionOrderStatus(order.id, order.companyId, order.status as never, 'CANCELLED', { actorId, actorRole: 'SYSTEM' }, { cancelledAt: new Date() });
   await persistAudit(recordAudit({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
-  return updated;
+  return prisma.order.findFirst({ where: { id: order.id, companyId }, include: ORDER_INCLUDE });
 }
 
 // Blueprint v4 §23: "Connector ingestion must be idempotent on platform +
@@ -475,14 +502,14 @@ export function normalizedExternalReference(value: string | null | undefined): s
 }
 
 /** The order already created for this channel + external reference, if any - whatever its status, since the database allows one per pair. */
-export async function findOrderByExternalReference(channel: string, externalReference: string) {
+export async function findOrderByExternalReference(companyId: string, channel: string, externalReference: string) {
   const ref = normalizedExternalReference(externalReference);
   if (!ref) return null;
   if (!databaseEnabled) {
     return listMemoryOrders().find((order) => order.channel === channel && order.externalReference === ref) ?? null;
   }
   return prisma.order.findFirst({
-    where: { channel, externalReference: ref },
+    where: { companyId, channel, externalReference: ref },
     include: ORDER_INCLUDE,
     orderBy: { createdAt: 'asc' },
   });
@@ -491,10 +518,12 @@ export async function findOrderByExternalReference(channel: string, externalRefe
 export async function createOrderWithReservation(input: Parameters<typeof createOrderInner>[0]): Promise<Awaited<ReturnType<typeof createOrderInner>> & { duplicate?: boolean }> {
   const reference = normalizedExternalReference(input.externalReference);
   if (!reference) return createOrderInner(input);
-  const key = `${input.channel} ${reference}`;
+  const companyId = input.companyId;
+  if (databaseEnabled && !companyId) throw new Error('companyId is required for database-backed orders.');
+  const key = `${companyId ?? 'memory'} ${input.channel} ${reference}`;
   const previous = ingestLocks.get(key) ?? Promise.resolve();
   const run = previous.catch(() => undefined).then(async () => {
-    const existing = await findOrderByExternalReference(input.channel, reference);
+    const existing = await findOrderByExternalReference(companyId ?? DEFAULT_COMPANY_ID, input.channel, reference);
     if (existing) return { ...(existing as Awaited<ReturnType<typeof createOrderInner>>), duplicate: true };
     return createOrderInner({ ...input, externalReference: reference });
   });

@@ -1,14 +1,9 @@
-import 'local_store.dart';
-import 'sync_vault.dart';
-
 class SyncEngine {
-  SyncEngine({this.minimumAppVersion = '2.0.0', this.vault});
+  SyncEngine({this.minimumAppVersion = '2.0.0'});
 
   final String minimumAppVersion;
-  final SyncVault? vault;
   final Map<String, SyncMutation> _queue = {};
   final Map<String, int> _ledger = {};
-  final List<String> _sealed = [];
 
   int onHand(String companyId, String itemId) =>
       _ledger[_key(companyId, itemId)] ?? 0;
@@ -22,41 +17,7 @@ class SyncEngine {
     if (existing != null) return existing;
     final processed = _apply(mutation);
     _queue[processed.mutationId] = processed;
-    final activeVault = vault;
-    if (activeVault != null) {
-      _sealed.add(activeVault.seal({
-        'mutationId': processed.mutationId,
-        'companyId': processed.companyId,
-        'actionType': processed.actionType,
-        'payload': processed.payload,
-        'status': processed.status.name,
-      }));
-    }
     return processed;
-  }
-
-  Future<void> persistSealed(LocalStore store) async {
-    final activeVault = vault;
-    if (activeVault == null) return;
-    await store.saveSealedQueue(activeVault.companyId, sealedQueue());
-  }
-
-  Future<void> restoreSealed(LocalStore store) async {
-    final activeVault = vault;
-    if (activeVault == null) return;
-    _sealed
-      ..clear()
-      ..addAll(await store.loadSealedQueue(activeVault.companyId));
-  }
-
-  List<String> sealedQueue() => List.unmodifiable(_sealed);
-
-  Map<String, Object?> openSealed(String envelope) {
-    final activeVault = vault;
-    if (activeVault == null) {
-      throw StateError('SYNC_VAULT_REQUIRED');
-    }
-    return activeVault.open(envelope);
   }
 
   bool allowsOfflineCompanySwitch() => false;

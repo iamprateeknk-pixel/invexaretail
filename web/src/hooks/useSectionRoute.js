@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 export const APP_SECTIONS = Object.freeze([
-  'dashboard', 'inventory', 'item-search', 'stock-update', 'expiry', 'catalog',
+  'dashboard', 'inventory', 'item-search', 'stock-update', 'import-wizard', 'expiry', 'catalog',
   'counts', 'campaigns', 'transfers', 'picking', 'putaway', 'purchase-orders', 'orders', 'qc', 'assets', 'jobs',
   'command-center', 'approvals', 'reports', 'intelligence', 'exceptions', 'alerts', 'integrations', 'connectors', 'saas', 'admin',
 ]);

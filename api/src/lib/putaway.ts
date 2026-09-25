@@ -13,6 +13,7 @@ import { persistAudit } from './persistence.js';
 // gets put away.
 
 export type CreatePutawayTaskInput = {
+  companyId: string;
   itemId: string;
   lotId?: string | null;
   locationId: string;
@@ -75,11 +76,11 @@ export function rankBinCandidates(candidates: BinCandidate[], ctx: { incomingQty
 const VELOCITY_WINDOW_DAYS = 30;
 const VELOCITY_THRESHOLD_UNITS = 20;
 
-async function suggestBin(locationId: string, itemId: string, quantity: number): Promise<string | null> {
+async function suggestBin(companyId: string, locationId: string, itemId: string, quantity: number): Promise<string | null> {
   const bins = await prisma.bin.findMany({ where: { locationId, status: 'ACTIVE' } });
   if (!bins.length) return null;
 
-  const item = await prisma.item.findUnique({ where: { id: itemId }, select: { category: true } });
+  const item = await prisma.item.findFirst({ where: { id: itemId, companyId }, select: { category: true } });
   const categoryMatches = item?.category ? bins.filter((bin) => bin.storageClass && bin.storageClass.toLowerCase() === item.category!.toLowerCase()) : [];
   const candidateBins = categoryMatches.length ? categoryMatches : bins;
 
@@ -116,7 +117,7 @@ async function suggestBin(locationId: string, itemId: string, quantity: number):
  */
 export async function createPutawayTask(input: CreatePutawayTaskInput): Promise<void> {
   try {
-    const suggestedBinId = await suggestBin(input.locationId, input.itemId, input.quantity);
+    const suggestedBinId = await suggestBin(input.companyId, input.locationId, input.itemId, input.quantity);
     const task = await prisma.putawayTask.create({
       data: {
         itemId: input.itemId,

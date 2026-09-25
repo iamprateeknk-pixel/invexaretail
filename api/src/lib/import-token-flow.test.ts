@@ -68,7 +68,7 @@ test('openingPreviewFromStagedRows normalizes an ADJUSTMENT_SET staged row into 
   const staged = stageStockAdjustment(preview, plan, 'SET');
 
   const batch: ImportBatchRecord = {
-    id: 'batch-1', type: 'ADJUSTMENT_SET', fileName: 'stock.csv', sourceFormat: preview.format,
+    id: 'batch-1', companyId: 'import-token-test-company', type: 'ADJUSTMENT_SET', fileName: 'stock.csv', sourceFormat: preview.format,
     importedById: 'user-1', importedAt: new Date().toISOString(), totalRows: preview.totalRows,
     validRows: staged.length, invalidRows: 0, duplicateRows: preview.duplicateRows,
     metadata: { sheetName: preview.sheetName, headerRow: preview.headerRow, format: preview.format, snapshotAt: preview.snapshotAt },

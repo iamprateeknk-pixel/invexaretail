@@ -44,6 +44,7 @@ import { planPickFaceReplenishment } from '../lib/pick-face-replenishment.js';
 import { verifyPackScan } from '../lib/pack-verification.js';
 import { getCarrierAdapter } from '../lib/carrier-adapter.js';
 import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, type ReturnAction } from '../lib/returns-rma.js';
+import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { findTemplateForCategory } from '../lib/qc-inspection.js';
 import { computeDemandStats, suggestReplenishment } from '../lib/demand-forecast.js';
@@ -79,10 +80,16 @@ import {
   setWebhookSubscriptionStatus,
 } from '../lib/webhook-store.js';
 import { replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
-import { DEFAULT_COMPANY_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
+import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
 
 const router = Router();
+
+function tenantContextOf(req: Request): TenantContext {
+  return { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as TenantContext['role'] };
+}
 router.use(extractToken, requireAuth, enforcePermissionOverrides, respondWhenMemoryUnavailable);
 
 // Centralized fix (see docs/tenant-scope-coverage.md's bare-id call-site
@@ -246,9 +253,12 @@ router.post('/jobs/:id/consume', async (req, res) => {
         where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId } },
       });
       if (!ledger || ledger.onHand < pick.quantity) throw new Error(`Insufficient stock for lot ${pick.lotNo}.`);
-      await tx.stockLedger.update({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId } },
-        data: { onHand: { decrement: pick.quantity }, version: { increment: 1 } },
+      await postInventoryMovementInTransaction(tx, {
+        tenant: tenantContextOf(req), itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId,
+        movementType: 'ADJUSTMENT', qtyDelta: -pick.quantity,
+        // One consume request = one movement per lot; the line's running issuedQty makes each request distinct.
+        idempotencyKey: `job-consume:${line.id}:${line.issuedQty}:${pick.lotId}`,
+        reason: 'Job consumption', sourceDocument: job.id, sourceLineId: line.id, correlationId: job.id,
       });
     }
     return tx.jobLine.update({
@@ -382,11 +392,12 @@ router.patch('/notification-inbox/:id/read', async (req, res) => {
   return res.json({ notification });
 });
 
-async function syncExpiryAlerts(locationId?: string): Promise<void> {
+async function syncExpiryAlerts(companyId: string, locationId?: string): Promise<void> {
   const cutoff = new Date(Date.now() + 90 * 86_400_000);
   const ledger = await prisma.stockLedger.findMany({
     where: {
       ...(locationId ? { locationId } : {}),
+      companyId,
       onHand: { gt: 0 },
       lot: { expiryDate: { not: null, lte: cutoff } },
     },
@@ -415,7 +426,7 @@ async function syncExpiryAlerts(locationId?: string): Promise<void> {
   }
   if (locationId) {
     await prisma.expiryAlert.updateMany({
-      where: { locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] }, ...(activeIds.length ? { id: { notIn: activeIds } } : {}) },
+      where: { companyId, locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] }, ...(activeIds.length ? { id: { notIn: activeIds } } : {}) },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
     });
   }
@@ -548,22 +559,21 @@ router.post('/expiry-write-off', async (req, res) => {
         },
       });
       const claimed = await tx.expiryAlert.updateMany({
-        where: { id: alertId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
+        where: { id: alertId, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
         data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, ledger.onHand - quantity) },
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
       const afterBalance = ledger.onHand - quantity;
-      await tx.stockLedger.update({
-        where: { itemId_lotId_locationId: { itemId, lotId, locationId } },
-        data: { onHand: { decrement: quantity }, version: { increment: 1 } },
-      });
-      const movement = await tx.stockMovement.create({ data: {
-        itemId, lotId, locationId,
+      // Canonical posting inside this transaction (journal + ledger + audit + outbox).
+      // The key carries the ledger version so a later, legitimate write-off of the same
+      // lot (the alert id is deterministic per item/lot/location) is a new movement.
+      const { movement } = await postInventoryMovementInTransaction(tx, {
+        tenant: tenantContextOf(req), itemId, lotId, locationId,
         movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
-        beforeBalance: ledger.onHand, afterBalance, sourceDocument: alertId,
-        actor: req.user!.id, timestamp: new Date(), correlationId: alertId, reason,
+        idempotencyKey: `expiry-writeoff:${alertId}:${ledger.version}`,
+        reason, sourceDocument: alertId, correlationId: alertId,
         metadata: { expiryDate: lot.expiryDate?.toISOString() ?? null, alertId },
-      } });
+      });
       await tx.auditLog.create({ data: {
         actorId: req.user!.id, actorRole: req.user!.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
         entityType: 'ExpiryAlert', entityId: alertId,
@@ -594,7 +604,7 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
   if (!current) return res.status(404).json({ message: 'Expiry alert not found.' });
   if (!canAccessLocation(req, current.locationId)) return res.status(403).json({ message: 'Location access denied.' });
   const alert = await prisma.expiryAlert.update({
-    where: { id: current.id },
+    where: { id: current.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     data: {
       status: status as any,
       acknowledgedAt: status === 'ACKNOWLEDGED' ? new Date() : current.acknowledgedAt,
@@ -631,17 +641,13 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
       const afterBalance = ledger.onHand - quantity;
-      await tx.stockLedger.update({
-        where: { itemId_lotId_locationId: { itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId } },
-        data: { onHand: { decrement: quantity }, version: { increment: 1 } },
-      });
-      const movement = await tx.stockMovement.create({ data: {
-        itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId,
+      const { movement } = await postInventoryMovementInTransaction(tx, {
+        tenant: tenantContextOf(req), itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId,
         movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
-        beforeBalance: ledger.onHand, afterBalance, sourceDocument: alert.id,
-        actor: req.user!.id, timestamp: new Date(), correlationId: alert.id, reason,
+        idempotencyKey: `expiry-writeoff:${alert.id}:${ledger.version}`,
+        reason, sourceDocument: alert.id, correlationId: alert.id,
         metadata: { expiryDate: alert.expiryDate.toISOString(), alertId: alert.id },
-      } });
+      });
       await tx.auditLog.create({ data: {
         actorId: req.user!.id, actorRole: req.user!.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
         entityType: 'ExpiryAlert', entityId: alert.id,
@@ -1295,8 +1301,9 @@ router.get('/orders', async (req, res) => {
     );
     return res.json({ orders });
   }
-  await expireStaleReservations();
-  await retryBackorderedOrders();
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  await expireStaleReservations(companyId);
+  await retryBackorderedOrders(companyId);
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   const status = typeof req.query.status === 'string' ? req.query.status : '';
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
@@ -1343,14 +1350,14 @@ router.post('/orders', async (req, res) => {
             }));
           }
           const locations = await prisma.location.findMany({
-            where: { status: 'ACTIVE' },
+            where: { status: 'ACTIVE', companyId: req.companyId ?? DEFAULT_COMPANY_ID },
             select: { id: true, name: true, type: true, latitude: true, longitude: true, deliverySlaHours: true, shippingCostPerKm: true },
           });
           let openOrders: Array<{ fulfillmentLocationId: string; count: number }> = [];
           try {
             const grouped = await prisma.order.groupBy({
               by: ['fulfillmentLocationId'],
-              where: { status: { in: ['RESERVED', 'BACKORDERED'] } },
+              where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['RESERVED', 'BACKORDERED'] } },
               _count: { _all: true },
             });
             openOrders = grouped.map((row) => ({ fulfillmentLocationId: row.fulfillmentLocationId, count: row._count._all }));
@@ -1395,9 +1402,10 @@ router.post('/orders', async (req, res) => {
 router.post('/orders/:id/fulfill', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const order = await fulfillOrder(req.params.id, req.user!.id);
+    const order = await fulfillOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to fulfill order.' });
   }
 });
@@ -1405,9 +1413,10 @@ router.post('/orders/:id/fulfill', async (req, res) => {
 router.post('/orders/:id/cancel', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const order = await cancelOrder(req.params.id, req.user!.id);
+    const order = await cancelOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to cancel order.' });
   }
 });
@@ -1420,9 +1429,9 @@ function requirePacker(req: Request, res: Response): boolean {
   return true;
 }
 
-async function packVerificationFor(orderId: string, session: { id: string }) {
+async function packVerificationFor(companyId: string, orderId: string, session: { id: string }) {
   const [order, packedLines] = await Promise.all([
-    prisma.order.findUnique({ where: { id: orderId }, include: { lines: true } }),
+    prisma.order.findFirst({ where: { id: orderId, companyId }, include: { lines: true } }),
     prisma.packedLine.findMany({ where: { packSessionId: session.id } }),
   ]);
   if (!order) return null;
@@ -1440,7 +1449,7 @@ router.post('/orders/:id/pack/start', async (req, res) => {
   if (!session) {
     session = await prisma.packSession.create({ data: { orderId: order.id, packedById: req.user!.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   }
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.status(201).json({ session, verification });
 });
 
@@ -1451,7 +1460,7 @@ router.get('/orders/:id/pack', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
   if (!session) return res.json({ session: null, verification: null });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.json({ session, verification });
 });
 
@@ -1468,7 +1477,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
   await prisma.packedLine.create({
     data: { packSessionId: session.id, itemId, lotId: typeof req.body.lotId === 'string' ? req.body.lotId : null, quantity, scannedById: req.user!.id },
   });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.status(201).json({ session, verification });
 });
 
@@ -1479,7 +1488,7 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
   if (!session) return res.status(409).json({ message: 'No pack session is in progress for this order.' });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   if (!verification?.readyToSeal) {
     return res.status(409).json({ message: 'Every order line must be scanned exactly before sealing.', verification });
   }
@@ -1640,12 +1649,12 @@ router.get('/orders/:id/returns', async (req, res) => {
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
+  const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
   return res.json({ returnRequests });
 });
 
 // Blueprint v4 §24: what QC says about a returned line, and whether QC applies.
-async function returnQcContext(returnRequestId: string, itemIds: string[]) {
+async function returnQcContext(companyId: string, returnRequestId: string, itemIds: string[]) {
   const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
   const templates: Array<{ id: string; category: string | null; active: boolean }> = databaseEnabled
     ? await prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
@@ -1655,7 +1664,7 @@ async function returnQcContext(returnRequestId: string, itemIds: string[]) {
     : listMemoryQcInspections().filter((row) => row.sourceDocument === returnRequestId);
   const categories = new Map<string, string | null>();
   if (databaseEnabled && itemIds.length) {
-    for (const row of await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, category: true } })) categories.set(row.id, row.category ?? null);
+    for (const row of await prisma.item.findMany({ where: { id: { in: itemIds }, companyId }, select: { id: true, category: true } })) categories.set(row.id, row.category ?? null);
   } else {
     for (const item of listItems()) categories.set(item.id, item.category ?? null);
   }
@@ -1698,7 +1707,7 @@ router.patch('/returns/:id/status', async (req, res) => {
 
   if (action === 'RECEIVE') {
     const dispositions = req.body.dispositions && typeof req.body.dispositions === 'object' ? req.body.dispositions as Record<string, string> : {};
-    const qc = await returnQcContext(returnRequest.id, returnRequest.lines.map((line) => line.itemId));
+    const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, returnRequest.lines.map((line) => line.itemId));
     // Decide every line before touching stock, so one bad line cannot leave the return half-received.
     const plans = [];
     for (const line of returnRequest.lines) {
@@ -1710,20 +1719,13 @@ router.patch('/returns/:id/status', async (req, res) => {
       await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
       const lot = await returnLot(returnRequest.id, line.itemId);
       if (plan.action === 'RESTOCK') {
-        const ledger = await prisma.stockLedger.upsert({
-          where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } },
-          update: { onHand: { increment: line.quantity }, version: { increment: 1 } },
-          create: { itemId: line.itemId, lotId: lot.id, locationId, onHand: line.quantity, version: 1 },
-        });
+        await prisma.$transaction((tx) => postInventoryMovementInTransaction(tx, {
+          tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+          movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+          idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
+          reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+        }));
         adjustStockLedger(line.itemId, lot.id, locationId, line.quantity);
-        await prisma.stockMovement.create({
-          data: {
-            itemId: line.itemId, lotId: lot.id, locationId, movementType: 'SALES_RETURN', qtyDelta: line.quantity,
-            beforeBalance: ledger.onHand - line.quantity, afterBalance: ledger.onHand,
-            sourceDocument: returnRequest.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-            reason: 'Customer return restocked after inspection',
-          },
-        }).catch(() => undefined);
       } else if (plan.action === 'HOLD') {
         // Physically back in the building but not sellable: quarantine until a disposition is decided.
         await prisma.stockLedger.upsert({
@@ -1748,7 +1750,13 @@ router.patch('/returns/:id/status', async (req, res) => {
     }
   }
 
-  const updated = await prisma.returnRequest.update({ where: { id: returnRequest.id }, data: { status: nextStatus }, include: { lines: true } });
+  const updated = await transitionReturnStatus({
+    entityId: returnRequest.id,
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+    action,
+    actorId: req.user!.id,
+    actorRole: req.user!.role,
+  });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: `RETURN_${action}`,
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: returnRequest.orderId, status: nextStatus },
@@ -1767,7 +1775,7 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   if (!line) return res.status(404).json({ message: 'Return line was not found.' });
   if (!isPendingDisposition(line.disposition)) return res.status(409).json({ message: `This line was already dispositioned as ${line.disposition}.` });
 
-  const qc = await returnQcContext(returnRequest.id, [line.itemId]);
+  const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, [line.itemId]);
   const plan = planReturnLine({ requested: String(req.body.disposition ?? ''), qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
   if ('message' in plan) return res.status(400).json({ message: plan.message });
   if (plan.action === 'HOLD') return res.status(409).json({ message: plan.note ?? 'This line must stay in quarantine.' });
@@ -1777,37 +1785,48 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } } });
   if (!ledger || ledger.quarantine + 1e-8 < line.quantity) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
   const restock = plan.action === 'RESTOCK';
-  await prisma.stockLedger.update({
-    where: { id: ledger.id },
-    data: {
-      quarantine: { decrement: line.quantity },
-      ...(restock ? { onHand: { increment: line.quantity } } : {}),
-      ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
-      version: { increment: 1 },
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.stockLedger.update({
+      where: { id: ledger.id },
+      data: {
+        quarantine: { decrement: line.quantity },
+        ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
+        version: { increment: 1 },
+      },
+    });
+    if (restock) {
+      await postInventoryMovementInTransaction(tx, {
+        tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+        movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+        idempotencyKey: `return-disposition:${returnRequest.id}:${line.id}`,
+        reason: `Return disposition: ${plan.disposition}`, sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+      });
+    } else {
+      // Quarantine -> damaged/other is a bucket move, not an on-hand change: zero-delta journal row.
+      await tx.stockMovement.create({
+        data: {
+          itemId: line.itemId, lotId: lot.id, locationId, movementType: plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
+          qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
+          sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
+          reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -line.quantity },
+          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+        } as never,
+      });
+    }
   });
   adjustQuarantineLedger(line.itemId, lot.id, locationId, -line.quantity);
   if (restock) adjustStockLedger(line.itemId, lot.id, locationId, line.quantity);
   await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
-  await prisma.stockMovement.create({
-    data: {
-      itemId: line.itemId, lotId: lot.id, locationId, movementType: restock ? 'SALES_RETURN' : plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
-      qtyDelta: restock ? line.quantity : -line.quantity, beforeBalance: restock ? ledger.onHand : ledger.quarantine,
-      afterBalance: restock ? ledger.onHand + line.quantity : ledger.quarantine - line.quantity,
-      sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-      reason: `Return disposition: ${plan.disposition}`,
-    },
-  }).catch(() => undefined);
   // The quarantine case opened at receipt is decided by this action.
   await prisma.exceptionCase.updateMany({
-    where: { sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
+    where: { companyId: returnRequest.companyId, sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
     data: { status: 'RESOLVED', resolvedAt: new Date() },
   }).catch(() => undefined);
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_LINE_DISPOSED',
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { lineId: line.id, disposition: plan.disposition, quantity: line.quantity },
   }));
-  const refreshed = await prisma.returnRequest.findUnique({ where: { id: returnRequest.id }, include: { lines: true } });
+  const refreshed = await prisma.returnRequest.findFirst({ where: { id: returnRequest.id, companyId: returnRequest.companyId }, include: { lines: true } });
   return res.json({ returnRequest: refreshed });
 });
 
@@ -1820,7 +1839,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
   if (!returnRequest) return res.status(404).json({ message: 'Return request not found.' });
   if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status)) return res.status(409).json({ message: 'A refund can be decided once the goods have been received.' });
   const updated = await prisma.returnRequest.update({
-    where: { id: returnRequest.id },
+    where: { id: returnRequest.id, companyId: returnRequest.companyId },
     data: { refundStatus: decision, refundNote: typeof req.body.note === 'string' ? req.body.note.slice(0, 2000) : null, refundedAt: new Date(), refundedById: req.user!.id },
   });
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `RETURN_REFUND_${decision}`, entityType: 'ReturnRequest', entityId: returnRequest.id }));
@@ -1832,7 +1851,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
 // required for correctness, only for an admin to force it on demand.
 router.post('/orders/expire-reservations', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const expiredCount = await expireStaleReservations();
+  const expiredCount = await expireStaleReservations(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json({ expiredCount });
 });
 
@@ -1842,13 +1861,13 @@ router.post('/orders/expire-reservations', async (req, res) => {
 // after receiving new stock, before the next order list happens to run).
 router.post('/orders/retry-backorders', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const filledCount = await retryBackorderedOrders();
+  const filledCount = await retryBackorderedOrders(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json({ filledCount });
 });
 
 router.post('/orders/:id/retry-backorder', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const order = await retryBackorderAllocation(req.params.id);
+  const order = await retryBackorderAllocation(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id);
   if (!order) return res.status(404).json({ message: 'Order was not found.' });
   return res.json({ order });
 });
@@ -2160,13 +2179,14 @@ router.get('/exceptions', async (req, res) => {
 
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const scope = mine
-    ? { ownerId: req.user!.id, companyId }
+    ? { ownerId: req.user!.id }
     : EXCEPTION_MANAGER_ROLES.includes(req.user!.role) || req.user!.role === 'AUDITOR'
-      ? (locationId ? { locationId, companyId } : { companyId })
-      : { locationId: { in: req.user!.locationIds ?? [] }, companyId };
+      ? (locationId ? { locationId } : {})
+      : { locationId: { in: req.user!.locationIds ?? [] } };
 
   const cases = await prisma.exceptionCase.findMany({
     where: {
+      companyId,
       ...scope,
       ...(status ? { status: status as never } : { status: { notIn: ['CLOSED', 'REJECTED'] as never } }),
       ...(type ? { type: type as never } : {}),
@@ -2244,7 +2264,7 @@ router.patch('/exceptions/:id', async (req, res) => {
   }
   if (!Object.keys(data).length) return res.status(400).json({ message: 'No updatable fields were provided.' });
 
-  const updated = await prisma.exceptionCase.update({ where: { id: existing.id }, data });
+  const updated = await prisma.exceptionCase.update({ where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, data });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role,
     action: 'EXCEPTION_UPDATED', entityType: 'ExceptionCase', entityId: existing.id, metadata: data,
@@ -2266,7 +2286,7 @@ router.post('/exceptions/:id/resolve', async (req, res) => {
   const now = new Date();
   await applyExceptionDisposition(existing, disposition as never, req.user!.id);
   const updated = await prisma.exceptionCase.update({
-    where: { id: existing.id },
+    where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     data: { disposition: disposition as never, resolutionNotes, status: 'CLOSED', resolvedAt: now, closedAt: now },
   });
   await persistAudit(recordAudit({
@@ -2454,7 +2474,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
     if (!lines.length) continue;
     try {
       const locations = databaseEnabled
-        ? await prisma.location.findMany({ where: { status: 'ACTIVE' }, select: { id: true, name: true, type: true } })
+        ? await prisma.location.findMany({ where: { status: 'ACTIVE', companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true, name: true, type: true } })
         : listLocations().map((location) => ({ id: location.id, name: location.name, type: location.type }));
       const order = await createOrderWithReservation({
         channel: mapped.channel,

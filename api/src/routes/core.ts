@@ -18,6 +18,7 @@ import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
 import { hashPassword } from '../lib/otp-auth.js';
 import {
   DEFAULT_COMPANY_ID,
+  DEFAULT_TENANT_ID,
   itemsForCompany,
   registerItemCompany,
   registerLocationCompany,
@@ -198,6 +199,7 @@ import {
 import type { DailyMovementRecord, LotRecord } from '../lib/repository.js';
 import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 
 const router = Router();
 
@@ -211,6 +213,15 @@ const INVENTORY_ROLES: readonly string[] = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAG
 function accessContext(user: EnhancedUserRecord): AccessContext {
   const role = INVENTORY_ROLES.includes(user.role) ? (user.role as Role) : 'STORE_USER';
   return { role, assignedLocationIds: user.locationIds ?? [], companyId: user.companyId };
+}
+
+function tenantContext(req: Request): TenantContext {
+  return {
+    companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    userId: req.user!.id,
+    role: req.user!.role as TenantContext['role'],
+  };
 }
 
 function csvEscape(value: unknown): string {
@@ -861,7 +872,7 @@ router.get('/counts', async (req: Request, res: Response) => {
   const counts = await Promise.all(visible.map(async (count) => {
     const variance = count.physicalQuantity - count.bookQty;
     const toleranceRecommendation = count.status === 'PENDING_REVIEW'
-      ? await getCountRecommendation({ itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
+      ? await getCountRecommendation(tenantContext(req), { itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
       : null;
     return { ...count, variance, toleranceRecommendation };
   }));
@@ -886,7 +897,7 @@ router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, re
   const stored = countsStore.find((candidate) => candidate.id === count.id)!;
   stored.reconciliationRequired = false;
   stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user!.id}: ${note}`.trim();
-  await persistCountReconciliation(stored);
+  await persistCountReconciliation(stored, req.companyId ?? DEFAULT_COMPANY_ID);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'COUNT_RECONCILIATION_RESOLVED', entityType: 'StockCount', entityId: count.id, metadata: { note, lateDelta: stored.lateDelta } }));
   publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [count.locationId] });
   return res.json({ success: true, count: { ...stored, variance: stored.physicalQuantity - stored.bookQty } });
@@ -1117,7 +1128,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
     } catch (error) {
       for (const row of saved) {
         removeCountRecord(row.saved.id);
-        await persistCountDeletion(row.saved.id).catch(() => undefined);
+        await persistCountDeletion(row.saved.id, req.companyId ?? DEFAULT_COMPANY_ID).catch(() => undefined);
       }
       throw error;
     } finally {
@@ -1170,7 +1181,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason });
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason }, req.companyId ?? DEFAULT_COMPANY_ID);
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
@@ -1643,7 +1654,7 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
       if (blocked) return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
     }
     const next: TransferRecord = { ...current, sourceLocationId: validated.sourceLocationId, destinationLocationId: validated.destinationLocationId, lines: validated.lines, cartonCount, notes: validated.notes };
-    await persistTransferReplacement(current, next);
+    await persistTransferReplacement(current, next, req.companyId ?? DEFAULT_COMPANY_ID);
     const updated = replaceTransferRecord(current.id, next);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_EDITED', entityType: 'Transfer', entityId: current.id }));
     return res.json({ success: true, transfer: updated });
@@ -1660,7 +1671,7 @@ router.delete('/transfers/:transferId', async (req: Request, res: Response) => {
   if (!canModifyTransfer(context, req.user!.id, transfer)) return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
   if (activeCartons(listTransferCartons(transfer.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
   try {
-    await persistTransferDeletion(transfer);
+    await persistTransferDeletion(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     removeTransferRecord(transfer.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DELETED', entityType: 'Transfer', entityId: transfer.id }));
     return res.json({ success: true, transferId: transfer.id });
@@ -1757,7 +1768,11 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
     validateTransferStatusChange(context.role, transfer.status, nextStatus);
     const wasTerminal = (TERMINAL_TRANSFER_STATUSES as readonly string[]).includes(transfer.status);
     const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     // Release the request-time reservation the first time this transfer
     // reaches a terminal state (CONFIRMED is released separately at the
     // dedicated /confirm endpoint, alongside the actual stock decrement).
@@ -2125,7 +2140,7 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Import history access denied.' });
   }
   try {
-    const batches = await listImportBatches(Number(req.query.limit ?? 100));
+    const batches = await listImportBatches(req.companyId ?? DEFAULT_COMPANY_ID, Number(req.query.limit ?? 100));
     // Blueprint v4 §10.1: a batch is reversible while it is POSTED and is not itself a reversal.
     return res.json({ batches: batches.map((batch) => ({ ...batch, reversible: batch.status === 'POSTED' && !String(batch.type).includes('REVERS') })) });
   } catch (error) {
@@ -2142,7 +2157,7 @@ router.get('/imports/:batchToken/errors', async (req: Request, res: Response, ne
   const batchToken = firstParam(req.params.batchToken);
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role) && req.user!.role !== 'AUDITOR') return res.status(403).json({ message: 'Import access denied.' });
-  const csv = await buildErrorCsv(batchToken);
+  const csv = await buildErrorCsv(req.companyId ?? DEFAULT_COMPANY_ID, batchToken);
   if (csv === undefined) return res.status(404).json({ message: 'Import batch was not found.' });
   if (String(req.query.format ?? 'csv').toLowerCase() === 'json') {
     return res.json({ batchToken, csv });
@@ -2154,7 +2169,7 @@ router.get('/imports/:batchToken', async (req: Request, res: Response, next: Nex
   const batchToken = firstParam(req.params.batchToken);
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role) && req.user!.role !== 'AUDITOR') return res.status(403).json({ message: 'Import access denied.' });
-  const preview = await buildBatchPreviewPayload(batchToken);
+  const preview = await buildBatchPreviewPayload(req.companyId ?? DEFAULT_COMPANY_ID, batchToken);
   if (!preview) return res.status(404).json({ message: 'Import batch was not found.' });
   return res.json(preview);
 });
@@ -2166,12 +2181,13 @@ router.post('/imports/:batchToken/abandon', async (req: Request, res: Response, 
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required to abandon an import.' });
   try {
-    const batch = await getBatch(batchToken);
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    const batch = await getBatch(companyId, batchToken);
     if (!batch) return res.status(404).json({ message: 'Import batch was not found.' });
     if (batch.importedById !== req.user!.id && req.user!.role !== 'ADMIN') {
       return res.status(403).json({ message: 'Only the importer or Main Admin can abandon this preview.' });
     }
-    const updated = await transitionBatch(batch.id, 'FAILED', { abandonedBy: req.user!.id, abandonedAt: new Date().toISOString() });
+    const updated = await transitionBatch(companyId, batch.id, 'FAILED', { abandonedBy: req.user!.id, abandonedAt: new Date().toISOString() });
     return res.json({ message: 'Preview abandoned. You can upload this file again.', batchToken: updated.id, status: updated.status });
   } catch (error) {
     if (error instanceof InvalidBatchTransitionError) return res.status(409).json({ message: error.message });
@@ -2213,6 +2229,7 @@ router.post('/imports/:batchId/reverse', async (req: Request, res: Response) => 
   try {
     const result = await reverseImportBatch({
       batchId,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       actorId: req.user!.id,
       reason: typeof req.body.reason === 'string' ? req.body.reason : '',
     });
@@ -2258,15 +2275,17 @@ router.post('/imports/opening-stock/preview', upload.single('file'), async (req:
     const preview = await readUploadedStockFile(req);
     const fileHash = computeFileHash(req.file!.buffer);
     const existing = await findDuplicateBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: 'OPENING_STOCK',
       fileHash,
       branchId: null,
       sourceDateFrom: preview.snapshotAt,
       sourceDateTo: preview.snapshotAt,
     });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const staged = stageOpeningStock(preview);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: 'OPENING_STOCK',
       fileName: req.file!.originalname,
       sourceFormat: preview.format,
@@ -2372,7 +2391,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     // high-value category." Gated on the same requestId the client already
     // sends for idempotency, so resubmitting the identical form after
     // approval both finds the APPROVED request and proceeds.
-    const adjustmentValue = (await estimateValueAtRisk(item.id, Math.abs(qtyDelta))) ?? 0;
+    const adjustmentValue = (await estimateValueAtRisk(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0;
     const adjustmentLocation = await prisma.location.findUnique({ where: { id: location.id }, select: { branchId: true } }).catch(() => null);
     const gate = await checkApprovalGate({
       triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
@@ -2397,11 +2416,12 @@ router.post('/stock-adjustments/import/preview', upload.single('file'), async (r
     const mode = validatedStockUpdateMode(req.body.mode);
     const preview = await readUploadedStockFile(req);
     const fileHash = computeFileHash(req.file!.buffer);
-    const existing = await findDuplicateBatch({ type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    const existing = await findDuplicateBatch({ companyId: req.companyId ?? DEFAULT_COMPANY_ID, type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const plan = planStockUpdate(preview, mode);
     const staged = stageStockAdjustment(preview, plan, mode);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: `ADJUSTMENT_${mode}`,
       fileName: req.file!.originalname,
       sourceFormat: preview.format,
@@ -2528,10 +2548,10 @@ function planDailyImport(preview: DailyImportPreview, importedBy: string) {
   return { errors, prepared, warehouse };
 }
 
-async function duplicateFileResponse(res: Response, existingId: string) {
-  const existing = await getBatch(existingId);
+async function duplicateFileResponse(res: Response, companyId: string, existingId: string) {
+  const existing = await getBatch(companyId, existingId);
   if (!existing) return res.status(409).json({ message: 'This file was already imported.' });
-  const preview = await buildBatchPreviewPayload(existing.id);
+  const preview = await buildBatchPreviewPayload(companyId, existing.id);
   return res.status(409).json({
     message: duplicateConflictMessage(existing),
     batchToken: existing.id,
@@ -2560,7 +2580,8 @@ function checkpointsFor(importType: 'SALES' | 'PURCHASE', batchId: string, movem
 }
 
 async function commitImportBatchToken(req: Request, res: Response, batchToken: string) {
-  const batch = await getBatch(batchToken);
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const batch = await getBatch(companyId, batchToken);
   if (!batch) return res.status(404).json({ message: 'Import batch was not found.' });
   if (batch.importedById !== req.user!.id && req.user!.role !== 'ADMIN') {
     return res.status(403).json({ message: 'Only the importer or Main Admin can commit this preview.' });
@@ -2576,12 +2597,12 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
   if (batch.status !== 'PREVIEWED' && batch.status !== 'VALIDATED') {
     return res.status(400).json({ message: `Batch ${batch.id} cannot be committed from ${batch.status}.` });
   }
-  const counts = await countRowsByStatus(batch.id);
+  const counts = await countRowsByStatus(companyId, batch.id);
   if (counts.INVALID > 0 || counts.VALID === 0) {
     return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', invalidRows: counts.INVALID, validRows: counts.VALID });
   }
-  if (batch.status === 'PREVIEWED') await transitionBatch(batch.id, 'VALIDATED');
-  const validRows = await listRows(batch.id, 'VALID');
+  if (batch.status === 'PREVIEWED') await transitionBatch(companyId, batch.id, 'VALIDATED');
+  const validRows = await listRows(companyId, batch.id, 'VALID');
 
   if (batch.type === 'SALES' || batch.type === 'PURCHASE') {
     const importType = batch.type;
@@ -2608,7 +2629,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
     // Movements dated before an existing count make that count's book quantity stale.
     await applyLateMovementsQuietly(movements, req.user!.id);
-    await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2641,11 +2662,11 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
         if (result.created) created += 1;
         else updated += 1;
       }
-      await transitionBatch(batch.id, 'POSTED', { committedRows: imported.length });
+      await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: imported.length });
       return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
-    await transitionBatch(batch.id, 'POSTED', { committedRows: result.stockRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2718,7 +2739,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       sourceFormat: batch.sourceFormat,
     });
     await applyDailyLedger(movements, lots, [], persisted.committedRows);
-    await transitionBatch(batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batch.id, metadata: { fileName: batch.fileName, mode, rows: persisted.committedRows, fileHash } }));
     return res.status(201).json({
       message: persisted.committedRows ? `Updated ${persisted.committedRows} branch/item/lot stock rows.` : 'This exact file and mode were already applied; stock was not changed again.',
@@ -2739,16 +2760,18 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
     const fileHash = computeFileHash(req.file.buffer);
     const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') });
     const existing = await findDuplicateBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
       fileHash,
       branchId: importType === 'PURCHASE' ? warehouse?.id ?? null : null,
       sourceDateFrom: preview.transactionFrom ?? null,
       sourceDateTo: preview.transactionTo ?? null,
     });
-    if (existing) return duplicateFileResponse(res, existing.id);
+    if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
     const plan = planDailyImport(preview, req.user!.id);
     const staged = stageDailyImport(preview, plan);
     const batch = await createPreviewBatch({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
       fileName: req.file.originalname,
       sourceFormat: 'daily-erp-export',
@@ -3093,7 +3116,11 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
 
     const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
     const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
@@ -3119,7 +3146,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   // Gate before touching stock - a confirmed allocation's total value
   // decides whether a configured ApprovalRule blocks this attempt.
   const totalValue = (await Promise.all(
-    [...allocations.values()].map((allocation) => estimateValueAtRisk(allocation.itemId, allocation.quantity)),
+    [...allocations.values()].map((allocation) => estimateValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
   )).reduce((sum, value) => sum + (value ?? 0), 0);
   const sourceLocation = await prisma.location.findUnique({ where: { id: transfer.sourceLocationId }, select: { branchId: true } }).catch(() => null);
   const gate = await checkApprovalGate({
@@ -3129,7 +3156,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
   try {
-    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()]);
+    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
     for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
     const updated = updateTransferStatus(transfer.id, 'CONFIRMED');
     // Stock has just physically left the source (decremented above); the
@@ -3380,7 +3407,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   if (damagedLines.length > 0) {
     const destinationLocation = await prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
     for (const line of damagedLines) {
-      const gate = await requireEvidenceForDamage({
+      const gate = await requireEvidenceForDamage(tenantContext(req), {
         transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
         branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
       });
@@ -3423,6 +3450,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
+      tenant: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role },
     });
 
     let status: TransferRecord['status'];
@@ -3484,6 +3512,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
         // received stock sitting at the dock indefinitely.
         if (line.receivedQty > 0) {
           void createPutawayTask({
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
           });
@@ -3685,7 +3714,11 @@ router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
     });
 
     const updated = updateTransferStatus(transfer.id, 'PICKED');
-    await persistTransferStatus(updated);
+    await persistTransferStatus(updated, {
+      id: req.user!.id,
+      role: context.role,
+      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,

@@ -23,11 +23,11 @@ async function drainImportCommitsOnce(chunkSize = 500) {
         return { batchesProcessed: 0, rowsProcessed: 0 };
     const pending = await db_js_1.prisma.importBatch.findMany({
         where: { status: { in: ['QUEUED_FOR_COMMIT', 'COMMITTING'] } },
-        select: { id: true },
+        select: { id: true, companyId: true },
     });
     let rowsProcessed = 0;
-    for (const { id } of pending) {
-        const result = await (0, import_commit_service_js_1.commitImportBatchChunk)(id, chunkSize);
+    for (const { id, companyId } of pending) {
+        const result = await (0, import_commit_service_js_1.commitImportBatchChunk)(companyId, id, chunkSize);
         rowsProcessed += result.processed;
     }
     return { batchesProcessed: pending.length, rowsProcessed };

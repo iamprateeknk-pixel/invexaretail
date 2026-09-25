@@ -1,3 +1,4 @@
+import type { TenantContext } from './tenant-context.js';
 export type ToleranceRuleLike = {
     id: string;
     label: string;
@@ -33,7 +34,7 @@ export type CountRecommendation = {
  * recommended (no rule triggered and no repeated-variance pattern), so
  * callers can omit the field entirely rather than show a false negative.
  */
-export declare function getCountRecommendation(input: {
+export declare function getCountRecommendation(tenant: TenantContext, input: {
     itemId: string;
     locationId: string;
     bookQty: number;

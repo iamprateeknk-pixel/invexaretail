@@ -4,7 +4,7 @@
 // Postgres - see AGENTS.md "Required tests". Skipped unless
 // TEST_DATABASE_URL is set.
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { before } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma, executeRaw } from './db.js';
 import { recordOutboxEventInTransaction } from './event-bus.js';
@@ -12,6 +12,14 @@ import { drainOutboxOnce, listPoisonEvents, requeuePoisonEvent, MAX_DELIVERY_ATT
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
+
+// These tests drain the whole table and assert on the claim counts, so they
+// need an otherwise empty outbox. Other Postgres suites (imports, reporting,
+// route slices) leave PENDING rows behind, and CI runs every suite against
+// one database - start from a clean table so suite order cannot matter.
+before(async () => {
+  if (databaseUrl) await prisma.$executeRawUnsafe('DELETE FROM "DomainEventOutbox"');
+});
 
 async function insertPendingEvent(companyId = `outbox-test-${randomUUID()}`): Promise<bigint> {
   await prisma.$transaction(async (tx) => {

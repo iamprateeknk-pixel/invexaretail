@@ -50,12 +50,13 @@ export function buildOpeningSnapshotReversalPlan(
     }));
 }
 
-export async function listImportBatches(limit = 100) {
+export async function listImportBatches(companyId: string, limit = 100) {
   if (!databaseEnabled) {
     const { listStoredBatches } = await import('./import-batch-store.js');
-    return listStoredBatches(limit);
+    return listStoredBatches(companyId, limit);
   }
   return prisma.importBatch.findMany({
+    where: { companyId },
     orderBy: { importedAt: 'desc' },
     take: Math.min(Math.max(limit, 1), 250),
     select: {
@@ -68,6 +69,7 @@ export async function listImportBatches(limit = 100) {
 
 export async function reverseImportBatch(input: {
   batchId: string;
+  companyId: string;
   actorId: string;
   reason: string;
 }): Promise<{ duplicate: boolean; reversalBatchId?: string; reversedMovements: number; plan: ReversalPlanLine[] }> {
@@ -76,8 +78,8 @@ export async function reverseImportBatch(input: {
   if (reason.length < 5) throw new Error('A reversal reason of at least 5 characters is required.');
 
   return prisma.$transaction(async (tx) => {
-    const batch = await tx.importBatch.findUnique({
-      where: { id: input.batchId },
+    const batch = await tx.importBatch.findFirst({
+      where: { id: input.batchId, companyId: input.companyId },
       include: { inventoryMovements: true, openingSnapshots: true },
     });
     if (!batch) throw new Error('Import batch was not found.');
@@ -92,15 +94,15 @@ export async function reverseImportBatch(input: {
     }
 
     const claimed = await tx.importBatch.updateMany({
-      where: { id: batch.id, status: 'POSTED' },
+      where: { id: batch.id, companyId: input.companyId, status: 'POSTED' },
       data: { status: 'REVERSING' },
     });
     if (claimed.count !== 1) throw new Error('Import is already being reversed.');
 
     if (fromMovements.length) {
       for (const line of plan) {
-        const ledger = await tx.stockLedger.findUnique({
-          where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+        const ledger = await tx.stockLedger.findFirst({
+          where: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId, companyId: input.companyId },
         });
         const after = Number(ledger?.onHand ?? 0) + line.qtyDelta;
         if (after < -1e-8) {
@@ -113,6 +115,7 @@ export async function reverseImportBatch(input: {
     await tx.importBatch.create({
       data: {
         id: reversalBatchId,
+        companyId: input.companyId,
         type: `${batch.type}_REVERSAL`,
         fileName: `Reversal of ${batch.fileName}`,
         sourceFormat: 'system-reversal',
@@ -153,11 +156,11 @@ export async function reverseImportBatch(input: {
         FROM (
           VALUES ${Prisma.join(chunk.map((line) => Prisma.sql`(${line.itemId}, ${line.lotId}, ${line.locationId}, ${line.qtyDelta}::double precision)`), ', ')}
         ) AS d("itemId", "lotId", "locationId", "qtyDelta")
-        WHERE sl."itemId" = d."itemId" AND sl."lotId" = d."lotId" AND sl."locationId" = d."locationId"
+        WHERE sl."companyId" = ${input.companyId} AND sl."itemId" = d."itemId" AND sl."lotId" = d."lotId" AND sl."locationId" = d."locationId"
       `);
     }
     await tx.importBatch.update({
-      where: { id: batch.id },
+      where: { id: batch.id, companyId: input.companyId },
       data: { status: 'REVERSED', metadata: { ...(batch.metadata && typeof batch.metadata === 'object' ? batch.metadata as object : {}), reversalBatchId, reversalReason: reason } as Prisma.InputJsonValue },
     });
     return { duplicate: false, reversalBatchId, reversedMovements: plan.length, plan };

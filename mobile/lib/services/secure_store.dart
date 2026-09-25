@@ -80,12 +80,6 @@ class SecureLocalStore implements LocalStore {
   @override
   Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) => delegate.saveQueuedCounts(items, companyId);
   @override
-  Future<List<String>> loadSealedQueue(String companyId) => delegate.loadSealedQueue(companyId);
-  @override
-  Future<void> saveSealedQueue(String companyId, List<String> envelopes) => delegate.saveSealedQueue(companyId, envelopes);
-  @override
-  Future<void> clearSealedQueue(String companyId) => delegate.clearSealedQueue(companyId);
-  @override
   Future<List<QueuedAction>> loadQueuedActions() => delegate.loadQueuedActions();
   @override
   Future<void> saveQueuedActions(List<QueuedAction> items) => delegate.saveQueuedActions(items);

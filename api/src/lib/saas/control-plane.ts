@@ -1678,6 +1678,38 @@ export class ControlPlane {
     return publicKey;
   }
 
+  /**
+   * Issues a replacement key with the same name and scopes and revokes the old
+   * one in a single step, so a leaked or aging key can be replaced without a gap
+   * in which two keys are valid. The new token is returned once and never again;
+   * the audit record names both key ids, never a token.
+   */
+  rotateApiKey(scope: ScopeContext, keyId: string): { id: string; token: string; prefix: string; rotatedFrom: string } {
+    const companyId = this.requireLockedCompany(scope);
+    const old = this.apiKeys.get(keyId);
+    if (!old || old.companyId !== companyId) {
+      throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
+    }
+    if (old.status !== 'active') {
+      throw new ControlPlaneError('Only an active API key can be rotated', 'API_KEY_REVOKED', 409);
+    }
+    const created = this.createApiKey(scope, old.name, [...old.scopes]);
+    old.status = 'revoked';
+    this.auditEvent({
+      actorUserId: scope.actorId,
+      actorType: 'platform',
+      tenantId: scope.tenantId,
+      companyId,
+      sessionId: scope.companySessionId,
+      action: 'API_KEY_ROTATED',
+      entityType: 'api_key',
+      entityId: old.id,
+      before: { status: 'active' },
+      after: { status: 'revoked', replacedBy: created.id },
+    });
+    return { ...created, rotatedFrom: old.id };
+  }
+
   createWebhook(scope: ScopeContext, url: string, events: string[], name = 'Ops webhook'): { id: string; signingSecret: string; name: string; url: string; events: string[] } {
     const companyId = this.requireLockedCompany(scope);
     this.assertFeature(companyId, 'INTEGRATIONS');

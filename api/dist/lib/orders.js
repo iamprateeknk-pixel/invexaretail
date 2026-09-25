@@ -22,6 +22,7 @@ const repository_js_1 = require("./repository.js");
 const promise_engine_js_1 = require("./promise-engine.js");
 const domain_policies_js_1 = require("./domain-policies.js");
 const tenant_scope_js_1 = require("./saas/tenant-scope.js");
+const inventory_posting_service_js_1 = require("./inventory-posting-service.js");
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
 // by website, marketplace and store simultaneously." An order line names
@@ -183,11 +184,12 @@ async function expireStaleReservations() {
         });
         for (const order of stale) {
             try {
-                await (0, domain_policies_js_1.assertValidOrderTransition)(order.status, 'EXPIRED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed' });
                 await (0, reservation_js_1.releaseReservedStock)(order.lines.filter((line) => line.lotId).map((line) => ({
                     itemId: line.itemId, lotId: line.lotId, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
                 })));
-                await db_js_1.prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED', expiredAt: new Date() } });
+                await (0, domain_policies_js_1.transitionOrderStatus)(order.id, order.companyId, order.status, 'EXPIRED', {
+                    actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed',
+                }, { expiredAt: new Date() });
                 await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
                     actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_RESERVATION_EXPIRED',
                     entityType: 'Order', entityId: order.id, metadata: { channel: order.channel, reservedAt: order.reservedAt },
@@ -241,11 +243,9 @@ async function retryBackorderAllocation(orderId, ttlMinutes = DEFAULT_RESERVATIO
         }
         const remaining = await db_js_1.prisma.orderLine.count({ where: { orderId: order.id, lotId: null, requestedQty: { gt: 0 } } });
         if (remaining === 0) {
-            await (0, domain_policies_js_1.assertValidOrderTransition)(order.status, 'RESERVED', order.id, { actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated' });
-            await db_js_1.prisma.order.update({
-                where: { id: order.id },
-                data: { status: 'RESERVED', reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) },
-            });
+            await (0, domain_policies_js_1.transitionOrderStatus)(order.id, order.companyId, order.status, 'RESERVED', {
+                actorId: 'system', actorRole: 'SYSTEM', reason: 'backorder fully allocated',
+            }, { reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000) });
             await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
                 actorId: 'system', actorRole: 'SYSTEM', action: 'ORDER_BACKORDER_FILLED', entityType: 'Order', entityId: order.id,
             }));
@@ -402,7 +402,6 @@ async function fulfillOrder(orderId, actorId) {
     const order = await db_js_1.prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
     if (!order)
         throw new Error('Order was not found.');
-    await (0, domain_policies_js_1.assertValidOrderTransition)(order.status, 'FULFILLED', order.id, { actorId, actorRole: 'SYSTEM' });
     await db_js_1.prisma.$transaction(async (tx) => {
         for (const line of order.lines) {
             if (!line.lotId)
@@ -414,22 +413,21 @@ async function fulfillOrder(orderId, actorId) {
             if (!ledger || ledger.onHand < line.requestedQty) {
                 throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
             }
-            await tx.stockLedger.update({
-                where: { id: ledger.id },
-                data: { onHand: { decrement: line.requestedQty }, reserved: { decrement: line.requestedQty }, version: { increment: 1 } },
+            // onHand leaves through the canonical service (journal + ledger + audit + outbox in
+            // this transaction); the reservation counter is a separate dimension the service
+            // does not model, so it is released here in the same transaction.
+            await (0, inventory_posting_service_js_1.postInventoryMovementInTransaction)(tx, {
+                tenant: { companyId: order.companyId, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+                itemId: line.itemId, lotId: line.lotId, locationId,
+                movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
+                idempotencyKey: `order-fulfill:${line.id}`,
+                reason: `Order fulfilled (${order.channel})`, sourceDocument: order.id, sourceLineId: line.id, correlationId: order.id,
+                metadata: { orderId: order.id, channel: order.channel },
             });
-            await tx.stockMovement.create({
-                data: {
-                    itemId: line.itemId, lotId: line.lotId, locationId,
-                    movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
-                    beforeBalance: ledger.onHand, afterBalance: ledger.onHand - line.requestedQty,
-                    sourceDocument: 'Order', sourceLineId: line.id, actor: actorId, timestamp: new Date(),
-                    reason: `Order fulfilled (${order.channel})`, metadata: { orderId: order.id, channel: order.channel },
-                },
-            });
+            await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { decrement: line.requestedQty } } });
             await tx.orderLine.update({ where: { id: line.id }, data: { fulfilledQty: line.requestedQty } });
         }
-        await tx.order.update({ where: { id: order.id }, data: { status: 'FULFILLED', fulfilledAt: new Date() } });
+        await (0, domain_policies_js_1.transitionOrderStatusInTransaction)(tx, order.id, order.companyId, order.status, 'FULFILLED', { actorId, actorRole: 'SYSTEM' }, { fulfilledAt: new Date() });
     });
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
         actorId, actorRole: 'SYSTEM', action: 'ORDER_FULFILLED', entityType: 'Order', entityId: order.id,
@@ -445,13 +443,16 @@ async function cancelOrder(orderId, actorId) {
         throw new Error('Order was not found.');
     if (order.status === 'CANCELLED' || order.status === 'EXPIRED')
         return order;
+    // Cancellation releases reservation state outside a broader transaction,
+    // so reject an illegal terminal-state move before touching stock. The
+    // centralized writer validates again immediately before persisting.
     await (0, domain_policies_js_1.assertValidOrderTransition)(order.status, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
     await (0, reservation_js_1.releaseReservedStock)(order.lines.filter((line) => line.lotId).map((line) => ({
         itemId: line.itemId, lotId: line.lotId, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
     })));
-    const updated = await db_js_1.prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: new Date() }, include: ORDER_INCLUDE });
+    await (0, domain_policies_js_1.transitionOrderStatus)(order.id, order.companyId, order.status, 'CANCELLED', { actorId, actorRole: 'SYSTEM' }, { cancelledAt: new Date() });
     await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
-    return updated;
+    return db_js_1.prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });
 }
 // Blueprint v4 §23: "Connector ingestion must be idempotent on platform +
 // external order ID." A marketplace that re-delivers a webhook (retry, replay,

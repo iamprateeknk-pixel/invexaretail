@@ -80,9 +80,9 @@ export type CommitChunkResult = {
  * checkpoint means an already-committed row's chunk is never re-scanned
  * from the start.
  */
-export declare function commitImportBatchChunk(batchId: string, chunkSize?: number): Promise<CommitChunkResult>;
+export declare function commitImportBatchChunk(companyId: string, batchId: string, chunkSize?: number): Promise<CommitChunkResult>;
 /** Runs commitImportBatchChunk to completion - the synchronous convenience wrapper tests and a worker's single tick both use. */
-export declare function commitImportBatchToCompletion(batchId: string, chunkSize?: number): Promise<void>;
+export declare function commitImportBatchToCompletion(ctx: TenantContext, batchId: string, chunkSize?: number): Promise<void>;
 /**
  * Reverses every committed row's movement through
  * reverseInventoryMovement (Week 6) - an equal-and-opposite post, never an

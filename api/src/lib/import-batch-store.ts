@@ -32,6 +32,7 @@ export type StagedImportRow = {
 
 export type ImportBatchRecord = {
   id: string;
+  companyId: string;
   type: string;
   fileName: string;
   sourceFormat: string;
@@ -50,6 +51,7 @@ export type ImportBatchRecord = {
 };
 
 export type CreatePreviewBatchInput = {
+  companyId: string;
   id?: string;
   type: string;
   fileName: string;
@@ -106,6 +108,7 @@ function cloneRow(row: StagedImportRow): StagedImportRow {
 
 function fromPrismaBatch(row: {
   id: string;
+  companyId: string;
   type: string;
   fileName: string;
   sourceFormat: string;
@@ -124,6 +127,7 @@ function fromPrismaBatch(row: {
 }): ImportBatchRecord {
   return {
     id: row.id,
+    companyId: row.companyId,
     type: row.type,
     fileName: row.fileName,
     sourceFormat: row.sourceFormat,
@@ -150,6 +154,7 @@ export async function createPreviewBatch(input: CreatePreviewBatchInput): Promis
   const id = input.id ?? `imp-${input.type.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const record: ImportBatchRecord = {
     id,
+    companyId: input.companyId,
     type: input.type,
     fileName: input.fileName,
     sourceFormat: input.sourceFormat,
@@ -178,6 +183,7 @@ export async function createPreviewBatch(input: CreatePreviewBatchInput): Promis
     await tx.importBatch.create({
       data: {
         id,
+        companyId: input.companyId,
         type: record.type,
         fileName: record.fileName,
         sourceFormat: record.sourceFormat,
@@ -200,6 +206,7 @@ export async function createPreviewBatch(input: CreatePreviewBatchInput): Promis
         data: chunk.map((row) => ({
           id: rowId(id, row.rowNumber),
           importBatchId: id,
+          companyId: input.companyId,
           rowNumber: row.rowNumber,
           rawData: row.rawData as Prisma.InputJsonValue,
           status: row.status,
@@ -215,22 +222,23 @@ export async function createPreviewBatch(input: CreatePreviewBatchInput): Promis
   return record;
 }
 
-export async function getBatch(id: string): Promise<ImportBatchRecord | undefined> {
+export async function getBatch(companyId: string, id: string): Promise<ImportBatchRecord | undefined> {
   if (!databaseEnabled()) {
     const found = memoryBatches.get(id);
-    return found ? { ...found, metadata: found.metadata ? { ...found.metadata } : null } : undefined;
+    return found?.companyId === companyId ? { ...found, metadata: found.metadata ? { ...found.metadata } : null } : undefined;
   }
-  const row = await prisma.importBatch.findUnique({ where: { id } });
+  const row = await prisma.importBatch.findFirst({ where: { id, companyId } });
   return row ? fromPrismaBatch(row) : undefined;
 }
 
-export async function listRows(id: string, status?: StagedRowStatus): Promise<StagedImportRow[]> {
+export async function listRows(companyId: string, id: string, status?: StagedRowStatus): Promise<StagedImportRow[]> {
   if (!databaseEnabled()) {
+    if (memoryBatches.get(id)?.companyId !== companyId) return [];
     const rows = memoryRows.get(id) ?? [];
     return rows.filter((row) => !status || row.status === status).map(cloneRow);
   }
   const rows = await prisma.importRow.findMany({
-    where: { importBatchId: id, ...(status ? { status } : {}) },
+    where: { importBatchId: id, companyId, ...(status ? { status } : {}) },
     orderBy: { rowNumber: 'asc' },
   });
   return rows.map((row) => ({
@@ -244,15 +252,16 @@ export async function listRows(id: string, status?: StagedRowStatus): Promise<St
   }));
 }
 
-export async function countRowsByStatus(id: string): Promise<Record<StagedRowStatus, number>> {
+export async function countRowsByStatus(companyId: string, id: string): Promise<Record<StagedRowStatus, number>> {
   const counts: Record<StagedRowStatus, number> = { VALID: 0, INVALID: 0, DUPLICATE: 0 };
   if (!databaseEnabled()) {
+    if (memoryBatches.get(id)?.companyId !== companyId) return counts;
     for (const row of memoryRows.get(id) ?? []) counts[row.status] += 1;
     return counts;
   }
   const grouped = await prisma.importRow.groupBy({
     by: ['status'],
-    where: { importBatchId: id },
+    where: { importBatchId: id, companyId },
     _count: { _all: true },
   });
   for (const entry of grouped) {
@@ -263,42 +272,33 @@ export async function countRowsByStatus(id: string): Promise<Record<StagedRowSta
   return counts;
 }
 
-/**
- * Transitions a batch's status, guarded by a compare-and-swap on the status
- * read at the start of this call: if another request has already changed
- * the batch's status in the meantime (e.g. a double-click or client retry
- * on the same "Confirm" action racing this one), this throws
- * ConcurrentBatchTransitionError instead of silently overwriting the other
- * request's result or bubbling a raw "Cannot move batch from POSTED to
- * POSTED" state-machine error. Callers that do real work (posting stock,
- * etc.) between reading the batch and calling this must treat that error as
- * "already handled by the other request", not a crash.
- */
-export async function transitionBatch(id: string, to: ImportBatchStatus, metadataPatch?: Record<string, unknown>): Promise<ImportBatchRecord> {
-  const current = await getBatch(id);
+export async function transitionBatch(companyId: string, id: string, to: ImportBatchStatus, metadataPatch?: Record<string, unknown>): Promise<ImportBatchRecord> {
+  const current = await getBatch(companyId, id);
   if (!current) throw new Error('Import batch was not found.');
   assertValidBatchTransition(current.status, to);
   const nextMetadata = metadataPatch ? { ...(current.metadata ?? {}), ...metadataPatch } : current.metadata;
   if (!databaseEnabled()) {
     const stillCurrent = memoryBatches.get(id);
-    if (!stillCurrent || stillCurrent.status !== current.status) throw new ConcurrentBatchTransitionError(id);
+    if (!stillCurrent || stillCurrent.companyId !== companyId || stillCurrent.status !== current.status) {
+      throw new ConcurrentBatchTransitionError(id);
+    }
     const updated: ImportBatchRecord = { ...stillCurrent, status: to, metadata: nextMetadata };
     memoryBatches.set(id, updated);
     return { ...updated, metadata: updated.metadata ? { ...updated.metadata } : null };
   }
   const result = await prisma.importBatch.updateMany({
-    where: { id, status: current.status },
+    where: { id, companyId, status: current.status },
     data: {
       status: to,
       metadata: (nextMetadata ?? Prisma.JsonNull) as Prisma.InputJsonValue,
     },
   });
-  if (result.count === 0) throw new ConcurrentBatchTransitionError(id);
-  const updated = await getBatch(id);
-  return updated!;
+  if (result.count !== 1) throw new ConcurrentBatchTransitionError(id);
+  return (await getBatch(companyId, id))!;
 }
 
 export async function findDuplicateBatch(input: {
+  companyId: string;
   type: string;
   fileHash: string;
   branchId?: string | null;
@@ -309,7 +309,8 @@ export async function findDuplicateBatch(input: {
   const from = input.sourceDateFrom ?? null;
   const to = input.sourceDateTo ?? null;
   const matches = (batch: ImportBatchRecord) =>
-    batch.type === input.type
+    batch.companyId === input.companyId
+    && batch.type === input.type
     && batch.fileHash === input.fileHash
     && batch.branchId === branchId
     && (batch.sourceDateFrom ?? null) === from
@@ -321,6 +322,7 @@ export async function findDuplicateBatch(input: {
   }
   const row = await prisma.importBatch.findFirst({
     where: {
+      companyId: input.companyId,
       type: input.type,
       fileHash: input.fileHash,
       status: { in: BLOCKING_STATUSES },
@@ -333,8 +335,9 @@ export async function findDuplicateBatch(input: {
   return row ? fromPrismaBatch(row) : undefined;
 }
 
-export function listStoredBatches(limit = 100): Array<Pick<ImportBatchRecord, 'id' | 'type' | 'fileName' | 'importedAt' | 'totalRows' | 'validRows' | 'invalidRows' | 'duplicateRows' | 'status' | 'branchId' | 'metadata'>> {
+export function listStoredBatches(companyId: string, limit = 100): Array<Pick<ImportBatchRecord, 'id' | 'type' | 'fileName' | 'importedAt' | 'totalRows' | 'validRows' | 'invalidRows' | 'duplicateRows' | 'status' | 'branchId' | 'metadata'>> {
   return [...memoryBatches.values()]
+    .filter((batch) => batch.companyId === companyId)
     .sort((a, b) => b.importedAt.localeCompare(a.importedAt))
     .slice(0, Math.min(Math.max(limit, 1), 250))
     .map((batch) => ({

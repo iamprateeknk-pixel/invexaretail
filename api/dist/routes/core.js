@@ -106,6 +106,14 @@ function accessContext(user) {
     const role = INVENTORY_ROLES.includes(user.role) ? user.role : 'STORE_USER';
     return { role, assignedLocationIds: user.locationIds ?? [], companyId: user.companyId };
 }
+function tenantContext(req) {
+    return {
+        companyId: req.companyId ?? req.user.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+        tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID,
+        userId: req.user.id,
+        role: req.user.role,
+    };
+}
 function csvEscape(value) {
     return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
@@ -727,7 +735,7 @@ router.get('/counts', async (req, res) => {
     const counts = await Promise.all(visible.map(async (count) => {
         const variance = count.physicalQuantity - count.bookQty;
         const toleranceRecommendation = count.status === 'PENDING_REVIEW'
-            ? await (0, count_tolerance_js_1.getCountRecommendation)({ itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
+            ? await (0, count_tolerance_js_1.getCountRecommendation)(tenantContext(req), { itemId: count.itemId, locationId: count.locationId, bookQty: count.bookQty, physicalQty: count.physicalQuantity })
             : null;
         return { ...count, variance, toleranceRecommendation };
     }));
@@ -1597,7 +1605,11 @@ router.patch('/transfers/:transferId/status', async (req, res) => {
         (0, inventory_js_1.validateTransferStatusChange)(context.role, transfer.status, nextStatus);
         const wasTerminal = reservation_js_1.TERMINAL_TRANSFER_STATUSES.includes(transfer.status);
         const updated = (0, repository_js_1.updateTransferStatus)(transfer.id, nextStatus);
-        await (0, persistence_js_1.persistTransferStatus)(updated);
+        await (0, persistence_js_1.persistTransferStatus)(updated, {
+            id: req.user.id,
+            role: context.role,
+            companyId: req.companyId ?? req.user.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+        });
         // Release the request-time reservation the first time this transfer
         // reaches a terminal state (CONFIRMED is released separately at the
         // dedicated /confirm endpoint, alongside the actual stock decrement).
@@ -2215,7 +2227,7 @@ router.post('/stock-adjustments/manual', async (req, res) => {
         // high-value category." Gated on the same requestId the client already
         // sends for idempotency, so resubmitting the identical form after
         // approval both finds the APPROVED request and proceeds.
-        const adjustmentValue = (await (0, exceptions_js_2.estimateValueAtRisk)(item.id, Math.abs(qtyDelta))) ?? 0;
+        const adjustmentValue = (await (0, exceptions_js_2.estimateValueAtRisk)(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0;
         const adjustmentLocation = await db_js_1.prisma.location.findUnique({ where: { id: location.id }, select: { branchId: true } }).catch(() => null);
         const gate = await (0, approval_rules_js_1.checkApprovalGate)({
             triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
@@ -3022,7 +3034,11 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req, res) => {
         }
         const nextStatus = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
         const updated = (0, repository_js_1.updateTransferStatus)(transfer.id, nextStatus);
-        await (0, persistence_js_1.persistTransferStatus)(updated);
+        await (0, persistence_js_1.persistTransferStatus)(updated, {
+            id: req.user.id,
+            role: context.role,
+            companyId: req.companyId ?? req.user.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+        });
         void (0, webhook_dispatcher_js_1.emitTransferUpdated)(updated);
         return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
     }
@@ -3052,7 +3068,7 @@ router.post('/transfers/:transferId/confirm', async (req, res) => {
     // Blueprint §16.2: "transfer > ₹1 lakh -> regional manager approval."
     // Gate before touching stock - a confirmed allocation's total value
     // decides whether a configured ApprovalRule blocks this attempt.
-    const totalValue = (await Promise.all([...allocations.values()].map((allocation) => (0, exceptions_js_2.estimateValueAtRisk)(allocation.itemId, allocation.quantity)))).reduce((sum, value) => sum + (value ?? 0), 0);
+    const totalValue = (await Promise.all([...allocations.values()].map((allocation) => (0, exceptions_js_2.estimateValueAtRisk)(tenantContext(req), allocation.itemId, allocation.quantity)))).reduce((sum, value) => sum + (value ?? 0), 0);
     const sourceLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.sourceLocationId }, select: { branchId: true } }).catch(() => null);
     const gate = await (0, approval_rules_js_1.checkApprovalGate)({
         triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: transfer.id,
@@ -3061,7 +3077,7 @@ router.post('/transfers/:transferId/confirm', async (req, res) => {
     if (gate.blocked)
         return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
     try {
-        await (0, persistence_js_1.persistConfirmedPickAllocations)(transfer.id, [...allocations.values()]);
+        await (0, persistence_js_1.persistConfirmedPickAllocations)(transfer.id, [...allocations.values()], { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, userId: req.user.id, role: req.user.role });
         for (const allocation of allocations.values())
             (0, repository_js_1.adjustStockLedger)(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
         const updated = (0, repository_js_1.updateTransferStatus)(transfer.id, 'CONFIRMED');
@@ -3342,7 +3358,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
         if (damagedLines.length > 0) {
             const destinationLocation = await db_js_1.prisma.location.findUnique({ where: { id: transfer.destinationLocationId }, select: { branchId: true } }).catch(() => null);
             for (const line of damagedLines) {
-                const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)({
+                const gate = await (0, evidence_rules_js_1.requireEvidenceForDamage)(tenantContext(req), {
                     transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
                     branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
                 });
@@ -3382,6 +3398,7 @@ router.post('/transfers/:transferId/receive', async (req, res) => {
             const persisted = await (0, transfer_receipt_js_1.persistTransferReceipt)({
                 requestId, transferId, destinationLocationId: transfer.destinationLocationId,
                 receivedById: req.user.id, notes, lines: receiptLines,
+                tenant: { companyId: req.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID, tenantId: tenant_scope_js_1.DEFAULT_TENANT_ID, userId: req.user.id, role: req.user.role },
             });
             let status;
             let summary;
@@ -3675,7 +3692,11 @@ router.post('/picker-tasks/complete', async (req, res) => {
             pickedQty: Number(req.body.pickedQty),
         });
         const updated = (0, repository_js_1.updateTransferStatus)(transfer.id, 'PICKED');
-        await (0, persistence_js_1.persistTransferStatus)(updated);
+        await (0, persistence_js_1.persistTransferStatus)(updated, {
+            id: req.user.id,
+            role: context.role,
+            companyId: req.companyId ?? req.user.companyId ?? tenant_scope_js_1.DEFAULT_COMPANY_ID,
+        });
         await (0, persistence_js_1.persistAudit)((0, audit_js_1.recordAudit)({
             actorId: req.user.id,
             actorRole: req.user.role,

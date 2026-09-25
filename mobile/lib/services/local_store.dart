@@ -12,7 +12,6 @@ const queuedActionsKey = 'invexa.queue.actions';
 
 String queuedCountsKeyFor(String companyId) => 'invexa.queue.counts.$companyId';
 
-String sealedQueueKeyFor(String companyId) => 'invexa.vault.$companyId';
 
 class PersistedSession {
   const PersistedSession({
@@ -32,9 +31,6 @@ abstract class LocalStore {
   Future<void> clearSession();
   Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']);
   Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']);
-  Future<List<String>> loadSealedQueue(String companyId);
-  Future<void> saveSealedQueue(String companyId, List<String> envelopes);
-  Future<void> clearSealedQueue(String companyId);
   Future<List<QueuedAction>> loadQueuedActions();
   Future<void> saveQueuedActions(List<QueuedAction> items);
 }
@@ -42,7 +38,6 @@ abstract class LocalStore {
 class MemoryStore implements LocalStore {
   PersistedSession? session;
   final Map<String, List<QueuedCount>> queuedByCompany = {};
-  final Map<String, List<String>> sealedByCompany = {};
   List<QueuedAction> queuedActions = [];
 
   @override
@@ -71,20 +66,6 @@ class MemoryStore implements LocalStore {
   }
 
   List<QueuedCount> queued = [];
-
-  @override
-  Future<List<String>> loadSealedQueue(String companyId) async =>
-      List<String>.from(sealedByCompany[companyId] ?? const []);
-
-  @override
-  Future<void> saveSealedQueue(String companyId, List<String> envelopes) async {
-    sealedByCompany[companyId] = List<String>.from(envelopes);
-  }
-
-  @override
-  Future<void> clearSealedQueue(String companyId) async {
-    sealedByCompany.remove(companyId);
-  }
 
   @override
   Future<List<QueuedAction>> loadQueuedActions() async =>
@@ -155,30 +136,6 @@ class PrefsStore implements LocalStore {
   Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) async {
     final prefs = await _ready();
     await prefs.setString(queuedCountsKeyFor(companyId), encodeQueuedCounts(items));
-  }
-
-  @override
-  Future<List<String>> loadSealedQueue(String companyId) async {
-    final prefs = await _ready();
-    final raw = prefs.getString(sealedQueueKeyFor(companyId));
-    if (raw == null || raw.trim().isEmpty) return const [];
-    try {
-      return asList(jsonDecode(raw)).map(asString).toList();
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  @override
-  Future<void> saveSealedQueue(String companyId, List<String> envelopes) async {
-    final prefs = await _ready();
-    await prefs.setString(sealedQueueKeyFor(companyId), jsonEncode(envelopes));
-  }
-
-  @override
-  Future<void> clearSealedQueue(String companyId) async {
-    final prefs = await _ready();
-    await prefs.remove(sealedQueueKeyFor(companyId));
   }
 
   @override

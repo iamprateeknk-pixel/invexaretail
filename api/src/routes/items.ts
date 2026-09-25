@@ -60,7 +60,19 @@ router.get('/items/:itemId/stock-detail', async (req: Request, res: Response) =>
 
 type AdjustBody = { locationId?: string; lotId?: string; qtyDelta?: number; reason?: string; idempotencyKey?: string };
 
-router.post('/items/:itemId/adjust', async (req: Request, res: Response) => {
+// Manual stock adjustments and reversals change on-hand quantity, so they are an
+// admin action (the web wizard is already limited to these roles). Before this
+// gate any authenticated role - a store user, picker or auditor - could post
+// them straight to the API.
+const ADJUST_ROLES = ['ADMIN', 'ADMIN_USER'];
+function requireAdjustRole(req: Request, res: Response, next: () => void) {
+  if (!ADJUST_ROLES.includes(req.user!.role)) {
+    return res.status(403).json({ message: 'Only an admin can post or reverse stock adjustments.', code: 'ADJUST_ROLE_DENIED' });
+  }
+  return next();
+}
+
+router.post('/items/:itemId/adjust', requireAdjustRole, async (req: Request, res: Response) => {
   const ctx = tenantContextFor(req);
   const itemId = firstParam(req.params.itemId);
   const body = req.body as AdjustBody;
@@ -118,7 +130,7 @@ router.post('/items/:itemId/adjust', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/items/:itemId/movements/:movementId/reverse', async (req: Request, res: Response) => {
+router.post('/items/:itemId/movements/:movementId/reverse', requireAdjustRole, async (req: Request, res: Response) => {
   const ctx = tenantContextFor(req);
   const movementId = firstParam(req.params.movementId);
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'Manual reversal';

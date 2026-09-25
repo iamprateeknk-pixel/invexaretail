@@ -17,6 +17,7 @@ import {
   ShoppingBag,
   PackageOpen,
   PackagePlus,
+  FileUp,
   ClipboardList,
   Plug,
   Building2,
@@ -95,6 +96,7 @@ export const NAVIGATION = [
       { id: 'inventory', label: 'Items & stock', icon: Boxes },
       { id: 'item-search', label: 'Item search & stock detail', icon: PackageSearch },
       { id: 'stock-update', label: 'Stock update', icon: PackagePlus, roles: ['ADMIN', 'ADMIN_USER'] },
+      { id: 'import-wizard', label: 'ERP file import', icon: FileUp, roles: ['ADMIN', 'ADMIN_USER'] },
       { id: 'expiry', label: 'Lots & expiry', icon: Clock3 },
       { id: 'catalog', label: 'Tags & custom fields', icon: Tags },
     ],
@@ -152,6 +154,7 @@ export const NAV_ENTITLEMENTS = {
   campaigns: 'INVENTORY',
   expiry: 'INVENTORY',
   'stock-update': 'INVENTORY',
+  'import-wizard': 'INVENTORY',
   catalog: 'INVENTORY',
 };
 
@@ -185,6 +188,7 @@ export const PAGE_META = {
   dashboard: ['Operations overview', 'Live work, stock risk and performance across your locations.'],
   inventory: ['Items and stock', 'Search current stock, inspect lots and open item-level details.'],
   'stock-update': ['Stock update', 'Add, remove or set branch stock manually or from a 5,000+ row lot-wise Excel file.'],
+  'import-wizard': ['ERP file import', 'Preview, validate and post purchase, sales, return or opening-stock files in safe batches - then reconcile or reverse.'],
   'item-search': ['Item search and stock detail', 'Search items, inspect branch balances, lots and movement history, and post guided adjustments/reversals.'],
   expiry: ['Lots and expiry', 'FEFO action queue for expired, near-expiry and missing-date lots, with write-off and date repair.'],
   catalog: ['Tags and custom fields', 'Create a flexible product catalogue without changing core retail fields.'],

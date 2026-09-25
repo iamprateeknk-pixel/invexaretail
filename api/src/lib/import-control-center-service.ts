@@ -45,16 +45,17 @@ const normalize = (value: unknown) => String(value ?? '').trim().toLowerCase();
  * still names one (a row rejected for an unknown branch cannot be attributed).
  */
 export async function loadRejectedRows(
+  companyId: string,
   batchIds: string[],
   locations: ControlCenterLocation[],
 ): Promise<{ byLocation: Map<string, { sales: number; purchases: number }>; unattributed: { sales: number; purchases: number } }> {
   const byLocation = new Map<string, { sales: number; purchases: number }>();
   const unattributed = { sales: 0, purchases: 0 };
   for (const batchId of [...new Set(batchIds)]) {
-    const batch = await getBatch(batchId);
+    const batch = await getBatch(companyId, batchId);
     if (!batch || (batch.type !== 'SALES' && batch.type !== 'PURCHASE')) continue;
     const key = batch.type === 'SALES' ? 'sales' : 'purchases';
-    for (const row of await listRows(batchId, 'INVALID')) {
+    for (const row of await listRows(companyId, batchId, 'INVALID')) {
       const location = locations.find((candidate) => normalize(candidate.name) === normalize(row.rawData?.locationName));
       if (!location) {
         unattributed[key] += 1;

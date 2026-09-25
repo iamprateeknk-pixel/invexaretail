@@ -174,3 +174,32 @@ integration('POST /exceptions: a newly opened case is stamped with the caller\'s
     assert.equal(created.body.case.companyId, a.companyId, 'createExceptionCase must stamp the caller\'s real companyId, not fall back to the schema default');
   });
 });
+
+// Week 6: receiving a return with a RESTOCK disposition posts SALES_RETURN through
+// the canonical service in its own transaction; a repeated RECEIVE cannot restock again.
+integration('PATCH /returns/:id/status RECEIVE+RESTOCK posts one canonical SALES_RETURN row matching the ledger', async () => {
+  const a = await makeFixture();
+  const item = await prisma.item.create({ data: { code: `RET-${randomUUID().slice(0, 8)}`, name: 'Returned item', companyId: a.companyId } });
+  const order = await makeOrder(a.companyId, a.locationId, a.userId);
+  const orderLine = await prisma.orderLine.create({ data: { orderId: order.id, itemId: item.id, requestedQty: 3 } });
+  const ret = await prisma.returnRequest.create({
+    data: { orderId: order.id, createdById: a.userId, companyId: a.companyId, status: 'APPROVED',
+      lines: { create: [{ itemId: item.id, quantity: 3, orderLineId: orderLine.id }] } } as never,
+    include: { lines: true },
+  }) as unknown as { id: string; lines: Array<{ id: string }> };
+
+  await withServer(async (call) => {
+    const res = await call('PATCH', `/returns/${ret.id}/status`, a.token, { action: 'RECEIVE', dispositions: { [ret.lines[0].id]: 'RESTOCK' } });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const again = await call('PATCH', `/returns/${ret.id}/status`, a.token, { action: 'RECEIVE', dispositions: { [ret.lines[0].id]: 'RESTOCK' } });
+    assert.equal(again.status, 409, 'a received return cannot be received (and restocked) twice');
+  });
+  const ledger = await prisma.stockLedger.findMany({ where: { itemId: item.id, locationId: a.locationId } });
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].onHand, 3);
+  const rows = await prisma.stockMovement.findMany({ where: { itemId: item.id } });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].movementType, 'SALES_RETURN');
+  assert.equal(rows[0].qtyDelta, 3);
+  assert.equal(rows[0].companyId, a.companyId);
+});

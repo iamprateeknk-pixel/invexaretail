@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { prisma, queryRaw, executeRaw } from './db.js';
 import { databaseEnabled } from './persistence.js';
+import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
+import type { TenantContext } from './tenant-context.js';
 import { validateReceiptLines, type ReceiptLineInput, type TransferReceiptLine } from './receipt-validation.js';
 
 type DbTransferLine = {
@@ -87,6 +89,7 @@ export async function persistTransferReceipt(input: {
   receivedById: string;
   notes: string;
   lines: ReceiptLineInput[];
+  tenant: TenantContext;
 }): Promise<PersistedReceiptResult | null> {
   if (!databaseEnabled) return null;
   await ensureReceiptSchema();
@@ -133,12 +136,18 @@ export async function persistTransferReceipt(input: {
       await executeRaw(tx,
         'UPDATE "TransferLine" SET "receivedQty"="receivedQty"+?, "damagedQty"="damagedQty"+?, "shortageQty"="shortageQty"+?, "excessQty"="excessQty"+?, "updatedAt"=CURRENT_TIMESTAMP(3) WHERE id=?',
         line.receivedQty, line.damagedQty, line.shortageQty, excessQty, dbLine.id);
+      // The destination on-hand leg goes through the canonical posting service in
+      // this same transaction: journal row + ledger + audit + outbox commit with the
+      // receipt. The idempotency key is per receipt line, so a retried request (which
+      // the requestId check above already short-circuits) can never post twice.
       if (line.receivedQty > 0) {
-        await executeRaw(tx,
-          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",version,"lastUpdatedAt")
-           VALUES (?,?,?,?,?,0,0,1,CURRENT_TIMESTAMP(3))
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand"="StockLedger"."onHand"+EXCLUDED."onHand",version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
-          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.receivedQty);
+        await postInventoryMovementInTransaction(tx as never, {
+          tenant: input.tenant,
+          itemId: dbLine.itemId, lotId: dbLine.lotId, locationId: input.destinationLocationId,
+          movementType: 'TRANSFER_IN', qtyDelta: line.receivedQty,
+          idempotencyKey: `transfer-receive:${input.requestId}:${dbLine.id}`,
+          reason: 'Transfer receipt', sourceDocument: input.transferId, sourceLineId: dbLine.id, correlationId: receiptId,
+        });
       }
       // Blueprint section 7.2 / Module H: damaged receiving stock is
       // physically on the shelf but not sellable - post it to the

@@ -309,11 +309,11 @@ export function openingPreviewFromStagedRows(batch: ImportBatchRecord, rows: Sta
   };
 }
 
-export async function buildBatchPreviewPayload(batchId: string) {
-  const batch = await getBatch(batchId);
+export async function buildBatchPreviewPayload(companyId: string, batchId: string) {
+  const batch = await getBatch(companyId, batchId);
   if (!batch) return undefined;
-  const counts = await countRowsByStatus(batchId);
-  const rows = await listRows(batchId);
+  const counts = await countRowsByStatus(companyId, batchId);
+  const rows = await listRows(companyId, batchId);
   const errors = rows
     .filter((row) => row.status === 'INVALID')
     .flatMap((row) => (row.errors ?? ['Invalid row']).map((message) => ({ rowNumber: row.rowNumber, message })));
@@ -362,10 +362,10 @@ export async function buildBatchPreviewPayload(batchId: string) {
   };
 }
 
-export async function buildErrorCsv(batchId: string): Promise<string | undefined> {
-  const batch = await getBatch(batchId);
+export async function buildErrorCsv(companyId: string, batchId: string): Promise<string | undefined> {
+  const batch = await getBatch(companyId, batchId);
   if (!batch) return undefined;
-  const rows = await listRows(batchId, 'INVALID');
+  const rows = await listRows(companyId, batchId, 'INVALID');
   return errorReportToCsv(buildImportErrorReport(
     rows.flatMap((row) => (row.errors ?? ['Invalid row']).map((message) => ({ rowNumber: row.rowNumber, message }))),
   ));

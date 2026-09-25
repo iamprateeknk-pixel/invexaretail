@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import { estimateValueAtRisk } from './exceptions.js';
+import type { TenantContext } from './tenant-context.js';
 
 // Blueprint Module D / section 10.2 (Count & Audit 2.0): "Tolerance can
 // vary by category, value, UOM and branch" and "High-value or repeated-
@@ -60,7 +61,7 @@ export type CountRecommendation = {
  * recommended (no rule triggered and no repeated-variance pattern), so
  * callers can omit the field entirely rather than show a false negative.
  */
-export async function getCountRecommendation(input: {
+export async function getCountRecommendation(tenant: TenantContext, input: {
   itemId: string;
   locationId: string;
   bookQty: number;
@@ -71,14 +72,14 @@ export async function getCountRecommendation(input: {
     const varianceAbs = Math.abs(variance);
     if (varianceAbs <= 1e-8) return null;
     const variancePercent = input.bookQty > 0 ? (varianceAbs / input.bookQty) * 100 : 100;
-    const varianceValue = (await estimateValueAtRisk(input.itemId, varianceAbs)) ?? 0;
+    const varianceValue = (await estimateValueAtRisk(tenant, input.itemId, varianceAbs)) ?? 0;
 
     const [item, location, rules, recentCounts] = await Promise.all([
-      prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),
-      prisma.location.findUnique({ where: { id: input.locationId }, select: { branchId: true } }),
-      prisma.toleranceRule.findMany({ where: { active: true } }),
+      prisma.item.findFirst({ where: { id: input.itemId, companyId: tenant.companyId }, select: { category: true } }),
+      prisma.location.findFirst({ where: { id: input.locationId, companyId: tenant.companyId }, select: { branchId: true } }),
+      prisma.toleranceRule.findMany({ where: { active: true, createdBy: { companyId: tenant.companyId } } }),
       prisma.stockCount.findMany({
-        where: { itemId: input.itemId, locationId: input.locationId, reviewStatus: { in: ['APPROVED', 'RECOUNT'] } },
+        where: { companyId: tenant.companyId, itemId: input.itemId, locationId: input.locationId, reviewStatus: { in: ['APPROVED', 'RECOUNT'] } },
         orderBy: { createdAt: 'desc' },
         take: 3,
         select: { physicalQty: true, bookQty: true },

@@ -1,6 +1,7 @@
 import { prisma } from './db.js';
 import { estimateValueAtRisk } from './exceptions.js';
 import { listTransferEvidence } from './transfer-evidence.js';
+import type { TenantContext } from './tenant-context.js';
 
 // Blueprint section 16.2, third named workflow example: "damaged receipt >
 // threshold -> photo mandatory." Distinct from ToleranceRule (recommend
@@ -53,7 +54,7 @@ export type EvidenceGateResult =
  * any internal error, same fail-open posture as checkApprovalGate /
  * getCountRecommendation elsewhere in this app.
  */
-export async function requireEvidenceForDamage(input: {
+export async function requireEvidenceForDamage(tenant: TenantContext, input: {
   transferId: string;
   triggerType: string;
   itemId: string;
@@ -62,9 +63,9 @@ export async function requireEvidenceForDamage(input: {
 }): Promise<EvidenceGateResult> {
   try {
     const [item, rules, damagedValue] = await Promise.all([
-      prisma.item.findUnique({ where: { id: input.itemId }, select: { category: true } }),
-      prisma.evidenceRule.findMany({ where: { triggerType: input.triggerType, active: true } }),
-      estimateValueAtRisk(input.itemId, input.damagedQty),
+      prisma.item.findFirst({ where: { id: input.itemId, companyId: tenant.companyId }, select: { category: true } }),
+      prisma.evidenceRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: tenant.companyId } } }),
+      estimateValueAtRisk(tenant, input.itemId, input.damagedQty),
     ]);
     if (rules.length === 0) return { blocked: false };
 

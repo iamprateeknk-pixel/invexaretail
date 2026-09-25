@@ -50,6 +50,30 @@ Commands from `web/`: `npm run dev`, `npm run build`, `npm test` (plain
 `.jsx` component rendering via `@testing-library/react` + `jsdom` - see
 `web/test/jsx-loader.mjs`), `npm run test:all` (both), `npm run lint`.
 
+## Execution guide: found, and the Week 12-20 narratives below are superseded
+
+`Invexa_Retail_20_Week_Developer_Execution_Guide.docx` has been recovered. The
+"Week 12" to "Week 20" entries and `docs/week12-*` ... `docs/week20-*` files
+below were written *without* it and are inferred scope - they do not match the
+guide's Weeks 12-20 (count campaigns, transfer/warehouse/QC, procurement, OMS,
+mobile offline DB, Android release, reporting/admin/docs, CI/security,
+release candidate). The authoritative per-week status is
+[docs/guide-status.md](docs/guide-status.md); the release gate is
+[docs/release-evidence/release-scorecard.md](docs/release-evidence/release-scorecard.md).
+Where this file and `docs/guide-status.md` disagree, the latter wins.
+
+Since then (guide Week 6 follow-up): `postInventoryMovementInTransaction` in `lib/inventory-posting-service.ts` is the canonical way to post on-hand inside a caller's own transaction; most on-hand paths now use it (`docs/inventory-posting-coverage.md`). Signature-authenticated routers (`routes/marketplace-webhook.ts`, `routes/evidence-access.ts`) must be mounted *before* any router that does `router.use(requireAuth)` - guarded by `routes/public-route-order.test.ts`.
+
+Added since (guide Weeks 12-19): `lib/stock-take-campaign.ts`
+(`planFairAssignment`, the guide's exact assignment examples),
+`lib/offline-command-contract.ts` (versioned offline command/conflict
+contract), `routes/marketplace-webhook.ts` + `lib/channel-ingest.ts` (signed
+webhook, company-scoped SKU/location resolution), `lib/telemetry.ts`
+(opt-in OpenTelemetry), `.github/workflows/security.yml`, and in `mobile/` a
+real SQLite store (`lib/services/native_database.dart`). See
+`docs/offline-contract-and-mobile-store.md`, `docs/security-gates.md`,
+`docs/slo-and-alerting.md`.
+
 ## Module ownership
 
 | Area | Owning files | Notes |
@@ -820,18 +844,11 @@ tracks how much of it):
   `security.yml` workflow (CodeQL for JS/TS, gitleaks secret scan, a
   non-blocking `npm audit --audit-level=high` matrix across `api`/`web`/
   `admin-panel`, same baseline-first posture as `architecture-lint`) plus
-  Dependabot. Rewrote `SyncVault` from a hand-rolled HMAC-keystream
-  cipher + separate HMAC tag to AES-256-GCM via `pointycastle` (chosen for
-  its synchronous API, so no caller in `sync_engine.dart` needed to
-  change); the companyId stays bound as AEAD associated data, so a
-  cross-tenant open is still rejected before decryption is even attempted.
-  New `mobile/test/sync_vault_test.dart` adds the one property the old
-  suite never checked - ciphertext tampering is rejected by the
-  authentication tag, not just a same-secret round trip. Honest caveat:
-  this session's sandbox has no Flutter/Dart SDK at all, so this mobile
-  change could not be run locally - it depends on `.github/workflows/
-  ci.yml`'s existing `mobile` job (which does have a real Flutter
-  toolchain) actually passing before it's trusted.
+  Dependabot. The legacy `SyncVault` was removed instead of retaining
+  unnecessary app-layer crypto: offline data is app-private and platform
+  credentials remain in `flutter_secure_storage`. A future encryption layer
+  requires a reviewed threat model and AEAD library; custom crypto remains
+  prohibited.
 - Post-merge follow-up 3 (`api/src/lib/event-bus.ts`,
   `routes/command-center.ts`, no dedicated ADR - see
   `docs/week35-outbox-lag-business-sli.md`): closes part of Week 19's

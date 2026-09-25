@@ -29,6 +29,21 @@ import { prisma } from '../lib/db.js';
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
 
+// Posting, validating and reversing stock files changes inventory in bulk, so it
+// is an admin action (the web wizard is already restricted this way). Reading a
+// batch's status and its failure list is also open to auditors. Before this gate
+// any authenticated role - a store user or picker - could stage, commit and
+// reverse imports through the API.
+const IMPORT_WRITE_ROLES = ['ADMIN', 'ADMIN_USER'];
+const IMPORT_READ_ROLES = [...IMPORT_WRITE_ROLES, 'AUDITOR'];
+router.use('/imports/staged', (req: Request, res: Response, next) => {
+  const allowed = req.method === 'GET' ? IMPORT_READ_ROLES : IMPORT_WRITE_ROLES;
+  if (!allowed.includes(req.user!.role)) {
+    return res.status(403).json({ message: 'Only an admin can stage, commit or reverse stock imports.', code: 'IMPORT_ROLE_DENIED' });
+  }
+  return next();
+});
+
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? '');
 }
@@ -68,7 +83,7 @@ router.post('/imports/staged/batches', async (req: Request, res: Response) => {
     return res.status(201).json({ batch, duplicate: false });
   } catch (error) {
     if (error instanceof DuplicateFileError) {
-      const existing = await prisma.importBatch.findUnique({ where: { id: error.existingBatchId } });
+      const existing = await prisma.importBatch.findFirst({ where: { id: error.existingBatchId, companyId: ctx.companyId } });
       return res.status(200).json({ batch: existing, duplicate: true });
     }
     throw error;

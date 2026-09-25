@@ -29,15 +29,4 @@ void main() {
     expect(grocery.single.localId, 'g-1');
     expect(jaipur.single.localId, 'j-1');
   });
-
-  test('sealed envelopes are namespaced by companyId', () async {
-    final store = MemoryStore();
-    await store.saveSealedQueue('default-company', ['grocery-envelope']);
-    await store.saveSealedQueue('company-jaipur', ['jaipur-envelope']);
-    expect(await store.loadSealedQueue('default-company'), ['grocery-envelope']);
-    expect(await store.loadSealedQueue('company-jaipur'), ['jaipur-envelope']);
-    await store.clearSealedQueue('default-company');
-    expect(await store.loadSealedQueue('default-company'), isEmpty);
-    expect(await store.loadSealedQueue('company-jaipur'), ['jaipur-envelope']);
-  });
 }

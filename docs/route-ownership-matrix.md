@@ -25,6 +25,7 @@ week's job.
 | `GET /transfers/list` | `routes/transfers.ts` → `lib/repositories/transfer-repository.ts` | First Transfer extraction. |
 | `POST /transfers` | `routes/transfers.ts` → `lib/transfer-command-service.ts` → `lib/reservation.ts` (Week 7) | Behavior unchanged - reservation, validation, audit, rollback-on-failure all identical to the pre-extraction inline handler. |
 | `GET /branches` | `routes/branches.ts` → `lib/branch-service.ts` | Migrated from the retired `foundation.ts` (unique, no live equivalent existed). |
+| `POST /webhooks/marketplaces/:connectorId` | `routes/marketplace-webhook.ts` → `lib/channel-ingest.ts` | Moved out of `index.ts` (guide Week 15). Signed-HMAC credential, no bearer token. SKU/location resolution now scoped to the connector's company; every outcome audited with a payload checksum. Test: `routes/marketplace-webhook.test.ts`. |
 | `POST /branches` | same | |
 | `PATCH /branches/:id` | same | |
 | `POST /branches/:id/archive` | same | Bug fixed while porting: the archive-guard's stock check now reads `StockLedger` (live) instead of `StockBalance` (dead since ADR-001's Week 6 addendum) - see `lib/branch-service.ts`'s header comment. |

@@ -56,8 +56,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
     final platform = _controller.platform;
     if (platform is AndroidWebViewController) {
+      // Navigation is already pinned to trusted hosts; on top of that only the
+      // camera (barcode scanning) may be granted. Anything else - microphone,
+      // protected media, or a mixed request - is denied, never auto-granted.
       platform.setOnPlatformPermissionRequest((request) {
-        request.grant();
+        final cameraOnly = request.types.isNotEmpty &&
+            request.types.every((type) => type == WebViewPermissionResourceType.camera);
+        if (cameraOnly) {
+          request.grant();
+        } else {
+          request.deny();
+        }
       });
     }
     _controller.loadRequest(_workspaceUri);

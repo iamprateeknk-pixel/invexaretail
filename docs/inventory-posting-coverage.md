@@ -46,6 +46,42 @@ and read by every screen that shows on-hand quantity — is `StockLedger`.
 finally written in the same transaction as a live table instead of an
 orphaned one. See the ADR-001 Week 6 addendum for the full note.
 
+## Update (guide Week 6 follow-up): on-hand paths migrated
+
+`postInventoryMovementInTransaction(tx, cmd)` joins the canonical posting to a
+transaction the caller already owns, so the journal row, `StockLedger`
+projection, audit entry and outbox row commit **with** the business state. The
+ledger change is one atomic `onHand + delta` upsert (no read-then-write gap).
+Every migrated path has a real-Postgres test asserting: one journal row per
+logical action, journal sum = on-hand, retry posts nothing more, and a failing
+transaction leaves no journal row and no ledger change.
+
+| Path | Movement | Test |
+|---|---|---|
+| PO receipt (`routes/catalog-procurement.ts`) | `PURCHASE_RECEIPT` - previously the journal row was written *after* commit and its failure swallowed | `catalog-procurement-purchase-orders.postgres.test.ts` |
+| Transfer receipt, destination leg (`lib/transfer-receipt.ts`) | `TRANSFER_IN` - previously no journal row at all | `transfer-receipt.postgres.test.ts` |
+| Transfer pick-confirm, source leg (`persistConfirmedPickAllocations`) | `TRANSFER_OUT` | `persistence-canonical-posting.postgres.test.ts` |
+| Count variance approval (`persistCountReview`) | `COUNT_VARIANCE` | `persistence-canonical-posting.postgres.test.ts` |
+| Order fulfilment (`lib/orders.ts`) | `SALES_DEDUCTION` (reservation counter released in the same tx) | `orders-fulfill.postgres.test.ts` |
+| Expiry write-off, both routes (`routes/operations-extension.ts`) | `EXPIRY_WRITE_OFF` | `operations-extension-expiry-alerts.postgres.test.ts` |
+| Return restock and return disposition (`routes/operations-extension.ts`) | `SALES_RETURN` | none yet (the returns suite covers cross-tenant access only) |
+| Job consume (`routes/operations-extension.ts`) | `ADJUSTMENT` - previously decremented on-hand with **no** journal | none yet |
+| Exception disposition (`lib/exceptions.ts`) | `ADJUSTMENT` for restock | `exceptions-disposition.postgres.test.ts` |
+
+Quarantine and damaged are separate ledger buckets, not on-hand movements, so
+they remain direct writes in the (allowlisted) files above. A quarantine ->
+damaged/write-off decision is journalled with **`qtyDelta` 0** and the bucket
+move in `metadata` - the old rows recorded `-qty` against quarantine, which made
+journal-sum-vs-on-hand reconciliation drift.
+
+**Still baseline (not migrated), and why:** `lib/reservation.ts` and the reserve/
+release calls in `lib/persistence.ts` (the `reserved` dimension has no service
+command); `lib/import-reversal.ts` and the legacy opening-stock/daily-import
+writes in `lib/persistence.ts` (bulk, absolute-set semantics; superseded for new
+uploads by the Week 11 staged import, which is canonical); transfer *dispatch*
+in-transit bucket. Closing these needs a service command for the `reserved`/
+`inTransit`/`quarantine` dimensions - a design decision, not a mechanical move.
+
 ## Mutation coverage table
 
 | Call site | Table(s) written | Status | Why |

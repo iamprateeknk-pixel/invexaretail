@@ -1,3 +1,4 @@
+import './lib/telemetry-bootstrap.js';
 import { randomUUID } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
@@ -22,6 +23,8 @@ import itemMasterRouter from './routes/item-master.js';
 import transferLogisticsRouter from './routes/transfer-logistics.js';
 import commandCenterRouter from './routes/command-center.js';
 import { requestMetricsMiddleware } from './lib/request-metrics.js';
+import marketplaceWebhookRouter from './routes/marketplace-webhook.js';
+import evidenceAccessRouter from './routes/evidence-access.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
@@ -272,6 +275,13 @@ app.use('/api/v1/auth', enterpriseAuthRouter);
 app.use('/api/v1/admin', enterpriseManagementRouter);
 app.use('/api/v1/analytics', enterpriseAnalyticsRouter);
 
+// Credential-by-signature routes (marketplace webhook HMAC, signed evidence
+// links) must be mounted BEFORE every router that does `router.use(requireAuth)`:
+// those routers reject any request without a bearer token before route matching,
+// so mounted after them these endpoints answered 401 to every real caller.
+app.use('/api/v1', marketplaceWebhookRouter);
+app.use('/api/v1', evidenceAccessRouter);
+
 // Blueprint v4 §11: live event stream + payload-free mutation events. The
 // publisher must sit before every router that owns a mutating route.
 app.use('/api/v1', eventsRouter);
@@ -290,63 +300,6 @@ app.use('/api/v1', importsRouter);
 app.use('/api/v1', reportsRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
-
-app.post('/api/v1/webhooks/marketplaces/:connectorId', async (req: Request, res: Response) => {
-  try {
-    const { findConnector, mapMarketplaceOrder, markConnectorIngested, validateNormalizedOrder, verifyConnectorSignature } = await import('./lib/connectors.js');
-    const { prisma } = await import('./lib/db.js');
-    const { databaseEnabled } = await import('./lib/persistence.js');
-    const { createOrderWithReservation } = await import('./lib/orders.js');
-    const { listItems, listLocations } = await import('./lib/repository.js');
-    const connectorId = String(req.params.connectorId ?? '');
-    const connector = findConnector(connectorId)
-      ?? (databaseEnabled ? await prisma.marketplaceConnector.findUnique({ where: { id: connectorId } }) : null);
-    if (!connector || connector.status === 'PAUSED') {
-      res.status(404).json({ message: 'Connector not found.' });
-      return;
-    }
-    const raw = JSON.stringify(req.body ?? {});
-    const signature = typeof req.headers['x-invexa-signature'] === 'string' ? req.headers['x-invexa-signature'] : '';
-    if (!verifyConnectorSignature(connector.webhookSecret, raw, signature)) {
-      res.status(401).json({ message: 'Invalid connector signature.' });
-      return;
-    }
-    const mapped = mapMarketplaceOrder(connector.platform as 'AMAZON' | 'FLIPKART' | 'WEBSITE' | 'CUSTOM', req.body ?? {});
-    const invalid = validateNormalizedOrder(mapped);
-    if (invalid) {
-      res.status(400).json({ message: invalid });
-      return;
-    }
-    const lines = [];
-    for (const line of mapped.lines) {
-      const item = (databaseEnabled ? await prisma.item.findFirst({ where: { OR: [{ code: line.sku }, { id: line.sku }] } }) : null)
-        ?? listItems().find((entry) => entry.code === line.sku || entry.id === line.sku);
-      if (item) lines.push({ itemId: item.id, quantity: line.quantity });
-    }
-    if (!lines.length) {
-      res.status(409).json({ message: 'No matching SKUs for this marketplace order.' });
-      return;
-    }
-    const locations = databaseEnabled
-      ? await prisma.location.findMany({ where: { status: 'ACTIVE' }, select: { id: true, name: true, type: true } })
-      : listLocations().map((location) => ({ id: location.id, name: location.name, type: location.type }));
-    const order = await createOrderWithReservation({
-      channel: mapped.channel,
-      externalReference: mapped.externalReference,
-      customerName: mapped.customerName,
-      notes: mapped.notes,
-      createdById: 'connector',
-      companyId: connector.tenantId,
-      allowSplit: true,
-      candidateLocations: locations.map((location) => ({ locationId: location.id, locationName: location.name, locationType: location.type })),
-      lines,
-    });
-    markConnectorIngested(connector.id);
-    res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
-  } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to ingest marketplace order.' });
-  }
-});
 
 app.use('/api/v1', operationsExtensionRouter);
 

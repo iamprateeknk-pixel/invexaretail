@@ -99,7 +99,7 @@ async function createImportBatch(ctx, input) {
             });
         }
     });
-    return db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: batchId } });
+    return db_js_1.prisma.importBatch.findFirstOrThrow({ where: { id: batchId, companyId: ctx.companyId } });
 }
 async function requireBatch(ctx, batchId) {
     const batch = await db_js_1.prisma.importBatch.findFirst({ where: { id: batchId, companyId: ctx.companyId } });
@@ -125,7 +125,7 @@ async function validateImportBatch(ctx, batchId) {
     let cursor;
     for (;;) {
         const rows = await db_js_1.prisma.importRow.findMany({
-            where: { importBatchId: batchId },
+            where: { importBatchId: batchId, companyId: ctx.companyId },
             orderBy: { id: 'asc' },
             take: ROW_CHUNK_SIZE,
             ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -137,21 +137,21 @@ async function validateImportBatch(ctx, batchId) {
             if (result.ok === false) {
                 invalidCount += 1;
                 await db_js_1.prisma.importRow.update({
-                    where: { id: row.id },
+                    where: { id: row.id, companyId: ctx.companyId },
                     data: { status: 'INVALID', errors: result.errors },
                 });
             }
             else {
                 validCount += 1;
                 await db_js_1.prisma.importRow.update({
-                    where: { id: row.id },
+                    where: { id: row.id, companyId: ctx.companyId },
                     data: { status: 'VALID', mappedData: result.mapped, errors: undefined, warnings: result.warnings },
                 });
             }
         }
         cursor = rows[rows.length - 1].id;
     }
-    await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { validRows: validCount, invalidRows: invalidCount, status: 'VALIDATED' } });
+    await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId: ctx.companyId }, data: { validRows: validCount, invalidRows: invalidCount, status: 'VALIDATED' } });
     return { validRows: validCount, invalidRows: invalidCount };
 }
 /**
@@ -164,10 +164,10 @@ async function queueImportBatchForCommit(ctx, batchId) {
     const batch = await requireBatch(ctx, batchId);
     assertStatus(batch, ['VALIDATED']);
     if (batch.commitPolicy === 'ALL_OR_NOTHING' && batch.invalidRows > 0) {
-        await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: 'FAILED' } });
+        await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId: ctx.companyId }, data: { status: 'FAILED' } });
         return;
     }
-    await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: 'QUEUED_FOR_COMMIT' } });
+    await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId: ctx.companyId }, data: { status: 'QUEUED_FOR_COMMIT' } });
 }
 /**
  * Commits up to one chunk of VALID rows past the batch's durable
@@ -179,24 +179,24 @@ async function queueImportBatchForCommit(ctx, batchId) {
  * checkpoint means an already-committed row's chunk is never re-scanned
  * from the start.
  */
-async function commitImportBatchChunk(batchId, chunkSize = ROW_CHUNK_SIZE) {
-    const batch = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: batchId } });
+async function commitImportBatchChunk(companyId, batchId, chunkSize = ROW_CHUNK_SIZE) {
+    const batch = await db_js_1.prisma.importBatch.findFirstOrThrow({ where: { id: batchId, companyId } });
     if (!['QUEUED_FOR_COMMIT', 'COMMITTING'].includes(batch.status))
         return { done: true, processed: 0 };
     if (batch.status === 'QUEUED_FOR_COMMIT') {
-        await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: 'COMMITTING' } });
+        await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId }, data: { status: 'COMMITTING' } });
     }
-    const importer = await db_js_1.prisma.user.findUniqueOrThrow({ where: { id: batch.importedById } });
+    const importer = await db_js_1.prisma.user.findFirstOrThrow({ where: { id: batch.importedById, companyId } });
     const ctx = { companyId: batch.companyId, tenantId: 'tenant-invexa', userId: importer.id, role: importer.role };
     const rows = await db_js_1.prisma.importRow.findMany({
-        where: { importBatchId: batchId, status: 'VALID', rowNumber: { gt: batch.checkpointRowNumber } },
+        where: { importBatchId: batchId, companyId, status: 'VALID', rowNumber: { gt: batch.checkpointRowNumber } },
         orderBy: { rowNumber: 'asc' },
         take: chunkSize,
     });
     if (!rows.length) {
-        const remainingInvalid = await db_js_1.prisma.importRow.count({ where: { importBatchId: batchId, status: 'INVALID' } });
+        const remainingInvalid = await db_js_1.prisma.importRow.count({ where: { importBatchId: batchId, companyId, status: 'INVALID' } });
         const finalStatus = remainingInvalid > 0 ? 'PARTIALLY_COMMITTED' : 'COMMITTED';
-        await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: finalStatus, invalidRows: remainingInvalid } });
+        await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId }, data: { status: finalStatus, invalidRows: remainingInvalid } });
         return { done: true, processed: 0 };
     }
     const movementType = MOVEMENT_TYPE_BY_IMPORT_TYPE[batch.type];
@@ -218,7 +218,7 @@ async function commitImportBatchChunk(batchId, chunkSize = ROW_CHUNK_SIZE) {
                 reason: `${batch.type} import row ${row.rowNumber}`,
             });
             await db_js_1.prisma.importRow.update({
-                where: { id: row.id },
+                where: { id: row.id, companyId },
                 data: {
                     status: 'COMMITTED',
                     movementId: result.movement.id,
@@ -238,18 +238,18 @@ async function commitImportBatchChunk(batchId, chunkSize = ROW_CHUNK_SIZE) {
             const message = error instanceof inventory_posting_service_js_1.NegativeStockBlockedError ? error.message : error instanceof Error ? error.message : String(error);
             const code = error instanceof inventory_posting_service_js_1.NegativeStockBlockedError ? 'INSUFFICIENT_STOCK' : 'COMMIT_FAILED';
             await db_js_1.prisma.importRow.update({
-                where: { id: row.id },
+                where: { id: row.id, companyId },
                 data: { status: 'INVALID', errors: [{ field: 'quantity', code, message }] },
             });
         }
-        await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { checkpointRowNumber: row.rowNumber } });
+        await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId }, data: { checkpointRowNumber: row.rowNumber } });
     }
     return { done: false, processed: rows.length };
 }
 /** Runs commitImportBatchChunk to completion - the synchronous convenience wrapper tests and a worker's single tick both use. */
-async function commitImportBatchToCompletion(batchId, chunkSize = ROW_CHUNK_SIZE) {
+async function commitImportBatchToCompletion(ctx, batchId, chunkSize = ROW_CHUNK_SIZE) {
     for (;;) {
-        const result = await commitImportBatchChunk(batchId, chunkSize);
+        const result = await commitImportBatchChunk(ctx.companyId, batchId, chunkSize);
         if (result.done)
             return;
     }
@@ -264,31 +264,31 @@ async function reverseImportBatch(ctx, batchId, reason) {
     const batch = await requireBatch(ctx, batchId);
     assertStatus(batch, ['COMMITTED', 'PARTIALLY_COMMITTED', 'REVERSING']);
     if (batch.status !== 'REVERSING') {
-        await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: 'REVERSING' } });
+        await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId: ctx.companyId }, data: { status: 'REVERSING' } });
     }
     const rows = await db_js_1.prisma.importRow.findMany({
-        where: { importBatchId: batchId, status: 'COMMITTED', movementId: { not: null } },
+        where: { importBatchId: batchId, companyId: ctx.companyId, status: 'COMMITTED', movementId: { not: null } },
         orderBy: { rowNumber: 'asc' },
     });
     for (const row of rows) {
         try {
             await (0, inventory_posting_service_js_1.reverseInventoryMovement)(ctx, row.movementId, reason);
-            await db_js_1.prisma.importRow.update({ where: { id: row.id }, data: { status: 'REVERSED' } });
+            await db_js_1.prisma.importRow.update({ where: { id: row.id, companyId: ctx.companyId }, data: { status: 'REVERSED' } });
         }
         catch (error) {
             if (error instanceof inventory_posting_service_js_1.AlreadyReversedError) {
-                await db_js_1.prisma.importRow.update({ where: { id: row.id }, data: { status: 'REVERSED' } });
+                await db_js_1.prisma.importRow.update({ where: { id: row.id, companyId: ctx.companyId }, data: { status: 'REVERSED' } });
                 continue;
             }
             throw error;
         }
     }
-    await db_js_1.prisma.importBatch.update({ where: { id: batchId }, data: { status: 'REVERSED', reversedAt: new Date() } });
+    await db_js_1.prisma.importBatch.update({ where: { id: batchId, companyId: ctx.companyId }, data: { status: 'REVERSED', reversedAt: new Date() } });
 }
 /** Every INVALID row's errors, flattened one error per line - the guide's downloadable "row, field, code and safe message" failure export. */
 async function exportFailedRows(ctx, batchId) {
     await requireBatch(ctx, batchId);
-    const rows = await db_js_1.prisma.importRow.findMany({ where: { importBatchId: batchId, status: 'INVALID' }, orderBy: { rowNumber: 'asc' } });
+    const rows = await db_js_1.prisma.importRow.findMany({ where: { importBatchId: batchId, companyId: ctx.companyId, status: 'INVALID' }, orderBy: { rowNumber: 'asc' } });
     const out = [];
     for (const row of rows) {
         const errors = row.errors ?? [];

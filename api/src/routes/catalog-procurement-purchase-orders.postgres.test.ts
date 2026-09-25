@@ -98,6 +98,10 @@ integration('PATCH /purchase-orders/:id/status: another company\'s purchase orde
 
     const unchanged = await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: poA.id } });
     assert.equal(unchanged.status, 'DRAFT', 'the cross-tenant attempt must not have changed anything');
+
+    const own = await call('PATCH', `/purchase-orders/${poA.id}/status`, a.token, { status: 'CANCELLED' });
+    assert.equal(own.status, 200, JSON.stringify(own.body));
+    assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: poA.id } })).status, 'CANCELLED');
   });
 });
 
@@ -129,4 +133,59 @@ integration('POST /purchase-orders/:id/receive: another company\'s purchase orde
     const cross = await call('POST', `/purchase-orders/${poA.id}/receive`, b.token, { requestId: randomUUID(), lines: [] });
     assert.equal(cross.status, 404);
   });
+});
+
+// Week 6 / guide Week 14: PO receipt posts its sellable quantity through the
+// canonical posting service *inside the receipt transaction*. Before, the
+// StockMovement journal row was written after commit and its failure was
+// swallowed, so the journal could silently disagree with the ledger.
+integration('POST /purchase-orders/:id/receive posts a journal row atomically with the ledger, once per requestId', async () => {
+  const a = await makeFixture();
+  const item = await prisma.item.create({ data: { code: `CANON-${randomUUID().slice(0, 8)}`, name: 'Canonical Rice', companyId: a.companyId } });
+  const po = await prisma.purchaseOrder.create({
+    data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: a.supplierId, locationId: a.locationId, createdById: a.userId, companyId: a.companyId, status: 'APPROVED',
+      lines: { create: [{ itemId: item.id, quantity: 20, unitCost: 5 }] } },
+    include: { lines: true },
+  });
+  const requestId = randomUUID();
+  await withServer(async (call) => {
+    const body = { requestId, lines: [{ lineId: po.lines[0].id, receivedQty: 8, damagedQty: 2, excessQty: 0, lotNo: 'CANON-LOT' }] };
+    const first = await call('POST', `/purchase-orders/${po.id}/receive`, a.token, body);
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.duplicate, false);
+    const retry = await call('POST', `/purchase-orders/${po.id}/receive`, a.token, body);
+    assert.equal(retry.body.duplicate, true);
+  });
+  const ledger = await prisma.stockLedger.findMany({ where: { itemId: item.id, locationId: a.locationId } });
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].onHand, 8, 'sellable quantity only');
+  assert.equal(ledger[0].quarantine, 2, 'damaged quantity is quarantined, not sellable');
+  assert.equal(ledger[0].companyId, a.companyId);
+  const movements = await prisma.stockMovement.findMany({ where: { itemId: item.id, locationId: a.locationId } });
+  assert.equal(movements.length, 1, 'exactly one journal row despite the retried request');
+  assert.equal(movements[0].qtyDelta, 8);
+  assert.equal(movements[0].afterBalance, 8);
+  assert.equal(movements[0].companyId, a.companyId);
+  assert.equal(movements.reduce((sum, m) => sum + m.qtyDelta, 0), ledger[0].onHand, 'journal sum equals the projection');
+});
+
+integration('a failing receipt leaves neither a journal row nor a ledger change (atomic)', async () => {
+  const a = await makeFixture();
+  const item = await prisma.item.create({ data: { code: `CANON-${randomUUID().slice(0, 8)}`, name: 'Atomic Rice', companyId: a.companyId } });
+  const po = await prisma.purchaseOrder.create({
+    data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: a.supplierId, locationId: a.locationId, createdById: a.userId, companyId: a.companyId, status: 'APPROVED',
+      lines: { create: [{ itemId: item.id, quantity: 10, unitCost: 5 }] } },
+    include: { lines: true },
+  });
+  // Pre-existing lot with a different expiry makes the transaction throw *after* the line update.
+  await prisma.lot.create({ data: { itemId: item.id, lotNo: 'CLASH', expiryDate: new Date('2027-01-01') } });
+  await withServer(async (call) => {
+    const res = await call('POST', `/purchase-orders/${po.id}/receive`, a.token, {
+      requestId: randomUUID(), lines: [{ lineId: po.lines[0].id, receivedQty: 5, damagedQty: 0, excessQty: 0, lotNo: 'CLASH', expiryDate: '2028-02-02' }],
+    });
+    assert.equal(res.status, 400);
+  });
+  assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id } }), 0);
+  assert.equal(await prisma.stockLedger.count({ where: { itemId: item.id } }), 0);
+  assert.equal((await prisma.purchaseOrderLine.findUniqueOrThrow({ where: { id: po.lines[0].id } })).receivedQty, 0);
 });

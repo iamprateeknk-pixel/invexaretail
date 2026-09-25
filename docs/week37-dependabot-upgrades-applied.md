@@ -44,9 +44,7 @@ test:all` (unit + component suites, all passing), `npm run lint` (only
 pre-existing warnings, unrelated to this change, no new ones), `npm run
 build` (clean).
 
-**`mobile/`**: `flutter_secure_storage` 9.2.4->11.2.0. This session's
-sandbox has no Flutter/Dart SDK (same constraint as the earlier SyncVault
-AES-GCM change), so this could not be run locally. Reviewed the actual
+**`mobile/`**: `flutter_secure_storage` 9.2.4->11.2.0. Reviewed the actual
 usage first: `lib/services/secure_store.dart`'s `PlatformSessionVault`
 only calls the package's three most stable, long-unchanged methods
 (`FlutterSecureStorage(aOptions: AndroidOptions(...))`, `.write`, `.read`,
@@ -54,8 +52,7 @@ only calls the package's three most stable, long-unchanged methods
 its 9.x-11.x major versions (the major bumps were Android/iOS minimum-SDK
 and internal-implementation changes, not this Dart-facing surface).
 Applied and pushed to let CI's real Flutter toolchain (`mobile` job)
-validate it, the same "trust CI, don't claim done until CI green" pattern
-that worked cleanly for the SyncVault rewrite.
+validate it; local Flutter verification is also required when available.
 
 ## Skipped, with a real reason: `typescript` 5.9.3 -> 7.0.2 (`api/`)
 

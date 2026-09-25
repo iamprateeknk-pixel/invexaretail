@@ -131,3 +131,37 @@ test('HTTP: Pro API keys authenticate /api/v1 and Starter cannot issue keys', as
     assert.equal(jaipurKey.body.code, 'FEATURE_NOT_ENTITLED');
   });
 });
+
+test('HTTP: rotating an API key replaces it atomically, shows the new token once, and is company scoped', async () => {
+  await withServer(async (url) => {
+    const login = await json(url, '/control/v1/auth/login', {
+      method: 'POST', body: JSON.stringify({ email: 'superadmin@invexa.local', password: seedPassword }),
+    });
+    const lock = await json(url, '/control/v1/sessions/select-company', {
+      method: 'POST', headers: { Authorization: `Bearer ${login.body.token}` }, body: JSON.stringify({ companyId: 'default-company' }),
+    });
+    const auth = { Authorization: `Bearer ${lock.body.token}` };
+    const created = await json(url, '/control/v1/integrations/api-keys', {
+      method: 'POST', headers: auth, body: JSON.stringify({ name: 'Rotating POS', scopes: ['inventory.read'] }),
+    });
+    const oldToken = created.body.token as string;
+
+    const rotated = await json(url, `/control/v1/integrations/api-keys/${created.body.id}/rotate`, { method: 'POST', headers: auth });
+    assert.equal(rotated.status, 201);
+    assert.match(rotated.body.token, /^invx_/);
+    assert.notEqual(rotated.body.token, oldToken);
+    assert.equal(rotated.body.rotatedFrom, created.body.id);
+
+    const oldNow = await json(url, '/api/v1/items', { headers: { Authorization: `Bearer ${oldToken}` } });
+    assert.equal(oldNow.status, 401);
+    assert.equal(oldNow.body.code, 'API_KEY_REVOKED');
+    const newNow = await json(url, '/api/v1/items', { headers: { Authorization: `Bearer ${rotated.body.token}` } });
+    assert.equal(newNow.status, 200);
+
+    const again = await json(url, `/control/v1/integrations/api-keys/${created.body.id}/rotate`, { method: 'POST', headers: auth });
+    assert.equal(again.status, 409, 'a revoked key cannot be rotated again');
+
+    const listing = await json(url, '/control/v1/integrations', { headers: auth });
+    assert.equal(JSON.stringify(listing.body).includes(rotated.body.token), false, 'the token is never shown again');
+  });
+});

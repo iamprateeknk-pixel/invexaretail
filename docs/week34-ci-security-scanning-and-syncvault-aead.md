@@ -1,4 +1,4 @@
-# CI security scanning + replacing SyncVault's hand-rolled cipher
+# CI security scanning + removal of unnecessary SyncVault crypto
 
 Closes two items named directly in the 20-Week Developer Execution Guide
 (Week 19's CI/security scope, and Week 16's "replace custom SyncVault/XOR
@@ -30,69 +30,26 @@ Container/image scanning from the guide's Week 19 scope is not applicable
 here - the repo has no Docker/container build step (Render/Railway/
 Cloudflare all deploy from source).
 
-## 2. SyncVault: hand-rolled cipher to AES-256-GCM (Week 16)
+## 2. SyncVault: remove unnecessary app-layer crypto (Week 16)
 
-`mobile/lib/services/sync_vault.dart` encrypted the offline mutation queue
-with a **custom construction**: an HMAC-SHA256-keyed keystream (counter-mode
-PRF blocks) XORed against the plaintext, then a separate HMAC-SHA256 tag
-over `companyId|iv|ciphertext`, checked with a constant-time compare. This
-has a real encrypt-then-MAC shape and wasn't trivially broken, but it is
-still hand-rolled cryptography - exactly what AGENTS.md's #5 prohibited
-pattern and the Week 16 guide text both call out by name ("Replace custom
-SyncVault/XOR design with standard authenticated encryption").
+`mobile/lib/services/sync_vault.dart` previously contained hand-rolled
+encryption for an offline queue. It was not wired to a production key and the
+database is app-private, while refresh credentials already use the platform
+keystore through `flutter_secure_storage`. The guide explicitly permits
+removing unnecessary app-layer crypto, so the vault and its crypto dependencies
+were removed rather than retaining a second encryption layer without a reviewed
+threat model.
 
-Replaced with **AES-256-GCM via PointyCastle** (`pointycastle: ^3.9.1`, a
-maintained, widely-used pure-Dart crypto library - chosen over the
-`cryptography` package specifically because PointyCastle's API is
-synchronous, so `SyncVault.seal`/`.open`'s existing synchronous signatures
-- and every call site in `sync_engine.dart` - needed zero changes):
-
-- Key: `SHA-256("invexa-sync-vault-v2|<companyId>|<secret>")`, truncated to
-  32 bytes. This is a key-derivation step, not the cipher itself - AES-GCM
-  provides the actual confidentiality/integrity guarantee.
-- Nonce: 12 random bytes per `seal()` call (`Random.secure()`), standard
-  GCM nonce length.
-- AAD: the `companyId`, so a ciphertext's authentication tag is bound to
-  the company it was sealed under - the tamper-detection property the old
-  code got from its separate HMAC now comes from the GCM tag itself.
-- Envelope bumped to `'v': 2`; the companyId mismatch check still runs
-  before any decryption is attempted (unchanged behavior, still throws
-  `StateError('SYNC_VAULT_COMPANY_MISMATCH')` first).
-
-No caller changed: `sync_engine.dart`'s `enqueue`/`openSealed` and every
-persistence path (`local_store.dart`, `drift_store.dart`,
-`native_database.dart`) treat sealed envelopes as opaque strings and were
-untouched.
+Any future application-layer encryption needs an approved threat model and a
+reviewed AEAD library; it must not restore a custom cipher.
 
 ## Testing
 
-New `mobile/test/sync_vault_test.dart` - the old `SyncVault` had no
-dedicated test file, only indirect coverage via `sync_engine_test.dart`'s
-cross-tenant checks (which still pass unchanged). Added what that coverage
-never exercised:
-
-- round-trip for the owning company;
-- two seals of the same payload produce different ciphertexts (nonce
-  actually varies);
-- **ciphertext tampering is rejected** (flip one byte, confirm
-  `SYNC_VAULT_MAC_INVALID` via `throwsStateError`) - the one property a
-  hand-rolled cipher is most likely to get subtly wrong and the old suite
-  never checked;
-- wrong secret, same company - rejected;
-- wrong company - rejected before decryption is attempted.
-
-This session's sandbox has no Flutter/Dart SDK, so these changes could not
-be run locally (`flutter pub get`/`flutter test`/`dart analyze` all
-unavailable here). Verification relies on the repository's existing
-`mobile` CI job (`.github/workflows/ci.yml`), which does have a real
-Flutter toolchain (`subosito/flutter-action@v2`) and already runs `flutter
-pub get`, `flutter analyze --no-fatal-infos` and `flutter test` on every
-PR - this PR must be watched through that job rather than assumed green.
+The removed vault's tests and dependencies were removed with it. Mobile
+verification remains `flutter analyze` and `flutter test` under the existing
+CI mobile job.
 
 ## What's unaffected
 
 `local_store.dart`, `drift_store.dart`, `native_database.dart`,
-`secure_store.dart` and the offline sync protocol are untouched - they
-only ever see `SyncVault`'s output as an opaque string, exactly as before.
-`flutter_secure_storage` (already used for refresh credentials, per Week
-16's other requirement) is unaffected by this change.
+`secure_store.dart` and the offline sync protocol remain unchanged.
