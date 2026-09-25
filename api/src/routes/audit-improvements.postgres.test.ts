@@ -248,3 +248,51 @@ integration('forecast excludes stockout days from demand, and reorder rules keep
     assert.equal((await call('PUT', `/reorder-rules/${item.id}`, a.token, { locationId: a.loc.id, minQty: 5, targetQty: 20, orderMultiple: -3 })).status, 400);
   });
 });
+
+integration('tags and custom fields are per company: same name allowed in two companies, no cross-company read, tag or write (audit T-1)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const itemA = await prisma.item.create({ data: { code: `TG-${randomUUID().slice(0, 8)}`, name: 'A item', companyId: a.companyId } });
+  const name = `Fresh-${randomUUID().slice(0, 6)}`;
+  await withServer(async (call) => {
+    const tagA = await call('POST', '/catalog/tags', a.token, { name });
+    assert.equal(tagA.status, 201, JSON.stringify(tagA.body));
+    assert.equal((await call('POST', '/catalog/tags', b.token, { name })).status, 201, 'the same name is free in another company');
+    assert.equal((await call('POST', '/catalog/tags', a.token, { name })).status, 409, 'but unique inside one company');
+    assert.deepEqual((await call('GET', '/catalog/tags', a.token)).body.tags.map((t: { name: string }) => t.name), [name]);
+
+    assert.equal((await call('PUT', `/catalog/items/${itemA.id}/tags`, b.token, { tagIds: [] })).status, 404, "B cannot tag A's item");
+    const bTag = (await call('GET', '/catalog/tags', b.token)).body.tags[0];
+    assert.equal((await call('PUT', `/catalog/items/${itemA.id}/tags`, a.token, { tagIds: [bTag.id] })).status, 404, "A cannot use B's tag");
+    assert.equal((await call('PUT', `/catalog/items/${itemA.id}/tags`, a.token, { tagIds: [tagA.body.tag.id] })).status, 200);
+    assert.equal((await call('GET', `/catalog/items/${itemA.id}`, b.token)).status, 404);
+
+    const field = await call('POST', '/catalog/custom-fields', a.token, { name: 'Batch note' });
+    assert.equal(field.status, 201, JSON.stringify(field.body));
+    assert.equal((await call('POST', '/catalog/custom-fields', b.token, { name: 'Batch note' })).status, 201);
+    assert.equal((await call('GET', '/catalog/custom-fields', b.token)).body.fields.length, 1);
+    assert.equal((await call('PUT', `/catalog/items/${itemA.id}/custom-fields/${field.body.field.id}`, b.token, { value: 'x' })).status, 404);
+    assert.equal((await call('PUT', `/catalog/items/${itemA.id}/custom-fields/${field.body.field.id}`, a.token, { value: 'x' })).status, 200);
+  });
+});
+
+integration('an order with a customer minimum shelf life is filled from the fresher lot; manufacturing date is company scoped (audit S-1)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `RSL-${randomUUID().slice(0, 8)}`, name: 'Yogurt', shelfLifeDays: 100, companyId: a.companyId } });
+  const day = 86_400_000;
+  const old = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'OLD', expiryDate: new Date(Date.now() + 10 * day) } });
+  const fresh = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'FRESH', expiryDate: new Date(Date.now() + 80 * day) } });
+  for (const lot of [old, fresh]) await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, onHand: 20, companyId: a.companyId } });
+  await withServer(async (call) => {
+    const res = await call('POST', '/orders', a.token, { channel: 'B2B', fulfillmentLocationId: a.loc.id, lines: [{ itemId: item.id, quantity: 5, minRslPercent: 50 }] });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const lotIds = (res.body.order?.lines ?? []).map((l: { lotId: string }) => l.lotId);
+    assert.deepEqual(lotIds, [fresh.id], 'the 10%-RSL lot is skipped for a 50% customer');
+
+    assert.equal((await call('PATCH', `/lots/${fresh.id}/manufactured`, b.token, { manufacturedAt: '2026-01-01' })).status, 404, "another company cannot edit this lot");
+    assert.equal((await call('PATCH', `/lots/${fresh.id}/manufactured`, a.token, { manufacturedAt: '2999-01-01' })).status, 400);
+    const ok = await call('PATCH', `/lots/${fresh.id}/manufactured`, a.token, { manufacturedAt: '2026-01-01' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  });
+});

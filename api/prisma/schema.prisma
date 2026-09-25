@@ -770,6 +770,8 @@ model Lot {
   itemId     String
   item       Item     @relation(fields: [itemId], references: [id])
   expiryDate DateTime?
+  // Audit S-1: when the lot was made; with the expiry date it gives the total shelf life for RSL rules.
+  manufacturedAt DateTime?
   // AVAILABLE | EXPIRED | BLOCKED | QUARANTINE (blueprint section 17): a
   // lot in any state other than AVAILABLE is excluded from normal FEFO/FIFO
   // allocation and can only be drawn from via an authorized manual override.
@@ -1028,10 +1030,15 @@ model AuditLog {
 
 model Tag {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
+  // Audit T-1: tags are per company (they were one global list).
+  companyId String   @default("default-company")
   color     String   @default("emerald")
   createdAt DateTime @default(now())
   items     ItemTag[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model ItemTag {
@@ -1046,7 +1053,9 @@ model ItemTag {
 
 model CustomFieldDefinition {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
+  // Audit T-1: custom fields are per company.
+  companyId String   @default("default-company")
   type      String   @default("text")
   options   Json?
   required  Boolean  @default(false)
@@ -1054,6 +1063,9 @@ model CustomFieldDefinition {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   values    CustomFieldValue[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model CustomFieldValue {

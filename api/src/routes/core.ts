@@ -425,7 +425,7 @@ router.put('/company', async (req: Request, res: Response) => {
 
   try {
     await persistCompanyProfile(profile);
-    const applied = await applyIndustryPack(nextKey);
+    const applied = await applyIndustryPack(nextKey, req.companyId ?? DEFAULT_COMPANY_ID);
     return res.json({
       company: profile,
       pack: toWorkspacePackView(pack),

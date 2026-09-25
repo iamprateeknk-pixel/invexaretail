@@ -52,8 +52,13 @@ function requireReportingRole(req: Request, res: Response): boolean {
   return true;
 }
 
-router.get('/catalog/tags', async (_req, res) => {
-  const tags = await prisma.tag.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { items: true } } } });
+// Tags, custom fields and their values are company scoped (audit T-1); an item or tag of another
+// company resolves 404 exactly like a missing one.
+const catalogCompany = (req: Request) => req.companyId ?? DEFAULT_COMPANY_ID;
+const ownsItem = async (req: Request, itemId: string) => Boolean(await prisma.item.findFirst({ where: { id: itemId, companyId: catalogCompany(req) }, select: { id: true } }));
+
+router.get('/catalog/tags', async (req, res) => {
+  const tags = await prisma.tag.findMany({ where: { companyId: catalogCompany(req) }, orderBy: { name: 'asc' }, include: { _count: { select: { items: true } } } });
   return res.json({ tags });
 });
 
@@ -62,7 +67,7 @@ router.post('/catalog/tags', async (req, res) => {
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   if (name.length < 2) return res.status(400).json({ message: 'Tag name must be at least 2 characters.' });
   try {
-    const tag = await prisma.tag.create({ data: { name, color: req.body.color || 'emerald' } });
+    const tag = await prisma.tag.create({ data: { name, companyId: catalogCompany(req), color: req.body.color || 'emerald' } });
     return res.status(201).json({ tag });
   } catch {
     return res.status(409).json({ message: 'A tag with this name already exists.' });
@@ -71,7 +76,10 @@ router.post('/catalog/tags', async (req, res) => {
 
 router.put('/catalog/items/:itemId/tags', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const tagIds = Array.isArray(req.body.tagIds) ? req.body.tagIds.filter((id: unknown) => typeof id === 'string') : [];
+  const requestedTagIds: string[] = Array.isArray(req.body.tagIds) ? req.body.tagIds.filter((id: unknown) => typeof id === 'string') : [];
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  const tagIds = (await prisma.tag.findMany({ where: { id: { in: requestedTagIds }, companyId: catalogCompany(req) }, select: { id: true } })).map((tag) => tag.id);
+  if (tagIds.length !== new Set(requestedTagIds).size) return res.status(404).json({ message: 'Tag not found.' });
   await prisma.$transaction([
     prisma.itemTag.deleteMany({ where: { itemId: req.params.itemId } }),
     prisma.itemTag.createMany({ data: tagIds.map((tagId: string) => ({ itemId: req.params.itemId, tagId })), skipDuplicates: true }),
@@ -79,8 +87,8 @@ router.put('/catalog/items/:itemId/tags', async (req, res) => {
   return res.json({ success: true });
 });
 
-router.get('/catalog/custom-fields', async (_req, res) => {
-  const fields = await prisma.customFieldDefinition.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+router.get('/catalog/custom-fields', async (req, res) => {
+  const fields = await prisma.customFieldDefinition.findMany({ where: { companyId: catalogCompany(req) }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   return res.json({ fields });
 });
 
@@ -89,13 +97,15 @@ router.post('/catalog/custom-fields', async (req, res) => {
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   const type = ['text', 'number', 'date', 'boolean', 'select'].includes(req.body.type) ? req.body.type : 'text';
   if (name.length < 2) return res.status(400).json({ message: 'Field name must be at least 2 characters.' });
+  if (await prisma.customFieldDefinition.findFirst({ where: { companyId: catalogCompany(req), name }, select: { id: true } })) return res.status(409).json({ message: 'A custom field with this name already exists.' });
   const field = await prisma.customFieldDefinition.create({
-    data: { name, type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
+    data: { name, companyId: catalogCompany(req), type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
   });
   return res.status(201).json({ field });
 });
 
 router.get('/catalog/items/:itemId', async (req, res) => {
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
   const [tags, values] = await Promise.all([
     prisma.itemTag.findMany({ where: { itemId: req.params.itemId }, include: { tag: true } }),
     prisma.customFieldValue.findMany({ where: { itemId: req.params.itemId }, include: { field: true } }),
@@ -106,7 +116,8 @@ router.get('/catalog/items/:itemId', async (req, res) => {
 router.put('/catalog/items/:itemId/custom-fields/:fieldId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const value = req.body.value == null ? '' : String(req.body.value);
-  const field = await prisma.customFieldDefinition.findUnique({ where: { id: req.params.fieldId } });
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  const field = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.fieldId, companyId: catalogCompany(req) } });
   if (!field) return res.status(404).json({ message: 'Custom field was not found.' });
   const pack = getIndustryPack(getActiveWorkflow().industryKey);
   if (value.trim() && isSerialFieldName(field.name, pack)) {

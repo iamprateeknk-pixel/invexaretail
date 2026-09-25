@@ -1,5 +1,5 @@
 import { readTabularFile } from './stock-import.js';
-import { isExpiredOn } from './expiry-date.js';
+import { daysUntilExpiryDate, isExpiredOn } from './expiry-date.js';
 
 export type TransferImportRow = {
   rowNumber: number;
@@ -86,7 +86,28 @@ export async function parseTransferImport(buffer: Buffer, fileName: string): Pro
 // just data. status is optional so existing callers that never set it (all
 // of them before this) keep treating every lot as available, unchanged.
 export type LotStatus = 'AVAILABLE' | 'EXPIRED' | 'BLOCKED' | 'QUARANTINE';
-export type FefoLot = { lotId: string; lotNo: string; expiryDate?: string | null; available: number; createdAt?: string; status?: LotStatus };
+export type FefoLot = {
+  lotId: string; lotNo: string; expiryDate?: string | null; available: number; createdAt?: string; status?: LotStatus;
+  /** With the expiry date this gives the lot's total shelf life; `shelfLifeDays` (from the item) wins when set. */
+  manufacturedAt?: string | null;
+  shelfLifeDays?: number | null;
+};
+
+/**
+ * Remaining shelf life of a lot as a percentage of its total life (audit S-1), or null when it cannot be
+ * known (no expiry date, or neither a shelf life nor a manufacturing date). Customers with a minimum RSL
+ * (retail chains commonly require 60-80%) must not be given a lot below it.
+ */
+export function lotRemainingShelfLifePercent(lot: FefoLot, today: Date = new Date()): number | null {
+  const daysLeft = daysUntilExpiryDate(lot.expiryDate, today);
+  if (daysLeft === null) return null;
+  let total = lot.shelfLifeDays && lot.shelfLifeDays > 0 ? lot.shelfLifeDays : null;
+  if (total === null && lot.manufacturedAt && lot.expiryDate) {
+    const days = Math.round((new Date(lot.expiryDate).getTime() - new Date(lot.manufacturedAt).getTime()) / 86_400_000);
+    if (days > 0) total = days;
+  }
+  return total === null ? null : Math.max(0, (daysLeft / total) * 100);
+}
 
 // A lot is allocatable only if it has stock, its status is AVAILABLE *and its
 // expiry date has not passed*. Status alone was not enough: nothing sweeps lots
@@ -158,7 +179,7 @@ export function allocateLots(
   lots: FefoLot[],
   requestedQty: number,
   strategy: AllocationStrategy,
-  options?: { manualLines?: ManualAllocationLine[]; overrideReason?: string; today?: Date },
+  options?: { manualLines?: ManualAllocationLine[]; overrideReason?: string; today?: Date; /** Skip lots whose remaining shelf life is below this percentage; lots whose RSL is unknown pass (a data gap, not a failure). */ minRemainingShelfLifePercent?: number },
 ): LotAllocationResult {
   const today = options?.today ?? new Date();
   if (strategy === 'MANUAL') {
@@ -175,7 +196,13 @@ export function allocateLots(
   }
 
   let remaining = requestedQty;
-  const sorted = lots.filter((lot) => isAllocatable(lot, today)).sort((a, b) => {
+  const minRsl = options?.minRemainingShelfLifePercent;
+  const meetsRsl = (lot: FefoLot) => {
+    if (!minRsl || minRsl <= 0) return true;
+    const rsl = lotRemainingShelfLifePercent(lot, today);
+    return rsl === null || rsl >= minRsl;
+  };
+  const sorted = lots.filter((lot) => isAllocatable(lot, today) && meetsRsl(lot)).sort((a, b) => {
     if (strategy === 'FIFO') return String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
     const aTime = a.expiryDate ? new Date(a.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.expiryDate ? new Date(b.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;

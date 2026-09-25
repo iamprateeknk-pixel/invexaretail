@@ -8,6 +8,7 @@ import {
   ManualAllocationRequiresReasonError,
   LotNotAllocatableError,
   ManualAllocationExceedsAvailableError,
+  lotRemainingShelfLifePercent,
 } from './warehouse-workflow.js';
 
 test('transfer import accepts minimal item name and quantity files', async () => {
@@ -115,4 +116,21 @@ test('when only lapsed lots exist the request is a shortage, and a manual overri
     () => allocateLots(lots, 3, 'MANUAL', { manualLines: [{ lotId: 'a', quantity: 3 }], overrideReason: 'Needed', today: auditToday }),
     /cannot be allocated/,
   );
+});
+
+test('a customer minimum remaining shelf life skips lots below it; unknown-RSL lots still pass (audit S-1)', () => {
+  const today = new Date('2026-09-26T06:00:00Z');
+  const day = (n: number) => new Date(today.getTime() + n * 86_400_000).toISOString();
+  const lots = [
+    { lotId: 'old', lotNo: 'OLD', available: 50, expiryDate: day(10), shelfLifeDays: 100 },
+    { lotId: 'fresh', lotNo: 'FRESH', available: 50, expiryDate: day(80), shelfLifeDays: 100 },
+    { lotId: 'nodate', lotNo: 'ND', available: 50, expiryDate: null },
+  ];
+  assert.equal(lotRemainingShelfLifePercent(lots[1], today), 80);
+  const strict = allocateLots(lots, 30, 'FEFO', { today, minRemainingShelfLifePercent: 50 });
+  assert.deepEqual(strict.allocations.map((a) => a.lotId), ['fresh']);
+  assert.equal(allocateLots(lots, 30, 'FEFO', { today }).allocations[0].lotId, 'old', 'no requirement: plain FEFO');
+  // Life derived from the manufacturing date when the item has no shelf life: 100 days, 10 left = 10%.
+  const made = { lotId: 'm', lotNo: 'M', available: 5, manufacturedAt: day(-90), expiryDate: day(10) };
+  assert.equal(Math.round(lotRemainingShelfLifePercent(made, today)!), 10);
 });

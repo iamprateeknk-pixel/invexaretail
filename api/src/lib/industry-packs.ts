@@ -157,14 +157,14 @@ export function isSerialFieldName(fieldName: string, pack = getIndustryPack(acti
   return /imei|serial/.test(haystack);
 }
 
-export async function applyIndustryPack(industryKey: IndustryKey): Promise<{ createdTags: number; createdFields: number }> {
+export async function applyIndustryPack(industryKey: IndustryKey, companyId: string = 'default-company'): Promise<{ createdTags: number; createdFields: number }> {
   const pack = getIndustryPack(industryKey);
   setActiveWorkflow(workflowFromPack(pack));
   if (!databaseEnabled) return { createdTags: 0, createdFields: 0 };
 
   const [existingTags, existingFields] = await Promise.all([
-    prisma.tag.findMany({ select: { name: true } }),
-    prisma.customFieldDefinition.findMany({ select: { name: true } }),
+    prisma.tag.findMany({ where: { companyId }, select: { name: true } }),
+    prisma.customFieldDefinition.findMany({ where: { companyId }, select: { name: true } }),
   ]);
 
   const tagsToCreate = missingPackSeeds(existingTags.map((row) => row.name), pack.tags);
@@ -172,7 +172,7 @@ export async function applyIndustryPack(industryKey: IndustryKey): Promise<{ cre
 
   if (tagsToCreate.length) {
     await prisma.tag.createMany({
-      data: tagsToCreate.map((tag) => ({ id: randomUUID(), name: tag.name, color: tag.color })),
+      data: tagsToCreate.map((tag) => ({ id: randomUUID(), name: tag.name, companyId, color: tag.color })),
       skipDuplicates: true,
     });
   }
@@ -182,6 +182,7 @@ export async function applyIndustryPack(industryKey: IndustryKey): Promise<{ cre
       data: {
         id: randomUUID(),
         name: field.name,
+        companyId,
         type: field.type,
         options: field.options,
         required: Boolean(field.required),

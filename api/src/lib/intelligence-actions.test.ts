@@ -84,3 +84,14 @@ test('shelf-life zone is attached when the item shelf life is known; expired lot
   assert.equal(expired.suggestedAction, 'WRITE_OFF');
   assert.equal(expired.atRiskQty, 4);
 });
+
+test('two surplus branches do not both fill the same shortage: the need is handed out once across the network', () => {
+  const row = (locationId: string, onHand: number, targetQty: number, minQty: number) => ({ itemId: 'i', itemName: 'Item', locationId, locationName: locationId, onHand, targetQty, minQty });
+  const rows = [row('big', 60, 40, 5), row('small', 50, 40, 5), row('needy', 2, 30, 12)];
+  const forBig = buildOverstockRecommendations(rows, 'big');
+  const forSmall = buildOverstockRecommendations(rows, 'small');
+  assert.deepEqual(forBig.map((r) => [r.destinationLocationId, r.suggestedTransferQty]), [['needy', 10]], 'the larger surplus covers the whole 10-unit need');
+  assert.deepEqual(forSmall, [], 'the need is already spoken for, so nothing is left to send');
+  const withInbound = buildOverstockRecommendations(rows, 'big', new Map([['i|needy', 4]]));
+  assert.equal(withInbound[0].suggestedTransferQty, 6, 'units already on their way reduce the need');
+});

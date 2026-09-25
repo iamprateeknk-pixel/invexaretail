@@ -174,35 +174,57 @@ export type OverstockInput = {
   minQty: number;
 };
 
+/**
+ * Overstock -> needy-store transfers, allocated across the WHOLE network for each item (audit R-1).
+ * Each surplus location's screen used to recommend filling the same needy store on its own, so three
+ * surplus branches would all "fill" one gap three times over. Now the need is handed out once, in a
+ * fixed order (largest surplus first, ties by location id), and each screen shows only its own share.
+ * `incoming` (units already on their way, keyed `itemId|locationId`) reduces a store's need first.
+ */
 export function buildOverstockRecommendations(
   rows: OverstockInput[],
   currentLocationId: string,
+  incoming: Map<string, number> = new Map(),
 ): OverstockRecommendation[] {
-  const here = rows.filter((row) => row.locationId === currentLocationId && row.onHand > row.targetQty && row.targetQty > 0);
-  const needy = rows.filter((row) => row.locationId !== currentLocationId && row.onHand < row.minQty);
-  return here.flatMap((surplus) => {
-    const surplusQty = surplus.onHand - surplus.targetQty;
-    const destination = needy
-      .filter((row) => row.itemId === surplus.itemId)
-      .sort((a, b) => (a.onHand - a.minQty) - (b.onHand - b.minQty))[0];
-    if (!destination) return [];
-    const need = destination.minQty - destination.onHand;
-    const suggestedTransferQty = Math.min(surplusQty, need);
-    if (suggestedTransferQty <= 0) return [];
-    return [{
-      type: 'OVERSTOCK' as const,
-      itemId: surplus.itemId,
-      itemName: surplus.itemName,
-      locationId: surplus.locationId,
-      onHand: surplus.onHand,
-      targetQty: surplus.targetQty,
-      surplusQty,
-      suggestedAction: 'TRANSFER' as const,
-      destinationLocationId: destination.locationId,
-      destinationLocationName: destination.locationName,
-      suggestedTransferQty,
-      reason: `${surplus.itemName} is ${surplusQty} over target here; ${destination.locationName} is below min by ${need}.`,
-      risk: surplusQty >= surplus.targetQty ? 'HIGH' as const : 'MEDIUM' as const,
-    }];
-  });
+  const items = [...new Set(rows.map((row) => row.itemId))];
+  const result: OverstockRecommendation[] = [];
+  for (const itemId of items) {
+    const itemRows = rows.filter((row) => row.itemId === itemId);
+    const donors = itemRows
+      .filter((row) => row.onHand > row.targetQty && row.targetQty > 0)
+      .map((row) => ({ row, left: row.onHand - row.targetQty }))
+      .sort((a, b) => b.left - a.left || a.row.locationId.localeCompare(b.row.locationId));
+    const needy = itemRows
+      .filter((row) => row.onHand < row.minQty && !donors.some((donor) => donor.row.locationId === row.locationId))
+      .map((row) => ({ row, need: row.minQty - row.onHand - Math.max(0, incoming.get(`${itemId}|${row.locationId}`) ?? 0) }))
+      .filter((entry) => entry.need > 0)
+      .sort((a, b) => b.need - a.need || a.row.locationId.localeCompare(b.row.locationId));
+    for (const donor of donors) {
+      for (const target of needy) {
+        if (donor.left <= 0) break;
+        if (target.need <= 0) continue;
+        const quantity = Math.min(donor.left, target.need);
+        donor.left -= quantity;
+        target.need -= quantity;
+        if (donor.row.locationId !== currentLocationId) continue;
+        const surplusQty = donor.row.onHand - donor.row.targetQty;
+        result.push({
+          type: 'OVERSTOCK' as const,
+          itemId,
+          itemName: donor.row.itemName,
+          locationId: donor.row.locationId,
+          onHand: donor.row.onHand,
+          targetQty: donor.row.targetQty,
+          surplusQty,
+          suggestedAction: 'TRANSFER' as const,
+          destinationLocationId: target.row.locationId,
+          destinationLocationName: target.row.locationName,
+          suggestedTransferQty: quantity,
+          reason: `${donor.row.itemName} is ${surplusQty} over target here; ${target.row.locationName} is below min by ${target.row.minQty - target.row.onHand}.`,
+          risk: surplusQty >= donor.row.targetQty ? 'HIGH' as const : 'MEDIUM' as const,
+        });
+      }
+    }
+  }
+  return result;
 }

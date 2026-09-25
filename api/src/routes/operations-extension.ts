@@ -297,6 +297,21 @@ function expiryAlertId(itemId: string, lotId: string, locationId: string): strin
   return `expiry-${createHash('sha1').update(`${itemId}|${lotId}|${locationId}`).digest('hex').slice(0, 24)}`;
 }
 
+router.patch('/lots/:id/manufactured', async (req, res) => {
+  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
+  const raw = req.body.manufacturedAt;
+  let manufacturedAt: Date | null = null;
+  if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+    manufacturedAt = new Date(raw);
+    if (Number.isNaN(manufacturedAt.getTime()) || manufacturedAt.getTime() > Date.now() + 86_400_000) return res.status(400).json({ message: 'Manufacturing date is invalid or in the future.' });
+  }
+  const owned = await prisma.lot.findFirst({ where: { id: req.params.id, item: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true, expiryDate: true } });
+  if (!owned) return res.status(404).json({ message: 'Lot not found.' });
+  if (manufacturedAt && owned.expiryDate && manufacturedAt >= owned.expiryDate) return res.status(400).json({ message: 'Manufacturing date must be before the expiry date.' });
+  const lot = await prisma.lot.update({ where: { id: owned.id }, data: { manufacturedAt } });
+  return res.json({ lot });
+});
+
 router.patch('/lots/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const validStatuses = ['AVAILABLE', 'EXPIRED', 'BLOCKED', 'QUARANTINE'] as const;
@@ -1375,8 +1390,8 @@ router.post('/orders', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const channel = typeof req.body.channel === 'string' ? req.body.channel.trim() : '';
   const fulfillmentLocationId = typeof req.body.fulfillmentLocationId === 'string' && req.body.fulfillmentLocationId ? req.body.fulfillmentLocationId : null;
-  const lines: Array<{ itemId: string; quantity: number }> = Array.isArray(req.body.lines)
-    ? req.body.lines.map((line: any) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity) })).filter((line: any) => line.itemId && Number.isFinite(line.quantity) && line.quantity > 0)
+  const lines: Array<{ itemId: string; quantity: number; minRslPercent?: number }> = Array.isArray(req.body.lines)
+    ? req.body.lines.map((line: any) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), ...(Number(line.minRslPercent) > 0 && Number(line.minRslPercent) <= 100 ? { minRslPercent: Number(line.minRslPercent) } : {}) })).filter((line: any) => line.itemId && Number.isFinite(line.quantity) && line.quantity > 0)
     : [];
   if (!channel || !lines.length) {
     return res.status(400).json({ message: 'channel and at least one positive-quantity line are required.' });
