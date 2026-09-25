@@ -28,3 +28,20 @@ test('reorder rules can be upserted for a location', () => {
   assert.throws(() => upsertReorderRule({ itemId: 'item-1002', locationId: 'loc-1', minQty: 20, targetQty: 10 }));
   resetReorderStore();
 });
+
+import { validateReorderQuantities } from './reorder-store.js';
+
+test('reorder quantities: whole numbers for counted items, up to 3 decimals for loose/KG items', () => {
+  assert.equal(validateReorderQuantities(5, 12, false), null);
+  assert.match(validateReorderQuantities(2.5, 12, false) ?? '', /whole numbers/);
+  assert.equal(validateReorderQuantities(2.5, 10.25, true), null, 'a 2.5 kg minimum is now possible');
+  assert.match(validateReorderQuantities(2.5555, 10, true) ?? '', /3 decimal/);
+  assert.match(validateReorderQuantities(8, 5, true) ?? '', /not be below/);
+  assert.match(validateReorderQuantities(-1, 5, false) ?? '', /non-negative/);
+  assert.match(validateReorderQuantities(Number.NaN, 5, false) ?? '', /non-negative/);
+  resetReorderStore();
+  const rule = upsertReorderRule({ itemId: 'item-1003', locationId: 'loc-1', minQty: 2.5, targetQty: 9, decimal: true });
+  assert.equal(rule.minQty, 2.5);
+  assert.throws(() => upsertReorderRule({ itemId: 'item-1003', locationId: 'loc-1', minQty: 2.5, targetQty: 9 }));
+  resetReorderStore();
+});

@@ -1,7 +1,7 @@
-import { expiryDayNumber, todayDayNumber } from './expiry-date.js';
+import { BUSINESS_TIMEZONE, expiryDayNumber, todayDayNumber } from './expiry-date.js';
 import type { CountRecord, ItemRecord, TransferRecord } from './repository.js';
 
-const DASHBOARD_TIMEZONE = 'Asia/Kolkata';
+const DASHBOARD_TIMEZONE = BUSINESS_TIMEZONE;
 
 function localDateString(instant: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);
@@ -70,7 +70,9 @@ export function buildDashboardSummary(input: DashboardSummaryInput & { stock?: A
   const nearExpiryNextMonth = itemsWhere((day) => day > thisMonthEnd && day <= nextMonthEnd);
 
   const reviewedCounts = input.counts.filter((count) => count.status === 'APPROVED' || count.status === 'REJECTED');
-  const matchingCounts = input.counts.filter((count) => Number(count.physicalQuantity ?? 0) === Number(count.bookQty ?? 0));
+  // Accuracy is judged on counts that have been reviewed - an unreviewed or recount-pending
+  // count is not yet a verdict (audit C-3: it used to include them in the denominator).
+  const matchingCounts = reviewedCounts.filter((count) => Number(count.physicalQuantity ?? 0) === Number(count.bookQty ?? 0));
   const closedTransfers = input.transfers.filter((transfer) => ['RECEIVED', 'CLOSED'].includes(transfer.status)).length;
 
   const countCompletionPercent = input.counts.length
@@ -79,8 +81,8 @@ export function buildDashboardSummary(input: DashboardSummaryInput & { stock?: A
   const transferSlaPercent = input.transfers.length
     ? Math.round((closedTransfers / input.transfers.length) * 1000) / 10
     : 0;
-  const stockAccuracyPercent = input.counts.length
-    ? Math.round((matchingCounts.length / input.counts.length) * 1000) / 10
+  const stockAccuracyPercent = reviewedCounts.length
+    ? Math.round((matchingCounts.length / reviewedCounts.length) * 1000) / 10
     : 0;
 
   return {

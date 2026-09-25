@@ -1110,7 +1110,7 @@ model PurchaseReceipt {
 
 model PurchaseOrder {
   id          String   @id @default(cuid())
-  number      String   @unique
+  number      String
   supplierId  String
   supplier    Supplier @relation(fields: [supplierId], references: [id])
   locationId  String
@@ -1147,6 +1147,9 @@ model PurchaseOrder {
 
   @@index([locationId, status])
   @@index([supplierId])
+
+  // Audit T-1: document numbers are unique per company, not across all tenants.
+  @@unique([companyId, number])
 }
 
 model PurchaseOrderLine {
@@ -1237,8 +1240,8 @@ model ReorderRule {
   itemId     String
   item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
   locationId String
-  minQty     Int      @default(0)
-  targetQty  Int      @default(0)
+  minQty     Float    @default(0)
+  targetQty  Float    @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1320,7 +1323,9 @@ model AssetCheckout {
 
 model Job {
   id          String    @id @default(cuid())
-  number      String    @unique
+  number      String
+  // Audit T-1: jobs had no company at all - every admin saw and could edit every company's jobs.
+  companyId   String    @default("default-company")
   name        String
   locationId  String
   status      String    @default("DRAFT")
@@ -1332,6 +1337,8 @@ model Job {
   lines       JobLine[]
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
+  @@index([companyId])
+  @@unique([companyId, number])
 
 
   @@index([locationId, status])

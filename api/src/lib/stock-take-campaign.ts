@@ -5,6 +5,8 @@ import type { AbcClass } from './abc-cycle-count.js';
 // prioritisation, balanced allocation, status derivation); lib/campaign-
 // service.ts wires them to the repository, scheduler and persistence.
 
+import { BUSINESS_TIMEZONE } from './expiry-date.js';
+
 export const CAMPAIGN_STATUSES = ['DRAFT', 'ACTIVE', 'COUNTING', 'IN_REVIEW', 'COMPLETED', 'PAUSED', 'CANCELLED'] as const;
 export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
 
@@ -19,7 +21,7 @@ export const PRIORITY_KEYS = ['NEVER_COUNTED', 'OLDEST_COUNTED', 'ABC', 'EXPIRY'
 export type PriorityKey = (typeof PRIORITY_KEYS)[number];
 export const DEFAULT_PRIORITY_ORDER: PriorityKey[] = ['NEVER_COUNTED', 'OLDEST_COUNTED', 'ABC', 'EXPIRY'];
 
-export const DEFAULT_CAMPAIGN_TIMEZONE = 'Asia/Kolkata';
+export const DEFAULT_CAMPAIGN_TIMEZONE = BUSINESS_TIMEZONE;
 export const MAX_DAILY_ITEMS_PER_USER = 500;
 
 export type CampaignRecord = {

@@ -40,7 +40,20 @@ export type CycleCountPlanItem = CycleCountStockInput & {
   eligible: boolean;
 };
 
+export type CountTrigger = {
+  itemId: string;
+  code: string;
+  lotId: string;
+  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED';
+  priority: CountPriority;
+  onHand: number;
+  reserved: number;
+  message: string;
+};
+
 export type CycleCountPlan = {
+  /** Event-driven counts the cadence would never pick: negative balances and stock promised beyond what is on hand. */
+  triggers: CountTrigger[];
   locationId: string;
   generatedAt: string;
   totalValue: number;
@@ -158,6 +171,29 @@ export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRe
     .sort((left, right) => left.itemId.localeCompare(right.itemId));
 }
 
+/**
+ * Audit C-2: the ABC plan skips every on-hand <= 0 row, so the items MOST in need of a
+ * count - a negative balance means the book is provably wrong - were invisible to it.
+ * Process-triggered counts (cycle-counting framework): count on a negative balance
+ * immediately, and when more is reserved than exists.
+ */
+export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[]): CountTrigger[] {
+  const itemMap = new Map(items.map((item) => [item.id, item]));
+  const triggers: CountTrigger[] = [];
+  for (const row of stock) {
+    const item = itemMap.get(row.itemId);
+    if (!item) continue;
+    const reserved = Number((row as { reserved?: number }).reserved ?? 0);
+    const base = { itemId: row.itemId, code: item.code, lotId: row.lotId, onHand: row.onHand, reserved };
+    if (row.onHand < 0) {
+      triggers.push({ ...base, reason: 'NEGATIVE_BALANCE', priority: 'HIGH', message: `${item.code} shows a negative balance (${row.onHand}) - the book is wrong; count it now.` });
+    } else if (reserved > row.onHand + 1e-8) {
+      triggers.push({ ...base, reason: 'OVER_RESERVED', priority: 'HIGH', message: `${item.code} has ${reserved} reserved but only ${row.onHand} on hand - verify the physical stock.` });
+    }
+  }
+  return triggers.sort((a, b) => a.onHand - b.onHand || a.code.localeCompare(b.code));
+}
+
 export function buildCycleCountPlan(input: {
   locationId: string;
   items: ItemRecord[];
@@ -241,6 +277,7 @@ export function buildCycleCountPlan(input: {
   }
 
   return {
+    triggers: buildCountTriggers(input.items, locationStock),
     locationId: input.locationId,
     generatedAt: now.toISOString(),
     totalValue: planItems.reduce((sum, item) => sum + item.extendedValue, 0),

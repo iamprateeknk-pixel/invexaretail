@@ -74,37 +74,37 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1160,
+    "line": 1163,
     "snippet": "unitCost        Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1182,
+    "line": 1185,
     "snippet": "totalAmount     Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1202,
+    "line": 1205,
     "snippet": "unitCost          Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1220,
+    "line": 1223,
     "snippet": "price         Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1831,
+    "line": 1838,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1961,
+    "line": 1968,
     "snippet": "value           Float?"
   }
 ]

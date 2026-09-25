@@ -18,7 +18,7 @@ test('dashboard summary calculates admin KPI cards from seeded data', () => {
   assert.equal(summary.transferRequests, 1);
   assert.equal(summary.expiredTillDate, 1);
   assert.equal(summary.countCompletionPercent, 0);
-  assert.equal(summary.stockAccuracyPercent, 100);
+  assert.equal(summary.stockAccuracyPercent, 0, 'no reviewed counts yet, so no accuracy verdict');
   assert.equal(summary.transferSlaPercent, 0);
 });
 
@@ -62,4 +62,18 @@ test('pending counts are the counts still awaiting review, not every count ever 
     transfers: [], items: [], now: dnow,
   });
   assert.equal(summary.pendingCounts, 2);
+});
+
+test('stock accuracy is the share of REVIEWED counts that matched the book', () => {
+  const base = { itemId: 'i', lotId: 'l', locationId: 'loc', mode: 'scan' as const, submittedBy: 'u', role: 'STORE_USER' as const, createdAt: dnow.toISOString() };
+  const summary = buildDashboardSummary({
+    counts: [
+      { ...base, id: 'a', physicalQuantity: 5, bookQty: 5, status: 'APPROVED' },
+      { ...base, id: 'b', physicalQuantity: 4, bookQty: 5, status: 'APPROVED' },
+      { ...base, id: 'c', physicalQuantity: 5, bookQty: 5 },                       // unreviewed: not a verdict yet
+      { ...base, id: 'd', physicalQuantity: 9, bookQty: 5, status: 'RECOUNT' },    // pending recount: not a verdict yet
+    ],
+    transfers: [], items: [], now: dnow,
+  });
+  assert.equal(summary.stockAccuracyPercent, 50);
 });

@@ -113,3 +113,29 @@ test('a higher service level yields strictly more safety stock', () => {
   const base = { averageDailyDemand: 10, stdDevDailyDemand: 4, averageLeadTimeDays: 9 };
   assert.ok(computeSafetyStock({ ...base, servicePercent: 97 }) > computeSafetyStock({ ...base, servicePercent: 95 }));
 });
+
+import { classifyDemandPattern, crostonDailyDemand, xyzClass } from './demand-forecast.js';
+
+const repeat = (pattern: number[], times: number) => Array.from({ length: times }, () => pattern).flat();
+
+test('demand patterns: steady, spiky, sparse-and-regular, sparse-and-lumpy, none', () => {
+  assert.equal(classifyDemandPattern(repeat([10, 11, 9, 10], 10)).pattern, 'SMOOTH');
+  assert.equal(classifyDemandPattern(repeat([1, 30, 2, 25], 10)).pattern, 'ERRATIC');
+  assert.equal(classifyDemandPattern(repeat([0, 0, 0, 0, 0, 5, 0, 0, 0, 0], 6)).pattern, 'INTERMITTENT');
+  assert.equal(classifyDemandPattern(repeat([0, 0, 0, 0, 0, 1, 0, 0, 0, 40], 6)).pattern, 'LUMPY');
+  assert.equal(classifyDemandPattern([0, 0, 0]).pattern, 'NO_DEMAND');
+});
+
+test('XYZ follows the coefficient of variation', () => {
+  assert.equal(xyzClass(repeat([10, 11, 9, 10], 5)), 'X');
+  assert.equal(xyzClass(repeat([2, 20, 4, 14], 5)), 'Y');
+  assert.equal(xyzClass(repeat([0, 0, 0, 0, 0, 0, 0, 0, 0, 50], 3)), 'Z');
+  assert.equal(xyzClass([0, 0]), 'Z');
+});
+
+test('Croston estimates the true rate of a sparse item (5 units every 10 days = 0.5/day), close to the plain mean', () => {
+  const series = repeat([0, 0, 0, 0, 0, 0, 0, 0, 0, 5], 12);
+  const croston = crostonDailyDemand(series);
+  assert.ok(croston > 0.42 && croston < 0.52, `croston ${croston}`);
+  assert.equal(crostonDailyDemand([0, 0, 0]), 0);
+});

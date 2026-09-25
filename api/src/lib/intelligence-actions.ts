@@ -6,6 +6,7 @@
 // through IntelligenceDismissal with the new type strings.
 
 import { daysUntilExpiryDate, isExpiredOn } from './expiry-date.js';
+import { projectSellThrough, shelfLifeZone, type ShelfLifeZone } from './shelf-life.js';
 
 export type LotBlockRecommendation = {
   type: 'LOT_BLOCK';
@@ -32,6 +33,10 @@ export type ExpiryActionRecommendation = {
   suggestedAction: 'MARKDOWN' | 'WRITE_OFF' | 'TRANSFER';
   reason: string;
   risk: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  /** Units projected to still be unsold on the expiry date (only when the item's sales rate is known). */
+  atRiskQty?: number;
+  /** Remaining-shelf-life zone (only when the item's shelf life is known). */
+  shelfLifeZone?: ShelfLifeZone | null;
 };
 
 export type OverstockRecommendation = {
@@ -102,39 +107,55 @@ export function daysToExpiry(expiryDate: string | null | undefined, today = new 
   return daysUntilExpiryDate(expiryDate, today);
 }
 
-export function buildExpiryActionRecommendations(lots: LotBlockInput[], today = new Date()): ExpiryActionRecommendation[] {
+export type ExpiryActionContext = {
+  /** Average units sold per day at this location, by item. Presence of the item enables sell-through projection. */
+  demandByItem?: Map<string, number>;
+  shelfLifeByItem?: Map<string, number | null | undefined>;
+};
+
+/**
+ * Expiry actions (audit S-1/S-2). With a known sales rate the question is not "how many days are
+ * left" but "will it sell before then": a lot that expires in 40 days but sells 1 unit a day
+ * against 200 on hand is a markdown candidate today, and a lot expiring in 3 days that will sell
+ * out is not. Without a sales rate we keep the old fixed rule (7 days). Shelf-life zones are added
+ * whenever the item's shelf life is known.
+ */
+export function buildExpiryActionRecommendations(lots: LotBlockInput[], today = new Date(), context: ExpiryActionContext = {}): ExpiryActionRecommendation[] {
   const recs: ExpiryActionRecommendation[] = [];
   for (const lot of lots) {
     if (!(lot.onHand > 0)) continue;
     const days = daysToExpiry(lot.expiryDate, today);
     if (days === null) continue;
+    const zone = shelfLifeZone(days, context.shelfLifeByItem?.get(lot.itemId));
+    const base = {
+      type: 'EXPIRY' as const, itemId: lot.itemId, itemName: lot.itemName, lotId: lot.lotId, lotNo: lot.lotNo,
+      locationId: lot.locationId, onHand: lot.onHand, daysToExpiry: days, shelfLifeZone: zone,
+    };
     if (days < 0) {
       recs.push({
-        type: 'EXPIRY',
-        itemId: lot.itemId,
-        itemName: lot.itemName,
-        lotId: lot.lotId,
-        lotNo: lot.lotNo,
-        locationId: lot.locationId,
-        onHand: lot.onHand,
-        daysToExpiry: days,
-        suggestedAction: 'WRITE_OFF',
+        ...base, suggestedAction: 'WRITE_OFF', atRiskQty: lot.onHand,
         reason: `${lot.lotNo} expired ${Math.abs(days)} day(s) ago - write off remaining ${lot.onHand}.`,
         risk: 'CRITICAL',
       });
       continue;
     }
+    const demand = context.demandByItem?.get(lot.itemId);
+    if (demand !== undefined) {
+      const projection = projectSellThrough({ onHand: lot.onHand, avgDailyDemand: demand, daysUntilExpiry: days });
+      if (projection.willSellOut || days > 90) continue;
+      const share = projection.atRiskQty / lot.onHand;
+      recs.push({
+        ...base, suggestedAction: 'MARKDOWN', atRiskQty: projection.atRiskQty,
+        reason: demand > 0
+          ? `${lot.lotNo} expires in ${days} day(s) and sells about ${demand}/day: ~${projection.atRiskQty} of ${lot.onHand} will still be unsold - markdown or move it to a faster-selling branch.`
+          : `${lot.lotNo} expires in ${days} day(s) with no recent sales - all ${lot.onHand} are at risk; markdown, move or donate.`,
+        risk: days <= 7 || (share >= 0.5 && days <= 21) ? 'HIGH' : 'MEDIUM',
+      });
+      continue;
+    }
     if (days <= 7) {
       recs.push({
-        type: 'EXPIRY',
-        itemId: lot.itemId,
-        itemName: lot.itemName,
-        lotId: lot.lotId,
-        lotNo: lot.lotNo,
-        locationId: lot.locationId,
-        onHand: lot.onHand,
-        daysToExpiry: days,
-        suggestedAction: 'MARKDOWN',
+        ...base, suggestedAction: 'MARKDOWN',
         reason: `${lot.lotNo} expires in ${days} day(s) - markdown or move before it becomes waste.`,
         risk: days <= 2 ? 'HIGH' : 'MEDIUM',
       });

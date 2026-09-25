@@ -1,7 +1,19 @@
 // Deliberately self-contained (no import from the count-campaign module, which
 // itself depends on the expiry board): the timezone default mirrors
 // DEFAULT_CAMPAIGN_TIMEZONE.
-const DEFAULT_CAMPAIGN_TIMEZONE = 'Asia/Kolkata';
+function validTimezone(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/** The business timezone: BUSINESS_TIMEZONE (IANA name) when set and valid, else Asia/Kolkata (audit T-2: it was a hard-coded constant). */
+export const BUSINESS_TIMEZONE = validTimezone(process.env.BUSINESS_TIMEZONE) ?? 'Asia/Kolkata';
+const DEFAULT_CAMPAIGN_TIMEZONE = BUSINESS_TIMEZONE;
 
 function localDateString(instant: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);

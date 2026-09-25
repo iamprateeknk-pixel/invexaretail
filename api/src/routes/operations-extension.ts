@@ -7,6 +7,7 @@ import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { recordAudit } from '../lib/audit.js';
 import { planRuleReplenishment } from '../lib/replenishment.js';
+import { sellableQuantity, totalSellable } from '../lib/sellable-stock.js';
 import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib/expiry-alerts.js';
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
 import {
@@ -48,7 +49,7 @@ import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDeci
 import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { findTemplateForCategory } from '../lib/qc-inspection.js';
-import { computeDemandStats, suggestReplenishment } from '../lib/demand-forecast.js';
+import { classifyDemandPattern, computeDemandStats, crostonDailyDemand, suggestReplenishment, xyzClass } from '../lib/demand-forecast.js';
 import { OPEN_PO_STATUSES } from '../lib/po-planning.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
 import {
@@ -162,15 +163,19 @@ router.patch('/asset-checkouts/:id/return', async (req, res) => {
   return res.json({ checkout: updated });
 });
 
+// Jobs are company scoped (audit T-1): the list, every lookup and every write filter by the caller's
+// company, and a job or line of another company resolves 404 exactly like a missing one.
+const jobCompany = (req: Request) => req.companyId ?? DEFAULT_COMPANY_ID;
+
 router.get('/jobs', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const where = locationId
+  const scope = locationId
     ? { locationId }
     : ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)
       ? {}
       : { locationId: { in: req.user!.locationIds ?? [] } };
-  const jobs = await prisma.job.findMany({ where, include: { lines: true }, orderBy: { createdAt: 'desc' } });
+  const jobs = await prisma.job.findMany({ where: { ...scope, companyId: jobCompany(req) }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
   return res.json({ jobs });
 });
 
@@ -178,10 +183,13 @@ router.post('/jobs', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   if (name.length < 2 || !req.body.locationId) return res.status(400).json({ message: 'Job name and location are required.' });
+  const location = await prisma.location.findFirst({ where: { id: String(req.body.locationId), companyId: jobCompany(req) }, select: { id: true } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
   const job = await prisma.job.create({ data: {
     number: newDocumentNumber('JOB'),
     name,
-    locationId: req.body.locationId,
+    companyId: jobCompany(req),
+    locationId: location.id,
     createdById: req.user!.id,
     dueAt: req.body.dueAt ? new Date(req.body.dueAt) : null,
     notes: req.body.notes || null,
@@ -193,20 +201,27 @@ router.post('/jobs/:id/lines', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const plannedQty = Number(req.body.plannedQty);
   if (!req.body.itemId || !Number.isInteger(plannedQty) || plannedQty < 1) return res.status(400).json({ message: 'Item and positive planned quantity are required.' });
-  const line = await prisma.jobLine.create({ data: { jobId: req.params.id, itemId: req.body.itemId, plannedQty } });
+  const job = await prisma.job.findFirst({ where: { id: req.params.id, companyId: jobCompany(req) }, select: { id: true } });
+  if (!job) return res.status(404).json({ message: 'Job not found.' });
+  const item = await prisma.item.findFirst({ where: { id: String(req.body.itemId), companyId: jobCompany(req) }, select: { id: true } });
+  if (!item) return res.status(404).json({ message: 'Item not found.' });
+  const line = await prisma.jobLine.create({ data: { jobId: job.id, itemId: item.id, plannedQty } });
   return res.status(201).json({ line });
 });
 
 router.patch('/jobs/:jobId/lines/:lineId', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Warehouse Picker access required.' });
-  const job = await prisma.job.findUnique({ where: { id: req.params.jobId } });
+  const job = await prisma.job.findFirst({ where: { id: req.params.jobId, companyId: jobCompany(req) } });
   if (!job) return res.status(404).json({ message: 'Job not found.' });
   if (!canAccessLocation(req, job.locationId)) return res.status(403).json({ message: 'Location access denied.' });
+  // The line must belong to THIS job (it used to be updated by line id alone, across jobs).
+  const existingLine = await prisma.jobLine.findFirst({ where: { id: req.params.lineId, jobId: job.id }, select: { id: true } });
+  if (!existingLine) return res.status(404).json({ message: 'Job line not found.' });
   const numeric = ['issuedQty', 'usedQty', 'returnedQty', 'damagedQty'].reduce<Record<string, number>>((result, key) => {
     if (req.body[key] !== undefined) result[key] = Math.max(0, Math.trunc(Number(req.body[key]) || 0));
     return result;
   }, {});
-  const line = await prisma.jobLine.update({ where: { id: req.params.lineId }, data: numeric });
+  const line = await prisma.jobLine.update({ where: { id: existingLine.id }, data: numeric });
   return res.json({ line });
 });
 
@@ -214,7 +229,9 @@ router.patch('/jobs/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const allowed = ['DRAFT', 'ACTIVE', 'RECONCILING', 'CLOSED', 'CANCELLED'];
   if (!allowed.includes(req.body.status)) return res.status(400).json({ message: 'Invalid job status.' });
-  const job = await prisma.job.update({ where: { id: req.params.id }, data: { status: req.body.status } });
+  const existing = await prisma.job.findFirst({ where: { id: req.params.id, companyId: jobCompany(req) }, select: { id: true } });
+  if (!existing) return res.status(404).json({ message: 'Job not found.' });
+  const job = await prisma.job.update({ where: { id: existing.id }, data: { status: req.body.status } });
   return res.json({ job });
 });
 
@@ -227,7 +244,7 @@ router.post('/jobs/:id/consume', async (req, res) => {
   if (!lineId || !Number.isFinite(quantity) || quantity <= 0) {
     return res.status(400).json({ message: 'lineId and a positive quantity are required.' });
   }
-  const job = await prisma.job.findUnique({ where: { id: req.params.id }, include: { lines: true } });
+  const job = await prisma.job.findFirst({ where: { id: req.params.id, companyId: jobCompany(req) }, include: { lines: true } });
   if (!job) return res.status(404).json({ message: 'Job not found.' });
   if (!canAccessLocation(req, job.locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (job.status !== 'ACTIVE') return res.status(409).json({ message: 'Start the job before consuming inventory.' });
@@ -677,23 +694,31 @@ router.get('/items/:itemId/forecast', async (req, res) => {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
   const movements = await prisma.stockMovement.findMany({
-    where: { itemId: req.params.itemId, locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: since } },
-    select: { qtyDelta: true, timestamp: true },
+    where: { itemId: req.params.itemId, locationId, movementType: { in: ['SALES_DEDUCTION', 'SALES_RETURN'] }, timestamp: { gte: since } },
+    select: { qtyDelta: true, timestamp: true, movementType: true },
   });
+  // Demand is NET sales: a return in the window offsets a sale (it used to be ignored, overstating demand).
   const soldByDay = new Map<string, number>();
   for (const movement of movements) {
     const day = movement.timestamp.toISOString().slice(0, 10);
-    soldByDay.set(day, (soldByDay.get(day) ?? 0) + Math.abs(movement.qtyDelta));
+    const signed = movement.movementType === 'SALES_RETURN' ? -Math.abs(movement.qtyDelta) : Math.abs(movement.qtyDelta);
+    soldByDay.set(day, (soldByDay.get(day) ?? 0) + signed);
   }
   const dailyDemand: number[] = [];
   for (let offset = 0; offset < windowDays; offset += 1) {
     const day = new Date(since.getTime() + offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     dailyDemand.push(soldByDay.get(day) ?? 0);
   }
-  const demand = computeDemandStats(dailyDemand);
+  const netDailyDemand = dailyDemand.map((value) => Math.max(0, value));
+  const plainDemand = computeDemandStats(netDailyDemand);
+  const { pattern: demandPattern } = classifyDemandPattern(netDailyDemand);
+  // Sparse items are forecast with Croston (SBA); averaging their zeros misstates the rate (audit O-2).
+  const intermittent = demandPattern === 'INTERMITTENT' || demandPattern === 'LUMPY';
+  const demand = intermittent ? { ...plainDemand, averageDailyDemand: crostonDailyDemand(netDailyDemand) } : plainDemand;
 
-  const ledgerRows = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId } });
-  const onHand = ledgerRows.reduce((sum, row) => sum + row.onHand, 0);
+  const ledgerRows = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId }, include: { lot: { select: { status: true, expiryDate: true } } } });
+  // Cover is sellable stock only: blocked, quarantined and expired lots do not count (audit O-6).
+  const onHand = totalSellable(ledgerRows);
   const openLines = await prisma.purchaseOrderLine.findMany({
     where: { itemId: req.params.itemId, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
   });
@@ -701,7 +726,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
 
   const suggestion = suggestReplenishment({ onHand, onOrder, demand, averageLeadTimeDays: leadTimeDays, servicePercent });
 
-  const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { name: true } });
+  const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { name: true, shelfLifeDays: true } });
   const lots = await prisma.lot.findMany({
     where: { itemId: req.params.itemId, stock: { some: { locationId, onHand: { gt: 0 } } } },
     include: { stock: { where: { locationId } } },
@@ -716,7 +741,10 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     status: lot.status,
     expiryDate: lot.expiryDate?.toISOString() ?? null,
   })));
-  const expiryActions = buildExpiryActionRecommendations(lotInputs);
+  const expiryActions = buildExpiryActionRecommendations(lotInputs, new Date(), {
+    demandByItem: demand.sampleDays > 0 ? new Map([[req.params.itemId, demand.averageDailyDemand]]) : undefined,
+    shelfLifeByItem: new Map([[req.params.itemId, item?.shelfLifeDays]]),
+  });
 
   const rules = await prisma.reorderRule.findMany({ where: { itemId: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   const networkLedger = await prisma.stockLedger.findMany({
@@ -740,7 +768,8 @@ router.get('/items/:itemId/forecast', async (req, res) => {
 
   return res.json({
     itemId: req.params.itemId, locationId, windowDays, leadTimeDays, servicePercent,
-    demand, onHand, onOrder, suggestion, expiryActions, overstock,
+    demand, demandPattern, variabilityClass: xyzClass(netDailyDemand), forecastMethod: intermittent ? 'CROSTON_SBA' : 'MOVING_AVERAGE',
+    onHand, onOrder, suggestion, expiryActions, overstock,
   });
 });
 
@@ -800,8 +829,11 @@ router.get('/intelligence/:locationId', async (req, res) => {
   const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
   const [rules, ledger, counts, dismissals] = await Promise.all([
     prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true } }),
+    // Scoped to this company's locations (it used to read every tenant's whole ledger on each request)
+    // and to the items that have rules, with the lot fields needed to judge what is sellable.
     prisma.stockLedger.findMany({
-      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, location: { select: { name: true, type: true } } },
+      where: { location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
+      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true } } },
     }),
     prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
     prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
@@ -813,8 +845,9 @@ router.get('/intelligence/:locationId', async (req, res) => {
   for (const entry of ledger) {
     if (entry.locationId === req.params.locationId) {
       const current = quantities.get(entry.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
-      current.onHand += entry.onHand;
-      current.reserved += entry.reserved;
+      const sellableHere = sellableQuantity({ onHand: entry.onHand, reserved: 0, lot: entry.lot });
+      current.onHand += sellableHere;
+      current.reserved += sellableHere > 0 ? entry.reserved : 0;
       current.inTransit += entry.inTransit;
       quantities.set(entry.itemId, current);
     }
@@ -825,7 +858,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       locationType: entry.location.type,
       available: 0,
     };
-    source.available += entry.onHand - entry.reserved;
+    source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved, lot: entry.lot });
     byLocation.set(entry.locationId, source);
     network.set(entry.itemId, byLocation);
   }
@@ -892,9 +925,20 @@ router.get('/intelligence/:locationId', async (req, res) => {
 
   const lots = await prisma.lot.findMany({
     where: { stock: { some: { locationId: req.params.locationId, onHand: { gt: 0 } } } },
-    include: { item: { select: { id: true, name: true } }, stock: { where: { locationId: req.params.locationId } } },
+    include: { item: { select: { id: true, name: true, shelfLifeDays: true } }, stock: { where: { locationId: req.params.locationId } } },
     take: 400,
   }).catch(() => []);
+  // Recent sales rate per item here, so expiry advice can ask "will it sell before it expires?".
+  const salesSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const recentSales = await prisma.stockMovement.groupBy({
+    by: ['itemId'],
+    where: { locationId: req.params.locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: salesSince } },
+    _sum: { qtyDelta: true },
+  }).catch(() => []);
+  const demandByItem = new Map<string, number>(recentSales.map((row) => [row.itemId, Math.abs(row._sum.qtyDelta ?? 0) / 30] as [string, number]));
+  // Items with no sales at all in the window are known-zero demand only if we actually have sales history for the location.
+  if (recentSales.length > 0) for (const lot of lots) if (!demandByItem.has(lot.itemId)) demandByItem.set(lot.itemId, 0);
+  const shelfLifeByItem = new Map<string, number | null | undefined>(lots.map((lot) => [lot.itemId, lot.item.shelfLifeDays] as [string, number | null | undefined]));
   const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => row.onHand > 0).map((row) => ({
     itemId: lot.itemId,
     itemName: lot.item.name,
@@ -907,7 +951,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
   })));
   const dismissedTypes = new Set(dismissals.map((row) => `${row.type}:${row.itemId}`));
   const lotBlocks = buildLotBlockRecommendations(lotInputs).filter((row) => !dismissedTypes.has(`LOT_BLOCK:${row.itemId}`));
-  const expiryActions = buildExpiryActionRecommendations(lotInputs).filter((row) => !dismissedTypes.has(`EXPIRY:${row.itemId}`));
+  const expiryActions = buildExpiryActionRecommendations(lotInputs, new Date(), { demandByItem, shelfLifeByItem }).filter((row) => !dismissedTypes.has(`EXPIRY:${row.itemId}`));
   const overstockRows = rules.flatMap((rule) => {
     const here = quantities.get(rule.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
     const networkRows = [...(network.get(rule.itemId)?.values() ?? [])].map((entry) => ({
@@ -1131,18 +1175,29 @@ router.get('/locations/:locationId/pick-face-replenishment', async (req, res) =>
   if (!pickFaceBins.length) return res.json({ suggestions: [] });
   const reserveBinCodeById = new Map(bins.filter((bin) => !bin.isPickFace).map((bin) => [bin.id, bin.code]));
 
-  const suggestions: Array<{ itemId: string; fromBinId: string; fromBinCode: string; toBinId: string; toBinCode: string; quantity: number }> = [];
+  const suggestions: Array<{ itemId: string; lotId?: string; fromBinId: string; fromBinCode: string; toBinId: string; toBinCode: string; quantity: number }> = [];
   for (const bin of pickFaceBins) {
     const pickFaceStock = await prisma.binStock.findMany({ where: { locationId, binId: bin.id } });
     const min = bin.pickFaceMin ?? 0;
     const max = bin.pickFaceMax ?? min;
-    for (const stock of pickFaceStock) {
+    // One decision per item in this pick face (its rows are per lot, and were suggested separately).
+    const onHandByItem = new Map<string, number>();
+    for (const row of pickFaceStock) onHandByItem.set(row.itemId, (onHandByItem.get(row.itemId) ?? 0) + row.onHand);
+    for (const [itemId, onHand] of onHandByItem) {
       const reserveRows = await prisma.binStock.findMany({
-        where: { locationId, itemId: stock.itemId, binId: { in: [...reserveBinCodeById.keys()] } },
+        where: { locationId, itemId, binId: { in: [...reserveBinCodeById.keys()] } },
       });
-      const reserveCandidates = reserveRows.map((row) => ({ binId: row.binId, code: reserveBinCodeById.get(row.binId) ?? row.binId, onHand: row.onHand }));
-      const suggestion = planPickFaceReplenishment({ binId: bin.id, code: bin.code, onHand: stock.onHand, min, max }, reserveCandidates);
-      if (suggestion) suggestions.push({ itemId: stock.itemId, ...suggestion });
+      const lotIds = [...new Set(reserveRows.map((row) => row.lotId).filter(Boolean))];
+      const lotInfo = new Map((lotIds.length ? await prisma.lot.findMany({ where: { id: { in: lotIds } }, select: { id: true, status: true, expiryDate: true } }) : []).map((lot) => [lot.id, lot]));
+      const reserveCandidates = reserveRows
+        .filter((row) => {
+          const lot = lotInfo.get(row.lotId);
+          // Never replenish a pick face from a blocked, quarantined or expired lot.
+          return !lot || sellableQuantity({ onHand: row.onHand, lot }) > 0;
+        })
+        .map((row) => ({ binId: row.binId, code: reserveBinCodeById.get(row.binId) ?? row.binId, onHand: row.onHand, lotId: row.lotId || undefined, expiryDate: lotInfo.get(row.lotId)?.expiryDate?.toISOString() ?? null }));
+      const suggestion = planPickFaceReplenishment({ binId: bin.id, code: bin.code, onHand, min, max }, reserveCandidates);
+      if (suggestion) suggestions.push({ itemId, ...suggestion });
     }
   }
   return res.json({ suggestions });

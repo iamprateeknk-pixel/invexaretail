@@ -22,6 +22,18 @@ const rules: ReorderRuleRecord[] = seedReorderRules.map((rule) => ({
   createdAt: new Date(0).toISOString(),
 }));
 
+/**
+ * Reorder quantities: whole numbers for counted items, up to 3 decimals for loose/KG items
+ * (audit O-4: rules were integer-only, so a KG item could not have a 2.5 kg minimum).
+ */
+export function validateReorderQuantities(minQty: number, targetQty: number, decimal: boolean): string | null {
+  if (!Number.isFinite(minQty) || !Number.isFinite(targetQty) || minQty < 0) return 'A non-negative minimum and a target not below it are required.';
+  if (targetQty < minQty) return 'The target must not be below the minimum.';
+  const fits = (value: number) => (decimal ? Math.abs(value * 1000 - Math.round(value * 1000)) < 1e-6 : Number.isInteger(value));
+  if (!fits(minQty) || !fits(targetQty)) return decimal ? 'Quantities support up to 3 decimal places.' : 'Quantities must be whole numbers for this item.';
+  return null;
+}
+
 export function resetReorderStore(): void {
   rules.splice(0, rules.length, ...seedReorderRules.map((rule) => ({
     ...rule,
@@ -33,12 +45,11 @@ export function listReorderRules(locationId: string): ReorderRuleRecord[] {
   return rules.filter((rule) => rule.locationId === locationId).map((rule) => ({ ...rule }));
 }
 
-export function upsertReorderRule(input: { itemId: string; locationId: string; minQty: number; targetQty: number }): ReorderRuleRecord {
+export function upsertReorderRule(input: { itemId: string; locationId: string; minQty: number; targetQty: number; decimal?: boolean }): ReorderRuleRecord {
   const minQty = Number(input.minQty);
   const targetQty = Number(input.targetQty);
-  if (!input.itemId || !input.locationId || !Number.isInteger(minQty) || minQty < 0 || !Number.isInteger(targetQty) || targetQty < minQty) {
-    throw new Error('Location, non-negative minimum and target not below minimum are required.');
-  }
+  const invalid = !input.itemId || !input.locationId ? 'Location, non-negative minimum and target not below minimum are required.' : validateReorderQuantities(minQty, targetQty, Boolean(input.decimal));
+  if (invalid) throw new Error(invalid);
   const existing = rules.find((rule) => rule.itemId === input.itemId && rule.locationId === input.locationId);
   if (existing) {
     existing.minQty = minQty;

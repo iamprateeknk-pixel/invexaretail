@@ -17,9 +17,13 @@ export type ReserveBinCandidate = {
   binId: string;
   code: string;
   onHand: number;
+  /** Lot held in this reserve bin, and its expiry (audit R-2: replenishment was lot/FEFO-blind). */
+  lotId?: string;
+  expiryDate?: string | null;
 };
 
 export type PickFaceReplenishmentSuggestion = {
+  lotId?: string;
   fromBinId: string;
   fromBinCode: string;
   toBinId: string;
@@ -42,15 +46,19 @@ export function planPickFaceReplenishment(
   const needed = pickFace.max - pickFace.onHand;
   if (needed <= 0) return null;
 
+  // Earliest-expiry lot first (FEFO) so the freshest stock is not pushed to the pick face ahead of
+  // older stock; among equal expiry (or none) the richest bin, which needs the fewest moves.
+  const expiryOf = (bin: ReserveBinCandidate) => (bin.expiryDate ? Date.parse(bin.expiryDate) : Number.POSITIVE_INFINITY);
   const source = [...reserveCandidates]
     .filter((bin) => bin.onHand > 0)
-    .sort((a, b) => b.onHand - a.onHand)[0];
+    .sort((a, b) => expiryOf(a) - expiryOf(b) || b.onHand - a.onHand || a.code.localeCompare(b.code))[0];
   if (!source) return null;
 
   const quantity = Math.min(needed, source.onHand);
   if (quantity <= 0) return null;
 
   return {
+    ...(source.lotId ? { lotId: source.lotId } : {}),
     fromBinId: source.binId,
     fromBinCode: source.code,
     toBinId: pickFace.binId,

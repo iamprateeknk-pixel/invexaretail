@@ -151,3 +151,54 @@ export function suggestReplenishment(input: {
     stockoutDate: projectedStockoutDate(input.onHand, input.demand.averageDailyDemand),
   };
 }
+
+// ---- demand pattern classification and intermittent-demand forecasting (audit O-2) ----
+
+export type DemandPattern = 'SMOOTH' | 'ERRATIC' | 'INTERMITTENT' | 'LUMPY' | 'NO_DEMAND';
+export type VariabilityClass = 'X' | 'Y' | 'Z';
+
+/**
+ * Syntetos-Boylan classification. ADI = average number of periods between demands; CV2 = squared
+ * coefficient of variation of the NON-ZERO demand sizes. Cut-offs 1.32 and 0.49 are the standard
+ * ones. A slow mover that sells 5 units once every ten days is INTERMITTENT: averaging its zeros
+ * and applying a normal-distribution safety stock (what suggestReplenishment does) misstates both.
+ */
+export function classifyDemandPattern(dailyDemand: number[]): { pattern: DemandPattern; adi: number | null; cv2: number | null } {
+  const sizes = dailyDemand.filter((value) => value > 0);
+  if (sizes.length === 0) return { pattern: 'NO_DEMAND', adi: null, cv2: null };
+  const adi = dailyDemand.length / sizes.length;
+  const mean = sizes.reduce((sum, value) => sum + value, 0) / sizes.length;
+  const variance = sizes.reduce((sum, value) => sum + (value - mean) ** 2, 0) / sizes.length;
+  const cv2 = mean > 0 ? variance / (mean * mean) : 0;
+  const pattern: DemandPattern = adi < 1.32 ? (cv2 < 0.49 ? 'SMOOTH' : 'ERRATIC') : (cv2 < 0.49 ? 'INTERMITTENT' : 'LUMPY');
+  return { pattern, adi, cv2 };
+}
+
+/** X/Y/Z by coefficient of variation of daily demand (<0.5, <1.0, otherwise); no demand is Z. */
+export function xyzClass(dailyDemand: number[]): VariabilityClass {
+  const stats = computeDemandStats(dailyDemand);
+  if (stats.averageDailyDemand <= 0) return 'Z';
+  const cv = stats.stdDevDailyDemand / stats.averageDailyDemand;
+  return cv < 0.5 ? 'X' : cv < 1 ? 'Y' : 'Z';
+}
+
+/**
+ * Croston's method with the Syntetos-Boylan bias correction: smooths demand SIZE and the INTERVAL
+ * between demands separately, forecast = size / interval x (1 - alpha/2). Returns units per day.
+ */
+export function crostonDailyDemand(dailyDemand: number[], alpha = 0.1): number {
+  let size: number | null = null;
+  let interval: number | null = null;
+  let sinceLast = 1;
+  for (const value of dailyDemand) {
+    if (value > 0) {
+      size = size === null ? value : alpha * value + (1 - alpha) * size;
+      interval = interval === null ? sinceLast : alpha * sinceLast + (1 - alpha) * interval;
+      sinceLast = 1;
+    } else {
+      sinceLast += 1;
+    }
+  }
+  if (size === null || interval === null || interval <= 0) return 0;
+  return (size / interval) * (1 - alpha / 2);
+}

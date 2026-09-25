@@ -1,4 +1,5 @@
 import { newDocumentNumber } from '../lib/document-number.js';
+import { sellableParts } from '../lib/sellable-stock.js';
 import { type Request, type Response, Router } from 'express';
 
 import { prisma } from '../lib/db.js';
@@ -7,11 +8,11 @@ import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { getActiveWorkflow, getIndustryPack, isSerialFieldName } from '../lib/industry-packs.js';
 import { respondWhenMemoryUnavailable } from '../lib/memory-mode.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { listReorderRules, upsertReorderRule } from '../lib/reorder-store.js';
-import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord } from '../lib/repository.js';
+import { listReorderRules, upsertReorderRule, validateReorderQuantities } from '../lib/reorder-store.js';
+import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems } from '../lib/repository.js';
 import { emitWebhookEvent } from '../lib/webhook-dispatcher.js';
 import { allocateLandedCost, type LandedCostMethod } from '../lib/landed-cost.js';
-import { computeVendorScore, computePriceVariance } from '../lib/vendor-score.js';
+import { computeVendorScore, computePriceVariance, supplierLeadTimeStats } from '../lib/vendor-score.js';
 import { canOrderFrom, parseSupplierFields, presentSupplier } from '../lib/supplier-master.js';
 import { checkPoMove, isPoStatus, isReceivablePo, type PoStatus } from '../lib/po-lifecycle.js';
 import { planPoReceipt, statusAfterReceipt, type ItemRules, type ReceiptLineInput } from '../lib/po-receipt.js';
@@ -143,12 +144,16 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
   const minQty = Number(req.body.minQty);
   const targetQty = Number(req.body.targetQty);
-  if (!locationId || !Number.isInteger(minQty) || minQty < 0 || !Number.isInteger(targetQty) || targetQty < minQty) {
-    return res.status(400).json({ message: 'Location, non-negative minimum and target not below minimum are required.' });
-  }
+  if (!locationId) return res.status(400).json({ message: 'Location, non-negative minimum and target not below minimum are required.' });
+  const ruleItem = databaseEnabled
+    ? await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { decimalQuantity: true } })
+    : listItems().find((entry) => entry.id === req.params.itemId);
+  const decimal = Boolean(ruleItem?.decimalQuantity);
+  const quantityProblem = validateReorderQuantities(minQty, targetQty, decimal);
+  if (quantityProblem) return res.status(400).json({ message: quantityProblem });
   if (!databaseEnabled) {
     try {
-      const rule = upsertReorderRule({ itemId: req.params.itemId, locationId, minQty, targetQty });
+      const rule = upsertReorderRule({ itemId: req.params.itemId, locationId, minQty, targetQty, decimal });
       return res.json({ rule });
     } catch (error) {
       return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
@@ -217,6 +222,7 @@ router.get('/suppliers/:id/score', async (req, res) => {
     expectedAt: order.expectedAt ? order.expectedAt.toISOString() : null,
     completedAt: ['RECEIVED', 'CLOSED'].includes(order.status) ? (lastReceiptAt.get(order.id) ?? order.updatedAt).toISOString() : null,
     createdAt: order.createdAt.toISOString(),
+    orderedAt: (order.sentAt ?? order.approvedAt ?? order.createdAt).toISOString(),
   }));
 
   const inspections = await prisma.qcInspection.findMany({
@@ -248,13 +254,21 @@ router.get('/suppliers/:id/score', async (req, res) => {
   });
 });
 
+// Bounded (audit O-8): newest first, at most `limit` (default 200, max 500) with a cursor for the next page,
+// instead of loading every purchase order the company has ever raised on each request.
 router.get('/purchase-orders', async (req, res) => {
-  const purchaseOrders = await prisma.purchaseOrder.findMany({
+  const requested = Number(req.query.limit);
+  const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 200;
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
+  const rows = await prisma.purchaseOrder.findMany({
     where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { supplier: true, lines: { include: { item: true } } },
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
   });
-  return res.json({ purchaseOrders });
+  const purchaseOrders = rows.slice(0, limit);
+  return res.json({ purchaseOrders, nextCursor: rows.length > limit ? purchaseOrders[purchaseOrders.length - 1].id : null });
 });
 
 router.post('/purchase-orders', async (req, res) => {
@@ -552,7 +566,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
 
   const [items, ledger, openLines, transfers, sales, lastLines, suppliers] = await Promise.all([
     prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
-    prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true } }),
+    prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true, lot: { select: { status: true, expiryDate: true } } } }),
     prisma.purchaseOrderLine.findMany({
       where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
       select: { itemId: true, quantity: true, receivedQty: true },
@@ -577,8 +591,10 @@ router.get('/purchase-orders/plan', async (req, res) => {
     for (const row of rows) { const [key, value] = pick(row); totals.set(key, (totals.get(key) ?? 0) + value); }
     return totals;
   };
-  const onHand = sum(ledger, (row) => [row.itemId, row.onHand]);
-  const reserved = sum(ledger, (row) => [row.itemId, row.reserved]);
+  // Cover = stock that can actually be sold: blocked, quarantined and expired lots are not cover (audit O-6).
+  const sellable = (rows: typeof ledger) => rows.map((row) => ({ ...sellableParts([row]), itemId: row.itemId }));
+  const onHand = sum(sellable(ledger), (row) => [row.itemId, row.onHand]);
+  const reserved = sum(sellable(ledger), (row) => [row.itemId, row.reserved]);
   const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
   const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, row.requestedQty - row.receivedQty - row.damagedQty - row.shortageQty)]);
   const sold = sum(sales, (row) => [row.itemId, Math.abs(row.qtyDelta)]);
@@ -586,6 +602,27 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const lastSupplier = new Map<string, { supplierId: string; unitCost: number }>();
   for (const line of lastLines) if (!lastSupplier.has(line.itemId)) lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: line.unitCost });
   const catalog = new Map(items.map((item) => [item.id, item]));
+
+  // Lead time measured from each supplier's own completed orders (placed -> last receipt), so the plan
+  // can use real delivery times and their variability instead of a default (audit O-3).
+  const history = await prisma.purchaseOrder.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['RECEIVED', 'CLOSED'] }, createdAt: { gte: new Date(Date.now() - 365 * 86_400_000) } },
+    select: { id: true, supplierId: true, createdAt: true, approvedAt: true, sentAt: true, updatedAt: true },
+  });
+  const receipts = history.length
+    ? await prisma.purchaseReceipt.findMany({ where: { purchaseOrderId: { in: history.map((order) => order.id) } }, select: { purchaseOrderId: true, createdAt: true } }).catch(() => [])
+    : [];
+  const lastReceipt = new Map<string, Date>();
+  for (const receipt of receipts) {
+    const seen = lastReceipt.get(receipt.purchaseOrderId);
+    if (!seen || receipt.createdAt > seen) lastReceipt.set(receipt.purchaseOrderId, receipt.createdAt);
+  }
+  const bySupplier = new Map<string, Array<{ completedAt: string; createdAt: string; orderedAt: string }>>();
+  for (const order of history) {
+    const list = bySupplier.get(order.supplierId) ?? [];
+    list.push({ completedAt: (lastReceipt.get(order.id) ?? order.updatedAt).toISOString(), createdAt: order.createdAt.toISOString(), orderedAt: (order.sentAt ?? order.approvedAt ?? order.createdAt).toISOString() });
+    bySupplier.set(order.supplierId, list);
+  }
 
   const planInputs: PlanInput[] = rules.map((rule) => ({
     itemId: rule.itemId, code: catalog.get(rule.itemId)?.code, name: catalog.get(rule.itemId)?.name,
@@ -596,7 +633,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   }));
   const result = planPurchases({
     items: planInputs,
-    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
+    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
   });
   return res.json({ locationId, windowDays, ...result, groups: groupBySupplier(result.suggestions) });
 });

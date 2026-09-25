@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { newDocumentNumber } from './document-number.js';
 
 test('numbers are prefixed, dated and human-readable', () => {
-  assert.match(newDocumentNumber('PO', new Date('2026-09-25T10:00:00Z')), /^PO-260925-[0-9A-HJ-NP-Z]{6}$/);
+  assert.match(newDocumentNumber('PO', new Date('2026-09-25T10:00:00Z')), /^PO-260925-[0-9A-HJ-NP-Z]{8}$/);
   assert.match(newDocumentNumber('JOB', new Date('2027-01-02T00:00:00Z')), /^JOB-270102-/);
 });
 

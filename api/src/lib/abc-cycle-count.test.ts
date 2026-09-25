@@ -5,6 +5,7 @@ import {
   ABC_CADENCE,
   addDaysIso,
   aggregateLocationStock,
+  buildCountTriggers,
   buildCycleCountPlan,
   classifyAbcClass,
   classifyAbcItems,
@@ -135,4 +136,21 @@ test('when NOTHING has a cost, quantity is the ranking unit for everyone (never 
   assert.ok(aggregated.every((row) => row.valueSource === 'qty_proxy' && row.extendedValue === row.onHand));
   const classes = classifyAbcItems(aggregated);
   assert.ok([...classes.values()].some((value) => value.abcClass === 'A'), 'ranking still produces an A class');
+});
+
+// Audit C-2: process-triggered counts the ABC cadence can never surface.
+test('negative balances and over-reserved stock trigger an immediate count; the ABC plan still skips them', () => {
+  const item = seedItems[0];
+  const lotId = item.lots[0].id;
+  const stock = [
+    { itemId: item.id, lotId, locationId: 'loc-1', onHand: -4, reserved: 0 },
+    { itemId: seedItems[1].id, lotId: seedItems[1].lots[0].id, locationId: 'loc-1', onHand: 2, reserved: 5 },
+    { itemId: seedItems[2].id, lotId: seedItems[2].lots[0].id, locationId: 'loc-1', onHand: 8, reserved: 1 },
+  ] as never;
+  const triggers = buildCountTriggers(seedItems, stock);
+  assert.deepEqual(triggers.map((t) => t.reason), ['NEGATIVE_BALANCE', 'OVER_RESERVED']);
+  assert.ok(triggers.every((t) => t.priority === 'HIGH'));
+  const plan = buildCycleCountPlan({ locationId: 'loc-1', items: seedItems, stock, assignments: [], now });
+  assert.equal(plan.triggers.length, 2);
+  assert.ok(!plan.items.some((entry) => entry.itemId === item.id), 'the negative item is not on the value-ranked cadence');
 });
