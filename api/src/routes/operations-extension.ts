@@ -392,11 +392,12 @@ router.patch('/notification-inbox/:id/read', async (req, res) => {
   return res.json({ notification });
 });
 
-async function syncExpiryAlerts(locationId?: string): Promise<void> {
+async function syncExpiryAlerts(companyId: string, locationId?: string): Promise<void> {
   const cutoff = new Date(Date.now() + 90 * 86_400_000);
   const ledger = await prisma.stockLedger.findMany({
     where: {
       ...(locationId ? { locationId } : {}),
+      companyId,
       onHand: { gt: 0 },
       lot: { expiryDate: { not: null, lte: cutoff } },
     },
@@ -425,7 +426,7 @@ async function syncExpiryAlerts(locationId?: string): Promise<void> {
   }
   if (locationId) {
     await prisma.expiryAlert.updateMany({
-      where: { locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] }, ...(activeIds.length ? { id: { notIn: activeIds } } : {}) },
+      where: { companyId, locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] }, ...(activeIds.length ? { id: { notIn: activeIds } } : {}) },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
     });
   }
@@ -558,7 +559,7 @@ router.post('/expiry-write-off', async (req, res) => {
         },
       });
       const claimed = await tx.expiryAlert.updateMany({
-        where: { id: alertId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
+        where: { id: alertId, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
         data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, ledger.onHand - quantity) },
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
@@ -603,7 +604,7 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
   if (!current) return res.status(404).json({ message: 'Expiry alert not found.' });
   if (!canAccessLocation(req, current.locationId)) return res.status(403).json({ message: 'Location access denied.' });
   const alert = await prisma.expiryAlert.update({
-    where: { id: current.id },
+    where: { id: current.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     data: {
       status: status as any,
       acknowledgedAt: status === 'ACKNOWLEDGED' ? new Date() : current.acknowledgedAt,
@@ -1428,9 +1429,9 @@ function requirePacker(req: Request, res: Response): boolean {
   return true;
 }
 
-async function packVerificationFor(orderId: string, session: { id: string }) {
+async function packVerificationFor(companyId: string, orderId: string, session: { id: string }) {
   const [order, packedLines] = await Promise.all([
-    prisma.order.findUnique({ where: { id: orderId }, include: { lines: true } }),
+    prisma.order.findFirst({ where: { id: orderId, companyId }, include: { lines: true } }),
     prisma.packedLine.findMany({ where: { packSessionId: session.id } }),
   ]);
   if (!order) return null;
@@ -1448,7 +1449,7 @@ router.post('/orders/:id/pack/start', async (req, res) => {
   if (!session) {
     session = await prisma.packSession.create({ data: { orderId: order.id, packedById: req.user!.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   }
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.status(201).json({ session, verification });
 });
 
@@ -1459,7 +1460,7 @@ router.get('/orders/:id/pack', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
   if (!session) return res.json({ session: null, verification: null });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.json({ session, verification });
 });
 
@@ -1476,7 +1477,7 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
   await prisma.packedLine.create({
     data: { packSessionId: session.id, itemId, lotId: typeof req.body.lotId === 'string' ? req.body.lotId : null, quantity, scannedById: req.user!.id },
   });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   return res.status(201).json({ session, verification });
 });
 
@@ -1487,7 +1488,7 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
   if (!session) return res.status(409).json({ message: 'No pack session is in progress for this order.' });
-  const verification = await packVerificationFor(order.id, session);
+  const verification = await packVerificationFor(order.companyId, order.id, session);
   if (!verification?.readyToSeal) {
     return res.status(409).json({ message: 'Every order line must be scanned exactly before sealing.', verification });
   }
@@ -1648,12 +1649,12 @@ router.get('/orders/:id/returns', async (req, res) => {
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!order) return res.status(404).json({ message: 'Order not found.' });
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
+  const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
   return res.json({ returnRequests });
 });
 
 // Blueprint v4 §24: what QC says about a returned line, and whether QC applies.
-async function returnQcContext(returnRequestId: string, itemIds: string[]) {
+async function returnQcContext(companyId: string, returnRequestId: string, itemIds: string[]) {
   const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
   const templates: Array<{ id: string; category: string | null; active: boolean }> = databaseEnabled
     ? await prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
@@ -1663,7 +1664,7 @@ async function returnQcContext(returnRequestId: string, itemIds: string[]) {
     : listMemoryQcInspections().filter((row) => row.sourceDocument === returnRequestId);
   const categories = new Map<string, string | null>();
   if (databaseEnabled && itemIds.length) {
-    for (const row of await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, category: true } })) categories.set(row.id, row.category ?? null);
+    for (const row of await prisma.item.findMany({ where: { id: { in: itemIds }, companyId }, select: { id: true, category: true } })) categories.set(row.id, row.category ?? null);
   } else {
     for (const item of listItems()) categories.set(item.id, item.category ?? null);
   }
@@ -1706,7 +1707,7 @@ router.patch('/returns/:id/status', async (req, res) => {
 
   if (action === 'RECEIVE') {
     const dispositions = req.body.dispositions && typeof req.body.dispositions === 'object' ? req.body.dispositions as Record<string, string> : {};
-    const qc = await returnQcContext(returnRequest.id, returnRequest.lines.map((line) => line.itemId));
+    const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, returnRequest.lines.map((line) => line.itemId));
     // Decide every line before touching stock, so one bad line cannot leave the return half-received.
     const plans = [];
     for (const line of returnRequest.lines) {
@@ -1774,7 +1775,7 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   if (!line) return res.status(404).json({ message: 'Return line was not found.' });
   if (!isPendingDisposition(line.disposition)) return res.status(409).json({ message: `This line was already dispositioned as ${line.disposition}.` });
 
-  const qc = await returnQcContext(returnRequest.id, [line.itemId]);
+  const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, [line.itemId]);
   const plan = planReturnLine({ requested: String(req.body.disposition ?? ''), qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
   if ('message' in plan) return res.status(400).json({ message: plan.message });
   if (plan.action === 'HOLD') return res.status(409).json({ message: plan.note ?? 'This line must stay in quarantine.' });
@@ -1818,14 +1819,14 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
   // The quarantine case opened at receipt is decided by this action.
   await prisma.exceptionCase.updateMany({
-    where: { sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
+    where: { companyId: returnRequest.companyId, sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
     data: { status: 'RESOLVED', resolvedAt: new Date() },
   }).catch(() => undefined);
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_LINE_DISPOSED',
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { lineId: line.id, disposition: plan.disposition, quantity: line.quantity },
   }));
-  const refreshed = await prisma.returnRequest.findUnique({ where: { id: returnRequest.id }, include: { lines: true } });
+  const refreshed = await prisma.returnRequest.findFirst({ where: { id: returnRequest.id, companyId: returnRequest.companyId }, include: { lines: true } });
   return res.json({ returnRequest: refreshed });
 });
 
@@ -1838,7 +1839,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
   if (!returnRequest) return res.status(404).json({ message: 'Return request not found.' });
   if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status)) return res.status(409).json({ message: 'A refund can be decided once the goods have been received.' });
   const updated = await prisma.returnRequest.update({
-    where: { id: returnRequest.id },
+    where: { id: returnRequest.id, companyId: returnRequest.companyId },
     data: { refundStatus: decision, refundNote: typeof req.body.note === 'string' ? req.body.note.slice(0, 2000) : null, refundedAt: new Date(), refundedById: req.user!.id },
   });
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `RETURN_REFUND_${decision}`, entityType: 'ReturnRequest', entityId: returnRequest.id }));
@@ -2178,13 +2179,14 @@ router.get('/exceptions', async (req, res) => {
 
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const scope = mine
-    ? { ownerId: req.user!.id, companyId }
+    ? { ownerId: req.user!.id }
     : EXCEPTION_MANAGER_ROLES.includes(req.user!.role) || req.user!.role === 'AUDITOR'
-      ? (locationId ? { locationId, companyId } : { companyId })
-      : { locationId: { in: req.user!.locationIds ?? [] }, companyId };
+      ? (locationId ? { locationId } : {})
+      : { locationId: { in: req.user!.locationIds ?? [] } };
 
   const cases = await prisma.exceptionCase.findMany({
     where: {
+      companyId,
       ...scope,
       ...(status ? { status: status as never } : { status: { notIn: ['CLOSED', 'REJECTED'] as never } }),
       ...(type ? { type: type as never } : {}),
@@ -2262,7 +2264,7 @@ router.patch('/exceptions/:id', async (req, res) => {
   }
   if (!Object.keys(data).length) return res.status(400).json({ message: 'No updatable fields were provided.' });
 
-  const updated = await prisma.exceptionCase.update({ where: { id: existing.id }, data });
+  const updated = await prisma.exceptionCase.update({ where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, data });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role,
     action: 'EXCEPTION_UPDATED', entityType: 'ExceptionCase', entityId: existing.id, metadata: data,
@@ -2284,7 +2286,7 @@ router.post('/exceptions/:id/resolve', async (req, res) => {
   const now = new Date();
   await applyExceptionDisposition(existing, disposition as never, req.user!.id);
   const updated = await prisma.exceptionCase.update({
-    where: { id: existing.id },
+    where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     data: { disposition: disposition as never, resolutionNotes, status: 'CLOSED', resolvedAt: now, closedAt: now },
   });
   await persistAudit(recordAudit({
