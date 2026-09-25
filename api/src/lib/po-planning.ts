@@ -73,7 +73,7 @@ export function economicOrderQuantity(input: { dailyDemand: number; unitCost?: n
   return Math.sqrt((2 * dailyDemand * 365 * orderingCost) / (holdingRate * unitCost));
 }
 
-export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTerms[]; coverDays?: number; /** Cost of placing one order. With `holdingRate` (yearly fraction of unit cost) it switches EOQ on. */ orderingCost?: number; holdingRate?: number }): PlanResult {
+export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTerms[]; coverDays?: number; /** Cost of placing one order. With `holdingRate` (yearly fraction of unit cost) it switches EOQ on. */ orderingCost?: number; holdingRate?: number; /** Spending cap for this plan: most urgent lines are kept, the rest deferred (audit O-4). */ budget?: number }): PlanResult {
   const coverDays = input.coverDays ?? DEFAULT_COVER_DAYS;
   const suppliers = new Map(input.suppliers.map((supplier) => [supplier.id, supplier]));
   const suggestions: Suggestion[] = [];
@@ -155,6 +155,21 @@ export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTe
   }
   const rank = { CRITICAL: 0, HIGH: 1, NORMAL: 2 } as const;
   suggestions.sort((a, b) => rank[a.urgency] - rank[b.urgency] || (a.daysOfCover ?? Infinity) - (b.daysOfCover ?? Infinity));
+  if (input.budget !== undefined && input.budget >= 0) {
+    // Most urgent first (already sorted); a line whose cost is unknown cannot be checked against the cap, so it is kept.
+    let spent = 0;
+    const kept: Suggestion[] = [];
+    for (const suggestion of suggestions) {
+      const cost = suggestion.estimatedCost ?? 0;
+      if (spent + cost > input.budget) {
+        skipped.push({ itemId: suggestion.itemId, reason: `${suggestion.code ?? suggestion.itemId}: deferred - ordering it (${fmt(cost)}) would take the plan past the budget of ${fmt(input.budget)}.` });
+        continue;
+      }
+      spent += cost;
+      kept.push(suggestion);
+    }
+    return { suggestions: kept, skipped };
+  }
   return { suggestions, skipped };
 }
 

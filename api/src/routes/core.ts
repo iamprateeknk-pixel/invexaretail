@@ -1,3 +1,4 @@
+import { exceedsDefaultTolerance } from '../lib/count-tolerance.js';
 import { parseCountReasonCode } from '../lib/count-reason-codes.js';
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
@@ -89,6 +90,7 @@ import {
   updateItemRecord,
   listItems,
   listDailyMovements,
+  listStockMovements,
   listLocations,
   listStockLedger,
   listStockLedgerForLocation,
@@ -1179,6 +1181,12 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     } catch {
       return res.status(403).json({ message: 'This user cannot review counts at the selected location.' });
     }
+    // Optional enforcement (COUNT_ENFORCE_RECOUNT=true, audit C-1): a first count whose variance is outside the
+    // default tolerance cannot be approved as is - it must go to a recount, which is then a second, independent count.
+    if (process.env.COUNT_ENFORCE_RECOUNT === 'true' && status === 'APPROVED' && !current.parentCountId
+      && exceedsDefaultTolerance(current.bookQty, Math.abs(current.physicalQuantity - current.bookQty))) {
+      return res.status(409).json({ message: 'This variance is outside tolerance. Request a recount instead of approving the first count.', code: 'RECOUNT_REQUIRED' });
+    }
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
@@ -1496,6 +1504,11 @@ function cycleCountPlanForLocation(locationId: string, now = new Date()) {
     stock: listStockLedgerForLocation(locationId),
     assignments: listCountAssignments(),
     counts: listCounts(),
+    // Items sold at this location in the last 30 days: order/import movements and the legacy daily sales import.
+    recentlySoldItemIds: new Set([
+      ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
+      ...listDailyMovements().filter((m) => m.locationId === locationId && m.sourceType === 'SALES' && m.qtyDelta < 0 && now.getTime() - new Date(m.transactionAt).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
+    ]),
     now,
   });
 }

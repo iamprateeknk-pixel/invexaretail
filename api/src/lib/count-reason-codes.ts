@@ -29,3 +29,39 @@ export function summarizeVarianceReasons(counts: Array<{ physicalQty: number; bo
   }
   return [...byCode.entries()].map(([reasonCode, row]) => ({ reasonCode, ...row })).sort((a, b) => b.absoluteUnits - a.absoluteUnits || a.reasonCode.localeCompare(b.reasonCode));
 }
+
+/**
+ * Count accuracy the way inventory managers report it (audit C-3): a count is accurate when its
+ * variance is inside tolerance (not only when it is exactly equal), and accuracy is also weighed by
+ * money so a 1-unit miss on an expensive item is not the same as one on a cheap item.
+ * `unitCost` null = uncosted: it counts toward the unit figures and is left out of the value ones.
+ */
+export function summarizeCountAccuracy(
+  counts: Array<{ physicalQty: number; bookQty: number; unitCost?: number | null }>,
+  tolerance: { minUnits: number; percent: number },
+) {
+  let within = 0;
+  let varianceValue = 0;
+  let bookValue = 0;
+  let costed = 0;
+  for (const count of counts) {
+    const diff = Math.abs(count.physicalQty - count.bookQty);
+    const allowed = Math.max(tolerance.minUnits, (Math.abs(count.bookQty) * tolerance.percent) / 100);
+    if (diff <= allowed) within += 1;
+    if (count.unitCost && count.unitCost > 0) {
+      costed += 1;
+      varianceValue += diff * count.unitCost;
+      bookValue += Math.abs(count.bookQty) * count.unitCost;
+    }
+  }
+  const round = (value: number) => Math.round(value * 100) / 100;
+  return {
+    counts: counts.length,
+    withinTolerance: within,
+    accuracyPercent: counts.length ? round((within / counts.length) * 100) : null,
+    costedCounts: costed,
+    varianceValue: round(varianceValue),
+    /** 100 - variance value as a share of the counted book value; null when nothing costed was counted. */
+    valueAccuracyPercent: bookValue > 0 ? round(Math.max(0, 100 - (varianceValue / bookValue) * 100)) : null,
+  };
+}

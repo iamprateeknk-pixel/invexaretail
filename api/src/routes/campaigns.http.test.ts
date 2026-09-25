@@ -346,3 +346,26 @@ test('settings can be edited while open; removing a user hands their work back',
     assert.equal(countAssignments.filter((row) => row.assignedToId === c2 && row.status === 'ASSIGNED').length, 0);
   });
 });
+
+test('COUNT_ENFORCE_RECOUNT refuses to approve an out-of-tolerance first count, and allows it when off (audit C-1)', async () => {
+  freshState();
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const stock = await call('GET', '/stock/loc-1', admin);
+    const row = stock.body.items.find((entry: { physicalQuantity: number }) => entry.physicalQuantity >= 20);
+    assert.ok(row, 'seed data has an item with stock');
+    const submit = async () => (await call('POST', '/stock-counts', admin, { itemId: row.itemId, locationId: 'loc-1', physicalQuantity: Math.max(0, row.physicalQuantity - 15), mode: 'manual' })).body;
+    const first = await submit();
+    const countId = first.count?.id ?? first.id;
+    assert.ok(countId, JSON.stringify(first));
+    process.env.COUNT_ENFORCE_RECOUNT = 'true';
+    try {
+      const refused = await call('PATCH', `/stock-counts/${countId}/review`, admin, { status: 'APPROVED', reviewReason: 'Looks right' });
+      assert.equal(refused.status, 409, JSON.stringify(refused.body));
+      assert.equal(refused.body.code, 'RECOUNT_REQUIRED');
+      assert.equal((await call('PATCH', `/stock-counts/${countId}/review`, admin, { status: 'RECOUNT', reviewReason: 'Recount please' })).status, 200);
+    } finally {
+      delete process.env.COUNT_ENFORCE_RECOUNT;
+    }
+  });
+});

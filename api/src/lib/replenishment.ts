@@ -27,7 +27,10 @@ export function routeReplenishment(
   destinationLocationId: string,
   requiredQty: number,
   network: NetworkStock[],
+  /** Where a purchase lands. Defaults to the company's own first warehouse (it was hard-coded to one customer's site). */
+  purchaseHub?: string,
 ): ReplenishmentRoute {
+  const hub = purchaseHub ?? [...network].filter((row) => String(row.locationType).toLowerCase() === 'warehouse').sort((a, b) => a.locationName.localeCompare(b.locationName))[0]?.locationName ?? 'the main warehouse';
   if (!Number.isFinite(requiredQty) || requiredQty <= 0) {
     return { action: 'NONE', suggestedTransferQty: 0, reason: 'Stock is at or above target.' };
   }
@@ -39,7 +42,7 @@ export function routeReplenishment(
       return warehousePriority || b.available - a.available || a.locationName.localeCompare(b.locationName);
     });
   if (!candidates.length) {
-    return { action: 'PURCHASE', suggestedTransferQty: 0, shortfallQty: requiredQty, reason: 'No other branch has available stock; purchase into H.O. Basni.' };
+    return { action: 'PURCHASE', suggestedTransferQty: 0, shortfallQty: requiredQty, reason: 'No other branch has available stock; purchase into ' + hub + '.' };
   }
   // Take from donors in priority order until the need is covered, so two donors together can fill it.
   const sources: Array<{ locationId: string; locationName: string; quantity: number }> = [];
@@ -60,7 +63,7 @@ export function routeReplenishment(
     shortfallQty: Math.max(0, remaining),
     reason: remaining <= 0
       ? 'Target can be restored from network stock.'
-      : 'Use available network stock first; purchase the remaining shortage into H.O. Basni.',
+      : 'Use available network stock first; purchase the remaining shortage into ' + hub + '.',
   };
 }
 
@@ -87,11 +90,12 @@ export function planRuleReplenishment(input: {
   minQty: number;
   targetQty: number;
   network: NetworkStock[];
+  purchaseHub?: string;
 }): RuleReplenishment {
   const position = input.availableHere + Math.max(0, input.incoming);
   const risk: RuleReplenishment['risk'] = position <= 0 ? 'CRITICAL' : position <= input.minQty ? 'HIGH' : 'HEALTHY';
   const suggestedOrderQty = position <= input.minQty ? Math.max(0, input.targetQty - position) : 0;
-  const route = routeReplenishment(input.destinationLocationId, suggestedOrderQty, input.network);
+  const route = routeReplenishment(input.destinationLocationId, suggestedOrderQty, input.network, input.purchaseHub);
   if (route.action === 'NONE' && position > input.minQty) route.reason = 'Above the reorder minimum; nothing to do.';
   return { position, suggestedOrderQty, route, risk };
 }

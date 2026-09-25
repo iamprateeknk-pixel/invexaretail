@@ -1,3 +1,4 @@
+import { loadSalesEvents, totalsByItem } from '../lib/sales-demand.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
@@ -668,16 +669,12 @@ router.get('/items/:itemId/forecast', async (req, res) => {
   if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
-  const movements = await prisma.stockMovement.findMany({
-    where: { itemId: req.params.itemId, locationId, movementType: { in: ['SALES_DEDUCTION', 'SALES_RETURN'] }, timestamp: { gte: since } },
-    select: { qtyDelta: true, timestamp: true, movementType: true },
-  });
+  const movements = await loadSalesEvents({ since, locationId, itemIds: [req.params.itemId] });
   // Demand is NET sales: a return in the window offsets a sale (it used to be ignored, overstating demand).
   const soldByDay = new Map<string, number>();
   for (const movement of movements) {
     const day = movement.timestamp.toISOString().slice(0, 10);
-    const signed = movement.movementType === 'SALES_RETURN' ? -Math.abs(movement.qtyDelta) : Math.abs(movement.qtyDelta);
-    soldByDay.set(day, (soldByDay.get(day) ?? 0) + signed);
+    soldByDay.set(day, (soldByDay.get(day) ?? 0) + movement.qty);
   }
   const dailyDemand: number[] = [];
   for (let offset = 0; offset < windowDays; offset += 1) {
@@ -910,12 +907,8 @@ router.get('/intelligence/:locationId', async (req, res) => {
   }).catch(() => []);
   // Recent sales rate per item here, so expiry advice can ask "will it sell before it expires?".
   const salesSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const recentSales = await prisma.stockMovement.groupBy({
-    by: ['itemId'],
-    where: { locationId: req.params.locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: salesSince } },
-    _sum: { qtyDelta: true },
-  }).catch(() => []);
-  const demandByItem = new Map<string, number>(recentSales.map((row) => [row.itemId, Math.abs(row._sum.qtyDelta ?? 0) / 30] as [string, number]));
+  const recentSales = [...totalsByItem(await loadSalesEvents({ since: salesSince, locationId: req.params.locationId }).catch(() => [])).entries()].map(([itemId, units]) => ({ itemId, units: Math.max(0, units) }));
+  const demandByItem = new Map<string, number>(recentSales.map((row) => [row.itemId, row.units / 30] as [string, number]));
   // Items with no sales at all in the window are known-zero demand only if we actually have sales history for the location.
   if (recentSales.length > 0) for (const lot of lots) if (!demandByItem.has(lot.itemId)) demandByItem.set(lot.itemId, 0);
   const shelfLifeByItem = new Map<string, number | null | undefined>(lots.map((lot) => [lot.itemId, lot.item.shelfLifeDays] as [string, number | null | undefined]));

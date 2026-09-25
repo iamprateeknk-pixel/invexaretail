@@ -154,3 +154,11 @@ test('negative balances and over-reserved stock trigger an immediate count; the 
   assert.equal(plan.triggers.length, 2);
   assert.ok(!plan.items.some((entry) => entry.itemId === item.id), 'the negative item is not on the value-ranked cadence');
 });
+
+test('a zero balance on an item that is still selling triggers a count; a zero on a dead item does not (audit C-2)', () => {
+  const items = [{ id: 'sell', code: 'SELL', name: 'S', lots: [] }, { id: 'dead', code: 'DEAD', name: 'D', lots: [] }] as never;
+  const stock = [{ itemId: 'sell', lotId: 'l1', locationId: 'x', onHand: 0 }, { itemId: 'dead', lotId: 'l2', locationId: 'x', onHand: 0 }] as never;
+  const triggers = buildCountTriggers(items, stock, new Set(['sell']));
+  assert.deepEqual(triggers.map((t) => [t.code, t.reason]), [['SELL', 'ZERO_BALANCE']]);
+  assert.equal(buildCountTriggers(items, stock).length, 0, 'without sales data no zero-balance trigger is raised');
+});

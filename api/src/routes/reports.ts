@@ -3,6 +3,7 @@
 // /reports/transfer-cycle, /reports/count-accuracy and /reports/audit-export
 // routes in routes/command-center.ts, and /companies/:companyId/dashboard/summary
 // in routes/enterprise-analytics.ts, are untouched by this module.
+import { loadSalesEvents, totalsByItem } from '../lib/sales-demand.js';
 import { type Request, type Response, Router } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
@@ -12,7 +13,8 @@ import { getDashboardSummary, listOpenExceptions } from '../lib/reporting-reposi
 import { prisma } from '../lib/db.js';
 import { companyTimezone, currentTimezone } from '../lib/timezone-context.js';
 import { saveCompanyTimezone } from '../lib/company-timezone.js';
-import { summarizeVarianceReasons } from '../lib/count-reason-codes.js';
+import { summarizeCountAccuracy, summarizeVarianceReasons } from '../lib/count-reason-codes.js';
+import { DEFAULT_TOLERANCE } from '../lib/count-tolerance.js';
 import { buildInventoryHealth, lotUnitCost, type HealthSales } from '../lib/inventory-health.js';
 
 const router = Router();
@@ -62,6 +64,21 @@ router.put('/company/timezone', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/reports/count-accuracy-breakdown', async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
+  const days = Number(req.query.days) > 0 ? Math.min(365, Number(req.query.days)) : 90;
+  const counts = await prisma.stockCount.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, reviewStatus: { in: ['APPROVED', 'REJECTED', 'RECOUNT'] }, countDate: { gte: new Date(Date.now() - days * 86_400_000) } },
+    select: { physicalQty: true, bookQty: true, lot: { select: { attributes: true } } },
+    take: 20_000,
+  });
+  const summary = summarizeCountAccuracy(
+    counts.map((count) => ({ physicalQty: count.physicalQty, bookQty: count.bookQty, unitCost: lotUnitCost(count.lot?.attributes as Record<string, unknown> | null) })),
+    DEFAULT_TOLERANCE,
+  );
+  return res.json({ days, tolerance: DEFAULT_TOLERANCE, ...summary });
+});
+
 router.get('/reports/count-variance-reasons', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
   const days = Number(req.query.days) > 0 ? Math.min(365, Number(req.query.days)) : 90;
@@ -94,11 +111,7 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
     unitCost: lotUnitCost(row.lot.attributes as Record<string, unknown> | null), lotCreatedAt: row.lot.createdAt,
   }));
 
-  const soldRows = await prisma.stockMovement.groupBy({
-    by: ['itemId'],
-    where: { companyId, movementType: 'SALES_DEDUCTION', timestamp: { gte: since }, ...(locationId ? { locationId } : {}) },
-    _sum: { qtyDelta: true },
-  });
+  const soldRows = [...totalsByItem(await loadSalesEvents({ since, companyId, ...(locationId ? { locationId } : {}) })).entries()].map(([itemId, units]) => ({ itemId, units: Math.max(0, units) }));
   // Cost of goods sold = units sold x the item's weighted-average unit cost among its costed stock here.
   const costed = new Map<string, { units: number; value: number }>();
   for (const row of rows) {
@@ -110,12 +123,12 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
   }
   const sales = new Map<string, HealthSales>();
   for (const sold of soldRows) {
-    const units = Math.abs(sold._sum.qtyDelta ?? 0);
+    const units = sold.units;
     const cost = costed.get(sold.itemId);
     sales.set(sold.itemId, { units, cogs: cost && cost.units > 0 ? units * (cost.value / cost.units) : 0 });
   }
   const health = buildInventoryHealth({ rows, sales, windowDays, hasSalesData: soldRows.length > 0 });
-  return res.json({ ...health, locationId, truncated, note: soldRows.length === 0 ? 'No sales movements were recorded in this window (sales imported through the legacy path are not in the stock journal): turns and cover are unknown and items are reported as NO_DATA rather than dead.' : undefined });
+  return res.json({ ...health, locationId, truncated, note: soldRows.length === 0 ? 'No sales movements were recorded in this window (neither order/staged-import nor legacy daily imports): turns and cover are unknown and items are reported as NO_DATA rather than dead.' : undefined });
 });
 
 export default router;

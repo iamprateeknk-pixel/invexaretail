@@ -296,3 +296,46 @@ integration('an order with a customer minimum shelf life is filled from the fres
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
   });
 });
+
+integration('demand includes sales imported through the legacy daily import (InventoryMovement), not only StockMovement (audit O-2)', async () => {
+  const a = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `LEG-${randomUUID().slice(0, 8)}`, name: 'Legacy sold', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'L' } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, onHand: 100, companyId: a.companyId } });
+  for (let d = 1; d <= 20; d += 1) {
+    await prisma.inventoryMovement.create({ data: {
+      id: randomUUID(), dedupeKey: `legacy-${randomUUID()}`, itemId: item.id, lotId: lot.id, locationId: a.loc.id,
+      movementType: 'SALE_OUT', qtyDelta: -6, transactionAt: new Date(Date.now() - d * 86_400_000), sourceType: 'SALES', sourceReference: `inv-${d}`, createdById: a.userId,
+    } });
+  }
+  await withServer(async (call) => {
+    const suggestions = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    assert.equal(suggestions.status, 200, JSON.stringify(suggestions.body));
+    const s = suggestions.body.suggestions.find((x: { itemId: string }) => x.itemId === item.id);
+    assert.ok(s, 'legacy-import sales must produce demand and therefore a suggestion');
+    assert.ok(s.averageDailyDemand > 1, `saw ${s.averageDailyDemand}`);
+    const forecast = await call('GET', `/items/${item.id}/forecast?locationId=${a.loc.id}&windowDays=30`, a.token);
+    assert.equal(forecast.status, 200, JSON.stringify(forecast.body));
+    assert.ok(forecast.body.demand.averageDailyDemand > 1, `forecast saw ${forecast.body.demand.averageDailyDemand}`);
+    const health = await call('GET', `/reports/inventory-health?locationId=${a.loc.id}&windowDays=30`, a.token);
+    assert.equal(health.body.items.find((i: { name: string }) => i.name === 'Legacy sold').status, 'HEALTHY');
+  });
+});
+
+integration('count accuracy breakdown is tolerance-based, value-weighted and tenant scoped (audit C-3)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `ACC-${randomUUID().slice(0, 8)}`, name: 'Counted', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'L', attributes: { purchaseRate: 10 } } });
+  const mk = (physicalQty: number, bookQty: number) => prisma.stockCount.create({ data: { id: `acc-${randomUUID()}`, itemId: item.id, lotId: lot.id, locationId: a.loc.id, physicalQty, bookQty, submittedById: a.userId, reviewStatus: 'APPROVED', companyId: a.companyId } as never });
+  await mk(100, 100); await mk(96, 100); await mk(50, 100);
+  await withServer(async (call) => {
+    const res = await call('GET', '/reports/count-accuracy-breakdown', a.token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.counts, 3);
+    assert.equal(res.body.withinTolerance, 2, '4 off on 100 is inside 10%; 50 off is not');
+    assert.equal(res.body.varianceValue, 540);
+    const other = await call('GET', '/reports/count-accuracy-breakdown', b.token);
+    assert.equal(other.body.counts, 0, 'another company sees none of these counts');
+  });
+});

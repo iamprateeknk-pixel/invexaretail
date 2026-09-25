@@ -82,3 +82,10 @@ test('several donors together fill a need one donor cannot, and the rest becomes
   assert.deepEqual(covered.sources?.map((s) => s.quantity), [10, 5]);
   assert.equal(covered.shortfallQty, 0);
 });
+
+test('the purchase fallback names the company\'s own warehouse, not a hard-coded site', () => {
+  const none = routeReplenishment('store-a', 5, [{ locationId: 'wh', locationName: 'Pune DC', locationType: 'warehouse', available: 0 }]);
+  assert.match(none.reason, /purchase into Pune DC/);
+  assert.match(routeReplenishment('store-a', 5, [], 'Custom Hub').reason, /Custom Hub/);
+  assert.match(routeReplenishment('store-a', 5, []).reason, /the main warehouse/);
+});

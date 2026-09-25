@@ -208,3 +208,13 @@ test('case packs round the order up and EOQ raises small orders only when its co
   assert.equal(economicOrderQuantity({ dailyDemand: 4, unitCost: 10 }), null);
   assert.equal(planPurchases({ items: [base], suppliers: [], orderingCost: 50, holdingRate: 0.2 }).suggestions[0].quantity, 271);
 });
+
+test('a budget keeps the most urgent lines and defers the rest with a reason (audit O-4)', async () => {
+  const { planPurchases } = await import('./po-planning.js');
+  const mk = (itemId: string, onHand: number) => ({ itemId, code: itemId, onHand, minQty: 10, targetQty: 20, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 1, demandDays: 30, unitCost: 10 });
+  const all = planPurchases({ items: [mk('urgent', 0), mk('later', 8)], suppliers: [] });
+  assert.equal(all.suggestions.length, 2);
+  const capped = planPurchases({ items: [mk('urgent', 0), mk('later', 8)], suppliers: [], budget: all.suggestions[0].estimatedCost! });
+  assert.deepEqual(capped.suggestions.map((s) => s.itemId), ['urgent']);
+  assert.match(capped.skipped.find((s) => s.itemId === 'later')!.reason, /past the budget/);
+});

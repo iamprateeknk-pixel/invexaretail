@@ -44,7 +44,7 @@ export type CountTrigger = {
   itemId: string;
   code: string;
   lotId: string;
-  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED';
+  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED' | 'ZERO_BALANCE';
   priority: CountPriority;
   onHand: number;
   reserved: number;
@@ -177,7 +177,7 @@ export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRe
  * Process-triggered counts (cycle-counting framework): count on a negative balance
  * immediately, and when more is reserved than exists.
  */
-export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[]): CountTrigger[] {
+export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[], recentlySoldItemIds: ReadonlySet<string> = new Set()): CountTrigger[] {
   const itemMap = new Map(items.map((item) => [item.id, item]));
   const triggers: CountTrigger[] = [];
   for (const row of stock) {
@@ -191,6 +191,15 @@ export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord
       triggers.push({ ...base, reason: 'OVER_RESERVED', priority: 'HIGH', message: `${item.code} has ${reserved} reserved but only ${row.onHand} on hand - verify the physical stock.` });
     }
   }
+  // A zero balance on an item that is still selling is the classic phantom-inventory signal (the book says
+  // empty, so nothing gets replenished or counted, while the shelf may hold stock). One trigger per item.
+  const totals = new Map<string, number>();
+  for (const row of stock) totals.set(row.itemId, (totals.get(row.itemId) ?? 0) + row.onHand);
+  for (const [itemId, total] of totals) {
+    const item = itemMap.get(itemId);
+    if (!item || total !== 0 || !recentlySoldItemIds.has(itemId) || triggers.some((t) => t.itemId === itemId)) continue;
+    triggers.push({ itemId, code: item.code, lotId: stock.find((row) => row.itemId === itemId)!.lotId, onHand: 0, reserved: 0, reason: 'ZERO_BALANCE', priority: 'NORMAL', message: `${item.code} shows zero stock but has sold recently - verify the shelf.` });
+  }
   return triggers.sort((a, b) => a.onHand - b.onHand || a.code.localeCompare(b.code));
 }
 
@@ -201,6 +210,8 @@ export function buildCycleCountPlan(input: {
   assignments: CountAssignmentRecord[];
   /** Past counts, used to honour the cadence (an A item counted yesterday is not due again). */
   counts?: Array<{ itemId: string; locationId: string; createdAt: string }>;
+  /** Items with sales at this location recently; enables the zero-balance trigger. */
+  recentlySoldItemIds?: ReadonlySet<string>;
   now?: Date;
 }): CycleCountPlan {
   const now = input.now ?? new Date();
@@ -277,7 +288,7 @@ export function buildCycleCountPlan(input: {
   }
 
   return {
-    triggers: buildCountTriggers(input.items, locationStock),
+    triggers: buildCountTriggers(input.items, locationStock, input.recentlySoldItemIds),
     locationId: input.locationId,
     generatedAt: now.toISOString(),
     totalValue: planItems.reduce((sum, item) => sum + item.extendedValue, 0),

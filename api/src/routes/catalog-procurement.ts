@@ -1,3 +1,4 @@
+import { loadSalesEvents } from '../lib/sales-demand.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { suggestReorderRule } from '../lib/reorder-suggestion.js';
 import { sellableParts } from '../lib/sellable-stock.js';
@@ -164,16 +165,12 @@ router.get('/reorder-rules/suggestions', async (req, res) => {
   const servicePercent = Number(req.query.servicePercent) > 0 ? Number(req.query.servicePercent) : 95;
   if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
   const since = new Date(Date.now() - windowDays * 86_400_000);
-  const movements = await prisma.stockMovement.findMany({
-    where: { locationId, movementType: { in: ['SALES_DEDUCTION', 'SALES_RETURN'] }, timestamp: { gte: since } },
-    select: { itemId: true, qtyDelta: true, timestamp: true, movementType: true },
-    take: 50_000,
-  });
+  const movements = await loadSalesEvents({ since, locationId, companyId });
   const byItem = new Map<string, Map<string, number>>();
   for (const m of movements) {
     const days = byItem.get(m.itemId) ?? new Map<string, number>();
     const day = m.timestamp.toISOString().slice(0, 10);
-    days.set(day, (days.get(day) ?? 0) + (m.movementType === 'SALES_RETURN' ? -Math.abs(m.qtyDelta) : Math.abs(m.qtyDelta)));
+    days.set(day, (days.get(day) ?? 0) + m.qty);
     byItem.set(m.itemId, days);
   }
   const [items, rules] = await Promise.all([
@@ -630,10 +627,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
       where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
       include: { lines: true },
     }),
-    prisma.stockMovement.findMany({
-      where: { itemId: { in: itemIds }, locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: since } },
-      select: { itemId: true, qtyDelta: true },
-    }),
+    loadSalesEvents({ since, locationId, itemIds }),
     prisma.purchaseOrderLine.findMany({
       where: { itemId: { in: itemIds }, purchaseOrder: { status: { not: 'CANCELLED' } } },
       select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
@@ -652,7 +646,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const reserved = sum(sellable(ledger), (row) => [row.itemId, row.reserved]);
   const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
   const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, row.requestedQty - row.receivedQty - row.damagedQty - row.shortageQty)]);
-  const sold = sum(sales, (row) => [row.itemId, Math.abs(row.qtyDelta)]);
+  const sold = sum(sales, (row) => [row.itemId, row.qty]);
   // The supplier an item was last bought from is the default; the buyer can change it in the draft.
   const lastSupplier = new Map<string, { supplierId: string; unitCost: number }>();
   for (const line of lastLines) if (!lastSupplier.has(line.itemId)) lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: line.unitCost });
@@ -691,7 +685,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const orderingCost = Number(req.query.orderingCost) > 0 ? Number(req.query.orderingCost) : undefined;
   const holdingRate = Number(req.query.holdingRatePercent) > 0 ? Number(req.query.holdingRatePercent) / 100 : undefined;
   const result = planPurchases({
-    orderingCost, holdingRate,
+    orderingCost, holdingRate, budget: Number(req.query.budget) >= 0 && req.query.budget !== undefined && req.query.budget !== '' ? Number(req.query.budget) : undefined,
     items: planInputs,
     suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
   });
