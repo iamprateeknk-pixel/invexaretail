@@ -134,6 +134,22 @@ integration('GET /orders: the list endpoint only ever returns the caller\'s own 
   });
 });
 
+integration('POST /orders/:id/cancel: another company gets 404 while the owner can cancel', async () => {
+  const a = await makeFixture();
+  const b = await makeFixture();
+  const orderA = await makeOrder(a.companyId, a.locationId, a.userId);
+
+  await withServer(async (call) => {
+    const cross = await call('POST', `/orders/${orderA.id}/cancel`, b.token);
+    assert.equal(cross.status, 404);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: orderA.id } })).status, 'RESERVED');
+
+    const own = await call('POST', `/orders/${orderA.id}/cancel`, a.token);
+    assert.equal(own.status, 200);
+    assert.equal(own.body.order.status, 'CANCELLED');
+  });
+});
+
 integration('POST /shipments/:awb/cancel: a shipment belonging to another company is not found', async () => {
   const a = await makeFixture();
   const b = await makeFixture();

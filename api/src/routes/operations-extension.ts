@@ -1300,8 +1300,9 @@ router.get('/orders', async (req, res) => {
     );
     return res.json({ orders });
   }
-  await expireStaleReservations();
-  await retryBackorderedOrders();
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  await expireStaleReservations(companyId);
+  await retryBackorderedOrders(companyId);
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   const status = typeof req.query.status === 'string' ? req.query.status : '';
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
@@ -1348,14 +1349,14 @@ router.post('/orders', async (req, res) => {
             }));
           }
           const locations = await prisma.location.findMany({
-            where: { status: 'ACTIVE' },
+            where: { status: 'ACTIVE', companyId: req.companyId ?? DEFAULT_COMPANY_ID },
             select: { id: true, name: true, type: true, latitude: true, longitude: true, deliverySlaHours: true, shippingCostPerKm: true },
           });
           let openOrders: Array<{ fulfillmentLocationId: string; count: number }> = [];
           try {
             const grouped = await prisma.order.groupBy({
               by: ['fulfillmentLocationId'],
-              where: { status: { in: ['RESERVED', 'BACKORDERED'] } },
+              where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['RESERVED', 'BACKORDERED'] } },
               _count: { _all: true },
             });
             openOrders = grouped.map((row) => ({ fulfillmentLocationId: row.fulfillmentLocationId, count: row._count._all }));
@@ -1400,9 +1401,10 @@ router.post('/orders', async (req, res) => {
 router.post('/orders/:id/fulfill', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const order = await fulfillOrder(req.params.id, req.user!.id);
+    const order = await fulfillOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to fulfill order.' });
   }
 });
@@ -1410,9 +1412,10 @@ router.post('/orders/:id/fulfill', async (req, res) => {
 router.post('/orders/:id/cancel', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const order = await cancelOrder(req.params.id, req.user!.id);
+    const order = await cancelOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to cancel order.' });
   }
 });
@@ -1847,7 +1850,7 @@ router.patch('/returns/:id/refund', async (req, res) => {
 // required for correctness, only for an admin to force it on demand.
 router.post('/orders/expire-reservations', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const expiredCount = await expireStaleReservations();
+  const expiredCount = await expireStaleReservations(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json({ expiredCount });
 });
 
@@ -1857,13 +1860,13 @@ router.post('/orders/expire-reservations', async (req, res) => {
 // after receiving new stock, before the next order list happens to run).
 router.post('/orders/retry-backorders', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const filledCount = await retryBackorderedOrders();
+  const filledCount = await retryBackorderedOrders(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json({ filledCount });
 });
 
 router.post('/orders/:id/retry-backorder', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const order = await retryBackorderAllocation(req.params.id);
+  const order = await retryBackorderAllocation(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id);
   if (!order) return res.status(404).json({ message: 'Order was not found.' });
   return res.json({ order });
 });
@@ -2469,7 +2472,7 @@ router.post('/connectors/:id/ingest', async (req, res) => {
     if (!lines.length) continue;
     try {
       const locations = databaseEnabled
-        ? await prisma.location.findMany({ where: { status: 'ACTIVE' }, select: { id: true, name: true, type: true } })
+        ? await prisma.location.findMany({ where: { status: 'ACTIVE', companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true, name: true, type: true } })
         : listLocations().map((location) => ({ id: location.id, name: location.name, type: location.type }));
       const order = await createOrderWithReservation({
         channel: mapped.channel,

@@ -25,7 +25,14 @@ integration('fulfillOrder posts a SALES_DEDUCTION journal row, releases the rese
       lines: { create: [{ itemId: item.id, lotId: lot.id, requestedQty: 3, fulfillmentLocationId: loc.id }] } },
   });
 
-  await fulfillOrder(order.id, userId);
+  const otherCompanyId = `ord-co-${randomUUID()}`;
+  await prisma.companyProfile.create({ data: { id: otherCompanyId, name: otherCompanyId } });
+  const otherUserId = `ord-user-${randomUUID()}`;
+  await prisma.user.create({ data: { id: otherUserId, name: 'Other', email: `${otherUserId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId: otherCompanyId } });
+  await assert.rejects(fulfillOrder(otherCompanyId, order.id, otherUserId), /not found/i);
+  assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status, 'RESERVED', 'a cross-tenant attempt must not mutate the order');
+
+  await fulfillOrder(companyId, order.id, userId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } });
   assert.equal(ledger.onHand, 7);
   assert.equal(ledger.reserved, 0);
@@ -35,7 +42,7 @@ integration('fulfillOrder posts a SALES_DEDUCTION journal row, releases the rese
   assert.equal(rows[0].qtyDelta, -3);
   assert.equal(rows[0].companyId, companyId);
 
-  await assert.rejects(fulfillOrder(order.id, userId), 'a fulfilled order cannot be fulfilled again');
+  await assert.rejects(fulfillOrder(companyId, order.id, userId), 'a fulfilled order cannot be fulfilled again');
   assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } })).onHand, 7);
   assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id } }), 1);
 });

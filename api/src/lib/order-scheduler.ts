@@ -2,6 +2,7 @@ import { DEFAULT_COMPANY_ID } from './saas/tenant-scope.js';
 import { publishEvent } from './event-bus.js';
 import { expireStaleReservations, retryBackorderedOrders } from './orders.js';
 import { withDistributedLock } from './distributed-lock.js';
+import { prisma } from './db.js';
 
 // Blueprint v4 §23: "Reservation expiry/backorder retry should be automatic
 // and visible." Until now both ran only when somebody listed orders, so an
@@ -12,6 +13,13 @@ import { withDistributedLock } from './distributed-lock.js';
 const INTERVAL_MS = 2 * 60 * 1000;
 let running = false;
 
+async function forEveryCompany(operation: (companyId: string) => Promise<number>): Promise<number> {
+  const companies = await prisma.companyProfile.findMany({ select: { id: true } });
+  let changed = 0;
+  for (const company of companies) changed += await operation(company.id);
+  return changed;
+}
+
 export type OrderSweepDeps = {
   expire: () => Promise<number>;
   retry: () => Promise<number>;
@@ -19,8 +27,8 @@ export type OrderSweepDeps = {
 };
 
 const defaults: OrderSweepDeps = {
-  expire: expireStaleReservations,
-  retry: retryBackorderedOrders,
+  expire: () => forEveryCompany(expireStaleReservations),
+  retry: () => forEveryCompany(retryBackorderedOrders),
   announce: () => {
     publishEvent({ topic: 'stock.changed', companyId: DEFAULT_COMPANY_ID });
   },
