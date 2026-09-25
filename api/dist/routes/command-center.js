@@ -11,6 +11,7 @@ const repository_js_1 = require("../lib/repository.js");
 const persistence_js_1 = require("../lib/persistence.js");
 const command_center_js_1 = require("../lib/command-center.js");
 const request_metrics_js_1 = require("../lib/request-metrics.js");
+const event_bus_js_2 = require("../lib/event-bus.js");
 const command_center_js_2 = require("../lib/command-center.js");
 const report_builders_js_1 = require("../lib/report-builders.js");
 // Blueprint v4 §29 Command Center and §30 Reports. Read-only.
@@ -114,6 +115,14 @@ router.get('/reports/audit-export', ...guard, (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="audit-export-${new Date().toISOString().slice(0, 10)}.csv"`);
     return res.send((0, report_builders_js_1.auditCsv)(events, names));
 });
+// Week 19 execution-guide scope: SLO thresholds for the business SLIs below,
+// each with a "why this number" so a later change is a deliberate edit, not
+// a guess. These are read here rather than enforced by an external alerting
+// system - this repo has no paging/alerting connector to route to, so the
+// honest deliverable is a visible, queryable breach flag on this endpoint,
+// not a fabricated "alerts configured" claim.
+const OUTBOX_LAG_BREACH_SECONDS = 15 * 60; // Delivery/backoff retries every few seconds; 15 minutes stuck means the worker itself is stuck, not just backing off.
+const OUTBOX_POISON_BREACH_COUNT = 1; // Any POISON row is a silently-failing event by definition (Week 7); zero tolerance.
 // Blueprint v4 §40 Observability: request latency/error by route, sync health, stuck transfers.
 router.get('/ops/metrics', ...guard, async (req, res) => {
     if (!['ADMIN', 'ADMIN_USER'].includes(req.user.role))
@@ -122,6 +131,10 @@ router.get('/ops/metrics', ...guard, async (req, res) => {
     const database = persistence_js_1.databaseEnabled
         ? await (0, db_js_1.databaseProbe)().catch((error) => ({ ok: false, code: error instanceof Error ? error.name : 'DATABASE_PROBE_FAILED' }))
         : { ok: true, mode: 'memory' };
+    const outbox = await (0, event_bus_js_2.outboxHealthSnapshot)().catch((error) => {
+        console.warn('[command-center] outbox health unavailable:', error instanceof Error ? error.message : error);
+        return undefined;
+    });
     return res.json({
         generatedAt: new Date().toISOString(),
         api: (0, request_metrics_js_1.metricsSnapshot)(),
@@ -129,6 +142,14 @@ router.get('/ops/metrics', ...guard, async (req, res) => {
         warehouse: { stuckTransfers: (0, command_center_js_2.stuckTransfers)((0, repository_js_1.listTransfers)(), new Date()).rows.length },
         process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
         database: { connected: persistence_js_1.databaseEnabled, ...database },
+        outbox: outbox && {
+            ...outbox,
+            slo: {
+                lagBreachSeconds: OUTBOX_LAG_BREACH_SECONDS,
+                poisonBreachCount: OUTBOX_POISON_BREACH_COUNT,
+                breached: outbox.oldestPendingAgeSeconds >= OUTBOX_LAG_BREACH_SECONDS || outbox.poison >= OUTBOX_POISON_BREACH_COUNT,
+            },
+        },
     });
 });
 exports.default = router;

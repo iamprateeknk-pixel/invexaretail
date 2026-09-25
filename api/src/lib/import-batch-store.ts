@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import {
   assertValidBatchTransition,
+  ConcurrentBatchTransitionError,
   type ImportBatchStatus,
 } from './import-center.js';
 
@@ -277,18 +278,23 @@ export async function transitionBatch(companyId: string, id: string, to: ImportB
   assertValidBatchTransition(current.status, to);
   const nextMetadata = metadataPatch ? { ...(current.metadata ?? {}), ...metadataPatch } : current.metadata;
   if (!databaseEnabled()) {
-    const updated: ImportBatchRecord = { ...current, status: to, metadata: nextMetadata };
+    const stillCurrent = memoryBatches.get(id);
+    if (!stillCurrent || stillCurrent.companyId !== companyId || stillCurrent.status !== current.status) {
+      throw new ConcurrentBatchTransitionError(id);
+    }
+    const updated: ImportBatchRecord = { ...stillCurrent, status: to, metadata: nextMetadata };
     memoryBatches.set(id, updated);
     return { ...updated, metadata: updated.metadata ? { ...updated.metadata } : null };
   }
-  const updated = await prisma.importBatch.update({
-    where: { id, companyId },
+  const result = await prisma.importBatch.updateMany({
+    where: { id, companyId, status: current.status },
     data: {
       status: to,
       metadata: (nextMetadata ?? Prisma.JsonNull) as Prisma.InputJsonValue,
     },
   });
-  return fromPrismaBatch(updated);
+  if (result.count !== 1) throw new ConcurrentBatchTransitionError(id);
+  return (await getBatch(companyId, id))!;
 }
 
 export async function findDuplicateBatch(input: {

@@ -14,9 +14,12 @@ abstract class SessionVault {
 }
 
 class PlatformSessionVault implements SessionVault {
+  // flutter_secure_storage 11.x removed AndroidOptions.encryptedSharedPreferences:
+  // EncryptedSharedPreferences is now the only Android backend, so the flag
+  // that used to opt into it no longer exists as a parameter.
   PlatformSessionVault([FlutterSecureStorage? storage])
       : _storage = storage ?? const FlutterSecureStorage(
-          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          aOptions: AndroidOptions(),
         );
   final FlutterSecureStorage _storage;
   @override

@@ -367,6 +367,24 @@ export function listCounts(): CountRecord[] {
   return [...counts];
 }
 
+/**
+ * Bare-id call-site migration slice 9 (see docs/tenant-scope-coverage.md):
+ * a companyId-scoped lookup for core.ts's many bare-id count lookups, as
+ * an independent second layer alongside the location-ownership check
+ * they already sit behind. Fail-safe-if-unknown, same shape as Week 27's
+ * centralized canAccessLocation fix: a record whose companyId is known
+ * and mismatches the caller's is denied; a record with no companyId yet
+ * (created before this field existed, or by a path this migration hasn't
+ * reached) falls through unchanged, so this can never cause a false deny
+ * on data the field hasn't reached yet.
+ */
+export function findCountForCompany(id: string, companyId: string): CountRecord | undefined {
+  const count = counts.find((row) => row.id === id);
+  if (!count) return undefined;
+  if (count.companyId && count.companyId !== companyId) return undefined;
+  return { ...count };
+}
+
 export function createTransferRecord(input: TransferRecord): TransferRecord {
   transfers.push(input);
   return { ...input, lines: input.lines.map((line) => ({ ...line })) };
@@ -579,4 +597,12 @@ export function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'pa
 
 export function listTransfers(): TransferRecord[] {
   return transfers.map((transfer) => ({ ...transfer, lines: transfer.lines.map((line) => ({ ...line })) }));
+}
+
+/** Same fail-safe-if-unknown companyId scoping as findCountForCompany, for Transfer. */
+export function findTransferForCompany(id: string, companyId: string): TransferRecord | undefined {
+  const transfer = transfers.find((record) => record.id === id);
+  if (!transfer) return undefined;
+  if (transfer.companyId && transfer.companyId !== companyId) return undefined;
+  return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }

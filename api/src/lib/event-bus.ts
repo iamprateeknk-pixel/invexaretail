@@ -143,4 +143,29 @@ export async function pruneDomainEventOutbox(olderThanDays: number = OUTBOX_RETE
   const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
   const result = await prisma.domainEventOutbox.deleteMany({ where: { occurredAt: { lt: cutoff } } });
   return result.count;
+}
+
+export type OutboxHealthSnapshot = {
+  pending: number;
+  poison: number;
+  /** Age of the oldest still-PENDING row, in seconds - the durable-delivery equivalent of consumer lag. */
+  oldestPendingAgeSeconds: number;
+};
+
+/**
+ * Business SLI (Week 19 execution-guide scope: "outbox lag ... business
+ * SLIs"): how far the outbox worker is behind, and how many events have
+ * exhausted retries. `undefined` in memory mode, same convention as
+ * `command-center.ts`'s other database-only extras - a missing database
+ * never takes `/ops/metrics` down.
+ */
+export async function outboxHealthSnapshot(now: Date = new Date()): Promise<OutboxHealthSnapshot | undefined> {
+  if (!databaseEnabled) return undefined;
+  const [pending, poison, oldestPending] = await Promise.all([
+    prisma.domainEventOutbox.count({ where: { status: 'PENDING' } }),
+    prisma.domainEventOutbox.count({ where: { status: 'POISON' } }),
+    prisma.domainEventOutbox.findFirst({ where: { status: 'PENDING' }, orderBy: { occurredAt: 'asc' }, select: { occurredAt: true } }),
+  ]);
+  const oldestPendingAgeSeconds = oldestPending ? Math.max(0, Math.round((now.getTime() - oldestPending.occurredAt.getTime()) / 1000)) : 0;
+  return { pending, poison, oldestPendingAgeSeconds };
 }

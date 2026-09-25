@@ -33,9 +33,9 @@ jobs:
       INVEXA_KEYSTORE_BASE64: ${{ secrets.INVEXA_KEYSTORE_BASE64 }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -75,7 +75,7 @@ jobs:
           flutter build apk --release --build-name=1.3.0 --build-number=4
       - name: Upload release artifacts
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: InvexaRetail-Android-1.3.0
           path: |

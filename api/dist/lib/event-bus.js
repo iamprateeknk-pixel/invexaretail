@@ -13,6 +13,7 @@ exports.durableEventsSince = durableEventsSince;
 exports.durableLatestEventId = durableLatestEventId;
 exports.resetEventBusForTests = resetEventBusForTests;
 exports.pruneDomainEventOutbox = pruneDomainEventOutbox;
+exports.outboxHealthSnapshot = outboxHealthSnapshot;
 const node_crypto_1 = require("node:crypto");
 const persistence_js_1 = require("./persistence.js");
 const db_js_1 = require("./db.js");
@@ -161,4 +162,22 @@ async function pruneDomainEventOutbox(olderThanDays = exports.OUTBOX_RETENTION_D
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
     const result = await db_js_1.prisma.domainEventOutbox.deleteMany({ where: { occurredAt: { lt: cutoff } } });
     return result.count;
+}
+/**
+ * Business SLI (Week 19 execution-guide scope: "outbox lag ... business
+ * SLIs"): how far the outbox worker is behind, and how many events have
+ * exhausted retries. `undefined` in memory mode, same convention as
+ * `command-center.ts`'s other database-only extras - a missing database
+ * never takes `/ops/metrics` down.
+ */
+async function outboxHealthSnapshot(now = new Date()) {
+    if (!persistence_js_1.databaseEnabled)
+        return undefined;
+    const [pending, poison, oldestPending] = await Promise.all([
+        db_js_1.prisma.domainEventOutbox.count({ where: { status: 'PENDING' } }),
+        db_js_1.prisma.domainEventOutbox.count({ where: { status: 'POISON' } }),
+        db_js_1.prisma.domainEventOutbox.findFirst({ where: { status: 'PENDING' }, orderBy: { occurredAt: 'asc' }, select: { occurredAt: true } }),
+    ]);
+    const oldestPendingAgeSeconds = oldestPending ? Math.max(0, Math.round((now.getTime() - oldestPending.occurredAt.getTime()) / 1000)) : 0;
+    return { pending, poison, oldestPendingAgeSeconds };
 }

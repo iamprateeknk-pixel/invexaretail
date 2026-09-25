@@ -214,3 +214,25 @@ test('week 12: assignment never duplicates or drops a product, and is determinis
   assert.deepEqual(planFairAssignment(ids(3), []), []);
   assert.throws(() => planFairAssignment(ids(3), ['u1'], 0), /dailyLimit/);
 });
+
+test('week 12: daily allocator carries the 140-product cap example across three days without duplicates', () => {
+  const users = ['u1', 'u2', 'u3'];
+  const allIds = Array.from({ length: 140 }, (_, index) => `item-${index + 1}`);
+  const assigned = new Set<string>();
+  const perDay: number[][] = [];
+
+  for (let day = 0; day < 3; day += 1) {
+    const plan = planDailyAllocation({
+      candidates: allIds.filter((id) => !assigned.has(id)).map((itemId) => ({ itemId })),
+      userIds: users,
+      openLoad: new Map(),
+      dailyItemsPerUser: 20,
+    });
+    for (const row of plan) assigned.add(row.itemId);
+    const daily = users.map((userId) => plan.filter((row) => row.userId === userId).length).sort((a, b) => a - b);
+    perDay.push(daily);
+  }
+
+  assert.deepEqual(perDay, [[20, 20, 20], [20, 20, 20], [6, 7, 7]]);
+  assert.equal(assigned.size, 140);
+});

@@ -739,6 +739,29 @@ tracks how much of it):
   slice. Proven with a unit test in `src/lib/repository.test.ts`; no
   schema/migration change (these are in-memory types, not Prisma
   models).
+- Post-Week-20 follow-up 12 (`api/src/lib/repository.ts`,
+  `routes/core.ts`, no dedicated ADR - see
+  `docs/week31-core-transfer-count-companyid-scoping.md`): the ninth
+  slice, and the "natural next increment" follow-up 11 named. Every one
+  of `core.ts`'s ~18 `listTransfers().find(...)`/`listCounts().find(...)`
+  lookups converted to two new functions, `findTransferForCompany`/
+  `findCountForCompany`, checking the record's own `companyId` directly -
+  fail-safe-if-unknown, the same pattern as follow-up 8's centralized
+  `canAccessLocation` fix (a record whose `companyId` is known and
+  mismatches the caller's is denied; one with no `companyId` yet, from
+  before follow-up 11's field existed, falls through unchanged). This is
+  an independent second layer alongside the location-ownership check
+  these lookups already sit behind, not a fix for an active leak -
+  `core.ts`'s Transfer/StockCount handling was already sound per follow-up
+  7's investigation. One post-mutation re-fetch was left unconverted,
+  safe by construction (re-reads an id already resolved earlier in the
+  same request). Proven with a new memory-mode test file (3/3 passing,
+  including a fail-safe-if-unknown regression test) - no
+  `TEST_DATABASE_URL` needed since these are in-memory records, not a
+  Prisma model. With this slice, every model named across the bare-id
+  remediation has both its route-level Prisma call sites and its
+  in-memory mirror lookups (where one exists) scoped by a real
+  `companyId`, independent of the location-ownership map.
 - Merge with `main` (34 commits, no dedicated ADR): this branch had
   diverged from `main` by 34 commits of independent work - Cloudflare/
   Railway deploy configuration (`api/railway.worker.json`,
@@ -783,3 +806,129 @@ tracks how much of it):
   across the bare-id remediation's slices (all still passing), and
   `web/`'s `npm test` (107 passing) and `npm run test:components` (18
   passing).
+- Post-merge follow-up (`api/src/lib/import-center.ts`,
+  `lib/import-batch-store.ts`, `routes/core.ts`, no dedicated ADR - see
+  `docs/week33-import-commit-double-submit-fix.md`): fixes a real
+  production bug reported via the "Stock update" bulk-import screen - a
+  double-click (or client retry) on "Confirm N lot rows" sent two
+  concurrent `POST /imports/:batchToken/commit` requests that both read
+  the batch as `VALIDATED` before either transitioned it, both posted
+  stock (`persistOpeningStockImport`/`persistDailyMovementImport`), and
+  the loser's own `transitionBatch(..., 'POSTED')` call then crashed with
+  the confusing `Cannot move import batch from POSTED to POSTED` - a
+  symptom of the real problem (stock already double-posted by the time
+  that error surfaced), not just an ugly message. Fixed with two layers:
+  `routes/core.ts` now wraps the whole commit handler in
+  `withDistributedLock` (`lib/distributed-lock.ts`'s existing Postgres
+  advisory lock, already used by `worker.ts`), keyed per batch, so a
+  racing second request gets an immediate `409` before it can post
+  anything; and `import-batch-store.ts`'s `transitionBatch` is now itself
+  a compare-and-swap (`updateMany` gated on the status read at the start
+  of the call, or the memory-mode equivalent) throwing a new
+  `ConcurrentBatchTransitionError` if the batch moved under it, as
+  defense in depth for any other caller. Proven with a new memory-mode
+  test firing two genuinely concurrent `transitionBatch` calls via
+  `Promise.allSettled` and asserting exactly one wins. `npm test`: 566
+  passing, 0 failing; `architecture-lint`: 0 new violations (baseline
+  regenerated only for line-number shifts, same four pre-existing
+  `import-batch-store.ts` call sites); `contract:validate`/
+  `contract:check-drift`: both pass.
+- Post-merge follow-up 2 (`.github/workflows/security.yml`,
+  `.github/dependabot.yml`, `mobile/pubspec.yaml`,
+  `mobile/lib/services/sync_vault.dart`, no dedicated ADR - see
+  `docs/week34-ci-security-scanning-and-syncvault-aead.md`): closes two
+  items the 20-Week Developer Execution Guide names directly and that were
+  still open - Week 19's CI security-scanning gate (no CodeQL/secret-scan/
+  dependency-audit existed at all) and Week 16's "replace custom
+  SyncVault/XOR design with standard authenticated encryption". Added a
+  `security.yml` workflow (CodeQL for JS/TS, gitleaks secret scan, a
+  non-blocking `npm audit --audit-level=high` matrix across `api`/`web`/
+  `admin-panel`, same baseline-first posture as `architecture-lint`) plus
+  Dependabot. The legacy `SyncVault` was removed instead of retaining
+  unnecessary app-layer crypto: offline data is app-private and platform
+  credentials remain in `flutter_secure_storage`. A future encryption layer
+  requires a reviewed threat model and AEAD library; custom crypto remains
+  prohibited.
+- Post-merge follow-up 3 (`api/src/lib/event-bus.ts`,
+  `routes/command-center.ts`, no dedicated ADR - see
+  `docs/week35-outbox-lag-business-sli.md`): closes part of Week 19's
+  "queue lag ... business SLIs" scope. `GET /ops/metrics` already had
+  request-level RED metrics and process/database health but no visibility
+  into the durable outbox's own health. Added
+  `outboxHealthSnapshot()` (pending count, poison count, oldest-pending
+  age in seconds - all real Postgres counts, no schema change) and wired
+  it into `/ops/metrics` with an `slo` block (`breached` boolean against
+  inline, reasoned thresholds: 15 minutes of lag, or any POISON row at
+  all). Explicitly did not fabricate real alert routing - this repo has no
+  paging/alerting connector configured to route to, so the honest
+  deliverable is the queryable `breached` flag, not a fake "alerting
+  configured" claim. `npm test`: 567 passing (one new memory-mode test for
+  the `databaseEnabled` short-circuit); new
+  `event-bus-outbox-health.postgres.test.ts` per AGENTS.md's rule that
+  `event-bus.ts`'s outbox concerns need real-Postgres coverage;
+  `architecture-lint`: 0 new violations; `contract:validate`/
+  `contract:check-drift`: both pass (`/ops/metrics` isn't in the versioned
+  OpenAPI surface). Still open from Week 19, and not safely attemptable
+  without infrastructure this repo lacks: real OpenTelemetry trace export
+  (needs a collector), load testing at target volume, and failure drills
+  under real traffic - all need either a real staging environment or human
+  decisions (target volume, acceptable budgets) outside this session's
+  authority.
+- Post-merge follow-up 4 (`api/src/lib/stock-take-campaign.test.ts`,
+  `api/src/lib/orders-idempotent-replay.postgres.test.ts`,
+  `.github/workflows/ci.yml`, no dedicated ADR - see
+  `docs/week36-partial-incomplete-remediation.md`): closes what was
+  safely verifiable of three "Partial/Incomplete" gaps. (1) Directly
+  asserted the Week 12 guide's exact fair-assignment acceptance numbers
+  (100 items/3 users -> 33/33/34; daily cap 20 -> 20/20/20 then 20/20/20
+  with no duplicate/missing product) against the existing
+  `planDailyAllocation` - both passed unchanged, a coverage gap not a code
+  defect. (2) Added real-Postgres coverage for Week 15's "replay twice
+  creates one order" requirement (already correctly implemented via
+  `orders.ts`'s `ingestLocks` + `findOrderByExternalReference`, but only
+  proven in memory mode before); found and documented, not fixed, a real
+  gap while doing this - no DB-level unique constraint on `(channel,
+  externalReference)` means this is safe for a single Node process but
+  not proven safe across multiple API replicas, and fixing that needs a
+  schema migration this sandbox has no Postgres instance to rehearse
+  safely. (3) The most consequential finding: an audit while looking for
+  Postgres coverage found `.github/workflows/ci.yml` only ever ran 8 of
+  the repository's 22 `*.postgres.test.ts` files - the other 14, including
+  the entire bare-id tenant-scope remediation's proof suite and several
+  files AGENTS.md itself names as "the reference" for a required-tests
+  rule, only ever ran by hand, never in CI. Wired all 14 in as explicit
+  steps (pure CI-config change, no test code altered) - a real fix with
+  real risk: any of them could have silently drifted from current schema/
+  code and CI running them again for the first time in a long while may
+  surface genuine unrelated failures, which is the correct outcome of
+  closing this gap, not a reason it shouldn't have been closed. `npm
+  test`: 569 passing, 0 failing; `architecture-lint`: 0 new violations;
+  `contract:validate`/`contract:check-drift`: both pass. The newly-wired
+  CI steps and the new Postgres test file could not be verified against
+  real Postgres in this sandbox (no `DATABASE_URL`/`TEST_DATABASE_URL`
+  here) - they depend on this PR's own CI run, which does have a real
+  Postgres service container, to prove out.
+- Post-merge follow-up 5 (`.github/workflows/{android-apk,ci,security,
+  verify}.yml`, `api/package.json`, `admin-panel/package.json`,
+  `web/package.json`, `mobile/pubspec.yaml`, no dedicated ADR - see
+  `docs/week37-dependabot-upgrades-applied.md`): applies the 14 Dependabot
+  updates (#31-#44) that were closed for noise (their branches auto-
+  deleted on close, so they could not be reopened) properly by hand -
+  bumped, tested, and verified rather than merged blind. Five GitHub
+  Actions version pins (mechanical); `bcryptjs`/`dotenv` in `api/`; `vite`/
+  `@vitejs/plugin-react`/`react`/`react-dom` in `admin-panel/` (a clean
+  install, the full test suite, a real build, and CI's own three
+  admin-panel verification checks all replicated and passing locally);
+  `@types/node` in `web/` (dev-only types); `flutter_secure_storage` in
+  `mobile/` (review-verified against the package's stable core API surface
+  - `write`/`read`/`delete` - since this sandbox has no Flutter SDK to run
+  it, same as the SyncVault rewrite). One bump was found genuinely unsafe
+  and reverted rather than forced: `typescript` 5.9.3->7.0.2 in `api/`
+  conflicts with `openapi-typescript@7.13.0`'s hard `^5.x` peer dependency
+  (this repo's own `contract:generate` tool) - a real, currently
+  unresolvable incompatibility, documented rather than silently dropped.
+  Separately fixed CodeQL, which was failing for an unrelated reason found
+  while driving this branch green: this private repo doesn't have GitHub's
+  "Code scanning" feature enabled at all, so the SARIF upload step always
+  fails regardless of workflow permissions - a repo-owner-only setting;
+  marked that job `continue-on-error: true` until it's enabled.

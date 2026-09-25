@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ImportTemplateRegistry = exports.ImportDuplicateGuard = exports.DuplicateImportBatchError = exports.InvalidBatchTransitionError = void 0;
+exports.ImportTemplateRegistry = exports.ImportDuplicateGuard = exports.DuplicateImportBatchError = exports.ConcurrentBatchTransitionError = exports.InvalidBatchTransitionError = void 0;
 exports.assertValidBatchTransition = assertValidBatchTransition;
 exports.computeFileHash = computeFileHash;
 exports.suggestFixFor = suggestFixFor;
@@ -33,6 +33,23 @@ class InvalidBatchTransitionError extends Error {
     }
 }
 exports.InvalidBatchTransitionError = InvalidBatchTransitionError;
+/**
+ * Thrown when a transition's precondition (the batch's status at read time)
+ * no longer holds by the time the transition is applied - a concurrent
+ * request (e.g. a double-click on "Confirm" or a client retry) already moved
+ * the batch. Distinct from InvalidBatchTransitionError: the transition
+ * itself was legal, it just lost a race, so callers can treat it as "already
+ * handled" rather than a real state-machine violation.
+ */
+class ConcurrentBatchTransitionError extends Error {
+    batchId;
+    constructor(batchId) {
+        super(`Import batch ${batchId} was already updated by a concurrent request.`);
+        this.batchId = batchId;
+        this.name = 'ConcurrentBatchTransitionError';
+    }
+}
+exports.ConcurrentBatchTransitionError = ConcurrentBatchTransitionError;
 function assertValidBatchTransition(from, to) {
     if (!ALLOWED_TRANSITIONS[from].includes(to)) {
         throw new InvalidBatchTransitionError(from, to);

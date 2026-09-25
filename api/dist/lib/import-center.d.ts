@@ -4,6 +4,18 @@ export declare class InvalidBatchTransitionError extends Error {
     readonly to: ImportBatchStatus;
     constructor(from: ImportBatchStatus, to: ImportBatchStatus);
 }
+/**
+ * Thrown when a transition's precondition (the batch's status at read time)
+ * no longer holds by the time the transition is applied - a concurrent
+ * request (e.g. a double-click on "Confirm" or a client retry) already moved
+ * the batch. Distinct from InvalidBatchTransitionError: the transition
+ * itself was legal, it just lost a race, so callers can treat it as "already
+ * handled" rather than a real state-machine violation.
+ */
+export declare class ConcurrentBatchTransitionError extends Error {
+    readonly batchId: string;
+    constructor(batchId: string);
+}
 export declare function assertValidBatchTransition(from: ImportBatchStatus, to: ImportBatchStatus): void;
 export type BatchFingerprint = {
     sourceType: string;

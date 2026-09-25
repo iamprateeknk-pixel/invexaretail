@@ -84,6 +84,8 @@ import {
   listCountAssignments,
   listCountAssignmentsFor,
   listCounts,
+  findCountForCompany,
+  findTransferForCompany,
   counts as countsStore,
   updateItemRecord,
   listItems,
@@ -174,7 +176,8 @@ import {
 } from '../lib/industry-packs.js';
 import { matchImportLocation, parseDailyStockImport, type DailyImportPreview, type DailyStockRow } from '../lib/daily-stock-sync.js';
 import { listImportBatches, reverseImportBatch } from '../lib/import-reversal.js';
-import { computeFileHash, InvalidBatchTransitionError } from '../lib/import-center.js';
+import { computeFileHash, ConcurrentBatchTransitionError, InvalidBatchTransitionError } from '../lib/import-center.js';
+import { withDistributedLock } from '../lib/distributed-lock.js';
 import {
   countRowsByStatus,
   createPreviewBatch,
@@ -881,7 +884,7 @@ router.get('/counts', async (req: Request, res: Response) => {
 // the count for the audit trail.
 router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
-  const count = listCounts().find((candidate) => candidate.id === firstParam(req.params.countId));
+  const count = findCountForCompany(firstParam(req.params.countId), req.companyId ?? DEFAULT_COMPANY_ID);
   if (!count) return res.status(404).json({ message: 'Stock count was not found.' });
   if (!canAccessLocation(accessContext(req.user!), count.locationId)) return res.status(403).json({ message: 'This user cannot review counts at that location.' });
   if (!count.reconciliationRequired) return res.status(409).json({ message: 'This count has no open reconciliation flag.' });
@@ -1167,7 +1170,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
 
   try {
     const countId = firstParam(req.params.countId);
-    const current = listCounts().find((count) => count.id === countId);
+    const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
     if (!current) return res.status(404).json({ message: 'Stock count was not found.' });
     if (current.status !== 'PENDING_REVIEW') return res.status(409).json({ message: `Count is already ${current.status} and cannot be reviewed again.` });
     try {
@@ -1621,7 +1624,7 @@ function canModifyTransfer(context: AccessContext, userId: string, transfer: Tra
 router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
-  const current = listTransfers().find((record) => record.id === transferId);
+  const current = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!current) return res.status(404).json({ message: 'Transfer was not found.' });
   if (!canModifyTransfer(context, req.user!.id, current)) return res.status(403).json({ message: 'Only an editable transfer request can be changed by its requester or a transfer manager.' });
   if (activeCartons(listTransferCartons(current.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer can no longer be edited.' });
@@ -1663,7 +1666,7 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
 router.delete('/transfers/:transferId', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   if (!canModifyTransfer(context, req.user!.id, transfer)) return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
   if (activeCartons(listTransferCartons(transfer.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
@@ -1691,7 +1694,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
   if (!canAccessLocation(context, sourceLocationId) || !canAccessLocation(context, destinationLocationId)) return res.status(403).json({ message: 'Location access denied.' });
 
   const transferId = `replenishment-${createHash('sha1').update(requestId).digest('hex').slice(0, 24)}`;
-  const existing = listTransfers().find((entry) => entry.id === transferId);
+  const existing = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (existing) return res.json({ success: true, duplicate: true, transfer: existing });
 
   const item = listItems().find((entry) => entry.id === itemId);
@@ -1739,7 +1742,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
 router.patch('/transfers/:transferId/status', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   const nextStatus = req.body.status as TransferRecord['status'];
 
   if (!transfer) {
@@ -2197,8 +2200,22 @@ router.post('/imports/:batchToken/commit', async (req: Request, res: Response, n
   if (RESERVED_IMPORT_PATHS.has(batchToken)) return next();
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required to commit imports.' });
   try {
-    return await commitImportBatchToken(req, res, batchToken);
+    // commitImportBatchToken posts real stock movements before flipping the
+    // batch to POSTED; without a lock here, a double-click or client retry
+    // sends two concurrent commit requests that both pass the PREVIEWED/
+    // VALIDATED status check and both post - not just an ugly "POSTED to
+    // POSTED" transition error, but the underlying stock getting applied
+    // twice. Serialize commits per batch so the second request always sees
+    // the first one's already-POSTED result instead of racing it.
+    const outcome = await withDistributedLock(`import-batch-commit:${batchToken}`, () => commitImportBatchToken(req, res, batchToken));
+    if (outcome === null) {
+      return res.status(409).json({ message: 'This import is already being committed by another request. Please wait and refresh.' });
+    }
+    return outcome;
   } catch (error) {
+    if (error instanceof ConcurrentBatchTransitionError) {
+      return res.status(409).json({ message: 'This import was already committed by a concurrent request.' });
+    }
     if (error instanceof InvalidBatchTransitionError) return res.status(409).json({ message: error.message });
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit import.' });
   }
@@ -2935,7 +2952,7 @@ async function savedPickSlips(transferId: string) {
 
 router.get('/picker/transfers/:transferId', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((entry) => entry.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker access denied.' });
@@ -2983,7 +3000,7 @@ async function pooledPickState(transfer: TransferRecord, itemId: string) {
 }
 
 router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
-  const transfer = listTransfers().find((entry) => entry.id === firstParam(req.params.transferId));
+  const transfer = findTransferForCompany(firstParam(req.params.transferId), req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
   if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
   try {
@@ -2999,7 +3016,7 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
 
 router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((entry) => entry.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
   const prior = await savedPickSlips(transferId);
@@ -3114,7 +3131,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
 router.post('/transfers/:transferId/confirm', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Only admins can confirm transfer-out.' });
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((entry) => entry.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status)) return res.status(400).json({ message: `Transfer must be ready for admin review, not ${transfer.status}.` });
   const allocations = new Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }>();
@@ -3159,7 +3176,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
 router.get('/transfers/:transferId/export.xls', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Transfer export is restricted to admins and auditors.' });
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((entry) => entry.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const itemMap = new Map(listItems().map((item) => [item.id, item]));
   const slips = await savedPickSlips(transfer.id);
@@ -3298,7 +3315,7 @@ router.get('/transfers/:transferId/reprint-audit', (req: Request, res: Response)
 
 router.get('/transfers/:transferId/label', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) {
     return res.status(404).json({ message: 'Transfer not found.' });
   }
@@ -3335,7 +3352,7 @@ router.get('/transfers/:transferId/label', async (req: Request, res: Response) =
 router.post('/transfers/:transferId/receive', async (req: Request, res: Response) => {
   if (!canReceiveTransfer(req.user!.role)) return res.status(403).json({ message: 'Only operational admins and destination store users can receive transfers.' });
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer not found.' });
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
@@ -3612,7 +3629,7 @@ router.delete('/items/:itemId/photos/:photoId', async (req: Request, res: Respon
 
 router.post('/transfers/:transferId/evidence', upload.single('evidence'), async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)
@@ -3632,7 +3649,7 @@ router.post('/transfers/:transferId/evidence', upload.single('evidence'), async 
 
 router.get('/transfers/:transferId/evidence', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {
@@ -3644,7 +3661,7 @@ router.get('/transfers/:transferId/evidence', async (req: Request, res: Response
 
 router.get('/transfers/:transferId/evidence/:evidenceId', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = listTransfers().find((record) => record.id === transferId);
+  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {
@@ -3683,7 +3700,7 @@ router.post('/picker-tasks', (req: Request, res: Response) => {
 
 router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  const transfer = listTransfers().find((record) => record.id === req.body.transferId);
+  const transfer = findTransferForCompany(req.body.transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId)) {
     return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
   }
