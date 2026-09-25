@@ -1,3 +1,4 @@
+import { parseCountReasonCode } from '../lib/count-reason-codes.js';
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
@@ -1159,9 +1160,11 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
 
   let status;
   let reviewReason;
+  let reasonCode;
   try {
     status = parseCountReviewStatus(req.body.status);
     reviewReason = parseCountReviewReason(req.body.reviewReason ?? req.body.reason);
+    reasonCode = parseCountReasonCode(req.body.reasonCode);
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid review payload.' });
   }
@@ -1179,8 +1182,8 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason }, req.companyId ?? DEFAULT_COMPANY_ID);
-    const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, req.companyId ?? DEFAULT_COMPANY_ID);
+    const updated = updateCountReview(countId, status, req.user!.id, reviewReason, reasonCode);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
     let recountAssignment;
@@ -1198,6 +1201,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       entityId: updated.id,
       metadata: {
         reviewReason,
+        reasonCode,
         ...(status === 'APPROVED' ? { bookQty: updated.bookQty, physicalQuantity: updated.physicalQuantity, variance, movementId: updated.varianceMovementId } : {}),
         ...(status === 'RECOUNT' ? { recountAssignmentId: recountAssignment?.id } : {}),
       },

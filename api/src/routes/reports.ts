@@ -10,6 +10,7 @@ import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.
 import type { TenantContext } from '../lib/tenant-context.js';
 import { getDashboardSummary, listOpenExceptions } from '../lib/reporting-repository.js';
 import { prisma } from '../lib/db.js';
+import { summarizeVarianceReasons } from '../lib/count-reason-codes.js';
 import { buildInventoryHealth, lotUnitCost, type HealthSales } from '../lib/inventory-health.js';
 
 const router = Router();
@@ -41,6 +42,17 @@ router.get('/reports/exceptions', async (req: Request, res: Response) => {
 // cost, else purchase rate) - stock with no recorded cost is reported as `unvaluedUnits`, never priced.
 const HEALTH_ROLES = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'];
 const HEALTH_ROW_LIMIT = 20_000;
+
+router.get('/reports/count-variance-reasons', async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
+  const days = Number(req.query.days) > 0 ? Math.min(365, Number(req.query.days)) : 90;
+  const rows = await prisma.stockCount.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, reviewStatus: 'APPROVED', countDate: { gte: new Date(Date.now() - days * 86_400_000) } },
+    select: { physicalQty: true, bookQty: true, reasonCode: true },
+    take: 20_000,
+  });
+  return res.json({ days, reasons: summarizeVarianceReasons(rows) });
+});
 
 router.get('/reports/inventory-health', async (req: Request, res: Response) => {
   if (!HEALTH_ROLES.includes(req.user!.role)) return res.status(403).json({ message: 'Inventory health reports require Admin, Branch Manager or Auditor access.' });

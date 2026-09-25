@@ -8,7 +8,8 @@ test('warehouse stock is preferred for branch replenishment', () => {
     { locationId: 'basni', locationName: 'H.O. Basni', locationType: 'warehouse', available: 10 },
   ]), {
     action: 'TRANSFER', sourceLocationId: 'basni', sourceLocationName: 'H.O. Basni',
-    suggestedTransferQty: 8, reason: 'Target can be restored from network stock.',
+    suggestedTransferQty: 8, sources: [{ locationId: 'basni', locationName: 'H.O. Basni', quantity: 8 }], shortfallQty: 0,
+    reason: 'Target can be restored from network stock.',
   });
 });
 
@@ -63,4 +64,21 @@ test('a donor is never drained below its own minimum', () => {
     network: [{ locationId: 'store-b', locationName: 'Store B', locationType: 'store', available: 9, protectedQty: 9 }],
   });
   assert.equal(none.route.action, 'PURCHASE', 'a donor at its minimum gives nothing, so the shortage becomes a purchase');
+});
+
+test('several donors together fill a need one donor cannot, and the rest becomes a shortfall', () => {
+  const route = routeReplenishment('store-a', 25, [
+    { locationId: 'basni', locationName: 'H.O. Basni', locationType: 'warehouse', available: 10 },
+    { locationId: 'store-b', locationName: 'Store B', locationType: 'store', available: 12 },
+    { locationId: 'store-c', locationName: 'Store C', locationType: 'store', available: 1 },
+  ]);
+  assert.deepEqual(route.sources?.map((s) => [s.locationId, s.quantity]), [['basni', 10], ['store-b', 12], ['store-c', 1]]);
+  assert.equal(route.suggestedTransferQty, 23);
+  assert.equal(route.shortfallQty, 2);
+  const covered = routeReplenishment('store-a', 15, [
+    { locationId: 'basni', locationName: 'H.O. Basni', locationType: 'warehouse', available: 10 },
+    { locationId: 'store-b', locationName: 'Store B', locationType: 'store', available: 12 },
+  ]);
+  assert.deepEqual(covered.sources?.map((s) => s.quantity), [10, 5]);
+  assert.equal(covered.shortfallQty, 0);
 });

@@ -169,6 +169,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     reviewedBy: count.approvedById ?? undefined,
     reviewedAt: count.approvedAt?.toISOString(),
     reviewReason: count.reviewReason ?? undefined,
+    reasonCode: (count as { reasonCode?: string | null }).reasonCode ?? undefined,
     parentCountId: count.parentCountId ?? undefined,
     requestId: (count as { requestId?: string | null }).requestId ?? undefined,
     reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
@@ -749,6 +750,7 @@ export async function persistCountReview(count: CountRecord, companyId: string):
           : null,
         reviewStatus: count.status ?? 'PENDING_REVIEW',
         reviewReason: count.reviewReason ?? null,
+        reasonCode: count.reasonCode ?? null,
       },
     });
     if (claimed.count !== 1) {

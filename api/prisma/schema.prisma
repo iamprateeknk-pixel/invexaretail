@@ -844,6 +844,8 @@ model StockCount {
   approvedAt      DateTime?
   reviewStatus    String   @default("PENDING_REVIEW")
   reviewReason    String?  @db.Text
+  // Audit C-3: root-cause code chosen at review (see lib/count-reason-codes.ts).
+  reasonCode      String?
   parentCountId   String?
   // Blueprint v4 §14: sales/purchase files imported after a count can carry
   // movements dated before it, changing what the book quantity should have

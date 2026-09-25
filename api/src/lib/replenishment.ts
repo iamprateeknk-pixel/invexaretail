@@ -16,6 +16,10 @@ export type ReplenishmentRoute = {
   sourceLocationId?: string;
   sourceLocationName?: string;
   suggestedTransferQty: number;
+  /** Every donor used, in order (audit R-1: one donor used to cap the transfer even when several could cover it). */
+  sources?: Array<{ locationId: string; locationName: string; quantity: number }>;
+  /** Part of the need no donor can cover; the caller buys it. */
+  shortfallQty?: number;
   reason: string;
 };
 
@@ -34,17 +38,27 @@ export function routeReplenishment(
       const warehousePriority = Number(String(b.locationType).toLowerCase() === 'warehouse') - Number(String(a.locationType).toLowerCase() === 'warehouse');
       return warehousePriority || b.available - a.available || a.locationName.localeCompare(b.locationName);
     });
-  const source = candidates[0];
-  if (!source) {
-    return { action: 'PURCHASE', suggestedTransferQty: 0, reason: 'No other branch has available stock; purchase into H.O. Basni.' };
+  if (!candidates.length) {
+    return { action: 'PURCHASE', suggestedTransferQty: 0, shortfallQty: requiredQty, reason: 'No other branch has available stock; purchase into H.O. Basni.' };
   }
-  const quantity = Math.min(requiredQty, source.available);
+  // Take from donors in priority order until the need is covered, so two donors together can fill it.
+  const sources: Array<{ locationId: string; locationName: string; quantity: number }> = [];
+  let remaining = requiredQty;
+  for (const donor of candidates) {
+    if (remaining <= 0) break;
+    const quantity = Math.min(remaining, donor.available);
+    sources.push({ locationId: donor.locationId, locationName: donor.locationName, quantity });
+    remaining -= quantity;
+  }
+  const quantity = requiredQty - Math.max(0, remaining);
   return {
     action: 'TRANSFER',
-    sourceLocationId: source.locationId,
-    sourceLocationName: source.locationName,
+    sourceLocationId: sources[0].locationId,
+    sourceLocationName: sources[0].locationName,
     suggestedTransferQty: quantity,
-    reason: quantity >= requiredQty
+    sources,
+    shortfallQty: Math.max(0, remaining),
+    reason: remaining <= 0
       ? 'Target can be restored from network stock.'
       : 'Use available network stock first; purchase the remaining shortage into H.O. Basni.',
   };
