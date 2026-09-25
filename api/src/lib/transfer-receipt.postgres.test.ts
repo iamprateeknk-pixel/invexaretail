@@ -8,6 +8,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from './db.js';
 import { persistTransferReceipt } from './transfer-receipt.js';
+import { persistConfirmedPickAllocations } from './persistence.js';
 import type { TenantContext } from './tenant-context.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -80,4 +81,39 @@ integration('a receipt that fails validation leaves no journal row, ledger row o
   assert.equal((await journal(f.item.id, f.dst.id)).length, 0);
   assert.equal(await prisma.stockLedger.count({ where: { itemId: f.item.id, locationId: f.dst.id } }), 0);
   assert.equal(await prisma.transferReceipt.count({ where: { transferId: f.transfer.id } }), 0);
+});
+
+integration('in-transit stock is tracked on the source lot from pick-confirm until the receipt settles it (audit O-7)', async () => {
+  const f = await makeTransfer(10);
+  const srcId = f.transfer.sourceLocationId;
+  await prisma.stockLedger.create({ data: { itemId: f.item.id, lotId: f.lot.id, locationId: srcId, onHand: 10, companyId: f.tenant.companyId } });
+  await prisma.transfer.update({ where: { id: f.transfer.id }, data: { status: 'PENDING_PICK' as never } });
+  const alloc = [{ itemId: f.item.id, lotId: f.lot.id, locationId: srcId, quantity: 10 }];
+  await persistConfirmedPickAllocations(f.transfer.id, alloc, f.tenant);
+  const afterConfirm = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } });
+  assert.equal(afterConfirm.onHand, 0);
+  assert.equal(afterConfirm.inTransit, 10, 'the 10 units are in flight, not vanished');
+  await assert.rejects(persistConfirmedPickAllocations(f.transfer.id, alloc, f.tenant), /already confirmed/);
+  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 10, 'a rejected replay does not double it');
+
+  await prisma.transfer.update({ where: { id: f.transfer.id }, data: { status: 'DISPATCHED' as never } });
+  const receive = (requestId: string, receivedQty: number, shortageQty: number) => persistTransferReceipt({
+    requestId, transferId: f.transfer.id, destinationLocationId: f.dst.id, receivedById: f.userId, notes: '', tenant: f.tenant,
+    lines: [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty, damagedQty: 0, shortageQty, excessQty: 0 }],
+  });
+  await receive(randomUUID(), 6, 0);
+  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 4, 'partial receipt releases only what arrived');
+  await receive(randomUUID(), 3, 1);
+  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 0, 'received + short settles the rest');
+});
+
+integration('a transfer confirmed before in-transit tracking existed does not disturb another transfer\'s in-transit', async () => {
+  const f = await makeTransfer(5);
+  const srcId = f.transfer.sourceLocationId;
+  await prisma.stockLedger.create({ data: { itemId: f.item.id, lotId: f.lot.id, locationId: srcId, onHand: 0, inTransit: 8, companyId: f.tenant.companyId } });
+  await persistTransferReceipt({
+    requestId: randomUUID(), transferId: f.transfer.id, destinationLocationId: f.dst.id, receivedById: f.userId, notes: '', tenant: f.tenant,
+    lines: [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty: 5, damagedQty: 0, shortageQty: 0, excessQty: 0 }],
+  });
+  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 8);
 });
