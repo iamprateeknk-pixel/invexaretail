@@ -5,7 +5,7 @@
 | Dimension | Pass condition (guide) | State | Blocking evidence still needed |
 |---|---|---|---|
 | Data integrity | Zero unexplained stock delta; all mutation paths canonical | **Not met** (much closer) | On-hand paths for PO/transfer receipt, pick-confirm, counts, orders, expiry and returns now post canonically and atomically. Still open: `reserved`/`inTransit`/`quarantine` dimensions, legacy bulk-import writes, and Float->Decimal (`docs/inventory-posting-coverage.md`) |
-| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | Partial | Replay/isolation suites exist and pass; a cross-tenant marketplace-ingest hole and a webhook that answered 401 to every caller were found and fixed, which shows review is not finished (`unscoped-tenant-query` baseline still tracked). Dependency-audit exceptions need owner acceptance (`docs/security-gates.md`) |
+| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | Partial | Replay/isolation suites exist and pass; the covered `unscoped-tenant-query` baseline is now zero after the marketplace, OMS, import, count, expiry, return and exception slices. Dependency-audit exceptions still need owner acceptance (`docs/security-gates.md`) |
 | Reliability | Backup/restore, migration rollback, worker replay pass | Partial | Local restore rehearsal only; no staging restore, rollback or replay drill |
 | Performance | p95 budgets pass at target volume | **Not measured** | No load test; budgets are proposals (`docs/slo-and-alerting.md`) |
 | UX | Five golden journeys pass desktop/tablet/mobile + keyboard | Partial | Item-search journey has Playwright coverage; the other four journeys have none |
