@@ -1246,6 +1246,8 @@ model ReorderRule {
   locationId String
   minQty     Float    @default(0)
   targetQty  Float    @default(0)
+  // Audit O-4: case pack; suggested order quantities round up to a multiple of this.
+  orderMultiple Float?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")

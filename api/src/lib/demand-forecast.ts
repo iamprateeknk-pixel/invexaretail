@@ -202,3 +202,40 @@ export function crostonDailyDemand(dailyDemand: number[], alpha = 0.1): number {
   if (size === null || interval === null || interval <= 0) return 0;
   return (size / interval) * (1 - alpha / 2);
 }
+
+/**
+ * Opening on-hand balance for each day of the window, reconstructed backwards from today's balance
+ * and every stock movement since the window started (signed deltas). Day 0 is the first day.
+ */
+export function openingBalancesByDay(input: { currentOnHand: number; movements: Array<{ qtyDelta: number; timestamp: Date }>; windowStart: Date; windowDays: number }): number[] {
+  const DAY = 86_400_000;
+  const startMs = input.windowStart.getTime();
+  const deltaByDay = new Array<number>(input.windowDays).fill(0);
+  for (const movement of input.movements) {
+    const index = Math.floor((movement.timestamp.getTime() - startMs) / DAY);
+    if (index >= 0 && index < input.windowDays) deltaByDay[index] += movement.qtyDelta;
+  }
+  const opening = new Array<number>(input.windowDays).fill(0);
+  let closing = input.currentOnHand;
+  for (let day = input.windowDays - 1; day >= 0; day -= 1) {
+    const open = closing - deltaByDay[day];
+    opening[day] = open;
+    closing = open;
+  }
+  return opening;
+}
+
+/**
+ * Stockout censoring (audit O-2): a day with nothing on the shelf at opening and no sales did not
+ * have zero DEMAND, it had no supply - counting it as zero understates the true rate. Those days
+ * are dropped from the demand series; days that sold anything are always kept.
+ */
+export function censorStockoutDays(dailyDemand: number[], openingBalances: number[]): { demand: number[]; censoredDays: number } {
+  const demand: number[] = [];
+  let censoredDays = 0;
+  dailyDemand.forEach((value, day) => {
+    if (value <= 0 && (openingBalances[day] ?? 1) <= 0) censoredDays += 1;
+    else demand.push(value);
+  });
+  return { demand, censoredDays };
+}

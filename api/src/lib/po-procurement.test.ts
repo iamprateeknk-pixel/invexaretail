@@ -197,3 +197,14 @@ test('a supplier whose lead time varies raises the safety stock above the config
   const contract = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', leadTimeDays: 3, measured: { samples: 6, meanDays: 20, stdDevDays: 0 } }] }).suggestions[0];
   assert.equal(contract.leadTimeDays, 3);
 });
+
+test('case packs round the order up and EOQ raises small orders only when its cost inputs are given (audit O-4)', async () => {
+  const { planPurchases, economicOrderQuantity } = await import('./po-planning.js');
+  const base = { itemId: 'i', code: 'I', onHand: 0, minQty: 10, targetQty: 25, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 4, demandDays: 30, unitCost: 10 };
+  assert.equal(planPurchases({ items: [{ ...base, orderMultiple: 12 }], suppliers: [] }).suggestions[0].quantity, 72, '66 rounds up to 6 packs of 12');
+  assert.equal(planPurchases({ items: [base], suppliers: [] }).suggestions[0].quantity, 66, 'no EOQ without cost inputs');
+  // EOQ = sqrt(2 x 1460 x 50 / (0.2 x 10)) = 270.2
+  assert.equal(Math.round(economicOrderQuantity({ dailyDemand: 4, unitCost: 10, orderingCost: 50, holdingRate: 0.2 })!), 270);
+  assert.equal(economicOrderQuantity({ dailyDemand: 4, unitCost: 10 }), null);
+  assert.equal(planPurchases({ items: [base], suppliers: [], orderingCost: 50, holdingRate: 0.2 }).suggestions[0].quantity, 271);
+});

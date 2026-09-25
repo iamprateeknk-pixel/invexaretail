@@ -49,7 +49,7 @@ import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDeci
 import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { findTemplateForCategory } from '../lib/qc-inspection.js';
-import { classifyDemandPattern, computeDemandStats, crostonDailyDemand, suggestReplenishment, xyzClass } from '../lib/demand-forecast.js';
+import { censorStockoutDays, classifyDemandPattern, computeDemandStats, openingBalancesByDay, crostonDailyDemand, suggestReplenishment, xyzClass } from '../lib/demand-forecast.js';
 import { OPEN_PO_STATUSES } from '../lib/po-planning.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
 import {
@@ -669,7 +669,12 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     const day = new Date(since.getTime() + offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     dailyDemand.push(soldByDay.get(day) ?? 0);
   }
-  const netDailyDemand = dailyDemand.map((value) => Math.max(0, value));
+  // Days with nothing on the shelf are censored, not counted as zero demand (audit O-2).
+  const allMovements = await prisma.stockMovement.findMany({ where: { itemId: req.params.itemId, locationId, timestamp: { gte: since } }, select: { qtyDelta: true, timestamp: true } });
+  const currentLedger = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId }, select: { onHand: true } });
+  const opening = openingBalancesByDay({ currentOnHand: currentLedger.reduce((sum, row) => sum + row.onHand, 0), movements: allMovements, windowStart: since, windowDays });
+  const censored = censorStockoutDays(dailyDemand.map((value) => Math.max(0, value)), opening);
+  const netDailyDemand = censored.demand.length ? censored.demand : dailyDemand.map((value) => Math.max(0, value));
   const plainDemand = computeDemandStats(netDailyDemand);
   const { pattern: demandPattern } = classifyDemandPattern(netDailyDemand);
   // Sparse items are forecast with Croston (SBA); averaging their zeros misstates the rate (audit O-2).
@@ -728,7 +733,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
 
   return res.json({
     itemId: req.params.itemId, locationId, windowDays, leadTimeDays, servicePercent,
-    demand, demandPattern, variabilityClass: xyzClass(netDailyDemand), forecastMethod: intermittent ? 'CROSTON_SBA' : 'MOVING_AVERAGE',
+    demand, demandPattern, variabilityClass: xyzClass(netDailyDemand), forecastMethod: intermittent ? 'CROSTON_SBA' : 'MOVING_AVERAGE', stockoutDaysExcluded: censored.censoredDays,
     onHand, onOrder, suggestion, expiryActions, overstock,
   });
 });

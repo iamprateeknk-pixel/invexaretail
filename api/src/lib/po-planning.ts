@@ -21,6 +21,8 @@ export type PlanInput = {
   decimal?: boolean;
   unitCost?: number;
   supplierId?: string | null;
+  /** Case pack / pallet layer: the order quantity is rounded UP to a multiple of this (audit O-4). */
+  orderMultiple?: number | null;
 };
 
 export type SupplierTerms = {
@@ -61,7 +63,17 @@ export const DEFAULT_COVER_DAYS = 7;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const fmt = (value: number) => String(round3(value));
 
-export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTerms[]; coverDays?: number }): PlanResult {
+/**
+ * Economic order quantity: sqrt(2 x annual demand x cost per order / annual holding cost per unit).
+ * Null unless demand, unit cost and both cost parameters are known: it is never guessed.
+ */
+export function economicOrderQuantity(input: { dailyDemand: number; unitCost?: number | null; orderingCost?: number; holdingRate?: number }): number | null {
+  const { dailyDemand, unitCost, orderingCost, holdingRate } = input;
+  if (!(dailyDemand > 0) || !unitCost || unitCost <= 0 || !orderingCost || orderingCost <= 0 || !holdingRate || holdingRate <= 0) return null;
+  return Math.sqrt((2 * dailyDemand * 365 * orderingCost) / (holdingRate * unitCost));
+}
+
+export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTerms[]; coverDays?: number; /** Cost of placing one order. With `holdingRate` (yearly fraction of unit cost) it switches EOQ on. */ orderingCost?: number; holdingRate?: number }): PlanResult {
   const coverDays = input.coverDays ?? DEFAULT_COVER_DAYS;
   const suppliers = new Map(input.suppliers.map((supplier) => [supplier.id, supplier]));
   const suggestions: Suggestion[] = [];
@@ -102,10 +114,20 @@ export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTe
     const orderUpTo = Math.max(item.targetQty, reorderPoint + Math.ceil(daily * coverDays));
     let quantity = orderUpTo - position;
     const notes: string[] = [];
+    const eoq = economicOrderQuantity({ dailyDemand: daily, unitCost: item.unitCost, orderingCost: input.orderingCost, holdingRate: input.holdingRate });
+    if (eoq !== null && quantity < eoq) {
+      quantity = eoq;
+      notes.push(`Raised to the economic order quantity of ${fmt(eoq)} (fewer, larger orders cost less at ${fmt(daily)}/day).`);
+    }
     const moq = usableSupplier?.moq && usableSupplier.moq > 0 ? usableSupplier.moq : 0;
     if (moq && quantity < moq) {
       quantity = moq;
       notes.push(`Raised to the supplier minimum order of ${fmt(moq)}.`);
+    }
+    const multiple = item.orderMultiple && item.orderMultiple > 0 ? item.orderMultiple : 0;
+    if (multiple && quantity % multiple !== 0) {
+      quantity = Math.ceil(quantity / multiple) * multiple;
+      notes.push(`Rounded up to a whole number of packs of ${fmt(multiple)}.`);
     }
     quantity = item.decimal ? round3(quantity) : Math.ceil(quantity);
     if (quantity <= 0) continue;

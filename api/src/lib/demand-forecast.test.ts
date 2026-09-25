@@ -1,3 +1,4 @@
+import { openingBalancesByDay, censorStockoutDays } from './demand-forecast.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -138,4 +139,18 @@ test('Croston estimates the true rate of a sparse item (5 units every 10 days = 
   const croston = crostonDailyDemand(series);
   assert.ok(croston > 0.42 && croston < 0.52, `croston ${croston}`);
   assert.equal(crostonDailyDemand([0, 0, 0]), 0);
+});
+
+test('opening balances are rebuilt backwards from today and stockout days are censored, not counted as zero demand', () => {
+  const start = new Date('2026-09-01T00:00:00Z');
+  const at = (day: number) => new Date(start.getTime() + day * 86_400_000 + 3_600_000);
+  // Day 0 opens with 5, sells 5 (empty), days 1-2 empty, day 3 receives 20 and sells 2 -> 18 today.
+  const opening = openingBalancesByDay({
+    currentOnHand: 18, windowStart: start, windowDays: 5,
+    movements: [{ qtyDelta: -5, timestamp: at(0) }, { qtyDelta: 20, timestamp: at(3) }, { qtyDelta: -2, timestamp: at(3) }],
+  });
+  assert.deepEqual(opening, [5, 0, 0, 0, 18]);
+  const { demand, censoredDays } = censorStockoutDays([5, 0, 0, 2, 0], opening);
+  assert.equal(censoredDays, 2, 'days 1-2 had nothing to sell');
+  assert.deepEqual(demand, [5, 2, 0], 'a real zero-demand day with stock is kept');
 });

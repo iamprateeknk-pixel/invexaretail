@@ -190,6 +190,9 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
     ? await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { decimalQuantity: true } })
     : listItems().find((entry) => entry.id === req.params.itemId);
   const decimal = Boolean(ruleItem?.decimalQuantity);
+  // Optional case pack: positive, or null to clear it.
+  const orderMultiple = req.body.orderMultiple === undefined ? undefined : req.body.orderMultiple === null ? null : Number(req.body.orderMultiple);
+  if (orderMultiple !== undefined && orderMultiple !== null && (!Number.isFinite(orderMultiple) || orderMultiple <= 0)) return res.status(400).json({ message: 'orderMultiple must be a positive number.' });
   const quantityProblem = validateReorderQuantities(minQty, targetQty, decimal);
   if (quantityProblem) return res.status(400).json({ message: quantityProblem });
   if (!databaseEnabled) {
@@ -204,8 +207,8 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
   if (!location) return res.status(404).json({ message: 'Location not found.' });
   const rule = await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
-    update: { minQty, targetQty },
-    create: { itemId: req.params.itemId, locationId, minQty, targetQty, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    update: { minQty, targetQty, ...(orderMultiple !== undefined ? { orderMultiple } : {}) },
+    create: { itemId: req.params.itemId, locationId, minQty, targetQty, orderMultiple: orderMultiple ?? null, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { item: true },
   });
   return res.json({ rule });
@@ -670,9 +673,14 @@ router.get('/purchase-orders/plan', async (req, res) => {
     onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: rule.minQty, targetQty: rule.targetQty,
     openPoQty: open.get(rule.itemId) ?? 0, inTransitQty: inTransit.get(rule.itemId) ?? 0,
     avgDailyDemand: (sold.get(rule.itemId) ?? 0) / windowDays, demandDays: (sold.get(rule.itemId) ?? 0) > 0 ? windowDays : 0,
+    orderMultiple: (rule as { orderMultiple?: number | null }).orderMultiple ?? null,
     decimal: Boolean(catalog.get(rule.itemId)?.decimalQuantity), unitCost: lastSupplier.get(rule.itemId)?.unitCost, supplierId: lastSupplier.get(rule.itemId)?.supplierId ?? null,
   }));
+  // EOQ is opt-in: it needs the buyer's own cost of placing an order and yearly holding rate, which the system cannot know.
+  const orderingCost = Number(req.query.orderingCost) > 0 ? Number(req.query.orderingCost) : undefined;
+  const holdingRate = Number(req.query.holdingRatePercent) > 0 ? Number(req.query.holdingRatePercent) / 100 : undefined;
   const result = planPurchases({
+    orderingCost, holdingRate,
     items: planInputs,
     suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
   });

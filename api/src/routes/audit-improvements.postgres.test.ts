@@ -224,3 +224,27 @@ integration('company timezone can be read, set by an admin, rejected when invali
     assert.equal((await call('GET', '/company/timezone', a.token)).body.timezone, 'Asia/Kolkata');
   });
 });
+
+integration('forecast excludes stockout days from demand, and reorder rules keep a case pack that the plan rounds to (audit O-2/O-4)', async () => {
+  const a = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `CEN-${randomUUID().slice(0, 8)}`, name: 'Censor', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'L' } });
+  const day = 86_400_000;
+  const mv = (ago: number, type: string, delta: number, before: number, after: number) => prisma.stockMovement.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, movementType: type as never, qtyDelta: delta, beforeBalance: before, afterBalance: after, actor: a.userId, timestamp: new Date(Date.now() - ago * day - 3_600_000), companyId: a.companyId } });
+  // 10-day window: received 10 on day -9, sold 10 on the same day (empty afterwards), restocked 20 on day -2, sold 2 on day -1.
+  await mv(9, 'PURCHASE_RECEIPT', 10, 0, 10);
+  await mv(9, 'SALES_DEDUCTION', -10, 10, 0);
+  await mv(2, 'PURCHASE_RECEIPT', 20, 0, 20);
+  await mv(1, 'SALES_DEDUCTION', -2, 20, 18);
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, onHand: 18, companyId: a.companyId } });
+  await withServer(async (call) => {
+    const forecast = await call('GET', `/items/${item.id}/forecast?locationId=${a.loc.id}&windowDays=10`, a.token);
+    assert.equal(forecast.status, 200, JSON.stringify(forecast.body));
+    assert.ok(forecast.body.stockoutDaysExcluded >= 5, `days with an empty shelf must be excluded, got ${forecast.body.stockoutDaysExcluded}`);
+
+    const put = await call('PUT', `/reorder-rules/${item.id}`, a.token, { locationId: a.loc.id, minQty: 5, targetQty: 20, orderMultiple: 12 });
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    assert.equal(put.body.rule.orderMultiple, 12);
+    assert.equal((await call('PUT', `/reorder-rules/${item.id}`, a.token, { locationId: a.loc.id, minQty: 5, targetQty: 20, orderMultiple: -3 })).status, 400);
+  });
+});
