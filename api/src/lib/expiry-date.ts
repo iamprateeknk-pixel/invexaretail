@@ -1,19 +1,8 @@
 // Deliberately self-contained (no import from the count-campaign module, which
 // itself depends on the expiry board): the timezone default mirrors
 // DEFAULT_CAMPAIGN_TIMEZONE.
-function validTimezone(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value });
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-/** The business timezone: BUSINESS_TIMEZONE (IANA name) when set and valid, else Asia/Kolkata (audit T-2: it was a hard-coded constant). */
-export const BUSINESS_TIMEZONE = validTimezone(process.env.BUSINESS_TIMEZONE) ?? 'Asia/Kolkata';
-const DEFAULT_CAMPAIGN_TIMEZONE = BUSINESS_TIMEZONE;
+import { BUSINESS_TIMEZONE, currentTimezone } from './timezone-context.js';
+export { BUSINESS_TIMEZONE };
 
 function localDateString(instant: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);
@@ -50,7 +39,7 @@ export function expiryDayNumber(expiry: string | Date | null | undefined): numbe
 }
 
 /** Today's calendar day (as a day number) in the business timezone. */
-export function todayDayNumber(now: Date = new Date(), timezone: string = DEFAULT_CAMPAIGN_TIMEZONE): number {
+export function todayDayNumber(now: Date = new Date(), timezone: string = currentTimezone()): number {
   const [year, month, day] = localDateString(now, timezone).split('-').map(Number);
   return utcDayNumber(year, month, day);
 }
@@ -59,7 +48,7 @@ export function todayDayNumber(now: Date = new Date(), timezone: string = DEFAUL
 export function daysUntilExpiryDate(
   expiry: string | Date | null | undefined,
   now: Date = new Date(),
-  timezone: string = DEFAULT_CAMPAIGN_TIMEZONE,
+  timezone: string = currentTimezone(),
 ): number | null {
   const expiryDay = expiryDayNumber(expiry);
   if (expiryDay === null) return null;
@@ -70,7 +59,7 @@ export function daysUntilExpiryDate(
 export function isExpiredOn(
   expiry: string | Date | null | undefined,
   now: Date = new Date(),
-  timezone: string = DEFAULT_CAMPAIGN_TIMEZONE,
+  timezone: string = currentTimezone(),
 ): boolean {
   const days = daysUntilExpiryDate(expiry, now, timezone);
   return days !== null && days < 0;

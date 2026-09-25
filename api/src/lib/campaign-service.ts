@@ -1,3 +1,4 @@
+import { currentTimezone } from './timezone-context.js';
 import { recordAudit } from './audit.js';
 import { classifyAbcItems, aggregateLocationStock } from './abc-cycle-count.js';
 import { getCampaign, listCampaignItems, listCampaigns, saveCampaign, saveCampaignItems } from './campaign-store.js';
@@ -216,7 +217,7 @@ export async function createCampaign(input: Record<string, unknown>, actor: Camp
   if (!listLocations().some((location) => location.id === locationId) || !companyOwnsLocation(companyId, locationId)) {
     throw new CampaignError('Select a valid location.');
   }
-  const timezone = typeof input.timezone === 'string' && input.timezone ? input.timezone : DEFAULT_CAMPAIGN_TIMEZONE;
+  const timezone = typeof input.timezone === 'string' && input.timezone ? input.timezone : currentTimezone();
   if (!isValidTimezone(timezone)) throw new CampaignError('timezone is not a valid IANA timezone.');
   const startDate = input.startDate === undefined ? localDateString(now, timezone) : input.startDate;
   if (!isDateOnly(startDate)) throw new CampaignError('startDate must be a YYYY-MM-DD date.');

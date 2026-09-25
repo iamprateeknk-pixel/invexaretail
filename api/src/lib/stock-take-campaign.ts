@@ -5,7 +5,7 @@ import type { AbcClass } from './abc-cycle-count.js';
 // prioritisation, balanced allocation, status derivation); lib/campaign-
 // service.ts wires them to the repository, scheduler and persistence.
 
-import { BUSINESS_TIMEZONE } from './expiry-date.js';
+import { BUSINESS_TIMEZONE } from './timezone-context.js';
 
 export const CAMPAIGN_STATUSES = ['DRAFT', 'ACTIVE', 'COUNTING', 'IN_REVIEW', 'COMPLETED', 'PAUSED', 'CANCELLED'] as const;
 export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];

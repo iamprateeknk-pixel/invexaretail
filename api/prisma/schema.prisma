@@ -139,6 +139,8 @@ model CompanyProfile {
   industry    String?
   industryKey String?
   address     String?  @db.Text
+  // Audit T-2: IANA business timezone; null = process default.
+  timezone    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")

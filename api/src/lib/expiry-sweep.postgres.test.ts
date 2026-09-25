@@ -41,3 +41,22 @@ integration('lapsed AVAILABLE lots become EXPIRED; today, future, undated and no
   assert.ok(next.expired >= 1);
   assert.equal(await status(today.id), 'EXPIRED', 'the day after its expiry date it lapses');
 });
+
+integration('the sweep judges each lot by its own company\'s timezone (audit T-2)', async () => {
+  const mkCompany = async (timezone: string | null) => {
+    const companyId = `sweeptz-co-${randomUUID()}`;
+    await prisma.companyProfile.create({ data: { id: companyId, name: companyId, timezone } as never });
+    const item = await prisma.item.create({ data: { code: `TZ-${randomUUID().slice(0, 8)}`, name: 'TZ item', companyId } });
+    const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'L', expiryDate: new Date('2026-09-25T00:00:00Z') } });
+    return lot.id;
+  };
+  const india = await mkCompany('Asia/Kolkata');
+  const la = await mkCompany('America/Los_Angeles');
+  // 02:00 UTC on the 26th: already the 26th in Kolkata, still the 25th in Los Angeles.
+  await sweepExpiredLots(new Date('2026-09-26T02:00:00Z'));
+  const status = async (id: string) => (await prisma.lot.findUniqueOrThrow({ where: { id } })).status;
+  assert.equal(await status(india), 'EXPIRED');
+  assert.equal(await status(la), 'AVAILABLE', 'the 25th is still usable in Los Angeles');
+  await sweepExpiredLots(new Date('2026-09-26T08:00:00Z')); // 01:00 on the 26th in Los Angeles
+  assert.equal(await status(la), 'EXPIRED');
+});

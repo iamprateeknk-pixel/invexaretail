@@ -208,3 +208,19 @@ integration('reorder suggestions are derived from sales history, tenant scoped, 
     assert.equal((await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}`, b.token)).status, 404);
   });
 });
+
+integration('company timezone can be read, set by an admin, rejected when invalid, and is per company (audit T-2)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  await withServer(async (call) => {
+    assert.equal((await call('PUT', '/company/timezone', a.token, { timezone: 'Not/AZone' })).status, 400);
+    assert.equal((await call('PUT', '/company/timezone', a.token, {})).status, 400);
+    const set = await call('PUT', '/company/timezone', a.token, { timezone: 'America/New_York' });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal((await call('GET', '/company/timezone', a.token)).body.timezone, 'America/New_York');
+    assert.equal((await call('GET', '/company/timezone', b.token)).body.timezone, 'Asia/Kolkata', 'another company is unaffected');
+    assert.equal((await prisma.companyProfile.findUniqueOrThrow({ where: { id: a.companyId } }) as { timezone?: string | null }).timezone, 'America/New_York');
+    assert.equal((await call('PUT', '/company/timezone', a.token, { timezone: null })).status, 200);
+    assert.equal((await call('GET', '/company/timezone', a.token)).body.timezone, 'Asia/Kolkata');
+  });
+});

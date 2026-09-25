@@ -66,7 +66,7 @@ Also fixed earlier in this engagement (already committed): expired/duplicate mar
 | ID | Sev | Finding | Recommendation |
 |---|---|---|---|
 | T-1 | P1 | Other globally-unique columns that should be per company: `Tag.name`, `Job.number`, `PurchaseOrder.number`, and several `name @unique` catalogue tables (custom fields, saved views, roles). | Same migration pattern as P0-3, one model at a time.  **Status: partially/fully addressed - `Job` company-scoped, PO/Job numbers unique per company (migration `20261106110000`). `Tag.name` and other catalogue tables still open.** |
-| T-2 | P2 | Business timezone is a hard-coded `Asia/Kolkata` constant (expiry, reports, campaigns). | Per-company timezone setting.  **Status: partially/fully addressed - `BUSINESS_TIMEZONE` env override (default Asia/Kolkata). Per-company setting still open.** |
+| T-2 | P2 | Business timezone is a hard-coded `Asia/Kolkata` constant (expiry, reports, campaigns). | Per-company timezone setting.  **Status: addressed - per-company `CompanyProfile.timezone` (migration `20261106130000`), request-scoped via AsyncLocalStorage at auth, sweep judges each lot by its company zone, `GET/PUT /company/timezone`. Background jobs outside a request use the process default.** |
 
 ## Suggested order
 

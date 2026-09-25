@@ -1,7 +1,6 @@
-import { BUSINESS_TIMEZONE, expiryDayNumber, todayDayNumber } from './expiry-date.js';
+import { expiryDayNumber, todayDayNumber } from './expiry-date.js';
+import { currentTimezone } from './timezone-context.js';
 import type { CountRecord, ItemRecord, TransferRecord } from './repository.js';
-
-const DASHBOARD_TIMEZONE = BUSINESS_TIMEZONE;
 
 function localDateString(instant: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);
@@ -53,7 +52,7 @@ export function buildDashboardSummary(input: DashboardSummaryInput & { stock?: A
   const transferRequests = input.transfers.filter((transfer) => transfer.status === 'REQUESTED').length;
 
   const today = todayDayNumber(now);
-  const [year, month] = localDateString(now, DASHBOARD_TIMEZONE).split('-').map(Number);
+  const [year, month] = localDateString(now, currentTimezone()).split('-').map(Number);
   const dayNumber = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d) / 86_400_000;
   const thisMonthEnd = dayNumber(year, month + 1, 0);
   const nextMonthEnd = dayNumber(year, month + 2, 0);

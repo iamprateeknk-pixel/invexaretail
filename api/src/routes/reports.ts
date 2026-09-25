@@ -10,6 +10,8 @@ import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.
 import type { TenantContext } from '../lib/tenant-context.js';
 import { getDashboardSummary, listOpenExceptions } from '../lib/reporting-repository.js';
 import { prisma } from '../lib/db.js';
+import { companyTimezone, currentTimezone } from '../lib/timezone-context.js';
+import { saveCompanyTimezone } from '../lib/company-timezone.js';
 import { summarizeVarianceReasons } from '../lib/count-reason-codes.js';
 import { buildInventoryHealth, lotUnitCost, type HealthSales } from '../lib/inventory-health.js';
 
@@ -42,6 +44,23 @@ router.get('/reports/exceptions', async (req: Request, res: Response) => {
 // cost, else purchase rate) - stock with no recorded cost is reported as `unvaluedUnits`, never priced.
 const HEALTH_ROLES = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'];
 const HEALTH_ROW_LIMIT = 20_000;
+
+router.get('/company/timezone', (req: Request, res: Response) => {
+  return res.json({ timezone: companyTimezone(req.companyId ?? DEFAULT_COMPANY_ID), effective: currentTimezone() });
+});
+
+router.put('/company/timezone', async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can change the company timezone.' });
+  if (req.body?.timezone === undefined) return res.status(400).json({ message: 'timezone is required (an IANA name, or null to use the default).' });
+  const requested = req.body?.timezone === null || req.body?.timezone === '' ? null : String(req.body?.timezone ?? '');
+  try {
+    const timezone = await saveCompanyTimezone(req.companyId ?? DEFAULT_COMPANY_ID, requested);
+    return res.json({ timezone });
+  } catch (error) {
+    if (error instanceof RangeError) return res.status(400).json({ message: error.message });
+    return res.status(404).json({ message: 'Company profile not found.' });
+  }
+});
 
 router.get('/reports/count-variance-reasons', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });

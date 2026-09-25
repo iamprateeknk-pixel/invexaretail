@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from './db.js';
-import { todayDayNumber } from './expiry-date.js';
+import { isExpiredOn } from './expiry-date.js';
+import { loadCompanyTimezones } from './company-timezone.js';
+import { companyTimezone } from './timezone-context.js';
 
 // Audit S-3: nothing ever moved a lot to EXPIRED when its date passed - the status was
 // only set as a side effect of a manual write-off - so reports, transfers and any path
@@ -12,12 +14,14 @@ import { todayDayNumber } from './expiry-date.js';
 let timer: NodeJS.Timeout | null = null;
 
 export async function sweepExpiredLots(now: Date = new Date()): Promise<{ expired: number }> {
-  // Expiry values are stored as UTC-midnight dates; a lot is expired once its date is before today's business date.
-  const todayStart = new Date(todayDayNumber(now) * 86_400_000);
-  const stale = await prisma.lot.findMany({
-    where: { status: 'AVAILABLE', expiryDate: { lt: todayStart } },
-    select: { id: true, itemId: true, lotNo: true, expiryDate: true },
+  // A lot is expired once its date is before today in ITS COMPANY's timezone (audit T-2), so candidates are
+  // fetched with a coarse cutoff (the furthest-ahead zone is UTC+14) and judged per company.
+  await loadCompanyTimezones().catch(() => undefined);
+  const candidates = await prisma.lot.findMany({
+    where: { status: 'AVAILABLE', expiryDate: { lt: new Date(now.getTime() + 2 * 86_400_000) } },
+    select: { id: true, expiryDate: true, item: { select: { companyId: true } } },
   });
+  const stale = candidates.filter((lot) => isExpiredOn(lot.expiryDate, now, companyTimezone(lot.item.companyId)));
   if (!stale.length) return { expired: 0 };
   const result = await prisma.lot.updateMany({
     where: { id: { in: stale.map((lot) => lot.id) }, status: 'AVAILABLE' },
