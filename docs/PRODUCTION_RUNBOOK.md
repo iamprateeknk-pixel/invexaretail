@@ -29,3 +29,15 @@ Application startup does not create or alter tables. Schema changes must be comm
 Use the Render-managed PostgreSQL backup/retention mechanism. Before a schema change or data import, take an on-demand backup. Restore into an isolated database first, compare schema and row counts, then run API health, readiness, authentication and read-only smoke tests.
 
 Record source/target identifiers, timestamps, checksum or backup identity, table counts, integrity results, RTO/RPO and reviewer sign-off in the release evidence. See `docs/POSTGRESQL_MIGRATION.md`.
+
+## Incident response
+
+1. Declare the incident in the operations channel, name an incident lead and record the first observed time, affected company/location, request or trace IDs, and the deployed commit.
+2. Protect stock truth first: pause the affected import, receipt, transfer, count, or integration path. Do not edit `StockLedger` rows manually and do not delete journals or audit records.
+3. Classify the incident:
+   - **Availability:** check `/health`, `/ready`, worker logs, database connectivity, and recent deploy events.
+   - **Data integrity:** run `api/scripts/reconcile-stock-journal.mjs` against a read-only database credential and preserve its output with the incident evidence.
+   - **Security or tenant isolation:** revoke affected API keys/sessions, preserve request headers and audit evidence, and stop the affected integration until the owner approves recovery.
+4. Roll back application code only to the last known-good reviewed commit. Do not roll back a Prisma migration by hand; restore an isolated backup and rehearse the recovery procedure first.
+5. Verify recovery with health/readiness, an authentication check, a read-only inventory check, and the applicable business flow. For any data-affecting incident, reconcile journal versus ledger before reopening writes.
+6. Close only after the incident lead records customer impact, root cause, corrective action, recovery time, reconciliation result, and owner sign-off in `docs/release-evidence/`.
