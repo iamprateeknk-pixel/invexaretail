@@ -46,7 +46,7 @@ integration('a valid purchase batch commits, posts at HO Basni and reconciles th
     strict_1.default.equal(summary.validRows, 2);
     strict_1.default.equal(summary.invalidRows, 0);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, batch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(batch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, batch.id);
     const final = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
     strict_1.default.equal(final.status, 'COMMITTED');
     strict_1.default.equal(final.checkpointRowNumber, 2);
@@ -65,7 +65,7 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, purchaseBatch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, purchaseBatch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(purchaseBatch.id, 500);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, purchaseBatch.id, 500);
     // Purchases always post at HO, not the branch (business rule) - seed the
     // branch itself via an opening-stock import (which, like sales, routes by
     // the row's own branchName) so the golden sales file has real stock to
@@ -77,7 +77,7 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, openingBatch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, openingBatch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(openingBatch.id, 500);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, openingBatch.id, 500);
     const salesRows = Array.from({ length: 5000 }, () => salesRow(itemId, 'GOLD-LOT', 1, branch.name));
     const salesBatch = await (0, import_commit_service_js_1.createImportBatch)(tenant, {
         type: 'SALES', fileName: 'golden-sales.json', sourceFormat: 'json',
@@ -85,7 +85,7 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, salesBatch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, salesBatch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(salesBatch.id, 500);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, salesBatch.id, 500);
     const purchaseFinal = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: purchaseBatch.id } });
     const salesFinal = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: salesBatch.id } });
     strict_1.default.equal(purchaseFinal.status, 'COMMITTED');
@@ -115,9 +115,9 @@ integration('retrying a commit chunk after a simulated crash does not double-pos
     // Simulate a worker crash mid-commit: process one chunk (one row), then
     // "restart" by calling commitImportBatchChunk again from the same
     // durable checkpoint, then finish. Total posted must equal the sum once.
-    await (0, import_commit_service_js_1.commitImportBatchChunk)(batch.id, 1);
-    await (0, import_commit_service_js_1.commitImportBatchChunk)(batch.id, 1);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(batch.id, 1);
+    await (0, import_commit_service_js_1.commitImportBatchChunk)(tenant.companyId, batch.id, 1);
+    await (0, import_commit_service_js_1.commitImportBatchChunk)(tenant.companyId, batch.id, 1);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, batch.id, 1);
     const final = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
     strict_1.default.equal(final.status, 'COMMITTED');
     const lot = await db_js_1.prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'LOT-RETRY' } } });
@@ -153,7 +153,7 @@ integration('a row dated before the location sync checkpoint still posts, is fla
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, openingBatch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, openingBatch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(openingBatch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, openingBatch.id);
     await db_js_1.prisma.syncCheckpoint.create({
         data: { locationId: branchLocationId, sourceType: 'SALES', syncedThroughAt: new Date('2026-02-01T00:00:00.000Z'), lastImportBatchId: 'seed' },
     });
@@ -164,7 +164,7 @@ integration('a row dated before the location sync checkpoint still posts, is fla
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, batch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, batch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(batch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, batch.id);
     const row = await db_js_1.prisma.importRow.findFirstOrThrow({ where: { importBatchId: batch.id } });
     strict_1.default.equal(row.status, 'COMMITTED');
     const warnings = row.warnings;
@@ -184,7 +184,7 @@ integration('a mid-commit oversell fails only that row (partial failure); the re
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, batch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, batch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(batch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, batch.id);
     const final = await db_js_1.prisma.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
     // Both rows are independent SALES_DEDUCTIONs against zero starting stock;
     // negative-stock policy on this fixture's item may block both or neither
@@ -205,7 +205,7 @@ integration('reversing a committed batch nets zero stock delta and is safe to ca
     });
     await (0, import_commit_service_js_1.validateImportBatch)(tenant, batch.id);
     await (0, import_commit_service_js_1.queueImportBatchForCommit)(tenant, batch.id);
-    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(batch.id);
+    await (0, import_commit_service_js_1.commitImportBatchToCompletion)(tenant, batch.id);
     const lot = await db_js_1.prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'LOT-REV' } } });
     let ledger = await db_js_1.prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId: lot.id, locationId: hoLocationId } } });
     strict_1.default.equal(ledger?.onHand, 7);
@@ -229,6 +229,7 @@ integration('an import batch is tenant-scoped: another company cannot read, vali
     });
     await strict_1.default.rejects((0, import_commit_service_js_1.validateImportBatch)(other.tenant, batch.id));
     await strict_1.default.rejects((0, import_commit_service_js_1.queueImportBatchForCommit)(other.tenant, batch.id));
+    await strict_1.default.rejects((0, import_commit_service_js_1.commitImportBatchChunk)(other.tenant.companyId, batch.id));
     await strict_1.default.rejects((0, import_commit_service_js_1.reverseImportBatch)(other.tenant, batch.id, 'cross-tenant attempt'));
     const ownRead = await (0, import_commit_service_js_1.validateImportBatch)(tenant, batch.id);
     strict_1.default.equal(ownRead.validRows, 1, 'the identical call must still succeed for the owning tenant');
