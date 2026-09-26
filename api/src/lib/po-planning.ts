@@ -23,6 +23,8 @@ export type PlanInput = {
   supplierId?: string | null;
   /** Case pack / pallet layer: the order quantity is rounded UP to a multiple of this (audit O-4). */
   orderMultiple?: number | null;
+  /** Quantity price breaks from the chosen supplier: ordering at least minQty costs unitCost each. */
+  priceBreaks?: Array<{ minQty: number; unitCost: number }>;
 };
 
 export type SupplierTerms = {
@@ -71,6 +73,12 @@ export function economicOrderQuantity(input: { dailyDemand: number; unitCost?: n
   const { dailyDemand, unitCost, orderingCost, holdingRate } = input;
   if (!(dailyDemand > 0) || !unitCost || unitCost <= 0 || !orderingCost || orderingCost <= 0 || !holdingRate || holdingRate <= 0) return null;
   return Math.sqrt((2 * dailyDemand * 365 * orderingCost) / (holdingRate * unitCost));
+}
+
+/** The unit cost that applies at a quantity: the deepest break reached, else the base cost. */
+export function unitCostAt(quantity: number, baseCost: number | undefined, breaks: Array<{ minQty: number; unitCost: number }> | undefined): number | undefined {
+  const reached = (breaks ?? []).filter((tier) => quantity >= tier.minQty).sort((a, b) => b.minQty - a.minQty)[0];
+  return reached ? reached.unitCost : baseCost;
 }
 
 export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTerms[]; coverDays?: number; /** Cost of placing one order. With `holdingRate` (yearly fraction of unit cost) it switches EOQ on. */ orderingCost?: number; holdingRate?: number; /** Spending cap for this plan: most urgent lines are kept, the rest deferred (audit O-4). */ budget?: number }): PlanResult {
@@ -131,6 +139,18 @@ export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTe
     }
     quantity = item.decimal ? round3(quantity) : Math.ceil(quantity);
     if (quantity <= 0) continue;
+    // Price breaks: step up to a break quantity only when it costs no more in total than the plain order
+    // (more units for the same or less money), and never to more than double the need.
+    if (item.priceBreaks?.length && item.unitCost) {
+      const plainCost = quantity * (unitCostAt(quantity, item.unitCost, item.priceBreaks) ?? item.unitCost);
+      const better = item.priceBreaks
+        .filter((tier) => tier.minQty > quantity && tier.minQty <= quantity * 2 && tier.minQty * tier.unitCost <= plainCost)
+        .sort((a, b) => a.minQty - b.minQty)[0];
+      if (better) {
+        notes.push(`Raised from ${fmt(quantity)} to ${fmt(better.minQty)} to reach the price break of ${fmt(better.unitCost)} each (no more money in total for more units).`);
+        quantity = better.minQty;
+      }
+    }
 
     const daysOfCover = daily > 0 ? round3(available / daily) : null;
     const window = item.demandDays ?? 0;
@@ -150,7 +170,7 @@ export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTe
       itemId: item.itemId, code: item.code, name: item.name,
       supplierId: usableSupplier?.id ?? null, supplierName: usableSupplier?.name ?? null,
       quantity, urgency, position: round3(position), reorderPoint, orderUpTo: round3(orderUpTo), leadTimeDays: lead,
-      daysOfCover, confidence, estimatedCost: item.unitCost ? round3(quantity * item.unitCost) : null, explanation,
+      daysOfCover, confidence, estimatedCost: item.unitCost ? round3(quantity * (unitCostAt(quantity, item.unitCost, item.priceBreaks) ?? item.unitCost)) : null, explanation,
     });
   }
   const rank = { CRITICAL: 0, HIGH: 1, NORMAL: 2 } as const;

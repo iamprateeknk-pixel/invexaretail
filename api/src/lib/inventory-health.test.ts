@@ -58,3 +58,19 @@ test('with no sales data at all nothing is called dead - it is NO_DATA', () => {
   assert.equal(health.items[0].status, 'NO_DATA');
   assert.equal(health.deadStock.items, 0);
 });
+
+test('service level counts only decided orders and weighs units for the line fill rate', async () => {
+  const { summarizeServiceLevel } = await import('./inventory-health.js');
+  const r = summarizeServiceLevel([
+    { status: 'FULFILLED', lines: [{ requestedQty: 10, fulfilledQty: 10 }] },
+    { status: 'FULFILLED', lines: [{ requestedQty: 10, fulfilledQty: 10 }] },
+    { status: 'BACKORDERED', lines: [{ requestedQty: 10, fulfilledQty: 0 }] },
+    { status: 'EXPIRED', lines: [{ requestedQty: 10, fulfilledQty: 0 }] },
+    { status: 'RESERVED', lines: [{ requestedQty: 99, fulfilledQty: 0 }] },
+    { status: 'CANCELLED', lines: [{ requestedQty: 99, fulfilledQty: 0 }] },
+  ]);
+  assert.equal(r.orders, 4);
+  assert.equal(r.orderFillRatePercent, 50);
+  assert.equal(r.unitFillRatePercent, 50);
+  assert.equal(summarizeServiceLevel([]).orderFillRatePercent, null);
+});

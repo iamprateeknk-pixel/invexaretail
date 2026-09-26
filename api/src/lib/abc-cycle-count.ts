@@ -44,7 +44,7 @@ export type CountTrigger = {
   itemId: string;
   code: string;
   lotId: string;
-  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED' | 'ZERO_BALANCE';
+  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED' | 'ZERO_BALANCE' | 'RECEIPT_DISCREPANCY';
   priority: CountPriority;
   onHand: number;
   reserved: number;
@@ -177,7 +177,7 @@ export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRe
  * Process-triggered counts (cycle-counting framework): count on a negative balance
  * immediately, and when more is reserved than exists.
  */
-export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[], recentlySoldItemIds: ReadonlySet<string> = new Set()): CountTrigger[] {
+export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[], recentlySoldItemIds: ReadonlySet<string> = new Set(), recentDiscrepancyItemIds: ReadonlySet<string> = new Set()): CountTrigger[] {
   const itemMap = new Map(items.map((item) => [item.id, item]));
   const triggers: CountTrigger[] = [];
   for (const row of stock) {
@@ -190,6 +190,14 @@ export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord
     } else if (reserved > row.onHand + 1e-8) {
       triggers.push({ ...base, reason: 'OVER_RESERVED', priority: 'HIGH', message: `${item.code} has ${reserved} reserved but only ${row.onHand} on hand - verify the physical stock.` });
     }
+  }
+  // A receipt that came in damaged, short or in excess leaves the book and the shelf in doubt: count the item.
+  for (const itemId of recentDiscrepancyItemIds) {
+    const item = itemMap.get(itemId);
+    const row = stock.find((entry) => entry.itemId === itemId);
+    if (!item || !row || triggers.some((t) => t.itemId === itemId)) continue;
+    const onHand = stock.filter((entry) => entry.itemId === itemId).reduce((sum, entry) => sum + entry.onHand, 0);
+    triggers.push({ itemId, code: item.code, lotId: row.lotId, onHand, reserved: 0, reason: 'RECEIPT_DISCREPANCY', priority: 'HIGH', message: `${item.code} was received with damage, shortage or excess recently - count it to confirm the book.` });
   }
   // A zero balance on an item that is still selling is the classic phantom-inventory signal (the book says
   // empty, so nothing gets replenished or counted, while the shelf may hold stock). One trigger per item.
@@ -212,6 +220,8 @@ export function buildCycleCountPlan(input: {
   counts?: Array<{ itemId: string; locationId: string; createdAt: string }>;
   /** Items with sales at this location recently; enables the zero-balance trigger. */
   recentlySoldItemIds?: ReadonlySet<string>;
+  /** Items received here with damaged/short/excess quantities recently; enables the receipt-discrepancy trigger. */
+  recentDiscrepancyItemIds?: ReadonlySet<string>;
   now?: Date;
 }): CycleCountPlan {
   const now = input.now ?? new Date();
@@ -288,7 +298,7 @@ export function buildCycleCountPlan(input: {
   }
 
   return {
-    triggers: buildCountTriggers(input.items, locationStock, input.recentlySoldItemIds),
+    triggers: buildCountTriggers(input.items, locationStock, input.recentlySoldItemIds, input.recentDiscrepancyItemIds),
     locationId: input.locationId,
     generatedAt: now.toISOString(),
     totalValue: planItems.reduce((sum, item) => sum + item.extendedValue, 0),

@@ -122,3 +122,26 @@ export function lotUnitCost(attributes: Record<string, unknown> | null | undefin
   }
   return null;
 }
+
+/**
+ * Service level from orders (audit O-5). Only orders that reached an outcome count: FULFILLED is a
+ * success; BACKORDERED (still waiting) and EXPIRED (reservation lapsed unfulfilled) are the stock
+ * failing the customer. Open RESERVED orders and CANCELLED ones say nothing about availability.
+ * Line fill rate weighs quantity: units fulfilled over units requested on those orders.
+ */
+export function summarizeServiceLevel(orders: Array<{ status: string; lines: Array<{ requestedQty: number; fulfilledQty: number }> }>) {
+  const decided = orders.filter((order) => ['FULFILLED', 'BACKORDERED', 'EXPIRED'].includes(order.status));
+  const fulfilled = decided.filter((order) => order.status === 'FULFILLED').length;
+  let requested = 0;
+  let delivered = 0;
+  for (const order of decided) for (const line of order.lines) { requested += line.requestedQty; delivered += Math.min(line.fulfilledQty, line.requestedQty); }
+  const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 10_000) / 100 : null);
+  return {
+    orders: decided.length,
+    fulfilledOrders: fulfilled,
+    backorderedOrders: decided.filter((order) => order.status === 'BACKORDERED').length,
+    expiredOrders: decided.filter((order) => order.status === 'EXPIRED').length,
+    orderFillRatePercent: pct(fulfilled, decided.length),
+    unitFillRatePercent: pct(delivered, requested),
+  };
+}

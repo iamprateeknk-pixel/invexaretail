@@ -218,3 +218,19 @@ test('a budget keeps the most urgent lines and defers the rest with a reason (au
   assert.deepEqual(capped.suggestions.map((s) => s.itemId), ['urgent']);
   assert.match(capped.skipped.find((s) => s.itemId === 'later')!.reason, /past the budget/);
 });
+
+test('price breaks: step up to a break that costs no more in total, never past double the need, and cost the reached tier (audit O-4)', async () => {
+  const { planPurchases, unitCostAt } = await import('./po-planning.js');
+  const base = { itemId: 'i', code: 'I', onHand: 0, minQty: 10, targetQty: 60, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 0, unitCost: 10 };
+  assert.equal(unitCostAt(99, 10, [{ minQty: 100, unitCost: 5.9 }]), 10);
+  assert.equal(unitCostAt(100, 10, [{ minQty: 100, unitCost: 5.9 }]), 5.9);
+  // 60 x 10 = 600; 100 x 5.9 = 590 <= 600 -> take the break.
+  const up = planPurchases({ items: [{ ...base, priceBreaks: [{ minQty: 100, unitCost: 5.9 }] }], suppliers: [] }).suggestions[0];
+  assert.equal(up.quantity, 100);
+  assert.equal(up.estimatedCost, 590);
+  assert.ok(up.explanation.some((line) => /price break/.test(line)));
+  // 100 x 7 = 700 > 600: costs more, so no step up.
+  assert.equal(planPurchases({ items: [{ ...base, priceBreaks: [{ minQty: 100, unitCost: 7 }] }], suppliers: [] }).suggestions[0].quantity, 60);
+  // A break at 200 is more than double the 60 need: ignored even though it is cheap.
+  assert.equal(planPurchases({ items: [{ ...base, priceBreaks: [{ minQty: 200, unitCost: 1 }] }], suppliers: [] }).suggestions[0].quantity, 60);
+});

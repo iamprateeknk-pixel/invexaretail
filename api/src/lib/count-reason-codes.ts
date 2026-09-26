@@ -36,8 +36,20 @@ export function summarizeVarianceReasons(counts: Array<{ physicalQty: number; bo
  * money so a 1-unit miss on an expensive item is not the same as one on a cheap item.
  * `unitCost` null = uncosted: it counts toward the unit figures and is left out of the value ones.
  */
+type AccuracyCount = { physicalQty: number; bookQty: number; unitCost?: number | null; abcClass?: string | null };
+
+/** Same summary, plus a per-ABC-class breakdown when the counts carry a class (A items matter most; a blended 95% can hide a 70% on A). */
+export function summarizeCountAccuracyByClass(counts: AccuracyCount[], tolerance: { minUnits: number; percent: number }) {
+  const byClass: Record<string, ReturnType<typeof summarizeCountAccuracy>> = {};
+  for (const abcClass of ['A', 'B', 'C']) {
+    const rows = counts.filter((count) => count.abcClass === abcClass);
+    if (rows.length) byClass[abcClass] = summarizeCountAccuracy(rows, tolerance);
+  }
+  return { ...summarizeCountAccuracy(counts, tolerance), byClass };
+}
+
 export function summarizeCountAccuracy(
-  counts: Array<{ physicalQty: number; bookQty: number; unitCost?: number | null }>,
+  counts: AccuracyCount[],
   tolerance: { minUnits: number; percent: number },
 ) {
   let within = 0;

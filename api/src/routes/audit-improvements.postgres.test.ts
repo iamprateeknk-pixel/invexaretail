@@ -177,6 +177,8 @@ integration('inventory health: valuation, turns, dead stock - company scoped, un
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.valuation.totalValue, 1200, "100 x 10 + 10 x 20; a second company's 999 x 1000 is not included");
     assert.equal(res.body.valuation.unvaluedUnits, 5);
+    assert.equal(res.body.service.orders, 0, 'no orders decided in this window');
+    assert.equal(res.body.service.orderFillRatePercent, null);
     const status = Object.fromEntries(res.body.items.map((i: { name: string; status: string }) => [i.name, i.status]));
     assert.equal(status.MILK, 'HEALTHY');
     assert.equal(status.RICE, 'DEAD', 'stock on hand and zero sales while other items sold');
@@ -337,5 +339,23 @@ integration('count accuracy breakdown is tolerance-based, value-weighted and ten
     assert.equal(res.body.varianceValue, 540);
     const other = await call('GET', '/reports/count-accuracy-breakdown', b.token);
     assert.equal(other.body.counts, 0, 'another company sees none of these counts');
+  });
+});
+
+integration('supplier price breaks: validated, tenant scoped, and the purchase plan uses them (audit O-4)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const supplier = await prisma.supplier.create({ data: { name: `PB-${randomUUID()}`, companyId: a.companyId } as never });
+  const item = await prisma.item.create({ data: { code: `PB-${randomUUID().slice(0, 8)}`, name: 'Break item', companyId: a.companyId } });
+  await withServer(async (call) => {
+    const path = `/suppliers/${supplier.id}/price-breaks/${item.id}`;
+    assert.equal((await call('PUT', path, a.token, { breaks: [{ minQty: 10, unitCost: 5 }, { minQty: 50, unitCost: 6 }] })).status, 400, 'a bigger quantity must cost less');
+    assert.equal((await call('PUT', path, a.token, { breaks: [{ minQty: 0, unitCost: 5 }] })).status, 400);
+    assert.equal((await call('PUT', path, b.token, { breaks: [{ minQty: 100, unitCost: 5.9 }] })).status, 404, "another company cannot set this supplier's breaks");
+    const ok = await call('PUT', path, a.token, { breaks: [{ minQty: 100, unitCost: 5.9 }] });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    const list = await call('GET', `/suppliers/${supplier.id}/price-breaks`, a.token);
+    assert.equal(list.body.priceBreaks.length, 1);
+    assert.equal((await call('GET', `/suppliers/${supplier.id}/price-breaks`, b.token)).status, 404);
   });
 });

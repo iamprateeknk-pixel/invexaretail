@@ -26,6 +26,7 @@ import { IntegrationsPage } from './pages/IntegrationsPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { AdminPage } from './pages/AdminPage';
 import { ImportWizardPage } from './pages/ImportWizardPage';
+import { InventoryHealthPage } from './pages/InventoryHealthPage';
 import { EmptyState, PermissionDeniedState } from '@/components/ui/feedback-states';
 
 const SECTION_PAGES = {
@@ -34,6 +35,7 @@ const SECTION_PAGES = {
   'import-wizard': ImportWizardPage,
   inventory: InventoryPage,
   'item-search': ItemStockDetailPage,
+  'inventory-health': InventoryHealthPage,
   catalog: CatalogPage,
   expiry: ExpiryPage,
   counts: CountsPage,

@@ -162,3 +162,10 @@ test('a zero balance on an item that is still selling triggers a count; a zero o
   assert.deepEqual(triggers.map((t) => [t.code, t.reason]), [['SELL', 'ZERO_BALANCE']]);
   assert.equal(buildCountTriggers(items, stock).length, 0, 'without sales data no zero-balance trigger is raised');
 });
+
+test('an item received damaged/short/excess triggers a count once, and a negative balance keeps its own trigger (audit C-2)', () => {
+  const items = [{ id: 'a', code: 'A', name: 'A', lots: [] }, { id: 'b', code: 'B', name: 'B', lots: [] }] as never;
+  const stock = [{ itemId: 'a', lotId: 'l1', locationId: 'x', onHand: 12 }, { itemId: 'b', lotId: 'l2', locationId: 'x', onHand: -1 }] as never;
+  const triggers = buildCountTriggers(items, stock, new Set(), new Set(['a', 'b']));
+  assert.deepEqual(triggers.map((t) => [t.code, t.reason]), [['B', 'NEGATIVE_BALANCE'], ['A', 'RECEIPT_DISCREPANCY']]);
+});

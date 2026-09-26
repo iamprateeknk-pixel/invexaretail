@@ -1187,6 +1187,13 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       && exceedsDefaultTolerance(current.bookQty, Math.abs(current.physicalQuantity - current.bookQty))) {
       return res.status(409).json({ message: 'This variance is outside tolerance. Request a recount instead of approving the first count.', code: 'RECOUNT_REQUIRED' });
     }
+    // A recount must be independent: the same person re-counting their own first count proves nothing (audit C-1).
+    if (process.env.COUNT_ENFORCE_RECOUNT === 'true' && status === 'APPROVED' && current.parentCountId) {
+      const parent = listCounts().find((count) => count.id === current.parentCountId);
+      if (parent && parent.submittedBy === current.submittedBy) {
+        return res.status(409).json({ message: 'A recount must be done by a different person than the first count.', code: 'RECOUNT_NOT_INDEPENDENT' });
+      }
+    }
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
@@ -1509,6 +1516,10 @@ function cycleCountPlanForLocation(locationId: string, now = new Date()) {
       ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
       ...listDailyMovements().filter((m) => m.locationId === locationId && m.sourceType === 'SALES' && m.qtyDelta < 0 && now.getTime() - new Date(m.transactionAt).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
     ]),
+    // Items received into this location with damaged, short or excess quantities in the last 14 days.
+    recentDiscrepancyItemIds: new Set(listTransfers()
+      .filter((transfer) => transfer.destinationLocationId === locationId && now.getTime() - new Date(transfer.createdAt).getTime() <= 14 * 86_400_000)
+      .flatMap((transfer) => transfer.lines.filter((line) => (line.damagedQty ?? 0) > 0 || (line.shortageQty ?? 0) > 0 || (line.excessQty ?? 0) > 0).map((line) => line.itemId))),
     now,
   });
 }

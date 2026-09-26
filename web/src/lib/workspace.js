@@ -95,6 +95,7 @@ export const NAVIGATION = [
     items: [
       { id: 'inventory', label: 'Items & stock', icon: Boxes },
       { id: 'item-search', label: 'Item search & stock detail', icon: PackageSearch },
+      { id: 'inventory-health', label: 'Inventory health', icon: Activity, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'] },
       { id: 'stock-update', label: 'Stock update', icon: PackagePlus, roles: ['ADMIN', 'ADMIN_USER'] },
       { id: 'import-wizard', label: 'ERP file import', icon: FileUp, roles: ['ADMIN', 'ADMIN_USER'] },
       { id: 'expiry', label: 'Lots & expiry', icon: Clock3 },
@@ -190,6 +191,7 @@ export const PAGE_META = {
   'stock-update': ['Stock update', 'Add, remove or set branch stock manually or from a 5,000+ row lot-wise Excel file.'],
   'import-wizard': ['ERP file import', 'Preview, validate and post purchase, sales, return or opening-stock files in safe batches - then reconcile or reverse.'],
   'item-search': ['Item search and stock detail', 'Search items, inspect branch balances, lots and movement history, and post guided adjustments/reversals.'],
+  'inventory-health': ['Inventory health', 'Stock value, turns, ageing, dead and slow stock, fill rate and count accuracy for a location.'],
   expiry: ['Lots and expiry', 'FEFO action queue for expired, near-expiry and missing-date lots, with write-off and date repair.'],
   catalog: ['Tags and custom fields', 'Create a flexible product catalogue without changing core retail fields.'],
   campaigns: ['Auto stock take', 'Set up a monthly stock take once - the daily counts are assigned to your team automatically.'],

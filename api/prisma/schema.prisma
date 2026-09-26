@@ -740,6 +740,7 @@ model Item {
   customFieldValues       CustomFieldValue[]
   purchaseOrderLines      PurchaseOrderLine[]
   reorderRules            ReorderRule[]
+  supplierPriceBreaks     SupplierPriceBreak[]
   openingSnapshots        OpeningStockSnapshot[]
   inventoryMovements      InventoryMovement[]
   stockMovements          StockMovement[]
@@ -1096,6 +1097,7 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   purchaseOrders PurchaseOrder[]
+  priceBreaks    SupplierPriceBreak[]
   tenantId    String   @default("tenant-invexa")
   // Bare-id call-site migration slice 6: real per-company scoping, added
   // after finding this model had none at all (GET /suppliers had no
@@ -1192,6 +1194,24 @@ model PurchaseOrderLine {
 // against the PO's lines and their already-tracked receivedQty (the GRN
 // side of the match); the result is stored so AP can see exactly which
 // lines cleared and which are exceptions, without recomputing it.
+// Audit O-4: quantity price breaks. Ordering at least `minQty` of the item from the supplier costs `unitCost` each.
+model SupplierPriceBreak {
+  id        String   @id @default(cuid())
+  supplierId String
+  supplier  Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  minQty    Float
+  // Money: Decimal, not Float (prohibited pattern #3).
+  unitCost  Decimal  @db.Decimal(18, 4)
+  companyId String   @default("default-company")
+  createdAt DateTime @default(now())
+
+  @@unique([supplierId, itemId, minQty])
+  @@index([companyId])
+  @@index([supplierId, itemId])
+}
+
 model SupplierInvoice {
   id              String   @id @default(cuid())
   purchaseOrderId String
