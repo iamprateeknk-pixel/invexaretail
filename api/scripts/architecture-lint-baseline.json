@@ -8,103 +8,103 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 246,
+    "line": 250,
     "snippet": "shippingCostPerKm     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 582,
+    "line": 590,
     "snippet": "valueThreshold   Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 611,
+    "line": 619,
     "snippet": "valueThreshold       Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 638,
+    "line": 646,
     "snippet": "valueThreshold    Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 660,
+    "line": 668,
     "snippet": "valueAtStake   Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 714,
+    "line": 722,
     "snippet": "mrp               Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1119,
+    "line": 1143,
     "snippet": "totalAmount Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1123,
+    "line": 1147,
     "snippet": "freightCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1124,
+    "line": 1148,
     "snippet": "customsCost   Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1125,
+    "line": 1149,
     "snippet": "insuranceCost Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1126,
+    "line": 1150,
     "snippet": "handlingCost  Float?  @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1152,
+    "line": 1179,
     "snippet": "unitCost        Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1174,
+    "line": 1201,
     "snippet": "totalAmount     Float    @default(0)"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1194,
+    "line": 1221,
     "snippet": "unitCost          Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1212,
+    "line": 1239,
     "snippet": "price         Float"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1823,
+    "line": 1856,
     "snippet": "valueAtRisk     Float?"
   },
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 1953,
+    "line": 1986,
     "snippet": "value           Float?"
   }
 ]

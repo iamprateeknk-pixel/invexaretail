@@ -1,4 +1,5 @@
 // Enterprise authentication routes with OTP, biometrics, and multi-org support
+import { runWithCompanyTimezone } from '../lib/timezone-context.js';
 import { type Request, type Response, type NextFunction, Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import {
@@ -130,7 +131,7 @@ export function extractToken(req: Request, res: Response, next: NextFunction): v
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.apiKey && req.user && req.companyId) {
     if (rejectSuspendedCompany(req.companyId, res)) return;
-    next();
+    runWithCompanyTimezone(req.companyId, next);
     return;
   }
   if (!req.userId || !req.companyId) {
@@ -144,7 +145,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
   if (rejectSuspendedCompany(user.companyId, res)) return;
   req.user = user;
-  next();
+  runWithCompanyTimezone(user.companyId, next);
 }
 
 function publicUser(user: repo.EnhancedUserRecord) {

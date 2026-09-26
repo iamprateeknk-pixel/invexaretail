@@ -4,6 +4,7 @@ import { startOrderScheduler, orderSweepTick } from './lib/order-scheduler.js';
 import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
 import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
+import { startExpirySweep } from './lib/expiry-sweep.js';
 import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
 import { deliverPersistedEvent } from './lib/event-bus.js';
 
@@ -33,6 +34,7 @@ async function main() {
   // even with a live consumer now attached.
   startOutboxWorker(deliverPersistedEvent);
   startOutboxRetention();
+  startExpirySweep();
   console.log('Invexa durable worker is running.');
 }
 

@@ -8,6 +8,7 @@ import {
   ManualAllocationRequiresReasonError,
   LotNotAllocatableError,
   ManualAllocationExceedsAvailableError,
+  lotRemainingShelfLifePercent,
 } from './warehouse-workflow.js';
 
 test('transfer import accepts minimal item name and quantity files', async () => {
@@ -85,4 +86,51 @@ test('PCS requires a matching scan and KG allows 3 decimal manual entry', () => 
   assert.throws(() => validatePickInput({ unit: 'PCS', quantity: 1, inputMethod: 'SCAN', scanCode: 'OTHER', itemCode: 'DF001', lotNo: 'L1' }), /Wrong Item/);
   assert.doesNotThrow(() => validatePickInput({ unit: 'KG', quantity: 12.375, inputMethod: 'MANUAL', itemCode: 'DF001', lotNo: 'L1' }));
   assert.throws(() => validatePickInput({ unit: 'KG', quantity: 1.2345, inputMethod: 'MANUAL', itemCode: 'DF001', lotNo: 'L1' }), /3 decimal/);
+});
+
+// Audit P0-1: nothing sweeps a lot to EXPIRED when its date passes, and FEFO sorts
+// the earliest expiry first - so a lapsed lot still marked AVAILABLE used to be the
+// FIRST lot allocated to orders, jobs and transfers.
+const auditToday = new Date('2026-09-26T06:30:00Z');
+test('FEFO never allocates a lot whose expiry date has passed, even if its status still says AVAILABLE', () => {
+  const lots = [
+    { lotId: 'lapsed', lotNo: 'L0', expiryDate: '2026-09-20T00:00:00.000Z', available: 10, status: 'AVAILABLE' as const },
+    { lotId: 'fresh', lotNo: 'L1', expiryDate: '2026-12-01T00:00:00.000Z', available: 10, status: 'AVAILABLE' as const },
+  ];
+  const result = allocateLots(lots, 5, 'FEFO', { today: auditToday });
+  assert.deepEqual(result.allocations.map((a) => a.lotId), ['fresh']);
+  assert.deepEqual(allocateFefo(lots, 5, auditToday).allocations.map((a) => a.lotId), ['fresh']);
+  assert.deepEqual(allocateLots(lots, 5, 'FIFO', { today: auditToday }).allocations.map((a) => a.lotId), ['fresh']);
+});
+
+test('a lot expiring today is still allocatable today (usable through its expiry date); the day after it is not', () => {
+  const lots = [{ lotId: 'a', lotNo: 'L', expiryDate: '2026-09-26T00:00:00.000Z', available: 4, status: 'AVAILABLE' as const }];
+  assert.equal(allocateLots(lots, 4, 'FEFO', { today: auditToday }).shortage, 0);
+  assert.equal(allocateLots(lots, 4, 'FEFO', { today: new Date('2026-09-27T06:30:00Z') }).shortage, 4);
+});
+
+test('when only lapsed lots exist the request is a shortage, and a manual override cannot pull a lapsed lot', () => {
+  const lots = [{ lotId: 'a', lotNo: 'L', expiryDate: '2026-09-01T00:00:00.000Z', available: 9, status: 'AVAILABLE' as const }];
+  assert.equal(allocateLots(lots, 3, 'FEFO', { today: auditToday }).shortage, 3);
+  assert.throws(
+    () => allocateLots(lots, 3, 'MANUAL', { manualLines: [{ lotId: 'a', quantity: 3 }], overrideReason: 'Needed', today: auditToday }),
+    /cannot be allocated/,
+  );
+});
+
+test('a customer minimum remaining shelf life skips lots below it; unknown-RSL lots still pass (audit S-1)', () => {
+  const today = new Date('2026-09-26T06:00:00Z');
+  const day = (n: number) => new Date(today.getTime() + n * 86_400_000).toISOString();
+  const lots = [
+    { lotId: 'old', lotNo: 'OLD', available: 50, expiryDate: day(10), shelfLifeDays: 100 },
+    { lotId: 'fresh', lotNo: 'FRESH', available: 50, expiryDate: day(80), shelfLifeDays: 100 },
+    { lotId: 'nodate', lotNo: 'ND', available: 50, expiryDate: null },
+  ];
+  assert.equal(lotRemainingShelfLifePercent(lots[1], today), 80);
+  const strict = allocateLots(lots, 30, 'FEFO', { today, minRemainingShelfLifePercent: 50 });
+  assert.deepEqual(strict.allocations.map((a) => a.lotId), ['fresh']);
+  assert.equal(allocateLots(lots, 30, 'FEFO', { today }).allocations[0].lotId, 'old', 'no requirement: plain FEFO');
+  // Life derived from the manufacturing date when the item has no shelf life: 100 days, 10 left = 10%.
+  const made = { lotId: 'm', lotNo: 'M', available: 5, manufacturedAt: day(-90), expiryDate: day(10) };
+  assert.equal(Math.round(lotRemainingShelfLifePercent(made, today)!), 10);
 });

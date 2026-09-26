@@ -1,3 +1,5 @@
+import { exceedsDefaultTolerance } from '../lib/count-tolerance.js';
+import { parseCountReasonCode } from '../lib/count-reason-codes.js';
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
@@ -90,7 +92,9 @@ import {
   updateItemRecord,
   listItems,
   listDailyMovements,
+  listStockMovements,
   listLocations,
+  listStockLedger,
   listStockLedgerForLocation,
   listSyncCheckpoints,
   listTransfers,
@@ -426,7 +430,7 @@ router.put('/company', async (req: Request, res: Response) => {
 
   try {
     await persistCompanyProfile(profile);
-    const applied = await applyIndustryPack(nextKey);
+    const applied = await applyIndustryPack(nextKey, req.companyId ?? DEFAULT_COMPANY_ID);
     return res.json({
       company: profile,
       pack: toWorkspacePackView(pack),
@@ -1161,9 +1165,11 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
 
   let status;
   let reviewReason;
+  let reasonCode;
   try {
     status = parseCountReviewStatus(req.body.status);
     reviewReason = parseCountReviewReason(req.body.reviewReason ?? req.body.reason);
+    reasonCode = parseCountReasonCode(req.body.reasonCode);
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid review payload.' });
   }
@@ -1178,11 +1184,17 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     } catch {
       return res.status(403).json({ message: 'This user cannot review counts at the selected location.' });
     }
+    // Optional enforcement (COUNT_ENFORCE_RECOUNT=true, audit C-1): a first count whose variance is outside the
+    // default tolerance cannot be approved as is - it must go to a recount, which is then a second, independent count.
+    if (process.env.COUNT_ENFORCE_RECOUNT === 'true' && status === 'APPROVED' && !current.parentCountId
+      && exceedsDefaultTolerance(current.bookQty, Math.abs(current.physicalQuantity - current.bookQty))) {
+      return res.status(409).json({ message: 'This variance is outside tolerance. Request a recount instead of approving the first count.', code: 'RECOUNT_REQUIRED' });
+    }
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason }, req.companyId ?? DEFAULT_COMPANY_ID);
-    const updated = updateCountReview(countId, status, req.user!.id, reviewReason);
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, req.companyId ?? DEFAULT_COMPANY_ID);
+    const updated = updateCountReview(countId, status, req.user!.id, reviewReason, reasonCode);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
     let recountAssignment;
@@ -1200,6 +1212,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       entityId: updated.id,
       metadata: {
         reviewReason,
+        reasonCode,
         ...(status === 'APPROVED' ? { bookQty: updated.bookQty, physicalQuantity: updated.physicalQuantity, variance, movementId: updated.varianceMovementId } : {}),
         ...(status === 'RECOUNT' ? { recountAssignmentId: recountAssignment?.id } : {}),
       },
@@ -1493,6 +1506,12 @@ function cycleCountPlanForLocation(locationId: string, now = new Date()) {
     items: listItems(),
     stock: listStockLedgerForLocation(locationId),
     assignments: listCountAssignments(),
+    counts: listCounts(),
+    // Items sold at this location in the last 30 days: order/import movements and the legacy daily sales import.
+    recentlySoldItemIds: new Set([
+      ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
+      ...listDailyMovements().filter((m) => m.locationId === locationId && m.sourceType === 'SALES' && m.qtyDelta < 0 && now.getTime() - new Date(m.transactionAt).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
+    ]),
     now,
   });
 }
@@ -1966,6 +1985,8 @@ router.get('/dashboard', (req: Request, res: Response) => {
       canAccessLocation(context, transfer.sourceLocationId) && canAccessLocation(context, transfer.destinationLocationId),
     ),
     items: itemsForCompany(companyId, listItems()),
+    // Expiry KPIs count only lots that still hold stock in a location this user can see.
+    stock: listStockLedger().filter((row) => canAccessLocation(context, row.locationId)),
   });
   return res.json({ dashboard: summary });
 });

@@ -149,6 +149,17 @@ export async function persistTransferReceipt(input: {
           reason: 'Transfer receipt', sourceDocument: input.transferId, sourceLineId: dbLine.id, correlationId: receiptId,
         });
       }
+      // Release the in-transit quantity the pick-confirm put on the source lot row (audit O-7): received,
+      // damaged and short units have all left the "in flight" state. Only transfers whose confirm was
+      // marked inTransit release anything, so transfers confirmed before this existed are untouched.
+      const settledQty = line.receivedQty + line.damagedQty + line.shortageQty;
+      if (settledQty > 0) {
+        await executeRaw(tx,
+          `UPDATE "StockLedger" SET "inTransit"=GREATEST(0,"inTransit"-?), version=version+1, "lastUpdatedAt"=CURRENT_TIMESTAMP(3)
+           WHERE "itemId"=? AND "lotId"=? AND "locationId" IN (
+             SELECT "locationId" FROM "StockMovement" WHERE "sourceDocument"=? AND "itemId"=? AND "lotId"=? AND "movementType"='TRANSFER_OUT' AND (metadata->>'inTransit')='true')`,
+          settledQty, dbLine.itemId, dbLine.lotId, input.transferId, dbLine.itemId, dbLine.lotId);
+      }
       // Blueprint section 7.2 / Module H: damaged receiving stock is
       // physically on the shelf but not sellable - post it to the
       // quarantine bucket instead of letting it vanish from the ledger.

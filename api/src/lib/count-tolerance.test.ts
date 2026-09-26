@@ -30,3 +30,15 @@ test('evaluateTolerance returns null when nothing triggers', () => {
   const r = rule({ valueThreshold: 100000 });
   assert.equal(evaluateTolerance([r], { category: null, branchId: null, variancePercent: 1, varianceValue: 50 }), null);
 });
+
+// Audit C-1: a company with no tolerance rules got no signal for a single large miss.
+import { DEFAULT_TOLERANCE, exceedsDefaultTolerance } from './count-tolerance.js';
+
+test('default tolerance: at least 3 units AND 10% of book', () => {
+  assert.equal(DEFAULT_TOLERANCE.percent, 10);
+  assert.equal(exceedsDefaultTolerance(100, 9), false, '9% of 100 is inside tolerance');
+  assert.equal(exceedsDefaultTolerance(100, 10), true, '10% is the edge');
+  assert.equal(exceedsDefaultTolerance(10, 2), false, 'small books get a 3-unit floor');
+  assert.equal(exceedsDefaultTolerance(10, 3), true);
+  assert.equal(exceedsDefaultTolerance(0, 3), true, 'stock that was not on the book at all');
+});

@@ -1,4 +1,5 @@
 import { orderLots } from './weight-allocation.js';
+import { isExpiredOn } from './expiry-date.js';
 
 // Blueprint v4 §15 Warehouse picking - KG loose: "Select item, enter requested
 // KG; backend allocates lots FIFO/FEFO", "No zero-stock lot offered", "No
@@ -24,7 +25,7 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 export function isPickableLot(lot: Pick<PickLot, 'status' | 'available' | 'expiryDate'>, today = new Date()): boolean {
   if ((lot.status ?? 'AVAILABLE') !== 'AVAILABLE') return false;
   if (!(lot.available > 0)) return false;
-  if (lot.expiryDate && Date.parse(lot.expiryDate) < Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) return false;
+  if (isExpiredOn(lot.expiryDate, today)) return false;
   return true;
 }
 

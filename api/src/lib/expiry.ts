@@ -1,4 +1,5 @@
 import { ItemRecord, StockLedgerRecord } from './repository.js';
+import { daysUntilExpiryDate } from './expiry-date.js';
 
 export interface ExpiryItem {
   itemId: string;
@@ -28,16 +29,7 @@ export interface ExpiryDashboard {
 }
 
 export function calculateDaysUntilExpiry(expiryDate: string | null | undefined): number {
-  if (!expiryDate) return Infinity;
-
-  const expiry = new Date(expiryDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const diffTime = expiry.getTime() - today.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-  return diffDays;
+  return daysUntilExpiryDate(expiryDate) ?? Infinity;
 }
 
 export function getExpiryStatus(daysUntilExpiry: number): 'EXPIRED' | 'EXPIRING_SOON' | 'WARNING' | 'SAFE' {

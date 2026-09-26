@@ -37,5 +37,5 @@ test('grocery pack matches Invexa item/lot model: FEFO, expiry, seed categories'
   assert.ok(pack.categories.includes('Household'));
   assert.ok(pack.units.includes('bag'));
   assert.equal(workflow.allocationStrategy, 'FEFO');
-  assert.equal(workflow.expiryBlocking, false);
+  assert.equal(workflow.expiryBlocking, true);
 });

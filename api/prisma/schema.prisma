@@ -139,6 +139,8 @@ model CompanyProfile {
   industry    String?
   industryKey String?
   address     String?  @db.Text
+  // Audit T-2: IANA business timezone; null = process default.
+  timezone    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -202,7 +204,7 @@ model User {
 
 model Branch {
   id              String   @id @default(cuid())
-  code            String   @unique
+  code            String
   name            String
   type            String   @default("WAREHOUSE")
   status          String   @default("ACTIVE")
@@ -225,11 +227,13 @@ model Branch {
   @@index([code, status])
   @@index([companyId])
   @@index([tenantId])
+
+  @@unique([companyId, code])
 }
 
 model Location {
   id                    String   @id @default(cuid())
-  code                  String   @unique
+  code                  String
   name                  String
   type                  String
   locationType          String?  @default("STANDARD")
@@ -273,6 +277,10 @@ model Location {
   @@index([code, branchId, status])
   @@index([companyId])
   @@index([tenantId])
+
+  // Audit P0-3: identity is per company. `code` used to be globally unique, so two
+  // customers could not both have a location (or SKU, or branch) with the same code.
+  @@unique([companyId, code])
 }
 
 // Blueprint Module B / section 6 (Location/WMS): warehouse -> zone -> aisle
@@ -674,7 +682,7 @@ model ApprovalRequest {
 
 model Item {
   id          String   @id @default(cuid())
-  code        String   @unique
+  code        String
   name        String
   category    String?
   subcategory String?
@@ -752,6 +760,8 @@ model Item {
   @@index([tenantId])
   @@index([status])
   @@index([barcode])
+
+  @@unique([companyId, code])
 }
 
 model Lot {
@@ -760,6 +770,8 @@ model Lot {
   itemId     String
   item       Item     @relation(fields: [itemId], references: [id])
   expiryDate DateTime?
+  // Audit S-1: when the lot was made; with the expiry date it gives the total shelf life for RSL rules.
+  manufacturedAt DateTime?
   // AVAILABLE | EXPIRED | BLOCKED | QUARANTINE (blueprint section 17): a
   // lot in any state other than AVAILABLE is excluded from normal FEFO/FIFO
   // allocation and can only be drawn from via an authorized manual override.
@@ -836,6 +848,8 @@ model StockCount {
   approvedAt      DateTime?
   reviewStatus    String   @default("PENDING_REVIEW")
   reviewReason    String?  @db.Text
+  // Audit C-3: root-cause code chosen at review (see lib/count-reason-codes.ts).
+  reasonCode      String?
   parentCountId   String?
   // Blueprint v4 §14: sales/purchase files imported after a count can carry
   // movements dated before it, changing what the book quantity should have
@@ -1016,10 +1030,15 @@ model AuditLog {
 
 model Tag {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
+  // Audit T-1: tags are per company (they were one global list).
+  companyId String   @default("default-company")
   color     String   @default("emerald")
   createdAt DateTime @default(now())
   items     ItemTag[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model ItemTag {
@@ -1034,7 +1053,9 @@ model ItemTag {
 
 model CustomFieldDefinition {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
+  // Audit T-1: custom fields are per company.
+  companyId String   @default("default-company")
   type      String   @default("text")
   options   Json?
   required  Boolean  @default(false)
@@ -1042,6 +1063,9 @@ model CustomFieldDefinition {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   values    CustomFieldValue[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model CustomFieldValue {
@@ -1102,7 +1126,7 @@ model PurchaseReceipt {
 
 model PurchaseOrder {
   id          String   @id @default(cuid())
-  number      String   @unique
+  number      String
   supplierId  String
   supplier    Supplier @relation(fields: [supplierId], references: [id])
   locationId  String
@@ -1139,6 +1163,9 @@ model PurchaseOrder {
 
   @@index([locationId, status])
   @@index([supplierId])
+
+  // Audit T-1: document numbers are unique per company, not across all tenants.
+  @@unique([companyId, number])
 }
 
 model PurchaseOrderLine {
@@ -1229,8 +1256,10 @@ model ReorderRule {
   itemId     String
   item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
   locationId String
-  minQty     Int      @default(0)
-  targetQty  Int      @default(0)
+  minQty     Float    @default(0)
+  targetQty  Float    @default(0)
+  // Audit O-4: case pack; suggested order quantities round up to a multiple of this.
+  orderMultiple Float?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1312,7 +1341,9 @@ model AssetCheckout {
 
 model Job {
   id          String    @id @default(cuid())
-  number      String    @unique
+  number      String
+  // Audit T-1: jobs had no company at all - every admin saw and could edit every company's jobs.
+  companyId   String    @default("default-company")
   name        String
   locationId  String
   status      String    @default("DRAFT")
@@ -1324,6 +1355,8 @@ model Job {
   lines       JobLine[]
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
+  @@index([companyId])
+  @@unique([companyId, number])
 
 
   @@index([locationId, status])

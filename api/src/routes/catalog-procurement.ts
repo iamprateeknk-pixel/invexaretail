@@ -1,3 +1,7 @@
+import { loadSalesEvents } from '../lib/sales-demand.js';
+import { newDocumentNumber } from '../lib/document-number.js';
+import { suggestReorderRule } from '../lib/reorder-suggestion.js';
+import { sellableParts } from '../lib/sellable-stock.js';
 import { type Request, type Response, Router } from 'express';
 
 import { prisma } from '../lib/db.js';
@@ -6,15 +10,15 @@ import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { getActiveWorkflow, getIndustryPack, isSerialFieldName } from '../lib/industry-packs.js';
 import { respondWhenMemoryUnavailable } from '../lib/memory-mode.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { listReorderRules, upsertReorderRule } from '../lib/reorder-store.js';
-import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord } from '../lib/repository.js';
+import { listReorderRules, upsertReorderRule, validateReorderQuantities } from '../lib/reorder-store.js';
+import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems } from '../lib/repository.js';
 import { emitWebhookEvent } from '../lib/webhook-dispatcher.js';
 import { allocateLandedCost, type LandedCostMethod } from '../lib/landed-cost.js';
-import { computeVendorScore, computePriceVariance } from '../lib/vendor-score.js';
+import { computeVendorScore, computePriceVariance, supplierLeadTimeStats } from '../lib/vendor-score.js';
 import { canOrderFrom, parseSupplierFields, presentSupplier } from '../lib/supplier-master.js';
 import { checkPoMove, isPoStatus, isReceivablePo, type PoStatus } from '../lib/po-lifecycle.js';
 import { planPoReceipt, statusAfterReceipt, type ItemRules, type ReceiptLineInput } from '../lib/po-receipt.js';
-import { groupBySupplier, planPurchases, type PlanInput } from '../lib/po-planning.js';
+import { groupBySupplier, OPEN_PO_STATUSES, planPurchases, type PlanInput } from '../lib/po-planning.js';
 import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { quarantineFailedLines, verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { evaluateInspection, type QcCheckResult } from '../lib/qc-inspection.js';
@@ -49,8 +53,13 @@ function requireReportingRole(req: Request, res: Response): boolean {
   return true;
 }
 
-router.get('/catalog/tags', async (_req, res) => {
-  const tags = await prisma.tag.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { items: true } } } });
+// Tags, custom fields and their values are company scoped (audit T-1); an item or tag of another
+// company resolves 404 exactly like a missing one.
+const catalogCompany = (req: Request) => req.companyId ?? DEFAULT_COMPANY_ID;
+const ownsItem = async (req: Request, itemId: string) => Boolean(await prisma.item.findFirst({ where: { id: itemId, companyId: catalogCompany(req) }, select: { id: true } }));
+
+router.get('/catalog/tags', async (req, res) => {
+  const tags = await prisma.tag.findMany({ where: { companyId: catalogCompany(req) }, orderBy: { name: 'asc' }, include: { _count: { select: { items: true } } } });
   return res.json({ tags });
 });
 
@@ -59,7 +68,7 @@ router.post('/catalog/tags', async (req, res) => {
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   if (name.length < 2) return res.status(400).json({ message: 'Tag name must be at least 2 characters.' });
   try {
-    const tag = await prisma.tag.create({ data: { name, color: req.body.color || 'emerald' } });
+    const tag = await prisma.tag.create({ data: { name, companyId: catalogCompany(req), color: req.body.color || 'emerald' } });
     return res.status(201).json({ tag });
   } catch {
     return res.status(409).json({ message: 'A tag with this name already exists.' });
@@ -68,7 +77,10 @@ router.post('/catalog/tags', async (req, res) => {
 
 router.put('/catalog/items/:itemId/tags', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const tagIds = Array.isArray(req.body.tagIds) ? req.body.tagIds.filter((id: unknown) => typeof id === 'string') : [];
+  const requestedTagIds: string[] = Array.isArray(req.body.tagIds) ? req.body.tagIds.filter((id: unknown) => typeof id === 'string') : [];
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  const tagIds = (await prisma.tag.findMany({ where: { id: { in: requestedTagIds }, companyId: catalogCompany(req) }, select: { id: true } })).map((tag) => tag.id);
+  if (tagIds.length !== new Set(requestedTagIds).size) return res.status(404).json({ message: 'Tag not found.' });
   await prisma.$transaction([
     prisma.itemTag.deleteMany({ where: { itemId: req.params.itemId } }),
     prisma.itemTag.createMany({ data: tagIds.map((tagId: string) => ({ itemId: req.params.itemId, tagId })), skipDuplicates: true }),
@@ -76,8 +88,8 @@ router.put('/catalog/items/:itemId/tags', async (req, res) => {
   return res.json({ success: true });
 });
 
-router.get('/catalog/custom-fields', async (_req, res) => {
-  const fields = await prisma.customFieldDefinition.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+router.get('/catalog/custom-fields', async (req, res) => {
+  const fields = await prisma.customFieldDefinition.findMany({ where: { companyId: catalogCompany(req) }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   return res.json({ fields });
 });
 
@@ -86,13 +98,15 @@ router.post('/catalog/custom-fields', async (req, res) => {
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   const type = ['text', 'number', 'date', 'boolean', 'select'].includes(req.body.type) ? req.body.type : 'text';
   if (name.length < 2) return res.status(400).json({ message: 'Field name must be at least 2 characters.' });
+  if (await prisma.customFieldDefinition.findFirst({ where: { companyId: catalogCompany(req), name }, select: { id: true } })) return res.status(409).json({ message: 'A custom field with this name already exists.' });
   const field = await prisma.customFieldDefinition.create({
-    data: { name, type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
+    data: { name, companyId: catalogCompany(req), type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
   });
   return res.status(201).json({ field });
 });
 
 router.get('/catalog/items/:itemId', async (req, res) => {
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
   const [tags, values] = await Promise.all([
     prisma.itemTag.findMany({ where: { itemId: req.params.itemId }, include: { tag: true } }),
     prisma.customFieldValue.findMany({ where: { itemId: req.params.itemId }, include: { field: true } }),
@@ -103,7 +117,8 @@ router.get('/catalog/items/:itemId', async (req, res) => {
 router.put('/catalog/items/:itemId/custom-fields/:fieldId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const value = req.body.value == null ? '' : String(req.body.value);
-  const field = await prisma.customFieldDefinition.findUnique({ where: { id: req.params.fieldId } });
+  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  const field = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.fieldId, companyId: catalogCompany(req) } });
   if (!field) return res.status(404).json({ message: 'Custom field was not found.' });
   const pack = getIndustryPack(getActiveWorkflow().industryKey);
   if (value.trim() && isSerialFieldName(field.name, pack)) {
@@ -137,17 +152,60 @@ router.get('/reorder-rules', async (req, res) => {
   return res.json({ rules });
 });
 
+router.get('/reorder-rules/suggestions', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
+  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  const windowDays = Number(req.query.windowDays) > 0 ? Math.min(365, Number(req.query.windowDays)) : 60;
+  const leadTimeDays = Number(req.query.leadTimeDays) > 0 ? Number(req.query.leadTimeDays) : 7;
+  const servicePercent = Number(req.query.servicePercent) > 0 ? Number(req.query.servicePercent) : 95;
+  if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const movements = await loadSalesEvents({ since, locationId, companyId });
+  const byItem = new Map<string, Map<string, number>>();
+  for (const m of movements) {
+    const days = byItem.get(m.itemId) ?? new Map<string, number>();
+    const day = m.timestamp.toISOString().slice(0, 10);
+    days.set(day, (days.get(day) ?? 0) + m.qty);
+    byItem.set(m.itemId, days);
+  }
+  const [items, rules] = await Promise.all([
+    prisma.item.findMany({ where: { companyId, id: { in: [...byItem.keys()] } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
+    prisma.reorderRule.findMany({ where: { locationId, companyId } }),
+  ]);
+  const ruleByItem = new Map(rules.map((rule) => [rule.itemId, rule]));
+  const suggestions = items.flatMap((item) => {
+    const days = byItem.get(item.id)!;
+    const dailyDemand = Array.from({ length: windowDays }, (_, offset) => days.get(new Date(since.getTime() + offset * 86_400_000).toISOString().slice(0, 10)) ?? 0);
+    const rule = ruleByItem.get(item.id);
+    const suggestion = suggestReorderRule({ itemId: item.id, dailyDemand, leadTimeDays, servicePercent, decimal: item.decimalQuantity, currentMin: rule?.minQty, currentTarget: rule?.targetQty });
+    return suggestion ? [{ ...suggestion, code: item.code, name: item.name }] : [];
+  }).filter((entry) => entry.change !== 'OK').sort((a, b) => a.code.localeCompare(b.code));
+  return res.json({ windowDays, leadTimeDays, servicePercent, suggestions });
+});
+
 router.put('/reorder-rules/:itemId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
   const minQty = Number(req.body.minQty);
   const targetQty = Number(req.body.targetQty);
-  if (!locationId || !Number.isInteger(minQty) || minQty < 0 || !Number.isInteger(targetQty) || targetQty < minQty) {
-    return res.status(400).json({ message: 'Location, non-negative minimum and target not below minimum are required.' });
-  }
+  if (!locationId) return res.status(400).json({ message: 'Location, non-negative minimum and target not below minimum are required.' });
+  const ruleItem = databaseEnabled
+    ? await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { decimalQuantity: true } })
+    : listItems().find((entry) => entry.id === req.params.itemId);
+  const decimal = Boolean(ruleItem?.decimalQuantity);
+  // Optional case pack: positive, or null to clear it.
+  const orderMultiple = req.body.orderMultiple === undefined ? undefined : req.body.orderMultiple === null ? null : Number(req.body.orderMultiple);
+  if (orderMultiple !== undefined && orderMultiple !== null && (!Number.isFinite(orderMultiple) || orderMultiple <= 0)) return res.status(400).json({ message: 'orderMultiple must be a positive number.' });
+  const quantityProblem = validateReorderQuantities(minQty, targetQty, decimal);
+  if (quantityProblem) return res.status(400).json({ message: quantityProblem });
   if (!databaseEnabled) {
     try {
-      const rule = upsertReorderRule({ itemId: req.params.itemId, locationId, minQty, targetQty });
+      const rule = upsertReorderRule({ itemId: req.params.itemId, locationId, minQty, targetQty, decimal });
       return res.json({ rule });
     } catch (error) {
       return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
@@ -157,8 +215,8 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
   if (!location) return res.status(404).json({ message: 'Location not found.' });
   const rule = await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
-    update: { minQty, targetQty },
-    create: { itemId: req.params.itemId, locationId, minQty, targetQty, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    update: { minQty, targetQty, ...(orderMultiple !== undefined ? { orderMultiple } : {}) },
+    create: { itemId: req.params.itemId, locationId, minQty, targetQty, orderMultiple: orderMultiple ?? null, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { item: true },
   });
   return res.json({ rule });
@@ -216,6 +274,7 @@ router.get('/suppliers/:id/score', async (req, res) => {
     expectedAt: order.expectedAt ? order.expectedAt.toISOString() : null,
     completedAt: ['RECEIVED', 'CLOSED'].includes(order.status) ? (lastReceiptAt.get(order.id) ?? order.updatedAt).toISOString() : null,
     createdAt: order.createdAt.toISOString(),
+    orderedAt: (order.sentAt ?? order.approvedAt ?? order.createdAt).toISOString(),
   }));
 
   const inspections = await prisma.qcInspection.findMany({
@@ -247,13 +306,21 @@ router.get('/suppliers/:id/score', async (req, res) => {
   });
 });
 
+// Bounded (audit O-8): newest first, at most `limit` (default 200, max 500) with a cursor for the next page,
+// instead of loading every purchase order the company has ever raised on each request.
 router.get('/purchase-orders', async (req, res) => {
-  const purchaseOrders = await prisma.purchaseOrder.findMany({
+  const requested = Number(req.query.limit);
+  const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 200;
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
+  const rows = await prisma.purchaseOrder.findMany({
     where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { supplier: true, lines: { include: { item: true } } },
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
   });
-  return res.json({ purchaseOrders });
+  const purchaseOrders = rows.slice(0, limit);
+  return res.json({ purchaseOrders, nextCursor: rows.length > limit ? purchaseOrders[purchaseOrders.length - 1].id : null });
 });
 
 router.post('/purchase-orders', async (req, res) => {
@@ -280,7 +347,7 @@ router.post('/purchase-orders', async (req, res) => {
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
   const purchaseOrder = await prisma.purchaseOrder.create({
     data: {
-      number: `PO-${Date.now().toString().slice(-8)}`,
+      number: newDocumentNumber('PO'),
       supplierId: req.body.supplierId,
       locationId: req.body.locationId,
       createdById: req.user!.id,
@@ -551,19 +618,16 @@ router.get('/purchase-orders/plan', async (req, res) => {
 
   const [items, ledger, openLines, transfers, sales, lastLines, suppliers] = await Promise.all([
     prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, code: true, name: true, decimalQuantity: true } }),
-    prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true } }),
+    prisma.stockLedger.findMany({ where: { locationId, itemId: { in: itemIds } }, select: { itemId: true, onHand: true, reserved: true, lot: { select: { status: true, expiryDate: true } } } }),
     prisma.purchaseOrderLine.findMany({
-      where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: ['SUBMITTED', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'] } } },
+      where: { itemId: { in: itemIds }, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
       select: { itemId: true, quantity: true, receivedQty: true },
     }),
     prisma.transfer.findMany({
       where: { destinationLocationId: locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
       include: { lines: true },
     }),
-    prisma.stockMovement.findMany({
-      where: { itemId: { in: itemIds }, locationId, movementType: 'SALES_DEDUCTION', timestamp: { gte: since } },
-      select: { itemId: true, qtyDelta: true },
-    }),
+    loadSalesEvents({ since, locationId, itemIds }),
     prisma.purchaseOrderLine.findMany({
       where: { itemId: { in: itemIds }, purchaseOrder: { status: { not: 'CANCELLED' } } },
       select: { itemId: true, unitCost: true, purchaseOrder: { select: { supplierId: true, createdAt: true } } },
@@ -576,26 +640,54 @@ router.get('/purchase-orders/plan', async (req, res) => {
     for (const row of rows) { const [key, value] = pick(row); totals.set(key, (totals.get(key) ?? 0) + value); }
     return totals;
   };
-  const onHand = sum(ledger, (row) => [row.itemId, row.onHand]);
-  const reserved = sum(ledger, (row) => [row.itemId, row.reserved]);
+  // Cover = stock that can actually be sold: blocked, quarantined and expired lots are not cover (audit O-6).
+  const sellable = (rows: typeof ledger) => rows.map((row) => ({ ...sellableParts([row]), itemId: row.itemId }));
+  const onHand = sum(sellable(ledger), (row) => [row.itemId, row.onHand]);
+  const reserved = sum(sellable(ledger), (row) => [row.itemId, row.reserved]);
   const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
   const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, row.requestedQty - row.receivedQty - row.damagedQty - row.shortageQty)]);
-  const sold = sum(sales, (row) => [row.itemId, Math.abs(row.qtyDelta)]);
+  const sold = sum(sales, (row) => [row.itemId, row.qty]);
   // The supplier an item was last bought from is the default; the buyer can change it in the draft.
   const lastSupplier = new Map<string, { supplierId: string; unitCost: number }>();
   for (const line of lastLines) if (!lastSupplier.has(line.itemId)) lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: line.unitCost });
   const catalog = new Map(items.map((item) => [item.id, item]));
+
+  // Lead time measured from each supplier's own completed orders (placed -> last receipt), so the plan
+  // can use real delivery times and their variability instead of a default (audit O-3).
+  const history = await prisma.purchaseOrder.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['RECEIVED', 'CLOSED'] }, createdAt: { gte: new Date(Date.now() - 365 * 86_400_000) } },
+    select: { id: true, supplierId: true, createdAt: true, approvedAt: true, sentAt: true, updatedAt: true },
+  });
+  const receipts = history.length
+    ? await prisma.purchaseReceipt.findMany({ where: { purchaseOrderId: { in: history.map((order) => order.id) } }, select: { purchaseOrderId: true, createdAt: true } }).catch(() => [])
+    : [];
+  const lastReceipt = new Map<string, Date>();
+  for (const receipt of receipts) {
+    const seen = lastReceipt.get(receipt.purchaseOrderId);
+    if (!seen || receipt.createdAt > seen) lastReceipt.set(receipt.purchaseOrderId, receipt.createdAt);
+  }
+  const bySupplier = new Map<string, Array<{ completedAt: string; createdAt: string; orderedAt: string }>>();
+  for (const order of history) {
+    const list = bySupplier.get(order.supplierId) ?? [];
+    list.push({ completedAt: (lastReceipt.get(order.id) ?? order.updatedAt).toISOString(), createdAt: order.createdAt.toISOString(), orderedAt: (order.sentAt ?? order.approvedAt ?? order.createdAt).toISOString() });
+    bySupplier.set(order.supplierId, list);
+  }
 
   const planInputs: PlanInput[] = rules.map((rule) => ({
     itemId: rule.itemId, code: catalog.get(rule.itemId)?.code, name: catalog.get(rule.itemId)?.name,
     onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: rule.minQty, targetQty: rule.targetQty,
     openPoQty: open.get(rule.itemId) ?? 0, inTransitQty: inTransit.get(rule.itemId) ?? 0,
     avgDailyDemand: (sold.get(rule.itemId) ?? 0) / windowDays, demandDays: (sold.get(rule.itemId) ?? 0) > 0 ? windowDays : 0,
+    orderMultiple: (rule as { orderMultiple?: number | null }).orderMultiple ?? null,
     decimal: Boolean(catalog.get(rule.itemId)?.decimalQuantity), unitCost: lastSupplier.get(rule.itemId)?.unitCost, supplierId: lastSupplier.get(rule.itemId)?.supplierId ?? null,
   }));
+  // EOQ is opt-in: it needs the buyer's own cost of placing an order and yearly holding rate, which the system cannot know.
+  const orderingCost = Number(req.query.orderingCost) > 0 ? Number(req.query.orderingCost) : undefined;
+  const holdingRate = Number(req.query.holdingRatePercent) > 0 ? Number(req.query.holdingRatePercent) / 100 : undefined;
   const result = planPurchases({
+    orderingCost, holdingRate, budget: Number(req.query.budget) >= 0 && req.query.budget !== undefined && req.query.budget !== '' ? Number(req.query.budget) : undefined,
     items: planInputs,
-    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
+    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
   });
   return res.json({ locationId, windowDays, ...result, groups: groupBySupplier(result.suggestions) });
 });
@@ -617,7 +709,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
     const purchaseOrder = await prisma.purchaseOrder.create({
       data: {
-        number: `PO-${Date.now().toString().slice(-8)}${created.length ? `-${created.length + 1}` : ''}`,
+        number: newDocumentNumber('PO'),
         supplierId: supplier.id, locationId, createdById: req.user!.id,
         companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         expectedAt: leadTimeDays ? new Date(Date.now() + leadTimeDays * 86_400_000) : null,

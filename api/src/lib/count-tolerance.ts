@@ -26,6 +26,18 @@ export type ToleranceContext = {
   varianceValue: number;
 };
 
+/**
+ * Built-in tolerance used only when the company has configured NO rules at all (audit C-1):
+ * before this, a company without rules got a recount recommendation only for *repeated*
+ * variance, so a 40% miss on a single count produced no signal. A count is out of tolerance
+ * at max(3 units, 10% of book).
+ */
+export const DEFAULT_TOLERANCE = { minUnits: 3, percent: 10 } as const;
+
+export function exceedsDefaultTolerance(bookQty: number, varianceAbs: number): boolean {
+  return varianceAbs >= Math.max(DEFAULT_TOLERANCE.minUnits, (Math.abs(bookQty) * DEFAULT_TOLERANCE.percent) / 100);
+}
+
 /** Pure: does this rule's scope (category/branch) apply to this count, and does its threshold trigger? */
 export function ruleTriggers(rule: ToleranceRuleLike, ctx: ToleranceContext): boolean {
   const categoryMatches = rule.category === null || rule.category === ctx.category;
@@ -93,6 +105,15 @@ export async function getCountRecommendation(tenant: TenantContext, input: {
         recommendRecount: true,
         reason: `Variance ${matched.valueThreshold !== null && varianceValue >= matched.valueThreshold ? `₹${varianceValue.toFixed(0)}` : `${variancePercent.toFixed(1)}%`} exceeds the "${matched.label}" tolerance rule.`,
         matchedRuleId: matched.id,
+        varianceValue,
+        variancePercent,
+      };
+    }
+
+    if (rules.length === 0 && exceedsDefaultTolerance(input.bookQty, varianceAbs)) {
+      return {
+        recommendRecount: true,
+        reason: `Variance ${varianceAbs} unit(s) (${variancePercent.toFixed(1)}%) is outside the default tolerance (${DEFAULT_TOLERANCE.percent}% or ${DEFAULT_TOLERANCE.minUnits} units) - no tolerance rules are configured for this company.`,
         varianceValue,
         variancePercent,
       };

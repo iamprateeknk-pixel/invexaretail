@@ -64,7 +64,7 @@ export class OrderShortageError extends Error {
   }
 }
 
-export type OrderLineInput = { itemId: string; quantity: number };
+export type OrderLineInput = { itemId: string; quantity: number; /** Customer's minimum remaining shelf life, as a percentage of the product's total life (audit S-1). */ minRslPercent?: number };
 
 async function fefoLotsForItem(companyId: string, itemId: string, locationId: string): Promise<FefoLot[]> {
   const item = await prisma.item.findFirst({ where: { id: itemId, companyId }, include: { lots: true } });
@@ -81,6 +81,8 @@ async function fefoLotsForItem(companyId: string, itemId: string, locationId: st
       // is not offered again here.
       available: Math.max(0, (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0)),
       status: (lot.status as FefoLot['status']) ?? 'AVAILABLE',
+      manufacturedAt: lot.manufacturedAt?.toISOString() ?? null,
+      shelfLifeDays: item.shelfLifeDays ?? null,
     };
   });
 }
@@ -98,7 +100,7 @@ async function tryAllocateAtLocation(companyId: string, lines: OrderLineInput[],
   const shortages: Shortage[] = [];
   for (const line of lines) {
     const lots = await fefoLotsForItem(companyId, line.itemId, locationId);
-    const allocation = allocateLots(lots, line.quantity, 'FEFO');
+    const allocation = allocateLots(lots, line.quantity, 'FEFO', { minRemainingShelfLifePercent: line.minRslPercent });
     if (allocation.shortage > 1e-8) {
       const totalAvailable = lots.reduce((sum, lot) => sum + lot.available, 0);
       shortages.push({ itemId: line.itemId, requestedQty: line.quantity, availableQty: totalAvailable });
@@ -126,7 +128,7 @@ async function partialAllocateAtLocation(companyId: string, lines: OrderLineInpu
   const backordered: BackorderLine[] = [];
   for (const line of lines) {
     const lots = await fefoLotsForItem(companyId, line.itemId, locationId);
-    const allocation = allocateLots(lots, line.quantity, 'FEFO');
+    const allocation = allocateLots(lots, line.quantity, 'FEFO', { minRemainingShelfLifePercent: line.minRslPercent });
     for (const pick of allocation.allocations) resolved.push({ itemId: line.itemId, lotId: pick.lotId, quantity: pick.quantity });
     if (allocation.shortage > 1e-8) backordered.push({ itemId: line.itemId, quantity: allocation.shortage });
   }

@@ -159,3 +159,62 @@ test('an item with neither a rule nor sales is not guessed at; suggestions are g
   assert.deepEqual(groups.map((group) => [group.supplierId, group.lines.length]), [['s2', 1], ['s1', 2]]);
   assert.equal(groups[0].estimatedTotal, 90);
 });
+
+// Audit O-3: measured supplier lead time and its variability feed the plan.
+import { planPurchases as planWithLeadTime, MIN_LEAD_TIME_SAMPLES } from './po-planning.js';
+import { supplierLeadTimeStats } from './vendor-score.js';
+
+const leadInput = { itemId: 'i1', onHand: 10, minQty: 5, targetQty: 0, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 4, demandDays: 30, supplierId: 's1' };
+
+test('lead time statistics come from placed -> last receipt, not from the draft date', () => {
+  const day = (n: number) => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+  const stats = supplierLeadTimeStats([
+    { createdAt: day(0), orderedAt: day(5), completedAt: day(12) },   // 7 days from placement (12 from the draft)
+    { createdAt: day(20), orderedAt: day(21), completedAt: day(30) }, // 9
+    { createdAt: day(40), orderedAt: day(40), completedAt: day(51) }, // 11
+    { createdAt: day(60), orderedAt: day(60), completedAt: null },    // still open: ignored
+  ]);
+  assert.equal(stats.samples, 3);
+  assert.equal(stats.meanDays, 9);
+  assert.equal(stats.stdDevDays, 2);
+});
+
+test('with no contractual lead time the plan uses the measured one and says so; too few samples fall back to the default', () => {
+  const measured = { samples: MIN_LEAD_TIME_SAMPLES, meanDays: 10, stdDevDays: 0 };
+  const plan = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured }] });
+  assert.equal(plan.suggestions[0].leadTimeDays, 10);
+  assert.match(plan.suggestions[0].explanation.join(' '), /measured over 3 completed orders/);
+  const sparse = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured: { samples: 2, meanDays: 30, stdDevDays: 1 } }] });
+  assert.equal(sparse.suggestions[0].leadTimeDays, 7);
+});
+
+test('a supplier whose lead time varies raises the safety stock above the configured minimum', () => {
+  const steady = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured: { samples: 6, meanDays: 7, stdDevDays: 0 } }] }).suggestions[0];
+  const erratic = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured: { samples: 6, meanDays: 7, stdDevDays: 3 } }] }).suggestions[0];
+  assert.ok(erratic.reorderPoint > steady.reorderPoint);
+  assert.match(erratic.explanation.join(' '), /varies by/);
+  // A contractual lead time wins over the measured mean.
+  const contract = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', leadTimeDays: 3, measured: { samples: 6, meanDays: 20, stdDevDays: 0 } }] }).suggestions[0];
+  assert.equal(contract.leadTimeDays, 3);
+});
+
+test('case packs round the order up and EOQ raises small orders only when its cost inputs are given (audit O-4)', async () => {
+  const { planPurchases, economicOrderQuantity } = await import('./po-planning.js');
+  const base = { itemId: 'i', code: 'I', onHand: 0, minQty: 10, targetQty: 25, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 4, demandDays: 30, unitCost: 10 };
+  assert.equal(planPurchases({ items: [{ ...base, orderMultiple: 12 }], suppliers: [] }).suggestions[0].quantity, 72, '66 rounds up to 6 packs of 12');
+  assert.equal(planPurchases({ items: [base], suppliers: [] }).suggestions[0].quantity, 66, 'no EOQ without cost inputs');
+  // EOQ = sqrt(2 x 1460 x 50 / (0.2 x 10)) = 270.2
+  assert.equal(Math.round(economicOrderQuantity({ dailyDemand: 4, unitCost: 10, orderingCost: 50, holdingRate: 0.2 })!), 270);
+  assert.equal(economicOrderQuantity({ dailyDemand: 4, unitCost: 10 }), null);
+  assert.equal(planPurchases({ items: [base], suppliers: [], orderingCost: 50, holdingRate: 0.2 }).suggestions[0].quantity, 271);
+});
+
+test('a budget keeps the most urgent lines and defers the rest with a reason (audit O-4)', async () => {
+  const { planPurchases } = await import('./po-planning.js');
+  const mk = (itemId: string, onHand: number) => ({ itemId, code: itemId, onHand, minQty: 10, targetQty: 20, openPoQty: 0, inTransitQty: 0, avgDailyDemand: 1, demandDays: 30, unitCost: 10 });
+  const all = planPurchases({ items: [mk('urgent', 0), mk('later', 8)], suppliers: [] });
+  assert.equal(all.suggestions.length, 2);
+  const capped = planPurchases({ items: [mk('urgent', 0), mk('later', 8)], suppliers: [], budget: all.suggestions[0].estimatedCost! });
+  assert.deepEqual(capped.suggestions.map((s) => s.itemId), ['urgent']);
+  assert.match(capped.skipped.find((s) => s.itemId === 'later')!.reason, /past the budget/);
+});

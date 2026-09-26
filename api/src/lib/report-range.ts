@@ -1,3 +1,4 @@
+import { currentTimezone } from './timezone-context.js';
 import { DEFAULT_CAMPAIGN_TIMEZONE, endOfLocalDayIso, isDateOnly, isValidTimezone, startOfLocalDayIso } from './stock-take-campaign.js';
 
 // Guide Week 18: reports and exports must define timezone handling explicitly,
@@ -26,7 +27,7 @@ function resolveBound(value: unknown, edge: 'from' | 'to', timezone: string): st
 }
 
 export function resolveReportRange(input: ReportRangeInput): ResolvedReportRange {
-  const timezone = input.timezone === undefined || input.timezone === '' ? DEFAULT_CAMPAIGN_TIMEZONE : String(input.timezone);
+  const timezone = input.timezone === undefined || input.timezone === '' ? currentTimezone() : String(input.timezone);
   if (!isValidTimezone(timezone)) throw new ReportRangeError(`Unknown timezone "${timezone}". Use an IANA name such as Asia/Kolkata.`);
   const from = resolveBound(input.from, 'from', timezone);
   const to = resolveBound(input.to, 'to', timezone);

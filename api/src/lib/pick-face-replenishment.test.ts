@@ -44,3 +44,30 @@ test('suggests nothing when no reserve bin has stock', () => {
   );
   assert.equal(result, null);
 });
+
+// Audit R-2: replenishment must be FEFO-aware.
+test('the earliest-expiry reserve lot is moved first, even if a fresher bin holds more', () => {
+  const suggestion = planPickFaceReplenishment(
+    { binId: 'pf', code: 'PF-1', onHand: 1, min: 5, max: 10 },
+    [
+      { binId: 'r1', code: 'R-1', onHand: 100, lotId: 'fresh', expiryDate: '2027-06-01T00:00:00Z' },
+      { binId: 'r2', code: 'R-2', onHand: 6, lotId: 'old', expiryDate: '2026-11-01T00:00:00Z' },
+    ],
+  );
+  assert.equal(suggestion?.fromBinCode, 'R-2');
+  assert.equal(suggestion?.lotId, 'old');
+  assert.equal(suggestion?.quantity, 6);
+});
+
+test('undated lots sort after dated ones; among equals the richest bin wins', () => {
+  const s = planPickFaceReplenishment({ binId: 'pf', code: 'PF', onHand: 0, min: 5, max: 8 }, [
+    { binId: 'a', code: 'A', onHand: 3 },
+    { binId: 'b', code: 'B', onHand: 9 },
+    { binId: 'c', code: 'C', onHand: 2, expiryDate: '2026-12-01T00:00:00Z' },
+  ]);
+  assert.equal(s?.fromBinCode, 'C');
+  const rich = planPickFaceReplenishment({ binId: 'pf', code: 'PF', onHand: 0, min: 5, max: 8 }, [
+    { binId: 'a', code: 'A', onHand: 3 }, { binId: 'b', code: 'B', onHand: 9 },
+  ]);
+  assert.equal(rich?.fromBinCode, 'B');
+});

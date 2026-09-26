@@ -5,6 +5,7 @@ import {
   ABC_CADENCE,
   addDaysIso,
   aggregateLocationStock,
+  buildCountTriggers,
   buildCycleCountPlan,
   classifyAbcClass,
   classifyAbcItems,
@@ -31,12 +32,13 @@ test('classes default to A and reject unknown values', () => {
   assert.throws(() => parseAbcClasses(['Z']), /include A, B, or C/);
 });
 
-test('seed loc-1 stock ranks yoghurt and bread as A, rice and milk as B, flour as C', () => {
+test('seed loc-1 stock: costed yoghurt and bread rank A; uncosted rice, milk and flour are held in B (unknown value is not top priority and not ignorable)', () => {
   const aggregated = aggregateLocationStock(seedItems, seedStockLedger.filter((row) => row.locationId === 'loc-1'));
   const byId = Object.fromEntries(aggregated.map((row) => [row.itemId, row]));
   assert.equal(byId['item-1004'].extendedValue, 180);
   assert.equal(byId['item-1005'].extendedValue, 90);
-  assert.equal(byId['item-1001'].extendedValue, 28);
+  // Uncosted stock no longer contributes its unit COUNT as if it were rupees (audit P1-5).
+  assert.equal(byId['item-1001'].extendedValue, 0);
   assert.equal(byId['item-1001'].valueSource, 'qty_proxy');
   assert.equal(byId['item-1004'].valueSource, 'purchase');
 
@@ -45,7 +47,7 @@ test('seed loc-1 stock ranks yoghurt and bread as A, rice and milk as B, flour a
   assert.equal(classified.get('item-1005')?.abcClass, 'A');
   assert.equal(classified.get('item-1001')?.abcClass, 'B');
   assert.equal(classified.get('item-1002')?.abcClass, 'B');
-  assert.equal(classified.get('item-1006')?.abcClass, 'C');
+  assert.equal(classified.get('item-1006')?.abcClass, 'B');
 });
 
 test('cycle-count plan applies cadence and skips items already ASSIGNED', () => {
@@ -70,8 +72,10 @@ test('cycle-count plan applies cadence and skips items already ASSIGNED', () => 
 
   assert.equal(plan.items.length, 5);
   assert.equal(plan.summary.A.count, 2);
+  // B now holds the three uncosted items (rice assigned; milk and flour eligible).
+  assert.equal(plan.summary.B.count, 3);
   assert.equal(plan.summary.B.assigned, 1);
-  assert.equal(plan.summary.B.eligible, 1);
+  assert.equal(plan.summary.B.eligible, 2);
   assert.equal(plan.items[0].itemId, 'item-1004');
   assert.equal(plan.items[0].priority, 'HIGH');
   assert.equal(plan.items[0].dueDate, addDaysIso(now, 7));
@@ -81,8 +85,8 @@ test('cycle-count plan applies cadence and skips items already ASSIGNED', () => 
   assert.equal(rice?.priority, 'NORMAL');
   assert.equal(rice?.dueDate, addDaysIso(now, ABC_CADENCE.B.dueInDays));
   const flour = plan.items.find((item) => item.itemId === 'item-1006');
-  assert.equal(flour?.abcClass, 'C');
-  assert.equal(flour?.priority, 'LOW');
+  assert.equal(flour?.abcClass, 'B');
+  assert.equal(flour?.priority, 'NORMAL');
 
   const classA = selectEligibleCycleCountItems(plan.items, { classes: ['A'] });
   assert.deepEqual(classA.map((item) => item.itemId), ['item-1004', 'item-1005']);
@@ -101,4 +105,60 @@ test('zero-stock locations produce an empty plan', () => {
   assert.equal(plan.items.length, 0);
   assert.equal(plan.totalValue, 0);
   assert.equal(plan.summary.A.count, 0);
+});
+
+// Audit P1-6: the cadence used to set only a due date; it never gated eligibility.
+test('an item counted within its cadence is not due again; never-counted and overdue items are', () => {
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString();
+  const plan = buildCycleCountPlan({
+    locationId: 'loc-1', items: seedItems, stock: seedStockLedger, assignments: [], now,
+    counts: [
+      { itemId: 'item-1004', locationId: 'loc-1', createdAt: daysAgo(2) },   // A (weekly): counted 2 days ago -> not due
+      { itemId: 'item-1005', locationId: 'loc-1', createdAt: daysAgo(9) },   // A: 9 days ago -> due
+      { itemId: 'item-1005', locationId: 'loc-1', createdAt: daysAgo(30) },  // older count must not mask the newer one
+      { itemId: 'item-1004', locationId: 'other', createdAt: daysAgo(1) },   // other location: irrelevant
+    ],
+  });
+  const byId = Object.fromEntries(plan.items.map((item) => [item.itemId, item]));
+  assert.equal(byId['item-1004'].due, false);
+  assert.equal(byId['item-1004'].eligible, false);
+  assert.equal(byId['item-1004'].daysSinceCounted, 2);
+  assert.equal(byId['item-1005'].due, true);
+  assert.equal(byId['item-1005'].daysSinceCounted, 9);
+  assert.equal(byId['item-1001'].due, true, 'never counted');
+  assert.equal(byId['item-1001'].lastCountedAt, null);
+  assert.deepEqual(selectEligibleCycleCountItems(plan.items, { classes: ['A'] }).map((item) => item.itemId), ['item-1005']);
+});
+
+test('when NOTHING has a cost, quantity is the ranking unit for everyone (never mixed with currency)', () => {
+  const bare = seedItems.map((item) => ({ ...item, lots: item.lots.map((lot) => ({ ...lot, attributes: {} })) }));
+  const aggregated = aggregateLocationStock(bare, seedStockLedger.filter((row) => row.locationId === 'loc-1'));
+  assert.ok(aggregated.every((row) => row.valueSource === 'qty_proxy' && row.extendedValue === row.onHand));
+  const classes = classifyAbcItems(aggregated);
+  assert.ok([...classes.values()].some((value) => value.abcClass === 'A'), 'ranking still produces an A class');
+});
+
+// Audit C-2: process-triggered counts the ABC cadence can never surface.
+test('negative balances and over-reserved stock trigger an immediate count; the ABC plan still skips them', () => {
+  const item = seedItems[0];
+  const lotId = item.lots[0].id;
+  const stock = [
+    { itemId: item.id, lotId, locationId: 'loc-1', onHand: -4, reserved: 0 },
+    { itemId: seedItems[1].id, lotId: seedItems[1].lots[0].id, locationId: 'loc-1', onHand: 2, reserved: 5 },
+    { itemId: seedItems[2].id, lotId: seedItems[2].lots[0].id, locationId: 'loc-1', onHand: 8, reserved: 1 },
+  ] as never;
+  const triggers = buildCountTriggers(seedItems, stock);
+  assert.deepEqual(triggers.map((t) => t.reason), ['NEGATIVE_BALANCE', 'OVER_RESERVED']);
+  assert.ok(triggers.every((t) => t.priority === 'HIGH'));
+  const plan = buildCycleCountPlan({ locationId: 'loc-1', items: seedItems, stock, assignments: [], now });
+  assert.equal(plan.triggers.length, 2);
+  assert.ok(!plan.items.some((entry) => entry.itemId === item.id), 'the negative item is not on the value-ranked cadence');
+});
+
+test('a zero balance on an item that is still selling triggers a count; a zero on a dead item does not (audit C-2)', () => {
+  const items = [{ id: 'sell', code: 'SELL', name: 'S', lots: [] }, { id: 'dead', code: 'DEAD', name: 'D', lots: [] }] as never;
+  const stock = [{ itemId: 'sell', lotId: 'l1', locationId: 'x', onHand: 0 }, { itemId: 'dead', lotId: 'l2', locationId: 'x', onHand: 0 }] as never;
+  const triggers = buildCountTriggers(items, stock, new Set(['sell']));
+  assert.deepEqual(triggers.map((t) => [t.code, t.reason]), [['SELL', 'ZERO_BALANCE']]);
+  assert.equal(buildCountTriggers(items, stock).length, 0, 'without sales data no zero-balance trigger is raised');
 });

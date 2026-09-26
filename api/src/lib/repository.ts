@@ -66,6 +66,7 @@ export type CountRecord = {
   reviewedBy?: string;
   reviewedAt?: string;
   reviewReason?: string;
+  reasonCode?: string;
   parentCountId?: string;
   varianceMovementId?: string;
   // Blueprint v4 §14 - see lib/late-movements.ts.
@@ -424,6 +425,7 @@ export function updateCountReview(
   status: 'APPROVED' | 'REJECTED' | 'RECOUNT',
   reviewedBy: string,
   reviewReason?: string,
+  reasonCode?: string,
 ): CountRecord {
   const count = counts.find((record) => record.id === id);
   if (!count) throw new Error('Stock count was not found.');
@@ -433,6 +435,7 @@ export function updateCountReview(
   count.reviewedBy = reviewedBy;
   count.reviewedAt = new Date().toISOString();
   if (reviewReason) count.reviewReason = reviewReason;
+  if (reasonCode) count.reasonCode = reasonCode;
 
   if (status === 'APPROVED') {
     const variance = count.physicalQuantity - count.bookQty;

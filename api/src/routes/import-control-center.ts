@@ -1,3 +1,4 @@
+import { currentTimezone } from '../lib/timezone-context.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { canAccessLocation } from '../lib/inventory.js';
@@ -18,7 +19,7 @@ router.get('/imports/control-center', extractToken, requireAuth, async (req: Req
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role)) {
     return res.status(403).json({ message: 'Import control center access denied.' });
   }
-  const timezone = typeof req.query.timezone === 'string' && req.query.timezone ? req.query.timezone : DEFAULT_CAMPAIGN_TIMEZONE;
+  const timezone = typeof req.query.timezone === 'string' && req.query.timezone ? req.query.timezone : currentTimezone();
   if (!isValidTimezone(timezone)) return res.status(400).json({ message: 'timezone is not a valid IANA timezone.' });
   const date = req.query.date === undefined ? todayFor(timezone) : req.query.date;
   if (!isDateOnly(date)) return res.status(400).json({ message: 'date must be a YYYY-MM-DD date.' });

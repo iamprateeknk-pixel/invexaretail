@@ -86,3 +86,11 @@ integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock
   await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(4), tenant), /already confirmed/);
   assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand, 6);
 });
+
+integration('the review stores the root-cause reason code with the variance (audit C-3)', async () => {
+  const f = await fixture(10);
+  const count = { ...(await pendingCount(f, 8, 10)), reasonCode: 'DAMAGE' };
+  await persistCountReview(count, f.companyId);
+  const row = await prisma.stockCount.findUniqueOrThrow({ where: { id: count.id } });
+  assert.equal((row as { reasonCode?: string | null }).reasonCode, 'DAMAGE');
+});

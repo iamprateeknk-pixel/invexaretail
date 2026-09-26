@@ -176,6 +176,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     reviewedBy: count.approvedById ?? undefined,
     reviewedAt: count.approvedAt?.toISOString(),
     reviewReason: count.reviewReason ?? undefined,
+    reasonCode: (count as { reasonCode?: string | null }).reasonCode ?? undefined,
     parentCountId: count.parentCountId ?? undefined,
     requestId: (count as { requestId?: string | null }).requestId ?? undefined,
     reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
@@ -756,6 +757,7 @@ export async function persistCountReview(count: CountRecord, companyId: string):
           : null,
         reviewStatus: count.status ?? 'PENDING_REVIEW',
         reviewReason: count.reviewReason ?? null,
+        reasonCode: count.reasonCode ?? null,
       },
     });
     if (claimed.count !== 1) {
@@ -980,13 +982,23 @@ export async function persistConfirmedPickAllocations(
       });
       if (!ledger || ledger.onHand < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
       // Stock leaves the source through the canonical service, in this transaction.
-      await postInventoryMovementInTransaction(tx, {
+      const outPost = await postInventoryMovementInTransaction(tx, {
         tenant,
         itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId,
         movementType: 'TRANSFER_OUT', qtyDelta: -allocation.quantity,
         idempotencyKey: `transfer-confirm:${transferId}:${allocation.itemId}:${allocation.lotId}:${allocation.locationId}`,
         reason: 'Transfer pick confirmed', sourceDocument: transferId, correlationId: transferId,
+        // Marks the leg as tracked in transit, so the receipt only releases what this confirm added.
+        metadata: { inTransit: true },
       });
+      // Stock in flight stays visible on the source lot row until the receipt releases it (audit O-7).
+      // Skipped when this confirm was already applied (duplicate idempotent post), so a replay cannot double it.
+      if (!outPost.duplicate) {
+        await tx.stockLedger.updateMany({
+          where: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId },
+          data: { inTransit: { increment: allocation.quantity } },
+        });
+      }
     }
     await tx.transfer.update({ where: { id: transferId, companyId: tenant.companyId }, data: { status: 'CONFIRMED' as any } });
   }, { maxWait: 10_000, timeout: 60_000 });

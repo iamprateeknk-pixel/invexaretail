@@ -31,10 +31,29 @@ export type CycleCountPlanItem = CycleCountStockInput & {
   priority: CountPriority;
   dueDate: string;
   assigned: boolean;
+  /** When this item was last counted at this location (ISO), or null if never. */
+  lastCountedAt: string | null;
+  /** Whole days since the last count; null if never counted. */
+  daysSinceCounted: number | null;
+  /** Never counted, or last counted at least one cadence ago. */
+  due: boolean;
   eligible: boolean;
 };
 
+export type CountTrigger = {
+  itemId: string;
+  code: string;
+  lotId: string;
+  reason: 'NEGATIVE_BALANCE' | 'OVER_RESERVED' | 'ZERO_BALANCE';
+  priority: CountPriority;
+  onHand: number;
+  reserved: number;
+  message: string;
+};
+
 export type CycleCountPlan = {
+  /** Event-driven counts the cadence would never pick: negative balances and stock promised beyond what is on hand. */
+  triggers: CountTrigger[];
   locationId: string;
   generatedAt: string;
   totalValue: number;
@@ -76,8 +95,12 @@ export function classifyAbcClass(cumulativeBefore: number): AbcClass {
   return 'C';
 }
 
-export function classifyAbcItems(rows: Array<{ itemId: string; extendedValue: number }>): Map<string, { abcClass: AbcClass; share: number; cumulativeShare: number }> {
-  const ranked = [...rows].sort((left, right) => {
+export function classifyAbcItems(rows: Array<{ itemId: string; extendedValue: number; valueSource?: AbcValueSource }>): Map<string, { abcClass: AbcClass; share: number; cumulativeShare: number }> {
+  const anyCosted = rows.some((row) => row.valueSource === 'purchase' || row.valueSource === 'mixed');
+  // With costs available, an item that has none cannot be ranked by value: it is held in B.
+  const unvalued = anyCosted ? rows.filter((row) => row.valueSource === 'qty_proxy') : [];
+  const unvaluedIds = new Set(unvalued.map((row) => row.itemId));
+  const ranked = rows.filter((row) => !unvaluedIds.has(row.itemId)).sort((left, right) => {
     if (right.extendedValue !== left.extendedValue) return right.extendedValue - left.extendedValue;
     return left.itemId.localeCompare(right.itemId);
   });
@@ -93,23 +116,41 @@ export function classifyAbcItems(rows: Array<{ itemId: string; extendedValue: nu
       cumulativeShare: totalValue <= 0 ? 0 : cumulative / totalValue,
     });
   }
+  for (const row of unvalued) classified.set(row.itemId, { abcClass: 'B', share: 0, cumulativeShare: 0 });
   return classified;
 }
 
+/**
+ * Value of each item's stock at this location, for ABC ranking.
+ *
+ * Audit P1-5: a lot with no recorded cost used to contribute its UNIT COUNT as if it
+ * were rupees, so 10,000 cheap units without a cost outranked a costed item worth
+ * far more, and the ranking mixed two incompatible units. Now, whenever ANY stock
+ * here has a cost, value is currency only: uncosted stock contributes 0 to the
+ * ranking (flagged `qty_proxy`) and `classifyAbcItems` places such items in class B
+ * - unknown value is neither top priority nor ignorable. Only when nothing has a cost
+ * is quantity used, uniformly, as the ranking unit.
+ */
 export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRecord[]): CycleCountStockInput[] {
   const itemMap = new Map(items.map((item) => [item.id, item]));
-  const byItem = new Map<string, { onHand: number; extendedValue: number; sources: Set<Exclude<AbcValueSource, 'mixed'>> }>();
-
+  type Row = { itemId: string; lotId: string; onHand: number; costed: number | null };
+  const rows: Row[] = [];
   for (const row of stock) {
     if (row.onHand <= 0) continue;
     const item = itemMap.get(row.itemId);
     if (!item) continue;
     const lot = item.lots.find((candidate) => candidate.id === row.lotId);
-    const purchaseValue = estimateLotValue(lot?.attributes, row.onHand);
-    const source: Exclude<AbcValueSource, 'mixed'> = purchaseValue === null ? 'qty_proxy' : 'purchase';
+    rows.push({ itemId: row.itemId, lotId: row.lotId, onHand: row.onHand, costed: estimateLotValue(lot?.attributes, row.onHand) });
+  }
+  const anyCosted = rows.some((row) => row.costed !== null);
+
+  const byItem = new Map<string, { onHand: number; extendedValue: number; sources: Set<Exclude<AbcValueSource, 'mixed'>> }>();
+  for (const row of rows) {
+    const source: Exclude<AbcValueSource, 'mixed'> = row.costed === null ? 'qty_proxy' : 'purchase';
+    const value = row.costed ?? (anyCosted ? 0 : row.onHand);
     const current = byItem.get(row.itemId) ?? { onHand: 0, extendedValue: 0, sources: new Set() };
     current.onHand += row.onHand;
-    current.extendedValue += purchaseValue ?? row.onHand;
+    current.extendedValue += value;
     current.sources.add(source);
     byItem.set(row.itemId, current);
   }
@@ -130,11 +171,47 @@ export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRe
     .sort((left, right) => left.itemId.localeCompare(right.itemId));
 }
 
+/**
+ * Audit C-2: the ABC plan skips every on-hand <= 0 row, so the items MOST in need of a
+ * count - a negative balance means the book is provably wrong - were invisible to it.
+ * Process-triggered counts (cycle-counting framework): count on a negative balance
+ * immediately, and when more is reserved than exists.
+ */
+export function buildCountTriggers(items: ItemRecord[], stock: StockLedgerRecord[], recentlySoldItemIds: ReadonlySet<string> = new Set()): CountTrigger[] {
+  const itemMap = new Map(items.map((item) => [item.id, item]));
+  const triggers: CountTrigger[] = [];
+  for (const row of stock) {
+    const item = itemMap.get(row.itemId);
+    if (!item) continue;
+    const reserved = Number((row as { reserved?: number }).reserved ?? 0);
+    const base = { itemId: row.itemId, code: item.code, lotId: row.lotId, onHand: row.onHand, reserved };
+    if (row.onHand < 0) {
+      triggers.push({ ...base, reason: 'NEGATIVE_BALANCE', priority: 'HIGH', message: `${item.code} shows a negative balance (${row.onHand}) - the book is wrong; count it now.` });
+    } else if (reserved > row.onHand + 1e-8) {
+      triggers.push({ ...base, reason: 'OVER_RESERVED', priority: 'HIGH', message: `${item.code} has ${reserved} reserved but only ${row.onHand} on hand - verify the physical stock.` });
+    }
+  }
+  // A zero balance on an item that is still selling is the classic phantom-inventory signal (the book says
+  // empty, so nothing gets replenished or counted, while the shelf may hold stock). One trigger per item.
+  const totals = new Map<string, number>();
+  for (const row of stock) totals.set(row.itemId, (totals.get(row.itemId) ?? 0) + row.onHand);
+  for (const [itemId, total] of totals) {
+    const item = itemMap.get(itemId);
+    if (!item || total !== 0 || !recentlySoldItemIds.has(itemId) || triggers.some((t) => t.itemId === itemId)) continue;
+    triggers.push({ itemId, code: item.code, lotId: stock.find((row) => row.itemId === itemId)!.lotId, onHand: 0, reserved: 0, reason: 'ZERO_BALANCE', priority: 'NORMAL', message: `${item.code} shows zero stock but has sold recently - verify the shelf.` });
+  }
+  return triggers.sort((a, b) => a.onHand - b.onHand || a.code.localeCompare(b.code));
+}
+
 export function buildCycleCountPlan(input: {
   locationId: string;
   items: ItemRecord[];
   stock: StockLedgerRecord[];
   assignments: CountAssignmentRecord[];
+  /** Past counts, used to honour the cadence (an A item counted yesterday is not due again). */
+  counts?: Array<{ itemId: string; locationId: string; createdAt: string }>;
+  /** Items with sales at this location recently; enables the zero-balance trigger. */
+  recentlySoldItemIds?: ReadonlySet<string>;
   now?: Date;
 }): CycleCountPlan {
   const now = input.now ?? new Date();
@@ -147,11 +224,24 @@ export function buildCycleCountPlan(input: {
       .map((assignment) => assignment.itemId),
   );
 
+  const lastCounted = new Map<string, string>();
+  for (const count of input.counts ?? []) {
+    if (count.locationId !== input.locationId) continue;
+    const previous = lastCounted.get(count.itemId);
+    if (!previous || count.createdAt > previous) lastCounted.set(count.itemId, count.createdAt);
+  }
+
   const planItems: CycleCountPlanItem[] = aggregated
     .map((row) => {
       const abc = classified.get(row.itemId)!;
       const cadence = ABC_CADENCE[abc.abcClass];
       const assigned = assignedItemIds.has(row.itemId);
+      // Audit P1-6: eligibility used to be just "not currently assigned", so every A item
+      // was eligible every day regardless of when it was last counted - the weekly/monthly/
+      // quarterly cadence only set a due date on the assignment, it never gated one.
+      const last = lastCounted.get(row.itemId) ?? null;
+      const daysSince = last ? Math.floor((now.getTime() - Date.parse(last)) / 86_400_000) : null;
+      const due = daysSince === null || daysSince >= cadence.dueInDays;
       return {
         ...row,
         abcClass: abc.abcClass,
@@ -161,7 +251,10 @@ export function buildCycleCountPlan(input: {
         priority: cadence.priority,
         dueDate: addDaysIso(now, cadence.dueInDays),
         assigned,
-        eligible: !assigned,
+        lastCountedAt: last,
+        daysSinceCounted: daysSince,
+        due,
+        eligible: !assigned && due,
       };
     })
     .sort((left, right) => {
@@ -195,6 +288,7 @@ export function buildCycleCountPlan(input: {
   }
 
   return {
+    triggers: buildCountTriggers(input.items, locationStock, input.recentlySoldItemIds),
     locationId: input.locationId,
     generatedAt: now.toISOString(),
     totalValue: planItems.reduce((sum, item) => sum + item.extendedValue, 0),

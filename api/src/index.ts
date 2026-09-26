@@ -1,3 +1,4 @@
+import { loadCompanyTimezones } from './lib/company-timezone.js';
 import './lib/telemetry-bootstrap.js';
 import { randomUUID } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -391,6 +392,7 @@ const hydrateRepository = async () => {
   // not yet received those optional tables.
   try {
     await hydrateCompanyProfile();
+    await loadCompanyTimezones().catch((error) => console.error('[timezone] load failed', error));
   } catch (error) {
     console.warn('Company profile could not be hydrated; continuing with the default profile.', error instanceof Error ? error.message : error);
   }
