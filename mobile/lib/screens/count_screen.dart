@@ -23,6 +23,10 @@ class _CountScreenState extends State<CountScreen> {
   String? _locationId;
   String? _selectedBatchKey;
   final _qty = TextEditingController();
+  // Lots already submitted this session, per item: a multi-lot item's assignment
+  // does not close on the server until every lot with stock is counted, so the
+  // flow must guide the user through all of them, not just the first.
+  final Map<String, Set<String>> _submittedLots = {};
 
   @override
   void initState() {
@@ -64,7 +68,7 @@ class _CountScreenState extends State<CountScreen> {
     final assignedIds = _selectedBatchRows.map((row) => row.itemId).toSet();
     // The work feed already dropped zero-stock items and lots and says how each
     // item is counted; an older server has no feed, so fall back to the catalog.
-    if (controller.isStoreUser && controller.countTasks.isNotEmpty) {
+    if (controller.isBlindCountWorker && controller.countTasks.isNotEmpty) {
       return [
         for (final task in controller.countTasks)
           if (assignedIds.contains(task.item.id) && task.locationId == _locationId) task.item,
@@ -81,7 +85,7 @@ class _CountScreenState extends State<CountScreen> {
   List<CatalogItem> _limitToStock(List<CatalogItem> candidates) {
     final controller = widget.controller;
     final locationId = _locationId;
-    if (!controller.isStoreUser || locationId == null || controller.selectedLocationId != locationId) {
+    if (!controller.isBlindCountWorker || locationId == null || controller.selectedLocationId != locationId) {
       return candidates;
     }
     return stockedCandidates(candidates, controller.stock, locationId);
@@ -98,6 +102,7 @@ class _CountScreenState extends State<CountScreen> {
       _itemId = null;
       _lotNo = null;
       _qty.clear();
+      _submittedLots.clear();
     });
   }
 
@@ -153,12 +158,14 @@ class _CountScreenState extends State<CountScreen> {
           : 'Choose an item, location, and a whole, non-negative quantity.');
       return;
     }
+    final isWeightItem = item != null && item.isWeightCounted;
+    final submittedLotNo = isWeightItem ? null : _lotNo;
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
       physicalQuantity: qty,
-      lotNo: item != null && item.isWeightCounted ? null : _lotNo,
-      weight: item != null && item.isWeightCounted,
+      lotNo: submittedLotNo,
+      weight: isWeightItem,
     );
     if (!ok || !mounted) {
       if (!ok) await ScanFeedback.rejected();
@@ -166,13 +173,34 @@ class _CountScreenState extends State<CountScreen> {
     }
     await ScanFeedback.saved();
     widget.controller.countDrafts.remove(_draftKey);
-    // Save & Next: go straight to the next item still open in this batch.
-    final remaining = _selectedBatchRows.where((row) => row.itemId != itemId).toList();
+    if (submittedLotNo != null) {
+      _submittedLots.putIfAbsent(itemId, () => {}).add(submittedLotNo);
+    }
+    // submitCount already refreshed the server's assignment list, so this reflects the real
+    // close-or-still-open decision: a multi-lot item whose other lots still have stock stays
+    // assigned. Stay on it and move to the next uncounted lot instead of jumping away and
+    // leaving it stuck pending forever (audit: mobile count flow, multi-lot assignments).
+    final stillAssigned = _selectedBatchRows.any((row) => row.itemId == itemId);
     setState(() {
-      _pickItem(remaining.isEmpty ? null : remaining.first.itemId);
-      if (remaining.isNotEmpty) {
-        final next = _find(_countableItems, _itemId);
-        _lotNo = next == null || next.lots.isEmpty ? null : next.lots.first.lotNo;
+      if (stillAssigned) {
+        final done = _submittedLots[itemId] ?? const <String>{};
+        LotRecord? nextLot;
+        for (final lot in item?.lots ?? const <LotRecord>[]) {
+          if (!done.contains(lot.lotNo)) {
+            nextLot = lot;
+            break;
+          }
+        }
+        _pickItem(itemId, lotNo: nextLot?.lotNo);
+        widget.controller.setNotice('${item?.name ?? itemId}: another lot at this location still needs counting.');
+      } else {
+        // Save & Next: go straight to the next item still open in this batch.
+        final remaining = _selectedBatchRows.where((row) => row.itemId != itemId).toList();
+        _pickItem(remaining.isEmpty ? null : remaining.first.itemId);
+        if (remaining.isNotEmpty) {
+          final next = _find(_countableItems, _itemId);
+          _lotNo = next == null || next.lots.isEmpty ? null : next.lots.first.lotNo;
+        }
       }
     });
   }

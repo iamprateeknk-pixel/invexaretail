@@ -172,6 +172,63 @@ export function aggregateLocationStock(items: ItemRecord[], stock: StockLedgerRe
 }
 
 /**
+ * Value of each item for ABC ranking, by *usage* (annualised units sold x unit cost) instead of
+ * stock value on hand (audit C-4). Stock-value ranking put an overstocked slow mover in class A
+ * just because a lot of it happened to be sitting on the shelf, while a fast-turning item with
+ * lean stock ranked lower - backwards for prioritising which items are worth counting most often.
+ * Unit cost is the weighted average across the item's on-hand costed lots (same lot-cost source as
+ * aggregateLocationStock). Same uncosted handling: whenever ANY item here has a cost, an uncosted
+ * item contributes 0 (`qty_proxy`, held in class B by classifyAbcItems); with nothing costed at
+ * all, units sold (annualised) is used uniformly as the ranking unit instead of on-hand quantity,
+ * since this ranking is about usage, not what is sitting in stock.
+ */
+export function aggregateUsageValue(
+  items: ItemRecord[],
+  stock: StockLedgerRecord[],
+  unitsSoldByItem: ReadonlyMap<string, number>,
+  windowDays: number,
+): CycleCountStockInput[] {
+  const itemMap = new Map(items.map((item) => [item.id, item]));
+  type Row = { itemId: string; lotId: string; onHand: number; costed: number | null };
+  const rows: Row[] = [];
+  for (const row of stock) {
+    if (row.onHand <= 0) continue;
+    const item = itemMap.get(row.itemId);
+    if (!item) continue;
+    const lot = item.lots.find((candidate) => candidate.id === row.lotId);
+    rows.push({ itemId: row.itemId, lotId: row.lotId, onHand: row.onHand, costed: estimateLotValue(lot?.attributes, row.onHand) });
+  }
+  const anyCosted = rows.some((row) => row.costed !== null);
+
+  const onHandByItem = new Map<string, number>();
+  const costByItem = new Map<string, { onHand: number; value: number; anyCosted: boolean }>();
+  for (const row of rows) {
+    onHandByItem.set(row.itemId, (onHandByItem.get(row.itemId) ?? 0) + row.onHand);
+    const entry = costByItem.get(row.itemId) ?? { onHand: 0, value: 0, anyCosted: false };
+    entry.onHand += row.onHand;
+    if (row.costed !== null) { entry.value += row.costed; entry.anyCosted = true; }
+    costByItem.set(row.itemId, entry);
+  }
+
+  const annualize = 365 / Math.max(1, windowDays);
+  const itemIds = new Set([...onHandByItem.keys(), ...unitsSoldByItem.keys()]);
+  const out: CycleCountStockInput[] = [];
+  for (const itemId of itemIds) {
+    const onHand = onHandByItem.get(itemId) ?? 0;
+    if (onHand <= 0) continue; // nothing physically here to count, regardless of past sales
+    const item = itemMap.get(itemId);
+    if (!item) continue;
+    const sold = Math.max(0, unitsSoldByItem.get(itemId) ?? 0);
+    const cost = costByItem.get(itemId);
+    const unitCost = cost?.anyCosted && cost.onHand > 0 ? cost.value / cost.onHand : null;
+    const valueSource: AbcValueSource = unitCost !== null ? 'purchase' : 'qty_proxy';
+    const extendedValue = unitCost !== null ? sold * annualize * unitCost : anyCosted ? 0 : sold * annualize;
+    out.push({ itemId, code: item.code, name: item.name, onHand, extendedValue, valueSource });
+  }
+  return out.sort((left, right) => left.itemId.localeCompare(right.itemId));
+}
+
+/**
  * Audit C-2: the ABC plan skips every on-hand <= 0 row, so the items MOST in need of a
  * count - a negative balance means the book is provably wrong - were invisible to it.
  * Process-triggered counts (cycle-counting framework): count on a negative balance
@@ -224,12 +281,22 @@ export function buildCycleCountPlan(input: {
   recentDiscrepancyItemIds?: ReadonlySet<string>;
   /** Per-company override of ABC_CADENCE's days-between-counts (audit C-4); missing classes fall back to the default. */
   cadenceDays?: Partial<Record<AbcClass, number>>;
+  /**
+   * Units sold per item over `demandWindowDays` (audit C-4): when given, ABC ranks by annualised
+   * usage value (aggregateUsageValue) instead of stock value on hand. Omit when no demand data is
+   * available (e.g. no database) - the plan falls back to stock-value ranking rather than reporting
+   * nothing.
+   */
+  unitsSoldByItem?: ReadonlyMap<string, number>;
+  demandWindowDays?: number;
   now?: Date;
 }): CycleCountPlan {
   const now = input.now ?? new Date();
   const dueInDaysFor = (abcClass: AbcClass) => input.cadenceDays?.[abcClass] ?? ABC_CADENCE[abcClass].dueInDays;
   const locationStock = input.stock.filter((row) => row.locationId === input.locationId);
-  const aggregated = aggregateLocationStock(input.items, locationStock);
+  const aggregated = input.unitsSoldByItem
+    ? aggregateUsageValue(input.items, locationStock, input.unitsSoldByItem, input.demandWindowDays ?? 90)
+    : aggregateLocationStock(input.items, locationStock);
   const classified = classifyAbcItems(aggregated);
   const assignedItemIds = new Set(
     input.assignments

@@ -90,9 +90,14 @@ void main() {
   });
 
   test('a piece count is sent to the lot endpoint with a request id', () async {
+    // A successful submit also re-fetches assignments/work-feed (a multi-lot item's assignment
+    // does not close until every lot is counted, so the client re-checks rather than assumes) -
+    // capture the specific /stock-counts request, not just whichever request came last.
     late http.Request captured;
     final controller = _controller((request) async {
-      captured = request;
+      if (request.url.path == '/api/v1/stock-counts') captured = request;
+      if (request.url.path.endsWith('/count-assignments/mine')) return _json({'assignments': []});
+      if (request.url.path.endsWith('/mobile/work')) return _json({'countTasks': []});
       return _json({'success': true, 'count': {'id': 'c1', 'itemId': 'i1', 'locationId': 'loc-1', 'physicalQuantity': 7}}, 201);
     });
     expect(await controller.submitCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 7, lotNo: 'LOT-1'), isTrue);

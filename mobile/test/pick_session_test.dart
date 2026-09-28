@@ -16,7 +16,7 @@ Map<String, dynamic> _payload() => {
       'transfer': {
         'id': 'tr-9',
         'lines': [
-          {'itemId': 'pen', 'itemCode': 'PEN', 'itemName': 'Pen', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 3, 'lotId': 'l1', 'lotNo': 'LOT-1', 'lotAvailable': 10, 'lotStatus': 'AVAILABLE'},
+          {'itemId': 'pen', 'itemCode': 'PEN', 'itemBarcode': '8901234567890', 'itemName': 'Pen', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 3, 'lotId': 'l1', 'lotNo': 'LOT-1', 'lotAvailable': 10, 'lotStatus': 'AVAILABLE'},
           {'itemId': 'pen', 'itemCode': 'PEN', 'itemName': 'Pen', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 2, 'lotId': 'l2', 'lotNo': 'LOT-2', 'lotAvailable': 0, 'lotStatus': 'AVAILABLE'},
           {'itemId': 'cup', 'itemCode': 'CUP', 'itemName': 'Cup', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 4, 'lotId': 'l3', 'lotNo': 'LOT-3', 'lotAvailable': 9, 'lotStatus': 'BLOCKED'},
           {'itemId': 'rice', 'itemCode': 'RICE', 'itemName': 'Rice', 'unit': 'KG', 'pickMethod': 'ITEM_QTY_FIFO', 'remainingQty': 5.5, 'lotId': 'l4', 'lotNo': 'LOT-4', 'lotAvailable': 9, 'lotStatus': 'AVAILABLE'},
@@ -50,6 +50,14 @@ void main() {
     session.undoScan('pen');
     expect(session.leftFor('pen'), 3);
     expect(session.scan('LOT-1').accepted, isTrue);
+  });
+
+  test('scanning the physical product barcode matches the item, not just its internal SKU code (audit: picker scan flow)', () {
+    final session = PickSession.fromServer(_payload());
+    final result = session.scan('8901234567890');
+    expect(result.accepted, isTrue);
+    expect(session.scannedFor('pen'), 1);
+    expect(session.scan('NOT-A-BARCODE').accepted, isFalse);
   });
 
   test('a weight cannot exceed what is still to be picked, and the slip carries item + weight only', () {

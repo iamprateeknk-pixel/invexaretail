@@ -37,7 +37,10 @@ MobileRoleHome mobileHomeForRole(String role) {
         title: 'Pick & putaway',
         subtitle: 'Scan-first warehouse work. Walk bins in order; wrong scans are blocked.',
         defaultDestination: 'work',
-        destinations: [_home, _work, _scan],
+        // Warehouse stock counts are assigned to pickers too (blueprint - the server has
+        // always accepted STORE_USER and WAREHOUSE_PICKER for count assignments/submission);
+        // the app just never surfaced it here.
+        destinations: [_home, _work, _count, _scan],
       );
     case 'STORE_USER':
       return const MobileRoleHome(

@@ -5,6 +5,7 @@ import {
   ABC_CADENCE,
   addDaysIso,
   aggregateLocationStock,
+  aggregateUsageValue,
   buildCountTriggers,
   buildCycleCountPlan,
   classifyAbcClass,
@@ -13,6 +14,7 @@ import {
   selectEligibleCycleCountItems,
 } from './abc-cycle-count.js';
 import { seedItems, seedStockLedger } from './seed.js';
+import type { ItemRecord, StockLedgerRecord } from './repository.js';
 
 const now = new Date('2026-09-14T12:00:00.000Z');
 
@@ -109,6 +111,45 @@ test('cadenceDays overrides ABC_CADENCE per class; a class left out keeps the de
   assert.equal(flour?.abcClass, 'B');
   assert.equal(flour?.dueInDays, ABC_CADENCE.B.dueInDays, 'B has no override, so it keeps the default');
   assert.equal(plan.summary.C.dueInDays, ABC_CADENCE.C.dueInDays);
+});
+
+// Audit C-4: ABC ranking by usage value instead of stock value on hand.
+function usageFixture(): { items: ItemRecord[]; stock: StockLedgerRecord[] } {
+  const item = (id: string, purchaseValue: number | null, onHand: number): ItemRecord => ({
+    id, code: id, name: id,
+    lots: [{ id: `lot-${id}`, itemId: id, lotNo: `L-${id}`, attributes: purchaseValue === null ? {} : { purchaseValue: purchaseValue * onHand } }],
+  });
+  return {
+    items: [item('overstock', 1, 1000), item('fastmover', 5, 10)],
+    stock: [
+      { itemId: 'overstock', lotId: 'lot-overstock', locationId: 'loc-1', onHand: 1000, quarantine: 0, version: 0 },
+      { itemId: 'fastmover', lotId: 'lot-fastmover', locationId: 'loc-1', onHand: 10, quarantine: 0, version: 0 },
+    ],
+  };
+}
+
+test('aggregateUsageValue ranks by annualised units sold x unit cost, not on-hand quantity', () => {
+  const { items, stock } = usageFixture();
+  // overstock: 1000 on hand x cost 1 = stock value 1000, but never sells. fastmover: 10 on hand x
+  // cost 5 = stock value only 50, but sells fast - 200 units in a 90-day window.
+  const rows = aggregateUsageValue(items, stock, new Map([['fastmover', 200]]), 90);
+  const byId = Object.fromEntries(rows.map((row) => [row.itemId, row]));
+  assert.equal(byId.overstock.extendedValue, 0, 'never sold: zero usage value regardless of how much is on the shelf');
+  assert.ok(byId.fastmover.extendedValue > byId.overstock.extendedValue);
+  assert.equal(Math.round(byId.fastmover.extendedValue), Math.round(200 * (365 / 90) * 5), '200 units annualised (x365/90) x unit cost 5');
+});
+
+test('buildCycleCountPlan with unitsSoldByItem flips the overstocked-slow-mover-ranks-A bug: usage ranks it C, the fast mover A', () => {
+  const { items, stock } = usageFixture();
+  const byStockValue = buildCycleCountPlan({ locationId: 'loc-1', items, stock, assignments: [], now });
+  assert.equal(byStockValue.items.find((i) => i.itemId === 'overstock')?.abcClass, 'A', 'stock-value mode (no demand given): the audit-reported bug, preserved for backward compatibility');
+
+  const byUsage = buildCycleCountPlan({
+    locationId: 'loc-1', items, stock, assignments: [], now,
+    unitsSoldByItem: new Map([['fastmover', 200]]), demandWindowDays: 90,
+  });
+  assert.equal(byUsage.items.find((i) => i.itemId === 'overstock')?.abcClass, 'C', 'usage-value mode: no sales, so it is no longer prioritised');
+  assert.equal(byUsage.items.find((i) => i.itemId === 'fastmover')?.abcClass, 'A', 'usage-value mode: the fast mover now ranks by how much it actually sells');
 });
 
 test('zero-stock locations produce an empty plan', () => {

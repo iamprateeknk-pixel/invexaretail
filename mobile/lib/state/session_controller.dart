@@ -62,6 +62,10 @@ class SessionController extends ChangeNotifier {
 
   bool get isSignedIn => user != null && (api.token ?? '').isNotEmpty;
   bool get isStoreUser => user?.role == 'STORE_USER';
+  // Warehouse pickers also work off count assignments (the server's
+  // /count-assignments/mine and /stock-counts already accept both roles) -
+  // a picker's own warehouse stock counts were missing from the app entirely.
+  bool get isBlindCountWorker => user?.role == 'STORE_USER' || user?.role == 'WAREHOUSE_PICKER';
   bool get showBookQuantity => user != null && canSeeBookQuantity(user!.role);
   bool get allowAdHocCount => user != null && canSubmitAdHocCount(user!.role);
   String get companyId => user?.companyId ?? 'default-company';
@@ -294,9 +298,9 @@ class SessionController extends ChangeNotifier {
       final jobs = <Future<void>>[
         if (slices.contains('items')) api.items().then((value) => items = value),
         if (slices.contains('counts')) api.counts().then((value) => counts = value),
-        if (slices.contains('assignments') && user?.role == 'STORE_USER')
+        if (slices.contains('assignments') && isBlindCountWorker)
           api.myAssignments().then((value) => assignments = value),
-        if ((slices.contains('assignments') || slices.contains('stock')) && user?.role == 'STORE_USER')
+        if ((slices.contains('assignments') || slices.contains('stock')) && isBlindCountWorker)
           _loadCountTasks(),
         if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
         if (slices.contains('putaway') && locationId != null)
@@ -329,7 +333,7 @@ class SessionController extends ChangeNotifier {
     dashboard = await dashFuture;
     counts = await countFuture;
     transfers = await transferFuture;
-    if (user?.role == 'STORE_USER') {
+    if (isBlindCountWorker) {
       try {
         assignments = await api.myAssignments();
       } on ApiException {
@@ -469,12 +473,21 @@ class SessionController extends ChangeNotifier {
         counts = [created, ...counts];
       }
       notice = 'Count submitted for review.';
-      // Update local state from the response instead of re-fetching the
-      // whole counts list and dashboard on every submit - that was costing
-      // two extra sequential round trips per save. The submitted item's
-      // assignment (if any) is closed server-side, so drop it locally too.
-      assignments = assignments.where((row) => !(row.itemId == itemId && row.locationId == locationId)).toList();
-      countTasks = countTasks.where((row) => !(row.item.id == itemId && row.locationId == locationId)).toList();
+      // An item's assignment only closes server-side once every lot that still has stock has
+      // been counted (commitLotCount's auto-close gate) - a multi-lot item needs each lot
+      // submitted before the task is actually done. This used to assume the first submission
+      // always closed it and drop the assignment from this list right away, which hid the still-
+      // open remaining lots from the picker/store user and left the assignment permanently
+      // ASSIGNED on the server with no way to reach it from the app again. Re-fetch from the
+      // server instead, so the list always reflects the real close-or-still-open decision.
+      if (isBlindCountWorker) {
+        try {
+          assignments = await api.myAssignments();
+        } on ApiException {
+          // Keep the previous list; the next sync/poll corrects it.
+        }
+        await _loadCountTasks();
+      }
       unawaited(_refreshDashboardQuietly());
       return true;
     } on ApiException catch (err) {
