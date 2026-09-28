@@ -94,6 +94,23 @@ test('cycle-count plan applies cadence and skips items already ASSIGNED', () => 
   assert.equal(skippedRice.length, 0);
 });
 
+// Audit C-4: cadence used to be the fixed ABC_CADENCE constant for every tenant.
+test('cadenceDays overrides ABC_CADENCE per class; a class left out keeps the default', () => {
+  const plan = buildCycleCountPlan({
+    locationId: 'loc-1', items: seedItems, stock: seedStockLedger, assignments: [], now,
+    cadenceDays: { A: 14 }, // B/C fall back to the 30/90 default
+  });
+  const yoghurt = plan.items.find((item) => item.itemId === 'item-1004');
+  assert.equal(yoghurt?.abcClass, 'A');
+  assert.equal(yoghurt?.dueInDays, 14);
+  assert.equal(yoghurt?.dueDate, addDaysIso(now, 14));
+  assert.equal(plan.summary.A.dueInDays, 14);
+  const flour = plan.items.find((item) => item.itemId === 'item-1006');
+  assert.equal(flour?.abcClass, 'B');
+  assert.equal(flour?.dueInDays, ABC_CADENCE.B.dueInDays, 'B has no override, so it keeps the default');
+  assert.equal(plan.summary.C.dueInDays, ABC_CADENCE.C.dueInDays);
+});
+
 test('zero-stock locations produce an empty plan', () => {
   const plan = buildCycleCountPlan({
     locationId: 'loc-empty',

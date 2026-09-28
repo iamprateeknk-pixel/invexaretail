@@ -55,6 +55,7 @@ import {
   parseAbcClasses,
   selectEligibleCycleCountItems,
 } from '../lib/abc-cycle-count.js';
+import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import {
   canCreateTransfer,
   isReceivableStatus,
@@ -1504,13 +1505,15 @@ router.get('/count-assignments', (req: Request, res: Response) => {
   return res.json({ assignments });
 });
 
-function cycleCountPlanForLocation(locationId: string, now = new Date()) {
+function cycleCountPlanForLocation(locationId: string, companyId: string, now = new Date()) {
   return buildCycleCountPlan({
     locationId,
     items: listItems(),
     stock: listStockLedgerForLocation(locationId),
     assignments: listCountAssignments(),
     counts: listCounts(),
+    // Audit C-4: cadence is a per-company setting now, not the fixed ABC_CADENCE constant.
+    cadenceDays: cadenceForCompany(companyId),
     // Items sold at this location in the last 30 days: order/import movements and the legacy daily sales import.
     recentlySoldItemIds: new Set([
       ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
@@ -1536,7 +1539,7 @@ router.get('/cycle-counts/:locationId', (req: Request, res: Response) => {
   } catch {
     return res.status(403).json({ message: 'This user cannot manage counts at the selected location.' });
   }
-  return res.json({ plan: cycleCountPlanForLocation(locationId) });
+  return res.json({ plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID) });
 });
 
 router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Response) => {
@@ -1580,7 +1583,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
     ? [...new Set(itemIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
     : [];
 
-  const plan = cycleCountPlanForLocation(locationId);
+  const plan = cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (requestedItemIds.length) {
     const known = new Set(plan.items.map((item) => item.itemId));
     const unknownItemId = requestedItemIds.find((id) => !known.has(id));
@@ -1627,7 +1630,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   return res.status(201).json({
     success: true,
     assignments: createdAssignments,
-    plan: cycleCountPlanForLocation(locationId),
+    plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID),
   });
 });
 

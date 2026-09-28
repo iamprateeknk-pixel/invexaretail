@@ -227,6 +227,31 @@ integration('company timezone can be read, set by an admin, rejected when invali
   });
 });
 
+integration('cycle-count cadence can be read, set per class by an admin, rejected when invalid, and is per company (audit C-4)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  await withServer(async (call) => {
+    const initial = await call('GET', '/company/cycle-count-cadence', a.token);
+    assert.equal(initial.status, 200, JSON.stringify(initial.body));
+    assert.deepEqual(initial.body.cadenceDays, { A: 7, B: 30, C: 90 });
+
+    assert.equal((await call('PUT', '/company/cycle-count-cadence', a.token, { A: 0 })).status, 400, 'zero days is invalid');
+    assert.equal((await call('PUT', '/company/cycle-count-cadence', a.token, { A: 3.5 })).status, 400, 'fractional days is invalid');
+    assert.equal((await call('PUT', '/company/cycle-count-cadence', a.token, {})).status, 400, 'at least one class is required');
+
+    const set = await call('PUT', '/company/cycle-count-cadence', a.token, { A: 14, B: 45 });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.deepEqual(set.body.cadenceDays, { A: 14, B: 45, C: 90 }, 'C was not set, so it keeps the default');
+
+    assert.deepEqual((await call('GET', '/company/cycle-count-cadence', a.token)).body.cadenceDays, { A: 14, B: 45, C: 90 });
+    assert.deepEqual((await call('GET', '/company/cycle-count-cadence', b.token)).body.cadenceDays, { A: 7, B: 30, C: 90 }, 'another company is unaffected');
+
+    const cleared = await call('PUT', '/company/cycle-count-cadence', a.token, { A: null });
+    assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+    assert.deepEqual(cleared.body.cadenceDays, { A: 7, B: 45, C: 90 }, 'clearing A restores the default; B stays overridden');
+  });
+});
+
 integration('forecast excludes stockout days from demand, and reorder rules keep a case pack that the plan rounds to (audit O-2/O-4)', async () => {
   const a = await makeCompany();
   const item = await prisma.item.create({ data: { code: `CEN-${randomUUID().slice(0, 8)}`, name: 'Censor', companyId: a.companyId } });

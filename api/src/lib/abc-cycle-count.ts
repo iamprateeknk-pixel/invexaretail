@@ -222,9 +222,12 @@ export function buildCycleCountPlan(input: {
   recentlySoldItemIds?: ReadonlySet<string>;
   /** Items received here with damaged/short/excess quantities recently; enables the receipt-discrepancy trigger. */
   recentDiscrepancyItemIds?: ReadonlySet<string>;
+  /** Per-company override of ABC_CADENCE's days-between-counts (audit C-4); missing classes fall back to the default. */
+  cadenceDays?: Partial<Record<AbcClass, number>>;
   now?: Date;
 }): CycleCountPlan {
   const now = input.now ?? new Date();
+  const dueInDaysFor = (abcClass: AbcClass) => input.cadenceDays?.[abcClass] ?? ABC_CADENCE[abcClass].dueInDays;
   const locationStock = input.stock.filter((row) => row.locationId === input.locationId);
   const aggregated = aggregateLocationStock(input.items, locationStock);
   const classified = classifyAbcItems(aggregated);
@@ -245,21 +248,22 @@ export function buildCycleCountPlan(input: {
     .map((row) => {
       const abc = classified.get(row.itemId)!;
       const cadence = ABC_CADENCE[abc.abcClass];
+      const dueInDays = dueInDaysFor(abc.abcClass);
       const assigned = assignedItemIds.has(row.itemId);
       // Audit P1-6: eligibility used to be just "not currently assigned", so every A item
       // was eligible every day regardless of when it was last counted - the weekly/monthly/
       // quarterly cadence only set a due date on the assignment, it never gated one.
       const last = lastCounted.get(row.itemId) ?? null;
       const daysSince = last ? Math.floor((now.getTime() - Date.parse(last)) / 86_400_000) : null;
-      const due = daysSince === null || daysSince >= cadence.dueInDays;
+      const due = daysSince === null || daysSince >= dueInDays;
       return {
         ...row,
         abcClass: abc.abcClass,
         share: abc.share,
         cumulativeShare: abc.cumulativeShare,
-        dueInDays: cadence.dueInDays,
+        dueInDays,
         priority: cadence.priority,
-        dueDate: addDaysIso(now, cadence.dueInDays),
+        dueDate: addDaysIso(now, dueInDays),
         assigned,
         lastCountedAt: last,
         daysSinceCounted: daysSince,
@@ -278,7 +282,7 @@ export function buildCycleCountPlan(input: {
     assigned: 0,
     onHand: 0,
     value: 0,
-    dueInDays: ABC_CADENCE[abcClass].dueInDays,
+    dueInDays: dueInDaysFor(abcClass),
     priority: ABC_CADENCE[abcClass].priority,
   });
 
