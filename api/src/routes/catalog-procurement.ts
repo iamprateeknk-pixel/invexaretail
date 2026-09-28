@@ -152,22 +152,29 @@ router.get('/reorder-rules', async (req, res) => {
   return res.json({ rules });
 });
 
-router.get('/reorder-rules/suggestions', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
-  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
-  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
-  const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
-  if (!location) return res.status(404).json({ message: 'Location not found.' });
-  const windowDays = Number(req.query.windowDays) > 0 ? Math.min(365, Number(req.query.windowDays)) : 60;
-  const leadTimeDays = Number(req.query.leadTimeDays) > 0 ? Number(req.query.leadTimeDays) : 7;
-  const servicePercent = Number(req.query.servicePercent) > 0 ? Number(req.query.servicePercent) : 95;
-  if (servicePercent < 50 || servicePercent > 99.99) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+// Matches the Action Center's own dismissal TTL (operations-extension.ts) - a dismissed
+// suggestion resurfaces after 24h if the underlying demand/rule gap is still real.
+const REORDER_SUGGESTION_DISMISSAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+type ReorderSuggestionQuery = { windowDays: number; leadTimeDays: number; servicePercent: number };
+
+function parseReorderSuggestionQuery(input: { windowDays?: unknown; leadTimeDays?: unknown; servicePercent?: unknown }): ReorderSuggestionQuery | null {
+  const windowDays = Number(input.windowDays) > 0 ? Math.min(365, Number(input.windowDays)) : 60;
+  const leadTimeDays = Number(input.leadTimeDays) > 0 ? Number(input.leadTimeDays) : 7;
+  const servicePercent = Number(input.servicePercent) > 0 ? Number(input.servicePercent) : 95;
+  if (servicePercent < 50 || servicePercent > 99.99) return null;
+  return { windowDays, leadTimeDays, servicePercent };
+}
+
+// Shared by the list endpoint and the single-item accept endpoint, so accept always recomputes
+// the suggestion server-side rather than trusting client-supplied numbers.
+async function computeReorderSuggestions(companyId: string, locationId: string, query: ReorderSuggestionQuery, itemIds?: string[]) {
+  const { windowDays, leadTimeDays, servicePercent } = query;
   const since = new Date(Date.now() - windowDays * 86_400_000);
   const movements = await loadSalesEvents({ since, locationId, companyId });
   const byItem = new Map<string, Map<string, number>>();
   for (const m of movements) {
+    if (itemIds && !itemIds.includes(m.itemId)) continue;
     const days = byItem.get(m.itemId) ?? new Map<string, number>();
     const day = m.timestamp.toISOString().slice(0, 10);
     days.set(day, (days.get(day) ?? 0) + m.qty);
@@ -178,14 +185,67 @@ router.get('/reorder-rules/suggestions', async (req, res) => {
     prisma.reorderRule.findMany({ where: { locationId, companyId } }),
   ]);
   const ruleByItem = new Map(rules.map((rule) => [rule.itemId, rule]));
-  const suggestions = items.flatMap((item) => {
+  return items.flatMap((item) => {
     const days = byItem.get(item.id)!;
     const dailyDemand = Array.from({ length: windowDays }, (_, offset) => days.get(new Date(since.getTime() + offset * 86_400_000).toISOString().slice(0, 10)) ?? 0);
     const rule = ruleByItem.get(item.id);
     const suggestion = suggestReorderRule({ itemId: item.id, dailyDemand, leadTimeDays, servicePercent, decimal: item.decimalQuantity, currentMin: rule?.minQty, currentTarget: rule?.targetQty });
-    return suggestion ? [{ ...suggestion, code: item.code, name: item.name }] : [];
-  }).filter((entry) => entry.change !== 'OK').sort((a, b) => a.code.localeCompare(b.code));
-  return res.json({ windowDays, leadTimeDays, servicePercent, suggestions });
+    return suggestion ? [{ ...suggestion, code: item.code, name: item.name, decimal: item.decimalQuantity }] : [];
+  });
+}
+
+router.get('/reorder-rules/suggestions', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
+  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  const query = parseReorderSuggestionQuery(req.query);
+  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  const dismissedSince = new Date(Date.now() - REORDER_SUGGESTION_DISMISSAL_TTL_MS);
+  const [computed, dismissals] = await Promise.all([
+    computeReorderSuggestions(companyId, locationId, query),
+    prisma.intelligenceDismissal.findMany({ where: { locationId, type: 'REORDER_SUGGESTION', createdAt: { gte: dismissedSince } }, select: { itemId: true } }),
+  ]);
+  const dismissed = new Set(dismissals.map((d) => d.itemId));
+  const suggestions = computed
+    .filter((entry) => entry.change !== 'OK' && !dismissed.has(entry.itemId))
+    .sort((a, b) => a.code.localeCompare(b.code));
+  return res.json({ windowDays: query.windowDays, leadTimeDays: query.leadTimeDays, servicePercent: query.servicePercent, suggestions });
+});
+
+// Accept half of the suggestion's accept/dismiss flow (audit O-1): recomputes the suggestion for
+// this one item server-side (never trusts client-supplied min/target) and writes it as the item's
+// reorder rule through the same upsert PUT /reorder-rules/:itemId uses. Dismiss reuses the existing
+// Action Center endpoint, POST /intelligence/:locationId/dismiss with type REORDER_SUGGESTION.
+router.post('/reorder-rules/suggestions/:itemId/accept', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
+  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  const query = parseReorderSuggestionQuery(req.body);
+  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  const [suggestion] = await computeReorderSuggestions(companyId, locationId, query, [req.params.itemId]);
+  if (!suggestion) return res.status(404).json({ message: 'No demand history to derive a suggestion from for this item at this location.' });
+  const quantityProblem = validateReorderQuantities(suggestion.suggestedMin, suggestion.suggestedTarget, suggestion.decimal);
+  if (quantityProblem) return res.status(400).json({ message: quantityProblem });
+  const rule = await prisma.reorderRule.upsert({
+    where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
+    update: { minQty: suggestion.suggestedMin, targetQty: suggestion.suggestedTarget },
+    create: { itemId: req.params.itemId, locationId, minQty: suggestion.suggestedMin, targetQty: suggestion.suggestedTarget, companyId },
+    include: { item: true },
+  });
+  await persistAudit(recordAudit({
+    actorId: req.user!.id, actorRole: req.user!.role, action: 'REORDER_RULE_ACCEPTED_FROM_SUGGESTION',
+    entityType: 'ReorderRule', entityId: rule.id,
+    metadata: { itemId: req.params.itemId, locationId, suggestedMin: suggestion.suggestedMin, suggestedTarget: suggestion.suggestedTarget, demandPattern: suggestion.demandPattern, change: suggestion.change },
+  }));
+  return res.json({ rule });
 });
 
 router.put('/reorder-rules/:itemId', async (req, res) => {

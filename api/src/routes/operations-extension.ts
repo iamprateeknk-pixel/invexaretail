@@ -958,11 +958,13 @@ router.get('/intelligence/:locationId', async (req, res) => {
 // trail" (blueprint §17.1) - accept already has one via the real
 // Transfer/PurchaseOrder record it creates. type REPLENISHMENT dismisses
 // by itemId; type ANOMALY dismisses one specific countId (a fresh variance
-// on the same item should still surface).
+// on the same item should still surface). type REORDER_SUGGESTION dismisses
+// a reorder-rule suggestion (audit O-1) by itemId - its own accept is
+// POST /reorder-rules/suggestions/:itemId/accept in catalog-procurement.ts.
 router.post('/intelligence/:locationId/dismiss', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Intelligence insights require Admin or Auditor access.' });
   if (!canAccessLocation(req, req.params.locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const type = ['ANOMALY', 'REPLENISHMENT', 'LOT_BLOCK', 'EXPIRY', 'OVERSTOCK'].includes(req.body.type) ? req.body.type : null;
+  const type = ['ANOMALY', 'REPLENISHMENT', 'LOT_BLOCK', 'EXPIRY', 'OVERSTOCK', 'REORDER_SUGGESTION'].includes(req.body.type) ? req.body.type : null;
   const itemId = typeof req.body.itemId === 'string' ? req.body.itemId : '';
   const countId = typeof req.body.countId === 'string' ? req.body.countId : null;
   if (!type || !itemId || (type === 'ANOMALY' && !countId)) {

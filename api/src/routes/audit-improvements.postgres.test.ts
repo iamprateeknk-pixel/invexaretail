@@ -342,6 +342,45 @@ integration('count accuracy breakdown is tolerance-based, value-weighted and ten
   });
 });
 
+integration('reorder suggestions can be accepted (writes the rule) or dismissed (drops from the list for 24h), tenant scoped (audit O-1)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `ACPT-${randomUUID().slice(0, 8)}`, name: 'Accept me', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L-${randomUUID().slice(0, 6)}` } });
+  for (let d = 1; d <= 20; d += 1) {
+    await prisma.stockMovement.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, movementType: 'SALES_DEDUCTION', qtyDelta: -8, beforeBalance: 500, afterBalance: 492, actor: a.userId, timestamp: new Date(Date.now() - d * 86_400_000), companyId: a.companyId } });
+  }
+  await withServer(async (call) => {
+    const before = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    const suggested = before.body.suggestions.find((s: { itemId: string }) => s.itemId === item.id);
+    assert.ok(suggested, 'must have a suggestion before accepting');
+
+    assert.equal((await call('POST', `/reorder-rules/suggestions/${item.id}/accept`, b.token, { locationId: a.loc.id })).status, 404, "another company cannot accept A's suggestion");
+
+    const accepted = await call('POST', `/reorder-rules/suggestions/${item.id}/accept`, a.token, { locationId: a.loc.id, windowDays: 30, leadTimeDays: 5 });
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.rule.minQty, suggested.suggestedMin);
+    assert.equal(accepted.body.rule.targetQty, suggested.suggestedTarget);
+    const stored = await prisma.reorderRule.findUniqueOrThrow({ where: { itemId_locationId: { itemId: item.id, locationId: a.loc.id } } });
+    assert.equal(stored.minQty, suggested.suggestedMin);
+
+    const after = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    assert.equal(after.body.suggestions.some((s: { itemId: string }) => s.itemId === item.id), false, 'the rule now matches the suggestion, so it is no longer NEW/INCREASE/DECREASE');
+
+    const item2 = await prisma.item.create({ data: { code: `DISM-${randomUUID().slice(0, 8)}`, name: 'Dismiss me', companyId: a.companyId } });
+    const lot2 = await prisma.lot.create({ data: { itemId: item2.id, lotNo: `L2-${randomUUID().slice(0, 6)}` } });
+    for (let d = 1; d <= 20; d += 1) {
+      await prisma.stockMovement.create({ data: { itemId: item2.id, lotId: lot2.id, locationId: a.loc.id, movementType: 'SALES_DEDUCTION', qtyDelta: -4, beforeBalance: 200, afterBalance: 196, actor: a.userId, timestamp: new Date(Date.now() - d * 86_400_000), companyId: a.companyId } });
+    }
+    const beforeDismiss = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    assert.ok(beforeDismiss.body.suggestions.some((s: { itemId: string }) => s.itemId === item2.id));
+    const dismiss = await call('POST', `/intelligence/${a.loc.id}/dismiss`, a.token, { type: 'REORDER_SUGGESTION', itemId: item2.id, reason: 'already ordering more manually' });
+    assert.equal(dismiss.status, 201, JSON.stringify(dismiss.body));
+    const afterDismiss = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
+    assert.equal(afterDismiss.body.suggestions.some((s: { itemId: string }) => s.itemId === item2.id), false, 'dismissed suggestion must not resurface immediately');
+  });
+});
+
 integration('supplier price breaks: validated, tenant scoped, and the purchase plan uses them (audit O-4)', async () => {
   const a = await makeCompany();
   const b = await makeCompany();
