@@ -253,6 +253,36 @@ router.put('/suppliers/:id', async (req, res) => {
   }
 });
 
+router.get('/suppliers/:id/price-breaks', async (req, res) => {
+  if (!requireReportingRole(req, res)) return;
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId }, select: { id: true } });
+  if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
+  const breaks = await prisma.supplierPriceBreak.findMany({ where: { supplierId: supplier.id, companyId }, orderBy: [{ itemId: 'asc' }, { minQty: 'asc' }] });
+  return res.json({ priceBreaks: breaks.map((row) => ({ ...row, unitCost: Number(row.unitCost) })) });
+});
+
+// Replaces the whole ladder for one supplier + item: [{ minQty, unitCost }], quantities ascending with costs falling.
+router.put('/suppliers/:id/price-breaks/:itemId', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const tiers: Array<{ minQty: number; unitCost: number }> = Array.isArray(req.body.breaks) ? req.body.breaks.map((tier: any) => ({ minQty: Number(tier.minQty), unitCost: Number(tier.unitCost) })) : [];
+  if (tiers.some((tier) => !Number.isFinite(tier.minQty) || tier.minQty <= 0 || !Number.isFinite(tier.unitCost) || tier.unitCost <= 0)) return res.status(400).json({ message: 'Every break needs a positive quantity and unit cost.' });
+  const ordered = [...tiers].sort((a, b) => a.minQty - b.minQty);
+  if (new Set(ordered.map((tier) => tier.minQty)).size !== ordered.length) return res.status(400).json({ message: 'Break quantities must be distinct.' });
+  if (ordered.some((tier, index) => index > 0 && tier.unitCost >= ordered[index - 1].unitCost)) return res.status(400).json({ message: 'A larger quantity must have a lower unit cost.' });
+  const [supplier, item] = await Promise.all([
+    prisma.supplier.findFirst({ where: { id: req.params.id, companyId }, select: { id: true } }),
+    prisma.item.findFirst({ where: { id: req.params.itemId, companyId }, select: { id: true } }),
+  ]);
+  if (!supplier || !item) return res.status(404).json({ message: 'Supplier or item not found.' });
+  await prisma.$transaction([
+    prisma.supplierPriceBreak.deleteMany({ where: { supplierId: supplier.id, itemId: item.id } }),
+    prisma.supplierPriceBreak.createMany({ data: ordered.map((tier) => ({ supplierId: supplier.id, itemId: item.id, minQty: tier.minQty, unitCost: tier.unitCost, companyId })) }),
+  ]);
+  return res.json({ priceBreaks: ordered });
+});
+
 router.get('/suppliers/:id/score', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
@@ -673,7 +703,10 @@ router.get('/purchase-orders/plan', async (req, res) => {
     bySupplier.set(order.supplierId, list);
   }
 
+  const breakRows = await prisma.supplierPriceBreak.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: { in: itemIds } }, select: { supplierId: true, itemId: true, minQty: true, unitCost: true } });
+  const breaksFor = (itemId: string, supplierId: string | undefined) => breakRows.filter((row) => row.itemId === itemId && row.supplierId === supplierId).map((row) => ({ minQty: row.minQty, unitCost: Number(row.unitCost) }));
   const planInputs: PlanInput[] = rules.map((rule) => ({
+    priceBreaks: breaksFor(rule.itemId, lastSupplier.get(rule.itemId)?.supplierId),
     itemId: rule.itemId, code: catalog.get(rule.itemId)?.code, name: catalog.get(rule.itemId)?.name,
     onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: rule.minQty, targetQty: rule.targetQty,
     openPoQty: open.get(rule.itemId) ?? 0, inTransitQty: inTransit.get(rule.itemId) ?? 0,

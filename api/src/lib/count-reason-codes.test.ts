@@ -36,3 +36,15 @@ test('accuracy is tolerance-based and value-weighted, and uncosted counts are le
   assert.equal(r.costedCounts, 3);
   assert.equal(r.valueAccuracyPercent, 61.5); // book = 1000 + 1000 + 2000 = 4000 -> 100 - 1540/4000
 });
+
+test('accuracy is also reported per ABC class so a weak class A cannot hide inside a good blended figure', async () => {
+  const { summarizeCountAccuracyByClass } = await import('./count-reason-codes.js');
+  const r = summarizeCountAccuracyByClass([
+    { physicalQty: 50, bookQty: 100, abcClass: 'A' }, { physicalQty: 100, bookQty: 100, abcClass: 'A' },
+    { physicalQty: 10, bookQty: 10, abcClass: 'C' }, { physicalQty: 10, bookQty: 10, abcClass: 'C' }, { physicalQty: 10, bookQty: 10, abcClass: 'C' }, { physicalQty: 9, bookQty: 10, abcClass: 'C' },
+  ], { minUnits: 3, percent: 10 });
+  assert.equal(r.accuracyPercent, 83.33);
+  assert.equal(r.byClass.A.accuracyPercent, 50);
+  assert.equal(r.byClass.C.accuracyPercent, 100);
+  assert.equal(r.byClass.B, undefined);
+});
