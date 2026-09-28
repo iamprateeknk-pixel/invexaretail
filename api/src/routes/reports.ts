@@ -13,6 +13,7 @@ import { getDashboardSummary, listOpenExceptions } from '../lib/reporting-reposi
 import { prisma } from '../lib/db.js';
 import { companyTimezone, currentTimezone } from '../lib/timezone-context.js';
 import { saveCompanyTimezone } from '../lib/company-timezone.js';
+import { databaseEnabled } from '../lib/persistence.js';
 import { summarizeCountAccuracyByClass, summarizeVarianceReasons } from '../lib/count-reason-codes.js';
 import { classifyAbcItems } from '../lib/abc-cycle-count.js';
 import { DEFAULT_TOLERANCE } from '../lib/count-tolerance.js';
@@ -30,12 +31,28 @@ function tenantContextFor(req: Request): TenantContext {
   };
 }
 
+// This whole module reads directly from Postgres (reporting-repository.ts / raw prisma queries), with
+// no in-memory equivalent - a real gap in memory-mode support, not a bug in one route. Every route
+// below returns a clean 501 off the database, matching the convention already used by routes/items.ts's
+// forecast endpoint, instead of the raw "DATABASE_URL is required..." 500 Prisma throws unhandled.
+// NOTE: this must be called explicitly inside each of THIS router's own handlers, never as
+// `router.use(...)` with no path - every router in this API is mounted at the same '/api/v1' base
+// (see index.ts), so a path-less `router.use` here would run as middleware for every request under
+// /api/v1 handled by ANY router, not just this module's own routes.
+function requireDatabaseForReport(res: Response): boolean {
+  if (databaseEnabled) return true;
+  res.status(501).json({ message: 'This report requires a connected database.' });
+  return false;
+}
+
 router.get('/reports/dashboard', async (req: Request, res: Response) => {
+  if (!requireDatabaseForReport(res)) return;
   const summary = await getDashboardSummary(tenantContextFor(req));
   return res.json(summary);
 });
 
 router.get('/reports/exceptions', async (req: Request, res: Response) => {
+  if (!requireDatabaseForReport(res)) return;
   const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
   const limit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
   const page = await listOpenExceptions(tenantContextFor(req), { cursor, limit: Number.isFinite(limit) ? limit : undefined });
@@ -66,6 +83,7 @@ router.put('/company/timezone', async (req: Request, res: Response) => {
 });
 
 router.get('/reports/count-accuracy-breakdown', async (req: Request, res: Response) => {
+  if (!requireDatabaseForReport(res)) return;
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
   const days = Number(req.query.days) > 0 ? Math.min(365, Number(req.query.days)) : 90;
   const counts = await prisma.stockCount.findMany({
@@ -96,6 +114,7 @@ router.get('/reports/count-accuracy-breakdown', async (req: Request, res: Respon
 });
 
 router.get('/reports/count-variance-reasons', async (req: Request, res: Response) => {
+  if (!requireDatabaseForReport(res)) return;
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Not permitted.' });
   const days = Number(req.query.days) > 0 ? Math.min(365, Number(req.query.days)) : 90;
   const rows = await prisma.stockCount.findMany({
@@ -107,6 +126,7 @@ router.get('/reports/count-variance-reasons', async (req: Request, res: Response
 });
 
 router.get('/reports/inventory-health', async (req: Request, res: Response) => {
+  if (!requireDatabaseForReport(res)) return;
   if (!HEALTH_ROLES.includes(req.user!.role)) return res.status(403).json({ message: 'Inventory health reports require Admin, Branch Manager or Auditor access.' });
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const locationId = typeof req.query.locationId === 'string' && req.query.locationId ? req.query.locationId : null;
