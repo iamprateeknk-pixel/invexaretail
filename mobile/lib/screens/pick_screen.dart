@@ -166,6 +166,52 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     });
   }
 
+  /// Verify-before-finish (audit: picker flow "advance to industry level"): shows exactly what is
+  /// about to be sent - what each line still needs versus what this device has picked or reported -
+  /// so the picker confirms the quantity before it leaves their hands, instead of a bare button that
+  /// silently closes out a short pick with no review.
+  Future<void> _confirmFinish() async {
+    final session = _session;
+    if (session == null) return;
+    final shortLines = <String>[];
+    for (final line in session.lines) {
+      final left = session.leftFor(line.itemId);
+      final exceptionQty = session.exceptions.where((row) => row['itemId'] == line.itemId).fold<num>(0, (sum, row) => sum + (row['quantity'] as num));
+      if (left - exceptionQty > 0.0005) {
+        shortLines.add('${line.itemName}: ${formatQty(left - exceptionQty)} left with no reason reported');
+      }
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm and finish pick'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final line in session.lines)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text('${line.itemName}: ${formatQty(session.pendingFor(line.itemId))} of ${formatQty(line.remaining)}${line.pooled ? ' ${line.unit}' : ''} this save'),
+                ),
+              if (shortLines.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                const Text('Not fully picked and no exception reported:', style: TextStyle(fontWeight: FontWeight.w700, color: invexaRose)),
+                for (final line in shortLines) Text('• $line', style: const TextStyle(color: invexaRose)),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Go back')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Confirm & finish')),
+        ],
+      ),
+    );
+    if (confirmed == true) await _save(finished: true);
+  }
+
   Future<void> _save({required bool finished}) async {
     final session = _session!;
     if (!session.hasPending && !finished) return;
@@ -227,7 +273,7 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
                     Expanded(
                       child: FilledButton(
                         key: const ValueKey('pick-finish'),
-                        onPressed: _busy ? null : () => _save(finished: true),
+                        onPressed: _busy ? null : _confirmFinish,
                         child: const Text('Finish pick'),
                       ),
                     ),

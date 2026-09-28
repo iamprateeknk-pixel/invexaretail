@@ -55,6 +55,8 @@ import {
   parseAbcClasses,
   selectEligibleCycleCountItems,
 } from '../lib/abc-cycle-count.js';
+import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
+import { signedSalesQty } from '../lib/sales-demand.js';
 import {
   canCreateTransfer,
   isReceivableStatus,
@@ -1453,7 +1455,9 @@ router.get('/count-assignments/mine', (req: Request, res: Response) => {
 // transfers waiting to be received at their branch. No full catalog.
 router.get('/mobile/work', (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  const isStore = context.role === 'STORE_USER';
+  // Warehouse pickers count assignments too (the server has always accepted both roles for
+  // /count-assignments/mine and /stock-counts) - this feed just never included them.
+  const isStore = context.role === 'STORE_USER' || context.role === 'WAREHOUSE_PICKER';
   const countTasks = isStore
     ? listCountAssignmentsFor(req.user!.id).flatMap((assignment) => {
         const item = listItems().find((candidate) => candidate.id === assignment.itemId);
@@ -1507,13 +1511,42 @@ router.get('/count-assignments', (req: Request, res: Response) => {
   return res.json({ assignments });
 });
 
-function cycleCountPlanForLocation(locationId: string, now = new Date()) {
+const CYCLE_COUNT_DEMAND_WINDOW_DAYS = 90;
+
+/** Net units sold at a location in the last `windowDays` (audit C-4: usage-value ABC ranking), from the same two in-memory movement sources `recentlySoldItemIds` below already reads - order/import movements and the legacy daily sales import. */
+function unitsSoldByItemForLocation(locationId: string, windowDays: number, now: Date): Map<string, number> {
+  const since = now.getTime() - windowDays * 86_400_000;
+  const totals = new Map<string, number>();
+  const add = (itemId: string, delta: number) => totals.set(itemId, (totals.get(itemId) ?? 0) + delta);
+  for (const m of listStockMovements({ locationId })) {
+    if (!['SALES_DEDUCTION', 'SALES_RETURN'].includes(m.movementType)) continue;
+    if (new Date(m.timestamp).getTime() < since) continue;
+    add(m.itemId, signedSalesQty(m.movementType, m.qtyDelta));
+  }
+  for (const m of listDailyMovements()) {
+    if (m.locationId !== locationId || m.sourceType !== 'SALES' || !['SALE_OUT', 'SALES_RETURN'].includes(m.movementType)) continue;
+    if (new Date(m.transactionAt).getTime() < since) continue;
+    add(m.itemId, signedSalesQty(m.movementType, m.qtyDelta));
+  }
+  return totals;
+}
+
+function cycleCountPlanForLocation(locationId: string, companyId: string, now = new Date()) {
+  // Usage-value ranking (audit C-4) needs at least one sale in the window to mean anything - with
+  // none at all (a brand-new location, or nothing has moved in 90 days) there is no usage signal,
+  // so buildCycleCountPlan falls back to stock-value ranking rather than every item defaulting to
+  // class C for lack of data (same "unknown is not zero" rule as gmroi/turns elsewhere).
+  const unitsSoldByItem = unitsSoldByItemForLocation(locationId, CYCLE_COUNT_DEMAND_WINDOW_DAYS, now);
   return buildCycleCountPlan({
     locationId,
     items: listItems(),
     stock: listStockLedgerForLocation(locationId),
     assignments: listCountAssignments(),
     counts: listCounts(),
+    // Audit C-4: cadence is a per-company setting now, not the fixed ABC_CADENCE constant; ABC
+    // ranks by usage value (units sold x cost), not stock value on hand.
+    cadenceDays: cadenceForCompany(companyId),
+    ...(unitsSoldByItem.size > 0 ? { unitsSoldByItem, demandWindowDays: CYCLE_COUNT_DEMAND_WINDOW_DAYS } : {}),
     // Items sold at this location in the last 30 days: order/import movements and the legacy daily sales import.
     recentlySoldItemIds: new Set([
       ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
@@ -1539,7 +1572,7 @@ router.get('/cycle-counts/:locationId', (req: Request, res: Response) => {
   } catch {
     return res.status(403).json({ message: 'This user cannot manage counts at the selected location.' });
   }
-  return res.json({ plan: cycleCountPlanForLocation(locationId) });
+  return res.json({ plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID) });
 });
 
 router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Response) => {
@@ -1583,7 +1616,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
     ? [...new Set(itemIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
     : [];
 
-  const plan = cycleCountPlanForLocation(locationId);
+  const plan = cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (requestedItemIds.length) {
     const known = new Set(plan.items.map((item) => item.itemId));
     const unknownItemId = requestedItemIds.find((id) => !known.has(id));
@@ -1630,7 +1663,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   return res.status(201).json({
     success: true,
     assignments: createdAssignments,
-    plan: cycleCountPlanForLocation(locationId),
+    plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID),
   });
 });
 
@@ -3001,7 +3034,10 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
     const lot = item?.lots.find((entry) => entry.id === line.lotId);
     const pickedQty = picked.get(`${line.itemId}|${line.lotId}`) ?? 0;
     return {
-      lineId: `${transfer.id}:${index}`, itemId: line.itemId, itemCode: item?.code, itemName: item?.name,
+      // itemBarcode: the picker scans the physical product barcode printed on the carton, which is
+      // a different value from the internal SKU code (itemCode) - the app only matched against the
+      // SKU and lot numbers before, so a real barcode scan was rejected as "wrong item" every time.
+      lineId: `${transfer.id}:${index}`, itemId: line.itemId, itemCode: item?.code, itemBarcode: item?.barcode, itemName: item?.name,
       unit: item?.unit ?? 'PCS', pickMethod: item?.pickMethod ?? 'LOT_SCAN', lotStatus: lot?.status ?? 'AVAILABLE', requestedQty: line.quantity, pickedQty, remainingQty: Math.max(0, line.quantity - pickedQty),
       lotId: line.lotId, lotNo: lot?.lotNo, expiryDate: lot?.expiryDate,
       lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,

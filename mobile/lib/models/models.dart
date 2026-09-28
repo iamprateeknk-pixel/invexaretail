@@ -38,7 +38,9 @@ List<dynamic> asList(Object? value) {
   return const [];
 }
 
-bool canSeeBookQuantity(String role) => role != 'STORE_USER';
+// Blind counting: neither a store user nor a warehouse picker sees the book
+// quantity before submitting their physical count.
+bool canSeeBookQuantity(String role) => role != 'STORE_USER' && role != 'WAREHOUSE_PICKER';
 
 bool canSubmitAdHocCount(String role) =>
     role == 'ADMIN' || role == 'ADMIN_USER' || role == 'BRANCH_MANAGER' || role == 'AUDITOR';

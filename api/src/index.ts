@@ -1,4 +1,5 @@
 import { loadCompanyTimezones } from './lib/company-timezone.js';
+import { loadCompanyCycleCountCadences } from './lib/cycle-count-cadence.js';
 import './lib/telemetry-bootstrap.js';
 import { randomUUID } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -393,6 +394,7 @@ const hydrateRepository = async () => {
   try {
     await hydrateCompanyProfile();
     await loadCompanyTimezones().catch((error) => console.error('[timezone] load failed', error));
+    await loadCompanyCycleCountCadences().catch((error) => console.error('[cycle-count-cadence] load failed', error));
   } catch (error) {
     console.warn('Company profile could not be hydrated; continuing with the default profile.', error instanceof Error ? error.message : error);
   }

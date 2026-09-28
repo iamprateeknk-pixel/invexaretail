@@ -188,3 +188,53 @@ test('mobile work lists only actionable count tasks, with no quantities', async 
     assert.ok(Array.isArray(work.body.receiveTasks));
   });
 });
+
+// audit: mobile app issue - "count completed on the phone, but still shows pending" - a multi-lot
+// item's assignment only closes once every lot with stock has been counted (the mobile app used to
+// assume the first lot submitted always closed it and hid the assignment locally, leaving it stuck
+// ASSIGNED on the server with no way to reach the remaining lots from the app again).
+test('a multi-lot item\'s assignment stays open until every lot is counted, then closes', async () => {
+  await withServer(async (call) => {
+    const store = tokenFor('store@retail.local');
+    const tag = unique();
+    const item = createItemRecord({ code: `ML-${tag}`, name: `Multi lot ${tag}` });
+    const lotA = item.lots[0];
+    const lotB = ensureLotRecord(item.id, `ML-${tag}-B`, null);
+    adjustStockLedger(item.id, lotA.id, 'loc-1', 5);
+    adjustStockLedger(item.id, lotB.id, 'loc-1', 3);
+    createCountAssignment({ id: `asg-${unique()}`, locationId: 'loc-1', itemId: item.id, assignedToId: 'user-store-1', assignedById: 'user-admin-1', countDate: '2026-09-19' });
+
+    const firstLot = await call('POST', '/stock-counts', store, { itemId: item.id, locationId: 'loc-1', lotNo: lotA.lotNo, physicalQuantity: 5, mode: 'manual' });
+    assert.equal(firstLot.status, 201, JSON.stringify(firstLot.body));
+    const afterFirst = (await call('GET', '/count-assignments/mine', store)).body.assignments as Array<{ itemId: string }>;
+    assert.equal(afterFirst.some((row) => row.itemId === item.id), true, 'lot B still has stock and has not been counted - the assignment must stay open');
+    const workAfterFirst = (await call('GET', '/mobile/work', store)).body.countTasks as Array<{ item: { id: string }; lots: Array<{ lotNo: string }> }>;
+    const remainingTask = workAfterFirst.find((task) => task.item.id === item.id);
+    assert.ok(remainingTask, 'the work feed must still offer this item so the app can guide the user to the next lot');
+    assert.ok(remainingTask!.lots.some((lot) => lot.lotNo === lotB.lotNo), 'lot B, not yet counted, is still offered');
+
+    const secondLot = await call('POST', '/stock-counts', store, { itemId: item.id, locationId: 'loc-1', lotNo: lotB.lotNo, physicalQuantity: 3, mode: 'manual' });
+    assert.equal(secondLot.status, 201, JSON.stringify(secondLot.body));
+    const afterSecond = (await call('GET', '/count-assignments/mine', store)).body.assignments as Array<{ itemId: string }>;
+    assert.equal(afterSecond.some((row) => row.itemId === item.id), false, 'every lot with stock is now counted - the assignment must close');
+  });
+});
+
+test('warehouse pickers are also assigned counts, and their own work feed offers them (audit: mobile app gap)', async () => {
+  await withServer(async (call) => {
+    const picker = tokenFor('picker@retail.local');
+    const tag = unique();
+    const item = createItemRecord({ code: `WP-${tag}`, name: `Warehouse count ${tag}` });
+    adjustStockLedger(item.id, item.lots[0].id, 'wh-1', 4);
+    createCountAssignment({ id: `asg-${unique()}`, locationId: 'wh-1', itemId: item.id, assignedToId: 'user-picker-1', assignedById: 'user-admin-1', countDate: '2026-09-19' });
+
+    const mine = (await call('GET', '/count-assignments/mine', picker)).body.assignments as Array<{ itemId: string }>;
+    assert.equal(mine.some((row) => row.itemId === item.id), true);
+    const work = (await call('GET', '/mobile/work', picker)).body.countTasks as Array<{ item: { id: string } }>;
+    assert.equal(work.some((task) => task.item.id === item.id), true, 'the picker\'s own work feed must include their assigned counts');
+
+    const submitted = await call('POST', '/stock-counts', picker, { itemId: item.id, locationId: 'wh-1', physicalQuantity: 4, mode: 'manual' });
+    assert.equal(submitted.status, 201, JSON.stringify(submitted.body));
+    assert.equal(submitted.body.count.bookQty, undefined, 'a picker\'s count is blind, same as a store user\'s');
+  });
+});

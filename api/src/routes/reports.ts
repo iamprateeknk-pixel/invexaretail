@@ -13,11 +13,14 @@ import { getDashboardSummary, listOpenExceptions } from '../lib/reporting-reposi
 import { prisma } from '../lib/db.js';
 import { companyTimezone, currentTimezone } from '../lib/timezone-context.js';
 import { saveCompanyTimezone } from '../lib/company-timezone.js';
+import { cadenceForCompany, DEFAULT_CADENCE_DAYS } from '../lib/cycle-count-cadence-context.js';
+import { saveCompanyCycleCountCadence } from '../lib/cycle-count-cadence.js';
 import { databaseEnabled } from '../lib/persistence.js';
 import { summarizeCountAccuracyByClass, summarizeVarianceReasons } from '../lib/count-reason-codes.js';
-import { classifyAbcItems } from '../lib/abc-cycle-count.js';
+import { ABC_CLASSES, classifyAbcItems, type AbcClass } from '../lib/abc-cycle-count.js';
 import { DEFAULT_TOLERANCE } from '../lib/count-tolerance.js';
 import { buildInventoryHealth, lotUnitCost, summarizeServiceLevel, type HealthSales } from '../lib/inventory-health.js';
+import { resolvePrice, type PriceCandidate } from '../lib/price-resolution.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -76,6 +79,31 @@ router.put('/company/timezone', async (req: Request, res: Response) => {
   try {
     const timezone = await saveCompanyTimezone(req.companyId ?? DEFAULT_COMPANY_ID, requested);
     return res.json({ timezone });
+  } catch (error) {
+    if (error instanceof RangeError) return res.status(400).json({ message: error.message });
+    return res.status(404).json({ message: 'Company profile not found.' });
+  }
+});
+
+// Audit C-4: cycle-count cadence (days between required counts, per ABC class) used to be the
+// fixed ABC_CADENCE constant (7/30/90) for every tenant. Same shape as /company/timezone: null
+// for a class clears its override back to the default.
+router.get('/company/cycle-count-cadence', (req: Request, res: Response) => {
+  return res.json({ cadenceDays: cadenceForCompany(req.companyId ?? DEFAULT_COMPANY_ID), defaultCadenceDays: DEFAULT_CADENCE_DAYS });
+});
+
+router.put('/company/cycle-count-cadence', async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can change the cycle-count cadence.' });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const requested: Partial<Record<AbcClass, number | null>> = {};
+  for (const cls of ABC_CLASSES) {
+    if (!(cls in body)) continue;
+    requested[cls] = body[cls] === null ? null : Number(body[cls]);
+  }
+  if (Object.keys(requested).length === 0) return res.status(400).json({ message: 'At least one of A, B, C is required (a day count, or null to clear it).' });
+  try {
+    const cadenceDays = await saveCompanyCycleCountCadence(req.companyId ?? DEFAULT_COMPANY_ID, requested);
+    return res.json({ cadenceDays });
   } catch (error) {
     if (error instanceof RangeError) return res.status(400).json({ message: error.message });
     return res.status(404).json({ message: 'Company profile not found.' });
@@ -157,11 +185,28 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
     entry.value += row.onHand * row.unitCost;
     costed.set(row.itemId, entry);
   }
+  // Revenue for GMROI (audit O-5) comes from PriceList/resolvePrice - the same "most specific,
+  // currently effective" RETAIL price GET /items/:itemId/price resolves for a real sale - never
+  // a guessed or list (MRP) price. Resolved at "now" (the report is a live valuation, not a
+  // historical reconstruction, same approximation turns/daysOfInventory already make by using
+  // current cost against a trailing window's units).
+  const soldItemIds = soldRows.map((row) => row.itemId);
+  const priceCandidatesByItem = new Map<string, PriceCandidate[]>();
+  if (soldItemIds.length) {
+    const priceRows = await prisma.priceList.findMany({ where: { itemId: { in: soldItemIds }, priceType: 'RETAIL', companyId } });
+    for (const row of priceRows) {
+      const list = priceCandidatesByItem.get(row.itemId) ?? [];
+      list.push({ id: row.id, price: row.price, branchId: row.branchId, customerGroup: row.customerGroup, effectiveFrom: row.effectiveFrom.toISOString(), effectiveTo: row.effectiveTo?.toISOString() ?? null, status: row.status });
+      priceCandidatesByItem.set(row.itemId, list);
+    }
+  }
   const sales = new Map<string, HealthSales>();
   for (const sold of soldRows) {
     const units = sold.units;
     const cost = costed.get(sold.itemId);
-    sales.set(sold.itemId, { units, cogs: cost && cost.units > 0 ? units * (cost.value / cost.units) : 0 });
+    const cogs = cost && cost.units > 0 ? units * (cost.value / cost.units) : 0;
+    const resolved = resolvePrice(priceCandidatesByItem.get(sold.itemId) ?? [], { branchId: locationId ?? undefined });
+    sales.set(sold.itemId, { units, cogs, revenue: resolved ? units * resolved.price : null });
   }
   const health = buildInventoryHealth({ rows, sales, windowDays, hasSalesData: soldRows.length > 0 });
   const orders = await prisma.order.findMany({

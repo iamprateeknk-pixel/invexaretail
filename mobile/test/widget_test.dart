@@ -102,7 +102,7 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
   });
 
-  testWidgets('warehouse pickers see pick/putaway/scan instead of count/transfers', (tester) async {
+  testWidgets('warehouse pickers see pick/putaway/scan plus their own warehouse stock counts, but not transfers', (tester) async {
     final controller = _controller(
       user: const AuthUser(id: 'u3', name: 'Picker', email: 'picker@retail.local', role: 'WAREHOUSE_PICKER'),
     );
@@ -110,7 +110,7 @@ void main() {
     expect(find.text('Pick'), findsWidgets);
     expect(find.text('Putaway'), findsWidgets);
     expect(find.text('Scan'), findsWidgets);
-    expect(find.text('Count'), findsNothing);
+    expect(find.text('Count'), findsWidgets, reason: 'pickers are assigned warehouse stock counts too (audit: mobile app gap)');
     expect(find.text('Transfers'), findsNothing);
   });
 

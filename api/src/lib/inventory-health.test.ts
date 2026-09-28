@@ -25,6 +25,27 @@ test('turns and days of inventory come from cost of goods sold over the window, 
   assert.equal(buildInventoryHealth({ rows: [row({})], sales: new Map(), windowDays: 30, now }).turns, null, 'no sales means turns is unknown, not zero');
 });
 
+test('gmroi is annualised (priced revenue - cogs on that same priced revenue) over current value; unpriced sales are excluded, not guessed at zero margin', () => {
+  // Value 1000 (200 x 5). Item sold 60 units, cogs 300 (matches the turns test). Priced at 12/unit -> revenue 720, margin 420.
+  const priced = buildInventoryHealth({
+    rows: [row({ onHand: 200, unitCost: 5 })],
+    sales: new Map([['i1', { units: 60, cogs: 300, revenue: 720 }]]),
+    windowDays: 30, now,
+  });
+  assert.equal(priced.gmroi, 5.11, '(720-300) margin annualised x365/30 = 5110, over value 1000');
+  assert.equal(priced.unitsSoldUnpriced, 0);
+
+  const unpriced = buildInventoryHealth({
+    rows: [row({ onHand: 200, unitCost: 5 })],
+    sales: new Map([['i1', { units: 60, cogs: 300, revenue: null }]]),
+    windowDays: 30, now,
+  });
+  assert.equal(unpriced.gmroi, null, 'no priced sales: gmroi is unknown, not a guessed margin');
+  assert.equal(unpriced.unitsSoldUnpriced, 60);
+
+  assert.equal(buildInventoryHealth({ rows: [row({})], sales: new Map(), windowDays: 30, now }).gmroi, null, 'no sales at all: gmroi is unknown');
+});
+
 test('dead stock has stock and no sales; slow stock has more than 180 days of cover; healthy is neither', () => {
   const health = buildInventoryHealth({
     rows: [row({ itemId: 'd', code: 'D', onHand: 10 }), row({ itemId: 's', code: 'S', onHand: 400 }), row({ itemId: 'h', code: 'H', onHand: 30 })],

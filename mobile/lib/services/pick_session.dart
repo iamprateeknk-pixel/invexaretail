@@ -6,6 +6,7 @@ class PickLine {
   PickLine({
     required this.itemId,
     required this.itemCode,
+    this.itemBarcode,
     required this.itemName,
     required this.unit,
     required this.pooled,
@@ -15,6 +16,9 @@ class PickLine {
 
   final String itemId;
   final String itemCode;
+  // The physical product barcode on the carton - a different value from the
+  // internal SKU code (itemCode). Null when the item has none recorded.
+  final String? itemBarcode;
   final String itemName;
   final String unit;
   // KG loose: the picker states a weight and the server chooses the lots.
@@ -83,9 +87,11 @@ class PickSession {
         if (!pooled && remaining > 0 && available > 0 && !blocked)
           PickLot(lotId: asString(row['lotId']), lotNo: asString(row['lotNo']), remaining: remaining, available: available),
       ];
+      final barcode = asString(row['itemBarcode']).trim();
       byItem[itemId] = PickLine(
         itemId: itemId,
         itemCode: asString(row['itemCode']),
+        itemBarcode: barcode.isEmpty ? existing?.itemBarcode : barcode,
         itemName: asString(row['itemName'], itemId),
         unit: asString(row['unit'], 'PCS'),
         pooled: pooled,
@@ -127,6 +133,9 @@ class PickSession {
         }
       }
       if (matched == null && row.itemCode.trim().toLowerCase() == code) matched = row;
+      // The physical carton barcode is a different value from the internal SKU code - without this,
+      // scanning the real product barcode always failed as "wrong item" (audit: picker scan flow).
+      if (matched == null && (row.itemBarcode ?? '').trim().toLowerCase() == code && (row.itemBarcode ?? '').isNotEmpty) matched = row;
       if (matched != null) break;
     }
     if (matched == null) return ScanResult.rejected('Wrong item: "$raw" is not on this pick.');

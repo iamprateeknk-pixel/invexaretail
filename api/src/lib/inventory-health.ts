@@ -15,7 +15,8 @@ export type HealthStockRow = {
   lotCreatedAt: Date | string | null;
 };
 
-export type HealthSales = { units: number; cogs: number };
+/** revenue is null when the item has no resolvable selling price (PriceList) - never guessed, same as unitCost. */
+export type HealthSales = { units: number; cogs: number; revenue?: number | null };
 
 /** NO_DATA: no sales movements exist at all for the window, so we cannot tell dead from unrecorded - we say so instead of calling everything dead. */
 export type ItemHealthStatus = 'DEAD' | 'SLOW' | 'HEALTHY' | 'NO_STOCK' | 'NO_DATA';
@@ -32,6 +33,15 @@ export type InventoryHealth = {
   /** Annualised: (cost of goods sold in the window x 365/window) / current inventory value. Null with no value or no sales. */
   turns: number | null;
   daysOfInventory: number | null;
+  /**
+   * Gross Margin Return on Investment (audit O-5), same annualised-over-current-value shape as
+   * turns: (priced revenue - cost of goods sold on that same priced revenue, x 365/window) /
+   * current inventory value. Only sales whose item has a resolvable PriceList price count -
+   * never a guessed margin. Null when there is no value, or nothing sold was priced.
+   */
+  gmroi: number | null;
+  /** Units sold in the window whose item had no resolvable price, so they could not count toward gmroi. */
+  unitsSoldUnpriced: number;
   ageing: Array<{ bucket: '0-30' | '31-90' | '91-180' | '181+'; value: number; units: number }>;
   items: Array<{ itemId: string; code: string; name: string; onHand: number; value: number; unitsSold: number; avgDailyDemand: number; daysOfCover: number | null; status: ItemHealthStatus }>;
   deadStock: { items: number; value: number; units: number };
@@ -82,9 +92,18 @@ export function buildInventoryHealth(input: { rows: HealthStockRow[]; sales: Map
   }
 
   let cogs = 0;
-  for (const sale of input.sales.values()) cogs += sale.cogs;
+  let pricedRevenue = 0;
+  let pricedCogs = 0;
+  let unitsSoldUnpriced = 0;
+  for (const sale of input.sales.values()) {
+    cogs += sale.cogs;
+    if (sale.revenue == null) { unitsSoldUnpriced += sale.units; continue; }
+    pricedRevenue += sale.revenue;
+    pricedCogs += sale.cogs;
+  }
   const turns = totalValue > 0 && cogs > 0 ? round2((cogs * (365 / windowDays)) / totalValue) : null;
   const daysOfInventory = totalValue > 0 && cogs > 0 ? round2(totalValue / (cogs / windowDays)) : null;
+  const gmroi = totalValue > 0 && pricedRevenue > 0 ? round2(((pricedRevenue - pricedCogs) * (365 / windowDays)) / totalValue) : null;
 
   const items = [...byItem.entries()].map(([itemId, item]) => {
     const sold = input.sales.get(itemId)?.units ?? 0;
@@ -107,6 +126,8 @@ export function buildInventoryHealth(input: { rows: HealthStockRow[]; sales: Map
     },
     turns,
     daysOfInventory,
+    gmroi,
+    unitsSoldUnpriced,
     ageing: [...ageing.entries()].map(([bucket, v]) => ({ bucket: bucket as InventoryHealth['ageing'][number]['bucket'], value: round2(v.value), units: v.units })),
     items,
     deadStock: sum('DEAD'),

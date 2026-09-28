@@ -141,6 +141,11 @@ model CompanyProfile {
   address     String?  @db.Text
   // Audit T-2: IANA business timezone; null = process default.
   timezone    String?
+  // Audit C-4: per-company cycle-count cadence override (days between required counts, by ABC
+  // class); null = the 7/30/90 default in ABC_CADENCE (lib/abc-cycle-count.ts).
+  cycleCountCadenceADays Int?
+  cycleCountCadenceBDays Int?
+  cycleCountCadenceCDays Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
