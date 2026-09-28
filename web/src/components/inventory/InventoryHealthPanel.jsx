@@ -30,6 +30,7 @@ export function InventoryHealthPanel({ health, accuracy, reasons = [] }) {
             <Stat label="Stock value" value={money(valuation.totalValue)} hint={valuation.unvaluedUnits > 0 ? `${valuation.unvaluedUnits} units have no recorded cost and are not valued` : undefined} />
             <Stat label="Inventory turns (annualised)" value={health.turns ?? '—'} hint={health.turns === null ? 'Needs sales in the window' : undefined} />
             <Stat label="Days of inventory" value={health.daysOfInventory ?? '—'} />
+            <Stat label="GMROI (annualised)" value={health.gmroi ?? '—'} hint={health.unitsSoldUnpriced > 0 ? `${health.unitsSoldUnpriced} units sold have no RETAIL price on file and are excluded` : health.gmroi === null ? 'Needs a priced sale in the window' : undefined} />
             <Stat label="Order fill rate" value={pct(service?.orderFillRatePercent)} hint={service ? `${service.orders} decided orders, unit fill ${pct(service.unitFillRatePercent)}` : undefined} />
           </dl>
           {health.note && <p className="mt-3 text-sm text-muted-foreground">{health.note}</p>}

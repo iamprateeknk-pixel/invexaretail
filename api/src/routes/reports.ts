@@ -20,6 +20,7 @@ import { summarizeCountAccuracyByClass, summarizeVarianceReasons } from '../lib/
 import { ABC_CLASSES, classifyAbcItems, type AbcClass } from '../lib/abc-cycle-count.js';
 import { DEFAULT_TOLERANCE } from '../lib/count-tolerance.js';
 import { buildInventoryHealth, lotUnitCost, summarizeServiceLevel, type HealthSales } from '../lib/inventory-health.js';
+import { resolvePrice, type PriceCandidate } from '../lib/price-resolution.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -184,11 +185,28 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
     entry.value += row.onHand * row.unitCost;
     costed.set(row.itemId, entry);
   }
+  // Revenue for GMROI (audit O-5) comes from PriceList/resolvePrice - the same "most specific,
+  // currently effective" RETAIL price GET /items/:itemId/price resolves for a real sale - never
+  // a guessed or list (MRP) price. Resolved at "now" (the report is a live valuation, not a
+  // historical reconstruction, same approximation turns/daysOfInventory already make by using
+  // current cost against a trailing window's units).
+  const soldItemIds = soldRows.map((row) => row.itemId);
+  const priceCandidatesByItem = new Map<string, PriceCandidate[]>();
+  if (soldItemIds.length) {
+    const priceRows = await prisma.priceList.findMany({ where: { itemId: { in: soldItemIds }, priceType: 'RETAIL', companyId } });
+    for (const row of priceRows) {
+      const list = priceCandidatesByItem.get(row.itemId) ?? [];
+      list.push({ id: row.id, price: row.price, branchId: row.branchId, customerGroup: row.customerGroup, effectiveFrom: row.effectiveFrom.toISOString(), effectiveTo: row.effectiveTo?.toISOString() ?? null, status: row.status });
+      priceCandidatesByItem.set(row.itemId, list);
+    }
+  }
   const sales = new Map<string, HealthSales>();
   for (const sold of soldRows) {
     const units = sold.units;
     const cost = costed.get(sold.itemId);
-    sales.set(sold.itemId, { units, cogs: cost && cost.units > 0 ? units * (cost.value / cost.units) : 0 });
+    const cogs = cost && cost.units > 0 ? units * (cost.value / cost.units) : 0;
+    const resolved = resolvePrice(priceCandidatesByItem.get(sold.itemId) ?? [], { branchId: locationId ?? undefined });
+    sales.set(sold.itemId, { units, cogs, revenue: resolved ? units * resolved.price : null });
   }
   const health = buildInventoryHealth({ rows, sales, windowDays, hasSalesData: soldRows.length > 0 });
   const orders = await prisma.order.findMany({

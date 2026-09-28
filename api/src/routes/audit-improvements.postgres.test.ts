@@ -189,6 +189,35 @@ integration('inventory health: valuation, turns, dead stock - company scoped, un
   });
 });
 
+integration('gmroi uses the resolved RETAIL PriceList price, never a guessed margin; unpriced sales are excluded and reported (audit O-5)', async () => {
+  const a = await makeCompany();
+  const mkItem = (code: string) => prisma.item.create({ data: { code: `${code}-${randomUUID().slice(0, 6)}`, name: code, companyId: a.companyId } });
+  const milk = await mkItem('MILK'); // will have a resolvable price
+  const rice = await mkItem('RICE'); // sold, but no PriceList row at all
+  const lot = (itemId: string) => prisma.lot.create({ data: { itemId, lotNo: `L-${randomUUID().slice(0, 6)}`, attributes: { purchaseRate: 10 } as never } });
+  const milkLot = await lot(milk.id);
+  const riceLot = await lot(rice.id);
+  await prisma.stockLedger.create({ data: { itemId: milk.id, lotId: milkLot.id, locationId: a.loc.id, onHand: 100, companyId: a.companyId } });
+  await prisma.stockLedger.create({ data: { itemId: rice.id, lotId: riceLot.id, locationId: a.loc.id, onHand: 100, companyId: a.companyId } });
+  const sale = (itemId: string, lotId: string, qty: number) => prisma.stockMovement.create({ data: { itemId, lotId, locationId: a.loc.id, movementType: 'SALES_DEDUCTION', qtyDelta: -qty, beforeBalance: qty, afterBalance: 0, actor: a.userId, timestamp: new Date(), companyId: a.companyId } });
+  await sale(milk.id, milkLot.id, 30); // 30 units, cost 10 -> cogs 300
+  await sale(rice.id, riceLot.id, 20); // no price: must not count toward gmroi
+  await prisma.priceList.create({ data: { itemId: milk.id, priceType: 'RETAIL', price: 15, createdById: a.userId, companyId: a.companyId } });
+  await withServer(async (call) => {
+    const res = await call('GET', `/reports/inventory-health?locationId=${a.loc.id}&windowDays=30`, a.token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    // value = 100x10 + 100x10 = 2000; priced margin = 30x15 - 30x10 = 150; annualised x365/30, over 2000.
+    assert.equal(res.body.gmroi, Math.round((150 * (365 / 30) / 2000) * 100) / 100);
+    assert.equal(res.body.unitsSoldUnpriced, 20, 'rice sold 20 units with no PriceList row');
+
+    // A price scoped to a DIFFERENT branch must not resolve here (same specificity rule as GET /items/:id/price).
+    const otherLoc = await prisma.location.create({ data: { code: `aud-${randomUUID()}`, name: 'Other', type: 'store', companyId: a.companyId } });
+    await prisma.priceList.create({ data: { itemId: rice.id, priceType: 'RETAIL', price: 8, branchId: otherLoc.id, createdById: a.userId, companyId: a.companyId } });
+    const stillUnpriced = await call('GET', `/reports/inventory-health?locationId=${a.loc.id}&windowDays=30`, a.token);
+    assert.equal(stillUnpriced.body.unitsSoldUnpriced, 20, 'a price scoped to another branch does not resolve for this one');
+  });
+});
+
 integration('reorder suggestions are derived from sales history, tenant scoped, and skip items with no demand', async () => {
   const a = await makeCompany();
   const b = await makeCompany();
