@@ -217,4 +217,33 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
   return res.json({ ...health, service: summarizeServiceLevel(orders), locationId, truncated, note: soldRows.length === 0 ? 'No sales movements were recorded in this window (neither order/staged-import nor legacy daily imports): turns and cover are unknown and items are reported as NO_DATA rather than dead.' : undefined });
 });
 
+// Network-wide in-transit view (audit O-7): pick-confirm now posts dispatched transfer stock to
+// StockLedger.inTransit and receipt releases it, but there was no network view of where that stock
+// actually is. Read-only rollup, company scoped; no write path lives here.
+router.get('/reports/in-transit', async (req: Request, res: Response) => {
+  if (!HEALTH_ROLES.includes(req.user!.role)) return res.status(403).json({ message: 'In-transit reports require Admin, Branch Manager or Auditor access.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const rows = await prisma.stockLedger.findMany({
+    where: { inTransit: { gt: 0 }, location: { companyId } },
+    select: {
+      itemId: true, inTransit: true,
+      item: { select: { code: true, name: true } },
+      location: { select: { id: true, name: true } },
+    },
+    orderBy: { inTransit: 'desc' },
+    take: 20_000,
+  });
+  const byItem = new Map<string, { itemId: string; code: string; name: string; totalInTransit: number; locations: Array<{ locationId: string; locationName: string; inTransit: number }> }>();
+  let totalInTransit = 0;
+  for (const row of rows) {
+    totalInTransit += row.inTransit;
+    const entry = byItem.get(row.itemId) ?? { itemId: row.itemId, code: row.item.code, name: row.item.name, totalInTransit: 0, locations: [] };
+    entry.totalInTransit += row.inTransit;
+    entry.locations.push({ locationId: row.location.id, locationName: row.location.name, inTransit: row.inTransit });
+    byItem.set(row.itemId, entry);
+  }
+  const items = [...byItem.values()].sort((a, b) => b.totalInTransit - a.totalInTransit);
+  return res.json({ totalInTransit, items });
+});
+
 export default router;
