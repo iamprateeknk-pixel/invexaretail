@@ -189,6 +189,38 @@ integration('inventory health: valuation, turns, dead stock - company scoped, un
   });
 });
 
+integration('in-transit report rolls up StockLedger.inTransit by item across every location, company scoped (audit O-7)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `IT-${randomUUID().slice(0, 8)}`, name: 'In transit', companyId: a.companyId } });
+  const otherLoc = await prisma.location.create({ data: { code: `aud-${randomUUID()}`, name: 'Other store', type: 'store', companyId: a.companyId } });
+  const mk = async (company: { companyId: string; loc: { id: string } }, code: string) => {
+    const it = await prisma.item.create({ data: { code: `${code}-${randomUUID().slice(0, 6)}`, name: code, companyId: company.companyId } });
+    const lot = await prisma.lot.create({ data: { itemId: it.id, lotNo: `L-${randomUUID().slice(0, 6)}` } });
+    await prisma.stockLedger.create({ data: { itemId: it.id, lotId: lot.id, locationId: company.loc.id, onHand: 0, inTransit: 50, companyId: company.companyId } });
+    return it;
+  };
+  const foreign = await mk(b, 'FOR');
+  const lotA1 = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L1-${randomUUID().slice(0, 6)}` } });
+  const lotA2 = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L2-${randomUUID().slice(0, 6)}` } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lotA1.id, locationId: a.loc.id, onHand: 0, inTransit: 12, companyId: a.companyId } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lotA2.id, locationId: otherLoc.id, onHand: 0, inTransit: 3, companyId: a.companyId } });
+  await withServer(async (call) => {
+    const res = await call('GET', '/reports/in-transit', a.token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const row = res.body.items.find((i: { itemId: string }) => i.itemId === item.id);
+    assert.ok(row, 'item with in-transit stock at two locations must appear');
+    assert.equal(row.totalInTransit, 15, '12 + 3 across the two locations');
+    assert.equal(row.locations.length, 2);
+    assert.equal(res.body.items.some((i: { itemId: string }) => i.itemId === foreign.id), false, "another company's in-transit stock must not appear");
+    assert.ok(res.body.totalInTransit >= 15);
+
+    const denied = await call('GET', '/reports/in-transit', b.token);
+    assert.equal(denied.status, 200);
+    assert.equal(denied.body.items.some((i: { itemId: string }) => i.itemId === item.id), false, "company A's in-transit item must not leak to company B");
+  });
+});
+
 integration('gmroi uses the resolved RETAIL PriceList price, never a guessed margin; unpriced sales are excluded and reported (audit O-5)', async () => {
   const a = await makeCompany();
   const mkItem = (code: string) => prisma.item.create({ data: { code: `${code}-${randomUUID().slice(0, 6)}`, name: code, companyId: a.companyId } });

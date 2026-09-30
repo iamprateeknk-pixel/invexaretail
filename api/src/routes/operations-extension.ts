@@ -840,14 +840,23 @@ router.get('/intelligence/:locationId', async (req, res) => {
     network.set(entry.itemId, byLocation);
   }
   // StockLedger.inTransit is never written (dispatch does not post to it), so stock already
-  // on its way is read from the Transfer table - the same source the purchase plan uses.
+  // on its way is read from the Transfer table - the same source the purchase plan uses. Fetched
+  // company-wide (not just this location) so the overstock/network-need calc below (audit R-1:
+  // "they use on-hand, not available - reserved/in-transit ignored") can also see what is already
+  // headed to a DIFFERENT needy store, not only what is headed here.
   const inboundTransfers = await prisma.transfer.findMany({
-    where: { destinationLocationId: req.params.locationId, status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    where: { status: { in: ['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'] }, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { lines: true },
   });
   const incoming = new Map<string, number>();
-  for (const line of inboundTransfers.flatMap((transfer) => transfer.lines)) {
-    incoming.set(line.itemId, (incoming.get(line.itemId) ?? 0) + Math.max(0, line.requestedQty - line.receivedQty - line.damagedQty - line.shortageQty));
+  const networkIncoming = new Map<string, number>();
+  for (const transfer of inboundTransfers) {
+    for (const line of transfer.lines) {
+      const qty = Math.max(0, line.requestedQty - line.receivedQty - line.damagedQty - line.shortageQty);
+      if (transfer.destinationLocationId === req.params.locationId) incoming.set(line.itemId, (incoming.get(line.itemId) ?? 0) + qty);
+      const key = `${line.itemId}|${transfer.destinationLocationId}`;
+      networkIncoming.set(key, (networkIncoming.get(key) ?? 0) + qty);
+    }
   }
   // A donor keeps its own reorder minimum for the item.
   const donorRules = await prisma.reorderRule.findMany({
@@ -944,7 +953,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
     }
     return networkRows;
   });
-  const overstock = buildOverstockRecommendations(overstockRows, req.params.locationId).filter((row) => !dismissedTypes.has(`OVERSTOCK:${row.itemId}`));
+  const overstock = buildOverstockRecommendations(overstockRows, req.params.locationId, networkIncoming).filter((row) => !dismissedTypes.has(`OVERSTOCK:${row.itemId}`));
 
   return res.json({
     intelligence: {
