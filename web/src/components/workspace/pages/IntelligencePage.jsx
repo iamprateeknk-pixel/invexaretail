@@ -126,7 +126,7 @@ export function IntelligencePage() {
         />
         <ActionList
           title="Expiry actions"
-          empty="No near-expiry write-off or markdown actions."
+          empty="No near-expiry write-off, markdown or transfer actions."
           items={expiryActions}
           canAct={canAct}
           submitLoading={submitLoading}

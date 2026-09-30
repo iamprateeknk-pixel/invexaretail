@@ -1,4 +1,4 @@
-import { loadSalesEvents, totalsByItem } from '../lib/sales-demand.js';
+import { loadSalesEvents, signedSalesQty, totalsByItem } from '../lib/sales-demand.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
@@ -804,16 +804,18 @@ router.get('/intelligence/:locationId', async (req, res) => {
   }
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
-  const [rules, ledger, counts, dismissals] = await Promise.all([
+  const [rules, ledger, counts, dismissals, destinationLocation] = await Promise.all([
     prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true } }),
     // Scoped to this company's locations (it used to read every tenant's whole ledger on each request)
     // and to the items that have rules, with the lot fields needed to judge what is sellable.
     prisma.stockLedger.findMany({
       where: { location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
-      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true } } },
+      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true, latitude: true, longitude: true, shippingCostPerKm: true, deliverySlaHours: true } } },
     }),
     prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
     prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
+    // Audit R-1: donors are ranked by estimated shipping cost/lead time when this and the donor both have coordinates.
+    prisma.location.findFirst({ where: { id: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { latitude: true, longitude: true, shippingCostPerKm: true } }),
   ]);
   const dismissedItemIds = new Set(dismissals.filter((d) => d.type === 'REPLENISHMENT').map((d) => d.itemId));
   const dismissedCountIds = new Set(dismissals.filter((d) => d.type === 'ANOMALY' && d.countId).map((d) => d.countId));
@@ -834,6 +836,10 @@ router.get('/intelligence/:locationId', async (req, res) => {
       locationName: entry.location.name,
       locationType: entry.location.type,
       available: 0,
+      latitude: entry.location.latitude,
+      longitude: entry.location.longitude,
+      shippingCostPerKm: entry.location.shippingCostPerKm,
+      deliverySlaHours: entry.location.deliverySlaHours,
     };
     source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved, lot: entry.lot });
     byLocation.set(entry.locationId, source);
@@ -873,6 +879,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       incoming: incoming.get(rule.itemId) ?? 0,
       minQty: rule.minQty, targetQty: rule.targetQty,
       network: [...(network.get(rule.itemId)?.values() ?? [])].map((row) => ({ ...row, protectedQty: minimumAt(rule.itemId, row.locationId) })),
+      destination: destinationLocation ?? undefined,
     });
     const available = plan.position;
     const suggestedOrderQty = plan.suggestedOrderQty;
@@ -921,6 +928,30 @@ router.get('/intelligence/:locationId', async (req, res) => {
   // Items with no sales at all in the window are known-zero demand only if we actually have sales history for the location.
   if (recentSales.length > 0) for (const lot of lots) if (!demandByItem.has(lot.itemId)) demandByItem.set(lot.itemId, 0);
   const shelfLifeByItem = new Map<string, number | null | undefined>(lots.map((lot) => [lot.itemId, lot.item.shelfLifeDays] as [string, number | null | undefined]));
+  // Other locations' demand for these same items, so an expiring lot can be offered a TRANSFER to
+  // a genuinely faster-selling branch instead of only ever MARKDOWN here (audit R-1).
+  const expiringItemIds = [...new Set(lots.map((lot) => lot.itemId))];
+  const networkMovements = expiringItemIds.length
+    ? await prisma.stockMovement.findMany({
+        where: { itemId: { in: expiringItemIds }, movementType: { in: ['SALES_DEDUCTION', 'SALES_RETURN'] }, timestamp: { gte: salesSince }, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
+        select: { itemId: true, locationId: true, qtyDelta: true, movementType: true },
+      }).catch(() => [])
+    : [];
+  const networkUnitsByKey = new Map<string, number>();
+  for (const m of networkMovements) {
+    const key = `${m.itemId}|${m.locationId}`;
+    networkUnitsByKey.set(key, (networkUnitsByKey.get(key) ?? 0) + signedSalesQty(m.movementType, m.qtyDelta));
+  }
+  const networkByItem = new Map<string, Array<{ locationId: string; locationName: string; avgDailyDemand: number; onHand: number }>>();
+  for (const itemId of expiringItemIds) {
+    const locations = [...(network.get(itemId)?.values() ?? [])]
+      .filter((entry) => entry.locationId !== req.params.locationId)
+      .map((entry) => ({
+        locationId: entry.locationId, locationName: entry.locationName, onHand: entry.available,
+        avgDailyDemand: Math.max(0, (networkUnitsByKey.get(`${itemId}|${entry.locationId}`) ?? 0) / 30),
+      }));
+    if (locations.length) networkByItem.set(itemId, locations);
+  }
   const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => row.onHand > 0).map((row) => ({
     itemId: lot.itemId,
     itemName: lot.item.name,
@@ -933,7 +964,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
   })));
   const dismissedTypes = new Set(dismissals.map((row) => `${row.type}:${row.itemId}`));
   const lotBlocks = buildLotBlockRecommendations(lotInputs).filter((row) => !dismissedTypes.has(`LOT_BLOCK:${row.itemId}`));
-  const expiryActions = buildExpiryActionRecommendations(lotInputs, new Date(), { demandByItem, shelfLifeByItem }).filter((row) => !dismissedTypes.has(`EXPIRY:${row.itemId}`));
+  const expiryActions = buildExpiryActionRecommendations(lotInputs, new Date(), { demandByItem, shelfLifeByItem, networkByItem }).filter((row) => !dismissedTypes.has(`EXPIRY:${row.itemId}`));
   const overstockRows = rules.flatMap((rule) => {
     const here = quantities.get(rule.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
     const networkRows = [...(network.get(rule.itemId)?.values() ?? [])].map((entry) => ({
