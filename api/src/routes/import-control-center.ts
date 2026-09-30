@@ -1,6 +1,7 @@
 import { currentTimezone } from '../lib/timezone-context.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
+import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { canAccessLocation } from '../lib/inventory.js';
 import { listLocations, listSyncCheckpoints } from '../lib/repository.js';
 import { locationsForCompany, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
@@ -14,7 +15,7 @@ import { DEFAULT_CAMPAIGN_TIMEZONE, isDateOnly, isValidTimezone } from '../lib/s
 // stock accuracy.
 const router = Router();
 
-router.get('/imports/control-center', extractToken, requireAuth, async (req: Request, res: Response) => {
+router.get('/imports/control-center', extractToken, requireAuth, enforcePermissionOverrides, async (req: Request, res: Response) => {
   const role = req.user!.role;
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role)) {
     return res.status(403).json({ message: 'Import control center access denied.' });

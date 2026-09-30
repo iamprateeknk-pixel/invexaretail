@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
+import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { canManageCountWork } from '../lib/count-lifecycle.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { getCampaign } from '../lib/campaign-store.js';
@@ -22,7 +23,7 @@ import {
 // endpoints - they simply receive the assignments a campaign creates.
 const router = Router();
 
-router.use('/campaigns', extractToken, requireAuth, (req: Request, res: Response, next: NextFunction) => {
+router.use('/campaigns', extractToken, requireAuth, enforcePermissionOverrides, (req: Request, res: Response, next: NextFunction) => {
   if (!canManageCountWork(req.user!.role)) {
     res.status(403).json({ message: 'Only admins and branch managers can manage stock-take campaigns.' });
     return;

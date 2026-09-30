@@ -183,9 +183,11 @@ test('with no contractual lead time the plan uses the measured one and says so; 
   const measured = { samples: MIN_LEAD_TIME_SAMPLES, meanDays: 10, stdDevDays: 0 };
   const plan = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured }] });
   assert.equal(plan.suggestions[0].leadTimeDays, 10);
+  assert.equal(plan.suggestions[0].leadTimeSource, 'measured', 'audit O-3: surfaced as a field, not only in the explanation text');
   assert.match(plan.suggestions[0].explanation.join(' '), /measured over 3 completed orders/);
   const sparse = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', measured: { samples: 2, meanDays: 30, stdDevDays: 1 } }] });
   assert.equal(sparse.suggestions[0].leadTimeDays, 7);
+  assert.equal(sparse.suggestions[0].leadTimeSource, 'default', 'too few samples to trust: falls back and says so');
 });
 
 test('a supplier whose lead time varies raises the safety stock above the configured minimum', () => {
@@ -196,6 +198,7 @@ test('a supplier whose lead time varies raises the safety stock above the config
   // A contractual lead time wins over the measured mean.
   const contract = planWithLeadTime({ items: [leadInput], suppliers: [{ id: 's1', name: 'S', leadTimeDays: 3, measured: { samples: 6, meanDays: 20, stdDevDays: 0 } }] }).suggestions[0];
   assert.equal(contract.leadTimeDays, 3);
+  assert.equal(contract.leadTimeSource, 'contract');
 });
 
 test('case packs round the order up and EOQ raises small orders only when its cost inputs are given (audit O-4)', async () => {
