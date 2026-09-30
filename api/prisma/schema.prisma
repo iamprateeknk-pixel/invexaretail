@@ -670,7 +670,11 @@ model ApprovalRequest {
   triggerType    String
   entityType     String
   entityId       String
-  valueAtStake   Float
+  // Decimal migration pilot (docs/decimal-migration-plan.md): write-only in
+  // application code (never used in arithmetic - checkApprovalGate compares
+  // the plain-number `value` argument against ApprovalRule.valueThreshold,
+  // which stays Float for now), so this is the safest first field to convert.
+  valueAtStake   Decimal   @db.Decimal(14, 2)
   status         String    @default("PENDING")
   requestedById  String
   requestedBy    User      @relation("ApprovalRequestRequestedBy", fields: [requestedById], references: [id])

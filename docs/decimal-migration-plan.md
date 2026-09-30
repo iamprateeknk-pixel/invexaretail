@@ -245,6 +245,48 @@ run against Float columns and vice versa. Rollback is therefore "redeploy
 the previous commit and run the down-migration," never "revert code but
 leave the schema" or the reverse.
 
+## Pilot slice executed: ApprovalRequest.valueAtStake
+
+Per the guide/this plan's own framing - "the schema/column change and the application-code change
+must ship together" - the first real, incremental conversion picks the single safest field rather
+than the full 80-field/24-file sweep in one change: `ApprovalRequest.valueAtStake` is write-only in
+application code (`lib/approval-rules.ts`'s `checkApprovalGate`, one create call) and never read
+back into arithmetic or a relational comparison anywhere - the only comparison against a money
+field in this flow, `ctx.value >= rule.valueThreshold` in `findTriggeredRule`, compares the
+plain-number `value` argument against `ApprovalRule.valueThreshold`, which stays `Float` for now
+(deliberately not touched in this slice - see below).
+
+Done: schema (`Decimal @db.Decimal(14,2)`), migration
+(`20261108090000_approval_request_value_decimal`, rounds existing rows per the money policy, same
+`ROUND(x::numeric, 2)` pattern as the rehearsal above), and the two JSON-response call sites that
+needed a code change - `GET /approval-requests` and `POST /approval-requests/:id/decide` in
+`routes/operations-extension.ts` now explicitly `Number(...)` the field before responding, since
+`Prisma.Decimal`'s default `toJSON()` serializes as a *string*, which would otherwise have silently
+changed the API's wire type for every existing consumer (the web app's `CountsPage.jsx` happens to
+already wrap the value in `Number(...)`, so it was not actually broken by the old behaviour, but the
+API contract itself was still wrong to leave as a silent string). The write path
+(`valueAtStake: input.value`) needed no change - Prisma accepts a plain `number` for a `Decimal`
+field input and does the conversion itself.
+
+New real-Postgres test, `lib/approval-request-decimal.postgres.test.ts`: a value with 3 decimal
+places (`1234.567`) rounds to `1234.57` at the database layer (round-half-up per the policy), and
+both routes return it as a JSON `number`, not a string. Not run in this session (no
+`TEST_DATABASE_URL`) - run before relying on this in production, per AGENTS.md's required-test
+rule for any `prisma/schema.prisma` change.
+
+**Deliberately not touched in this slice**: `ApprovalRule.valueThreshold` (the companion field in
+the same feature) - converting it would make `ctx.value >= rule.valueThreshold` compare a `number`
+against a `Prisma.Decimal`. JS relational operators (`>=`, `<=`) happen to still produce the right
+answer here (they coerce via `valueOf()`/`toString()` to a comparable primitive), but this is exactly
+the fragile, easy-to-get-wrong territory the "24-file arithmetic rewrite" risk in this plan warns
+about for *any* field that participates in a computation rather than pure storage - not a safe thing
+to leave to happenstance JS coercion semantics even where it currently works. `Float` for now.
+
+This is slice 1 of the eventual 80-field migration - the remaining 79 fields (and in particular
+the ~24 files performing real arithmetic, not just storage/comparison) still need their own slices,
+each with the same discipline: real-Postgres verification before merge, and any comparison or
+arithmetic call site converted in the same change as its schema type.
+
 ## Exception-record policy
 
 Any row flagged during the real (non-rehearsal) migration run is copied to
