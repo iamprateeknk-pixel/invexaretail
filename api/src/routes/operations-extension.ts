@@ -804,16 +804,18 @@ router.get('/intelligence/:locationId', async (req, res) => {
   }
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
-  const [rules, ledger, counts, dismissals] = await Promise.all([
+  const [rules, ledger, counts, dismissals, destinationLocation] = await Promise.all([
     prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true } }),
     // Scoped to this company's locations (it used to read every tenant's whole ledger on each request)
     // and to the items that have rules, with the lot fields needed to judge what is sellable.
     prisma.stockLedger.findMany({
       where: { location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
-      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true } } },
+      select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true, latitude: true, longitude: true, shippingCostPerKm: true, deliverySlaHours: true } } },
     }),
     prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
     prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
+    // Audit R-1: donors are ranked by estimated shipping cost/lead time when this and the donor both have coordinates.
+    prisma.location.findFirst({ where: { id: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { latitude: true, longitude: true, shippingCostPerKm: true } }),
   ]);
   const dismissedItemIds = new Set(dismissals.filter((d) => d.type === 'REPLENISHMENT').map((d) => d.itemId));
   const dismissedCountIds = new Set(dismissals.filter((d) => d.type === 'ANOMALY' && d.countId).map((d) => d.countId));
@@ -834,6 +836,10 @@ router.get('/intelligence/:locationId', async (req, res) => {
       locationName: entry.location.name,
       locationType: entry.location.type,
       available: 0,
+      latitude: entry.location.latitude,
+      longitude: entry.location.longitude,
+      shippingCostPerKm: entry.location.shippingCostPerKm,
+      deliverySlaHours: entry.location.deliverySlaHours,
     };
     source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved, lot: entry.lot });
     byLocation.set(entry.locationId, source);
@@ -873,6 +879,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       incoming: incoming.get(rule.itemId) ?? 0,
       minQty: rule.minQty, targetQty: rule.targetQty,
       network: [...(network.get(rule.itemId)?.values() ?? [])].map((row) => ({ ...row, protectedQty: minimumAt(rule.itemId, row.locationId) })),
+      destination: destinationLocation ?? undefined,
     });
     const available = plan.position;
     const suggestedOrderQty = plan.suggestedOrderQty;
