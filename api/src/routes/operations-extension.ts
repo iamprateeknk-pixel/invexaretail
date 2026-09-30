@@ -2028,7 +2028,10 @@ router.get('/approval-requests', async (req, res) => {
     orderBy: { createdAt: 'desc' },
     take: 200,
   }).catch(() => []);
-  return res.json({ requests });
+  // valueAtStake is a Decimal column (docs/decimal-migration-plan.md) - JSON.stringify would
+  // otherwise serialize it as a string (Prisma.Decimal's toJSON), silently changing the API
+  // contract for every existing consumer that expects a number.
+  return res.json({ requests: requests.map((request) => ({ ...request, valueAtStake: Number(request.valueAtStake) })) });
 });
 
 router.post('/approval-requests/:id/decide', async (req, res) => {
@@ -2036,7 +2039,8 @@ router.post('/approval-requests/:id/decide', async (req, res) => {
   if (!decision) return res.status(400).json({ message: 'decision must be APPROVED or REJECTED.' });
   try {
     const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, req.body.notes || null);
-    return res.json({ request });
+    // valueAtStake is Decimal (docs/decimal-migration-plan.md) - see the same note on GET /approval-requests.
+    return res.json({ request: { ...request, valueAtStake: Number(request.valueAtStake) } });
   } catch (error) {
     return res.status(error instanceof Error && error.message.includes('Only a') ? 403 : 409).json({ message: error instanceof Error ? error.message : 'Unable to decide approval request.' });
   }
