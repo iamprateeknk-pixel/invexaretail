@@ -8,7 +8,7 @@ test('warehouse stock is preferred for branch replenishment', () => {
     { locationId: 'basni', locationName: 'H.O. Basni', locationType: 'warehouse', available: 10 },
   ]), {
     action: 'TRANSFER', sourceLocationId: 'basni', sourceLocationName: 'H.O. Basni',
-    suggestedTransferQty: 8, sources: [{ locationId: 'basni', locationName: 'H.O. Basni', quantity: 8 }], shortfallQty: 0,
+    suggestedTransferQty: 8, sources: [{ locationId: 'basni', locationName: 'H.O. Basni', quantity: 8, estimatedCost: null }], shortfallQty: 0,
     reason: 'Target can be restored from network stock.',
   });
 });
@@ -88,4 +88,30 @@ test('the purchase fallback names the company\'s own warehouse, not a hard-coded
   assert.match(none.reason, /purchase into Pune DC/);
   assert.match(routeReplenishment('store-a', 5, [], 'Custom Hub').reason, /Custom Hub/);
   assert.match(routeReplenishment('store-a', 5, []).reason, /the main warehouse/);
+});
+
+test('a donor with real cost data is chosen over a warehouse without it, and the cost is surfaced (audit R-1)', () => {
+  const far = { locationId: 'wh', locationName: 'Far Warehouse', locationType: 'warehouse', available: 50, latitude: 28.6139, longitude: 77.209, shippingCostPerKm: 5 }; // Delhi
+  const near = { locationId: 'store-b', locationName: 'Near Store', locationType: 'store', available: 50, latitude: 19.076, longitude: 72.8777, shippingCostPerKm: 5 }; // Mumbai
+  const destination = { latitude: 18.5204, longitude: 73.8567, shippingCostPerKm: 5 }; // Pune - close to Mumbai, far from Delhi
+  const route = routeReplenishment('store-a', 10, [far, near], undefined, destination);
+  assert.equal(route.sourceLocationId, 'store-b', 'the nearby store beats the warehouse once real distance/cost data exists');
+  assert.ok((route.sources?.[0].estimatedCost ?? 0) > 0);
+  assert.match(route.reason, /est\. shipping cost/);
+});
+
+test('without coordinates on both ends the original type/quantity heuristic still decides (no guessed cost)', () => {
+  const warehouseNoGeo = { locationId: 'wh', locationName: 'Warehouse', locationType: 'warehouse', available: 50 };
+  const storeWithGeo = { locationId: 'store-b', locationName: 'Store B', locationType: 'store', available: 50, latitude: 19.076, longitude: 72.8777, shippingCostPerKm: 5 };
+  // Destination has no coordinates, so estimatedTransferCost can never be computed for either donor.
+  const route = routeReplenishment('store-a', 10, [warehouseNoGeo, storeWithGeo], undefined, {});
+  assert.equal(route.sourceLocationId, 'wh', 'falls back to warehouse-first when cost cannot be compared for both sides');
+  assert.equal(route.sources?.[0].estimatedCost, null);
+});
+
+test('a shorter quoted delivery SLA breaks a tie when neither side has cost data', () => {
+  const slow = { locationId: 'store-b', locationName: 'Slow Store', locationType: 'store', available: 50, deliverySlaHours: 48 };
+  const fast = { locationId: 'store-c', locationName: 'Fast Store', locationType: 'store', available: 50, deliverySlaHours: 6 };
+  const route = routeReplenishment('store-a', 10, [slow, fast]);
+  assert.equal(route.sourceLocationId, 'store-c');
 });
