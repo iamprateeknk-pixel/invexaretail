@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
+import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { recordAudit, listAuditEvents } from '../lib/audit.js';
 import { createExceptionCase } from '../lib/exceptions.js';
 import { canManageTransferDispatch } from '../lib/transfer-lifecycle.js';
@@ -25,7 +26,7 @@ import {
 // shipped carton by carton, and dispatch records who carries it and when it is
 // due. Both are refused until the step before them is genuinely complete.
 const router = Router();
-const guard = [extractToken, requireAuth];
+const guard = [extractToken, requireAuth, enforcePermissionOverrides];
 
 const PACK_STATUSES = ['READY_FOR_ADMIN', 'PARTIAL', 'CONFIRMED'];
 const PACKERS = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'WAREHOUSE_PICKER'];

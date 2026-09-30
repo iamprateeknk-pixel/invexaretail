@@ -45,6 +45,8 @@ export type Suggestion = {
   reorderPoint: number;
   orderUpTo: number;
   leadTimeDays: number;
+  /** Where leadTimeDays came from (audit O-3): 'default' means not set on the supplier and too few completed orders to measure - surfaced as a field, not only in the explanation text, so a caller can flag it without parsing prose. */
+  leadTimeSource: 'contract' | 'measured' | 'default';
   daysOfCover: number | null;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   estimatedCost: number | null;
@@ -169,7 +171,7 @@ export function planPurchases(input: { items: PlanInput[]; suppliers: SupplierTe
     suggestions.push({
       itemId: item.itemId, code: item.code, name: item.name,
       supplierId: usableSupplier?.id ?? null, supplierName: usableSupplier?.name ?? null,
-      quantity, urgency, position: round3(position), reorderPoint, orderUpTo: round3(orderUpTo), leadTimeDays: lead,
+      quantity, urgency, position: round3(position), reorderPoint, orderUpTo: round3(orderUpTo), leadTimeDays: lead, leadTimeSource: leadSource,
       daysOfCover, confidence, estimatedCost: item.unitCost ? round3(quantity * (unitCostAt(quantity, item.unitCost, item.priceBreaks) ?? item.unitCost)) : null, explanation,
     });
   }

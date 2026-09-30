@@ -106,6 +106,26 @@ export function useWorkspaceAdmin({
     }
   }
 
+  // Gives permissionUser the exact same function-level access as another user in one action (e.g. a
+  // warehouse picker who should work like a specific store user) instead of replaying the same
+  // checkbox grid by hand. Reloads the draft afterwards so the grid reflects what was copied.
+  async function copyPermissionsFrom(sourceUserId) {
+    if (!permissionUser || !sourceUserId) return;
+    setAdminLoading(true);
+    try {
+      await apiRequest(`/api/v1/users/${permissionUser.id}/permissions/copy-from/${sourceUserId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      await openUserPermissions(permissionUser);
+      showToast(`Copied permissions onto ${permissionUser.name}.`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to copy permissions.', 'error');
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
   async function saveCompanyProfile(event) {
     event.preventDefault();
     setAdminLoading(true);
@@ -306,6 +326,7 @@ export function useWorkspaceAdmin({
     setPermissionScopeId,
     openAdminPortal,
     openUserPermissions,
+    copyPermissionsFrom,
     saveUserPermissions,
     saveCompanyProfile,
     createLocation,

@@ -1,6 +1,7 @@
 import { resolveReportRange, ReportRangeError } from '../lib/report-range.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
+import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { databaseProbe, prisma } from '../lib/db.js';
 import { listAuditEvents } from '../lib/audit.js';
 import { latestEventId, subscriberCount } from '../lib/event-bus.js';
@@ -16,7 +17,7 @@ import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type A
 
 // Blueprint v4 §29 Command Center and §30 Reports. Read-only.
 const router = Router();
-const guard = [extractToken, requireAuth];
+const guard = [extractToken, requireAuth, enforcePermissionOverrides];
 
 const MANAGEMENT = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'];
 

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { DEFAULT_WORKSPACE_PROFILE, ROLE_LABELS } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -26,7 +27,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 export function AdminPortalDialog() {
   const {
     adminLoading, adminPortalOpen, adminTab, allUsers,
-    companyForm, createLocation, createUser, darkMode,
+    companyForm, copyPermissionsFrom, createLocation, createUser, darkMode,
     deleteLocationById, deleteUserById, editLocationForm, editUserForm,
     editingLocationId, editingUserId, industryApplyPending, isMobile,
     locations, newLocationForm, newUserForm, openUserPermissions,
@@ -39,6 +40,7 @@ export function AdminPortalDialog() {
     sidebarCompact, startEditLocation, startEditUser, toggleFormLocation,
     workspaceProfile,
   } = useWorkspace();
+  const [copySourceId, setCopySourceId] = useState('');
   return (
     <>
       <Dialog open={adminPortalOpen} onOpenChange={setAdminPortalOpen}>
@@ -311,8 +313,29 @@ export function AdminPortalDialog() {
                         </SelectContent>
                       </Select>
                     </div>
+                    <div className="grid min-w-52 gap-1">
+                      <Label>Copy permissions from</Label>
+                      <div className="flex gap-2">
+                        <Select value={copySourceId} onValueChange={setCopySourceId}>
+                          <SelectTrigger><SelectValue placeholder="Choose a user" /></SelectTrigger>
+                          <SelectContent>
+                            {(allUsers ?? []).filter((user) => user.id !== permissionUser.id && user.role !== 'ADMIN').map((user) => (
+                              <SelectItem key={user.id} value={user.id}>{user.name} · {ROLE_LABELS[user.role] ?? user.role}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={!copySourceId || adminLoading}
+                          onClick={() => copyPermissionsFrom(copySourceId)}
+                        >
+                          Copy
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">Deny always wins over Allow. Default keeps the user's existing role access. Branch-specific rules override only that branch.</p>
+                  <p className="text-xs text-muted-foreground">Deny always wins over Allow. Default keeps the user's existing role access. Branch-specific rules override only that branch. "Copy permissions from" gives this user the exact same function-level access as another user in one click - e.g. a warehouse picker who should work like a specific store user - without their base role changing.</p>
                   <div className="max-h-[52vh] overflow-auto rounded-lg border">
                     <Table>
                       <TableHeader className="sticky top-0 z-10 bg-background">

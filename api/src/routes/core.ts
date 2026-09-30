@@ -313,6 +313,46 @@ router.put('/users/:userId/permissions', async (req: Request, res: Response) => 
   }
 });
 
+// Gives a user the exact same function-level access as another user in one action (e.g. a
+// warehouse picker who should work like a specific store user, or the other way round) instead of
+// replaying the same checkbox grid by hand. Copies the SOURCE user's current UserPermission rows
+// onto the TARGET verbatim; it does not touch either user's base role - an admin still changes that
+// separately via PUT /users/:userId if the roles themselves should also match.
+router.post('/users/:userId/permissions/copy-from/:sourceUserId', async (req: Request, res: Response) => {
+  if (req.user!.role !== 'ADMIN') return res.status(403).json({ message: 'Only Main Admin can change user permissions.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Permission overrides require a connected database.' });
+  const userId = firstParam(req.params.userId);
+  const sourceUserId = firstParam(req.params.sourceUserId);
+  if (userId === req.user!.id) return res.status(400).json({ message: 'Main Admin permissions cannot be restricted.' });
+  if (userId === sourceUserId) return res.status(400).json({ message: 'Choose a different user to copy from.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const [target, source] = await Promise.all([
+    prisma.user.findFirst({ where: { id: userId, companyId } }),
+    prisma.user.findFirst({ where: { id: sourceUserId, companyId } }),
+  ]);
+  if (!target || !source) return res.status(404).json({ message: 'User not found.' });
+  if (target.role === 'ADMIN') return res.status(400).json({ message: 'Another Main Admin cannot be restricted here.' });
+  try {
+    const sourcePermissions = await prisma.userPermission.findMany({ where: { userId: sourceUserId } });
+    await prisma.$transaction(async (tx) => {
+      await tx.userPermission.deleteMany({ where: { userId } });
+      for (const row of sourcePermissions) {
+        await tx.userPermission.create({ data: {
+          userId, permissionId: row.permissionId, allowed: row.allowed, denied: row.denied,
+          scopeId: row.scopeId, scopeType: row.scopeType, reason: row.reason,
+        } });
+      }
+      await tx.auditLog.create({ data: {
+        actorId: req.user!.id, actorRole: req.user!.role, action: 'USER_PERMISSIONS_COPIED',
+        entityType: 'User', entityId: userId, metadata: { sourceUserId, permissionCount: sourcePermissions.length },
+      } });
+    });
+    return res.json({ success: true, userId, permissionCount: sourcePermissions.length });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to copy permissions.' });
+  }
+});
+
 // ============================================
 // USERS & LOCATIONS
 // ============================================

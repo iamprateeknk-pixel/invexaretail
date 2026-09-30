@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
+import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID, companyOwnsItem } from '../lib/saas/tenant-scope.js';
 import { deleteBlockers, parseStatusChange } from '../lib/item-master.js';
 import { ItemMasterError, changeItemStatus, deleteItemPermanently, referenceCounts } from '../lib/item-master-service.js';
@@ -8,7 +9,7 @@ import { requireTenantContext } from '../lib/tenant-context.js';
 // Blueprint v4 §6: lifecycle controls for the canonical Item Master.
 // Create/edit live on POST/PUT /items in core.ts.
 const router = Router();
-const guard = [extractToken, requireAuth];
+const guard = [extractToken, requireAuth, enforcePermissionOverrides];
 
 function companyOf(req: Request): string {
   return req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID;
