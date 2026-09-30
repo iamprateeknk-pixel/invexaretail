@@ -79,3 +79,36 @@ integration("a needy store's overstock-transfer recommendation is reduced by sto
     assert.equal(findRec(after.body), undefined, 'need is already fully covered by the in-flight transfer: no duplicate recommendation');
   });
 });
+
+integration("an expiring lot is suggested as a TRANSFER to a genuinely faster-selling branch, not just MARKDOWN (audit R-1)", async () => {
+  const companyId = `ops-xt-co-${randomUUID()}`;
+  await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+  const userId = `ops-xt-user-${randomUUID()}`;
+  await prisma.user.create({ data: { id: userId, name: 'A', email: `${userId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
+  createEnhancedUser({ id: userId, companyId, email: `${userId}@test.invexa.local`, name: 'A', role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active' });
+  const token = generateJWT(userId, companyId);
+
+  const slow = await prisma.location.create({ data: { code: `xt-slow-${randomUUID()}`, name: 'Slow Store', type: 'store', companyId } });
+  const fast = await prisma.location.create({ data: { code: `xt-fast-${randomUUID()}`, name: 'Fast Store', type: 'store', companyId } });
+  const item = await prisma.item.create({ data: { code: `XT-${randomUUID().slice(0, 8)}`, name: 'Expiring item', companyId } });
+  const day = 86_400_000;
+  const expiringLot = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L-EXP-${randomUUID().slice(0, 6)}`, expiryDate: new Date(Date.now() + 10 * day) } });
+  const fastLot = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L-FAST-${randomUUID().slice(0, 6)}` } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: expiringLot.id, locationId: slow.id, onHand: 100, companyId } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: fastLot.id, locationId: fast.id, onHand: 20, companyId } });
+
+  // Slow store: 1 unit/day. Fast store: 5 units/day - genuinely faster.
+  const sale = (locationId: string, lotId: string, daysAgo: number, qty: number) => prisma.stockMovement.create({ data: { itemId: item.id, lotId, locationId, movementType: 'SALES_DEDUCTION', qtyDelta: -qty, beforeBalance: qty, afterBalance: 0, actor: userId, timestamp: new Date(Date.now() - daysAgo * day), companyId } });
+  for (let d = 1; d <= 20; d += 1) await sale(slow.id, expiringLot.id, d, 1);
+  for (let d = 1; d <= 20; d += 1) await sale(fast.id, fastLot.id, d, 5);
+
+  await withServer(async (call) => {
+    const res = await call('GET', `/intelligence/${slow.id}`, token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const rec = res.body.intelligence.expiryActions.find((row: { itemId: string }) => row.itemId === item.id);
+    assert.ok(rec, 'the expiring lot must produce a recommendation');
+    assert.equal(rec.suggestedAction, 'TRANSFER', `expected TRANSFER to the faster branch, got ${JSON.stringify(rec)}`);
+    assert.equal(rec.destinationLocationId, fast.id);
+    assert.ok(rec.suggestedTransferQty > 0);
+  });
+});

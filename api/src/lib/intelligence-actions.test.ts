@@ -77,6 +77,33 @@ test('no recent sales at all means everything is at risk; unknown demand keeps t
   assert.equal(buildExpiry([lotIn(200, 500)], auditNow, { demandByItem: new Map([['i1', 0]]) }).length, 0);
 });
 
+// Audit R-1: the declared TRANSFER action for expiring stock was never produced.
+test('a faster-selling branch with enough shelf life left is suggested as a TRANSFER instead of MARKDOWN', () => {
+  const [rec] = buildExpiry([lotIn(10, 100)], auditNow, {
+    demandByItem: new Map([['i1', 1]]),
+    networkByItem: new Map([['i1', [{ locationId: 'fast-store', locationName: 'Fast Store', avgDailyDemand: 20, onHand: 5 }]]]),
+  });
+  assert.equal(rec.suggestedAction, 'TRANSFER');
+  assert.equal(rec.destinationLocationId, 'fast-store');
+  // sellableDays = 10 - 2 transit buffer = 8; min(atRiskQty, 20/day x 8 days).
+  assert.equal(rec.suggestedTransferQty, Math.min(rec.atRiskQty!, 160));
+  assert.match(rec.reason, /transfer .* there instead of marking it down/);
+});
+
+test('TRANSFER is not suggested when the only other branch sells no faster, or there is no time left to ship it', () => {
+  const noFaster = buildExpiry([lotIn(10, 100)], auditNow, {
+    demandByItem: new Map([['i1', 5]]),
+    networkByItem: new Map([['i1', [{ locationId: 'slower', locationName: 'Slower Store', avgDailyDemand: 3, onHand: 5 }]]]),
+  });
+  assert.equal(noFaster[0].suggestedAction, 'MARKDOWN', 'the other branch sells slower, not faster - no point moving it there');
+
+  const tooSoon = buildExpiry([lotIn(2, 100)], auditNow, {
+    demandByItem: new Map([['i1', 1]]),
+    networkByItem: new Map([['i1', [{ locationId: 'fast-store', locationName: 'Fast Store', avgDailyDemand: 20, onHand: 5 }]]]),
+  });
+  assert.equal(tooSoon[0].suggestedAction, 'MARKDOWN', 'expires in 2 days, transit alone is a 2-day buffer: no sellable time left there either');
+});
+
 test('shelf-life zone is attached when the item shelf life is known; expired lots are still written off', () => {
   const [rec] = buildExpiry([lotIn(3, 10)], auditNow, { shelfLifeByItem: new Map([['i1', 365]]) });
   assert.equal(rec.shelfLifeZone, 'CRITICAL');

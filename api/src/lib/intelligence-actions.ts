@@ -37,6 +37,10 @@ export type ExpiryActionRecommendation = {
   atRiskQty?: number;
   /** Remaining-shelf-life zone (only when the item's shelf life is known). */
   shelfLifeZone?: ShelfLifeZone | null;
+  /** Only when suggestedAction is TRANSFER: the faster-selling branch this stock should move to instead of being marked down here. */
+  destinationLocationId?: string;
+  destinationLocationName?: string;
+  suggestedTransferQty?: number;
 };
 
 export type OverstockRecommendation = {
@@ -107,11 +111,18 @@ export function daysToExpiry(expiryDate: string | null | undefined, today = new 
   return daysUntilExpiryDate(expiryDate, today);
 }
 
+export type NetworkDemandRow = { locationId: string; locationName: string; avgDailyDemand: number; onHand: number };
+
 export type ExpiryActionContext = {
   /** Average units sold per day at this location, by item. Presence of the item enables sell-through projection. */
   demandByItem?: Map<string, number>;
   shelfLifeByItem?: Map<string, number | null | undefined>;
+  /** Other locations' demand/stock for the same item (audit R-1: the declared TRANSFER action for expiring stock was never produced). */
+  networkByItem?: Map<string, NetworkDemandRow[]>;
 };
+
+/** Days it would take this stock to leave, shipping there costs this many days - both fixed, documented assumptions (audit R-1). */
+const TRANSFER_TRANSIT_BUFFER_DAYS = 2;
 
 /**
  * Expiry actions (audit S-1/S-2). With a known sales rate the question is not "how many days are
@@ -144,12 +155,33 @@ export function buildExpiryActionRecommendations(lots: LotBlockInput[], today = 
       const projection = projectSellThrough({ onHand: lot.onHand, avgDailyDemand: demand, daysUntilExpiry: days });
       if (projection.willSellOut || days > 90) continue;
       const share = projection.atRiskQty / lot.onHand;
+      const risk = days <= 7 || (share >= 0.5 && days <= 21) ? 'HIGH' : 'MEDIUM';
+      // A destination genuinely sells this item faster (higher daily demand) AND has enough shelf
+      // time left to actually sell it before this lot's expiry, net of a fixed transit buffer -
+      // otherwise the old markdown-here recommendation stands (audit R-1: the declared TRANSFER
+      // action for expiring stock was never produced).
+      const sellableDays = days - TRANSFER_TRANSIT_BUFFER_DAYS;
+      const destination = sellableDays > 0
+        ? (context.networkByItem?.get(lot.itemId) ?? [])
+            .filter((row) => row.locationId !== lot.locationId && row.avgDailyDemand > demand)
+            .sort((a, b) => b.avgDailyDemand - a.avgDailyDemand)[0]
+        : undefined;
+      if (destination) {
+        const transferQty = Math.max(1, Math.min(projection.atRiskQty, Math.floor(destination.avgDailyDemand * sellableDays)));
+        recs.push({
+          ...base, suggestedAction: 'TRANSFER', atRiskQty: projection.atRiskQty,
+          destinationLocationId: destination.locationId, destinationLocationName: destination.locationName, suggestedTransferQty: transferQty,
+          reason: `${lot.lotNo} expires in ${days} day(s) and sells about ${demand}/day here; ${destination.locationName} sells about ${destination.avgDailyDemand}/day - transfer ${transferQty} there instead of marking it down.`,
+          risk,
+        });
+        continue;
+      }
       recs.push({
         ...base, suggestedAction: 'MARKDOWN', atRiskQty: projection.atRiskQty,
         reason: demand > 0
           ? `${lot.lotNo} expires in ${days} day(s) and sells about ${demand}/day: ~${projection.atRiskQty} of ${lot.onHand} will still be unsold - markdown or move it to a faster-selling branch.`
           : `${lot.lotNo} expires in ${days} day(s) with no recent sales - all ${lot.onHand} are at risk; markdown, move or donate.`,
-        risk: days <= 7 || (share >= 0.5 && days <= 21) ? 'HIGH' : 'MEDIUM',
+        risk,
       });
       continue;
     }
