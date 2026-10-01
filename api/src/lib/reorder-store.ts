@@ -163,7 +163,10 @@ export function buildReplenishmentIntelligence(locationId: string) {
   const executiveSummary = critical
     ? `${critical} critical item${critical === 1 ? '' : 's'}; ${transfers} network transfer${transfers === 1 ? '' : 's'} and ${purchases} purchase action${purchases === 1 ? '' : 's'} recommended.`
     : transfers || purchases
-      ? `${transfers} network transfer${transfers === 1 ? '' : 's'} and ${purchases} H.O. Basni purchase action${purchases === 1 ? '' : 's'} recommended.`
+      // Same fix as the database-mode summary in operations-extension.ts: the purchase hub is
+      // per-company and chosen dynamically - this line used to hard-code one customer's site
+      // ("H.O. Basni") regardless of the actual configured warehouse (audit R-1 leftover).
+      ? `${transfers} network transfer${transfers === 1 ? '' : 's'} and ${purchases} warehouse purchase action${purchases === 1 ? '' : 's'} recommended.`
       : 'Configured inventory is above reorder targets. Continue monitoring count variance.';
 
   return {
