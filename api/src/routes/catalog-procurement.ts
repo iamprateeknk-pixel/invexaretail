@@ -1,6 +1,8 @@
 import { loadSalesEvents } from '../lib/sales-demand.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { suggestReorderRule } from '../lib/reorder-suggestion.js';
+import { computeDemandStats } from '../lib/demand-forecast.js';
+import { computePeriodicReviewPolicy, projectPeriodicReview } from '../lib/periodic-review-policy.js';
 import { sellableParts } from '../lib/sellable-stock.js';
 import { type Request, type Response, Router } from 'express';
 
@@ -246,6 +248,55 @@ router.post('/reorder-rules/suggestions/:itemId/accept', async (req, res) => {
     metadata: { itemId: req.params.itemId, locationId, suggestedMin: suggestion.suggestedMin, suggestedTarget: suggestion.suggestedTarget, demandPattern: suggestion.demandPattern, change: suggestion.change },
   }));
   return res.json({ rule });
+});
+
+// Periodic-review (R,S) policy (audit R-3, second increment): the reorder system everywhere else in
+// this file is continuous-review. This derives R/S from the item's own demand history - same
+// computeDemandStats + servicePercent inputs as the reorder-suggestion route above - and returns a
+// 90-day simulation of that policy (lib/periodic-review-policy.ts) so the caller can see it work
+// before adopting it, not just the two numbers. Read-only: nothing here writes a rule.
+router.get('/items/:itemId/periodic-review-policy', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
+  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!databaseEnabled) return res.status(501).json({ message: 'Periodic-review policy requires a connected database.' });
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const [location, item] = await Promise.all([
+    prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } }),
+    prisma.item.findFirst({ where: { id: req.params.itemId, companyId }, select: { id: true, code: true, name: true } }),
+  ]);
+  if (!location || !item) return res.status(404).json({ message: 'Item or location not found.' });
+  const query = parseReorderSuggestionQuery(req.query); // reuses windowDays/leadTimeDays/servicePercent parsing+defaults
+  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  const reviewPeriodDays = Number(req.query.reviewPeriodDays) > 0 ? Math.min(90, Number(req.query.reviewPeriodDays)) : 7;
+  const leadTimeStdDevDays = Number(req.query.leadTimeStdDevDays) >= 0 ? Number(req.query.leadTimeStdDevDays) : 0;
+
+  const since = new Date(Date.now() - query.windowDays * 86_400_000);
+  const movements = await loadSalesEvents({ since, locationId, companyId, itemIds: [req.params.itemId] });
+  const byDay = new Map<string, number>();
+  for (const m of movements) {
+    const day = m.timestamp.toISOString().slice(0, 10);
+    byDay.set(day, (byDay.get(day) ?? 0) + m.qty);
+  }
+  const dailyDemand = Array.from({ length: query.windowDays }, (_, offset) => byDay.get(new Date(since.getTime() + offset * 86_400_000).toISOString().slice(0, 10)) ?? 0);
+  const stats = computeDemandStats(dailyDemand.map((value) => Math.max(0, value)));
+
+  const policy = computePeriodicReviewPolicy({
+    avgDailyDemand: stats.averageDailyDemand, stdDevDailyDemand: stats.stdDevDailyDemand,
+    leadTimeDays: query.leadTimeDays, leadTimeStdDevDays, reviewPeriodDays, servicePercent: query.servicePercent,
+  });
+  const stock = await prisma.stockLedger.aggregate({ where: { itemId: req.params.itemId, locationId }, _sum: { onHand: true, reserved: true } });
+  const onHand = Math.max(0, (stock._sum.onHand ?? 0) - (stock._sum.reserved ?? 0));
+  const simulation = projectPeriodicReview({
+    onHand, avgDailyDemand: stats.averageDailyDemand, leadTimeDays: policy.leadTimeDays,
+    reviewPeriodDays: policy.reviewPeriodDays, reorderPoint: policy.reorderPoint, orderUpToLevel: policy.orderUpToLevel,
+    horizonDays: 90,
+  });
+  return res.json({
+    itemId: item.id, code: item.code, name: item.name, locationId, onHand,
+    windowDays: query.windowDays, sampleDays: stats.sampleDays, averageDailyDemand: stats.averageDailyDemand,
+    policy, simulation,
+  });
 });
 
 router.put('/reorder-rules/:itemId', async (req, res) => {

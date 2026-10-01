@@ -272,6 +272,28 @@ integration('reorder suggestions are derived from sales history, tenant scoped, 
   });
 });
 
+integration('periodic-review (R,S) policy is derived from sales history and simulated 90 days forward, tenant scoped (audit R-3)', async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const item = await prisma.item.create({ data: { code: `PRP-${randomUUID().slice(0, 8)}`, name: 'Weekly buy item', companyId: a.companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L-${randomUUID().slice(0, 6)}` } });
+  for (let d = 1; d <= 30; d += 1) {
+    await prisma.stockMovement.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, movementType: 'SALES_DEDUCTION', qtyDelta: -8, beforeBalance: 500, afterBalance: 492, actor: a.userId, timestamp: new Date(Date.now() - d * 86_400_000), companyId: a.companyId } });
+  }
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lot.id, locationId: a.loc.id, onHand: 0, companyId: a.companyId } });
+  await withServer(async (call) => {
+    const res = await call('GET', `/items/${item.id}/periodic-review-policy?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5&reviewPeriodDays=7`, a.token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.ok(res.body.averageDailyDemand > 7 && res.body.averageDailyDemand < 9, `~8/day expected, got ${res.body.averageDailyDemand}`);
+    assert.equal(res.body.policy.protectionIntervalDays, 12, 'leadTimeDays 5 + reviewPeriodDays 7');
+    assert.ok(res.body.policy.orderUpToLevel > 0);
+    assert.equal(res.body.policy.reorderPoint, res.body.policy.orderUpToLevel);
+    assert.ok(Array.isArray(res.body.simulation.plannedOrders) && res.body.simulation.plannedOrders.length > 0, 'zero on hand must trigger an order in the 90-day simulation');
+
+    assert.equal((await call('GET', `/items/${item.id}/periodic-review-policy?locationId=${a.loc.id}&leadTimeDays=5`, b.token)).status, 404, "another company cannot read this item/location's policy");
+  });
+});
+
 integration('company timezone can be read, set by an admin, rejected when invalid, and is per company (audit T-2)', async () => {
   const a = await makeCompany();
   const b = await makeCompany();
