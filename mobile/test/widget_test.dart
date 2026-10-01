@@ -5,9 +5,11 @@ import 'package:http/testing.dart';
 import 'package:invexaretail_mobile/app.dart';
 import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/screens/dashboard_screen.dart';
+import 'package:invexaretail_mobile/screens/expiry_detail_screen.dart';
 import 'package:invexaretail_mobile/screens/home_shell.dart';
 import 'package:invexaretail_mobile/screens/login_screen.dart';
 import 'package:invexaretail_mobile/screens/stock_screen.dart';
+import 'package:invexaretail_mobile/screens/transfers_screen.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
 import 'package:invexaretail_mobile/state/session_controller.dart';
@@ -69,6 +71,72 @@ void main() {
     expect(find.text('Expired lots'), findsOneWidget);
     expect(find.text('Total Items'), findsNothing);
     expect(find.text('Hello, Admin User'), findsOneWidget);
+  });
+
+  testWidgets('tapping Expired lots opens the drill-down detail screen (audit: powerful clickable dashboard)', (tester) async {
+    final controller = _controller(
+      user: const AuthUser(id: 'u1', name: 'Admin User', email: 'admin@retail.local', role: 'ADMIN'),
+    )
+      ..dashboard = const DashboardSummary(
+        pendingCounts: 0, transferRequests: 0, expiredTillDate: 1, nearExpiryThisMonth: 0,
+        nearExpiryNextMonth: 0, countCompletionPercent: 100, transferSlaPercent: 100, stockAccuracyPercent: 100,
+      );
+
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: DashboardScreen(controller: controller))));
+    await tester.ensureVisible(find.text('Expired lots'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expired lots'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ExpiryDetailScreen), findsOneWidget);
+    expect(find.text('Expired lots'), findsWidgets, reason: 'the pushed screen titles itself the same way');
+  });
+
+  testWidgets('tapping Transfer requests opens the Transfers screen', (tester) async {
+    final controller = _controller(
+      user: const AuthUser(id: 'u1', name: 'Admin User', email: 'admin@retail.local', role: 'ADMIN'),
+    )
+      ..dashboard = const DashboardSummary(
+        pendingCounts: 0, transferRequests: 3, expiredTillDate: 0, nearExpiryThisMonth: 0,
+        nearExpiryNextMonth: 0, countCompletionPercent: 100, transferSlaPercent: 100, stockAccuracyPercent: 100,
+      );
+
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: DashboardScreen(controller: controller))));
+    await tester.ensureVisible(find.text('Transfer requests'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transfer requests'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransfersScreen), findsOneWidget);
+  });
+
+  testWidgets('pickers and store users see the same dashboard card format, with role-appropriate live activity', (tester) async {
+    final pickerController = _controller(
+      user: const AuthUser(id: 'p1', name: 'Picker', email: 'picker@retail.local', role: 'WAREHOUSE_PICKER'),
+    )
+      ..dashboard = const DashboardSummary(
+        pendingCounts: 0, transferRequests: 0, expiredTillDate: 0, nearExpiryThisMonth: 0,
+        nearExpiryNextMonth: 0, countCompletionPercent: 100, transferSlaPercent: 100, stockAccuracyPercent: 100,
+      );
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: DashboardScreen(controller: pickerController))));
+    expect(find.text('Pick tasks open'), findsOneWidget);
+    // A picker is a blind-count worker too (audit: pickers are assigned warehouse stock counts) -
+    // they see this tile alongside their pick/putaway ones, not instead of them.
+    expect(find.text('Count batches open'), findsOneWidget);
+    // Same card vocabulary either way - every role's dashboard renders the identical KPI grid.
+    expect(find.text('Branch health'), findsOneWidget);
+    expect(find.text('Pending counts'), findsOneWidget);
+
+    final storeController = _controller(
+      user: const AuthUser(id: 's1', name: 'Store', email: 'store@retail.local', role: 'STORE_USER'),
+    )
+      ..dashboard = const DashboardSummary(
+        pendingCounts: 0, transferRequests: 0, expiredTillDate: 0, nearExpiryThisMonth: 0,
+        nearExpiryNextMonth: 0, countCompletionPercent: 100, transferSlaPercent: 100, stockAccuracyPercent: 100,
+      );
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: DashboardScreen(controller: storeController))));
+    expect(find.text('Count batches open'), findsOneWidget);
+    expect(find.text('Pick tasks open'), findsNothing);
+    expect(find.text('Branch health'), findsOneWidget);
+    expect(find.text('Pending counts'), findsOneWidget);
   });
 
   testWidgets('stock list joins item names and hides book qty for store users', (tester) async {

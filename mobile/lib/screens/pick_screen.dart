@@ -17,10 +17,7 @@ class PickScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final picks = controller.transfers.where((row) {
-      final status = row.status.toUpperCase();
-      return status.contains('PICK') || status == 'REQUESTED' || status == 'PARTIAL';
-    }).toList();
+    final picks = openPickTransfers(controller.transfers);
 
     return RefreshIndicator(
       color: invexaEmerald,
