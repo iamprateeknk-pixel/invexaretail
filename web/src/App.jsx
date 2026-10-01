@@ -125,6 +125,7 @@ function AppShell() {
           item={forecastItem}
           token={authToken}
           locationId={locationId}
+          role={role}
           onClose={() => setForecastItem(null)}
         />
       )}

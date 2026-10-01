@@ -2,13 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api-client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
-export default function ItemForecastPanel({ item, token, locationId, onClose }) {
+export default function ItemForecastPanel({ item, token, locationId, role, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const canSeePolicy = ['ADMIN', 'ADMIN_USER'].includes(role);
+  const [reviewPeriodDays, setReviewPeriodDays] = useState(7);
+  const [policy, setPolicy] = useState(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policyError, setPolicyError] = useState('');
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  const loadPolicy = () => {
+    if (!locationId) return;
+    setPolicyLoading(true); setPolicyError('');
+    apiRequest(`/api/v1/items/${encodeURIComponent(item.id)}/periodic-review-policy?locationId=${encodeURIComponent(locationId)}&reviewPeriodDays=${encodeURIComponent(reviewPeriodDays)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => { if (mounted.current) setPolicy(response); })
+      .catch((err) => { if (mounted.current) setPolicyError(err instanceof Error ? err.message : 'Unable to load the periodic-review policy.'); })
+      .finally(() => { if (mounted.current) setPolicyLoading(false); });
+  };
 
   useEffect(() => {
     if (!locationId) { setError('Select a location to view its forecast.'); setLoading(false); return; }
@@ -66,6 +84,30 @@ export default function ItemForecastPanel({ item, token, locationId, onClose }) 
         {!data.expiryActions?.length && !data.overstock?.length && (
           <p className="text-xs text-muted-foreground">No expiry risk or overstock signal for this item right now.</p>
         )}
+
+        {canSeePolicy && <div className="border-t pt-4">
+          <p className="mb-2 font-medium">Periodic-review (R,S) policy</p>
+          <div className="flex items-end gap-2">
+            <div>
+              <label htmlFor="review-period-days" className="block text-xs text-muted-foreground">Review every (days)</label>
+              <Input id="review-period-days" type="number" min="1" max="90" className="h-8 w-20" value={reviewPeriodDays} onChange={(e) => setReviewPeriodDays(e.target.value)} />
+            </div>
+            <Button size="sm" variant="outline" disabled={policyLoading} onClick={loadPolicy}>{policyLoading ? 'Calculating…' : 'Calculate policy'}</Button>
+          </div>
+          {policyError && <p role="alert" className="mt-2 text-xs text-destructive">{policyError}</p>}
+          {policy && <div className="mt-3 space-y-2">
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+              <div><p className="text-xs text-muted-foreground">Safety stock</p><p>{Math.round(policy.policy.safetyStock)}</p></div>
+              <div><p className="text-xs text-muted-foreground">Reorder point (s)</p><p>{Math.round(policy.policy.reorderPoint)}</p></div>
+              <div><p className="text-xs text-muted-foreground">Order up to (S)</p><p className="font-semibold">{Math.round(policy.policy.orderUpToLevel)}</p></div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Protects {policy.policy.protectionIntervalDays} days (lead time + review period) at {policy.averageDailyDemand.toFixed(2)}/day.{' '}
+              90-day simulation: {policy.simulation.plannedOrders.length} order{policy.simulation.plannedOrders.length === 1 ? '' : 's'}
+              {policy.simulation.firstStockoutDay != null ? `, first projected stockout on day ${policy.simulation.firstStockoutDay}` : ', no projected stockout'}.
+            </p>
+          </div>}
+        </div>}
       </div>}
     </DialogContent>
   </Dialog>;
