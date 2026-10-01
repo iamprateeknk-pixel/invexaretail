@@ -1,5 +1,14 @@
 import '../models/models.dart';
 
+/// A transfer still worth a picker's attention: not yet fully picked. Shared by the Pick tab and
+/// the dashboard's "Pick tasks open" tile, so the two never disagree on what counts as open.
+List<TransferRecord> openPickTransfers(List<TransferRecord> transfers) {
+  return transfers.where((row) {
+    final status = row.status.toUpperCase();
+    return status.contains('PICK') || status == 'REQUESTED' || status == 'PARTIAL';
+  }).toList();
+}
+
 /// One item to pick on a transfer, as the picker sees it. Lots with nothing on
 /// the shelf are never listed (blueprint v4 §15 "no zero-stock lot offered").
 class PickLine {

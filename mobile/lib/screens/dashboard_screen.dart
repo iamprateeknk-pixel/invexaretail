@@ -2,7 +2,30 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
+import '../services/pick_session.dart';
 import '../state/session_controller.dart';
+import 'count_screen.dart';
+import 'expiry_detail_screen.dart';
+import 'pick_screen.dart';
+import 'putaway_screen.dart';
+import 'transfers_screen.dart';
+
+/// How urgent a tile's number is - drives the colour so the branch's state reads at a glance,
+/// not just as a bare number (the same green/amber/red convention used elsewhere in the app).
+enum TileSeverity { good, warn, bad, neutral }
+
+Color _severityColor(TileSeverity severity) {
+  switch (severity) {
+    case TileSeverity.good:
+      return invexaEmerald;
+    case TileSeverity.warn:
+      return invexaAmber;
+    case TileSeverity.bad:
+      return invexaRose;
+    case TileSeverity.neutral:
+      return invexaMuted;
+  }
+}
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key, required this.controller});
@@ -13,6 +36,7 @@ class DashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final dashboard = controller.dashboard;
     final user = controller.user;
+    final locationName = controller.selectedLocation?.name;
 
     return RefreshIndicator(
       color: invexaEmerald,
@@ -20,14 +44,27 @@ class DashboardScreen extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          Text(
-            user == null ? 'Operations' : 'Hello, ${user.name}',
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: invexaInk),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            user == null ? '' : _roleLabel(user.role),
-            style: const TextStyle(color: invexaMuted),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user == null ? 'Operations' : 'Hello, ${user.name}',
+                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: invexaInk),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      user == null ? '' : _roleLabel(user.role),
+                      style: const TextStyle(color: invexaMuted),
+                    ),
+                  ],
+                ),
+              ),
+              if (locationName != null) _BranchChip(name: locationName),
+            ],
           ),
           if (controller.notice != null) ...[
             const SizedBox(height: 12),
@@ -44,20 +81,48 @@ class DashboardScreen extends StatelessWidget {
               child: Center(child: CircularProgressIndicator()),
             )
           else ...[
+            ..._liveActivitySection(context),
+            const SizedBox(height: 20),
+            const Text('Branch health', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(locationName == null ? 'Live counts for your assigned branches.' : 'Live counts for $locationName.', style: const TextStyle(color: invexaMuted, fontSize: 12)),
+            const SizedBox(height: 10),
             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               mainAxisSpacing: 12,
               crossAxisSpacing: 12,
-              childAspectRatio: 1.35,
+              childAspectRatio: 1.25,
               children: [
-                _MetricCard(label: 'Pending counts', value: '${dashboard.pendingCounts}', icon: Icons.pending_actions_outlined),
-                _MetricCard(label: 'Transfer requests', value: '${dashboard.transferRequests}', icon: Icons.swap_horiz),
-                _MetricCard(label: 'Expired lots', value: '${dashboard.expiredTillDate}', icon: Icons.event_busy_outlined),
-                _MetricCard(label: 'Near expiry', value: '${dashboard.nearExpiryThisMonth}', icon: Icons.schedule_outlined),
-                _MetricCard(label: 'Count completion', value: '${dashboard.countCompletionPercent}%', icon: Icons.task_alt_outlined),
-                _MetricCard(label: 'Stock accuracy', value: '${dashboard.stockAccuracyPercent}%', icon: Icons.verified_outlined),
+                _MetricCard(
+                  label: 'Pending counts', value: '${dashboard.pendingCounts}', icon: Icons.pending_actions_outlined,
+                  severity: dashboard.pendingCounts > 0 ? TileSeverity.warn : TileSeverity.good,
+                  onTap: () => _push(context, CountScreen(controller: controller)),
+                ),
+                _MetricCard(
+                  label: 'Transfer requests', value: '${dashboard.transferRequests}', icon: Icons.swap_horiz,
+                  severity: dashboard.transferRequests > 0 ? TileSeverity.warn : TileSeverity.good,
+                  onTap: () => _push(context, TransfersScreen(controller: controller)),
+                ),
+                _MetricCard(
+                  label: 'Expired lots', value: '${dashboard.expiredTillDate}', icon: Icons.event_busy_outlined,
+                  severity: dashboard.expiredTillDate > 0 ? TileSeverity.bad : TileSeverity.good,
+                  onTap: () => _push(context, ExpiryDetailScreen(controller: controller, expiredOnly: true)),
+                ),
+                _MetricCard(
+                  label: 'Near expiry', value: '${dashboard.nearExpiryThisMonth}', icon: Icons.schedule_outlined,
+                  severity: dashboard.nearExpiryThisMonth > 0 ? TileSeverity.warn : TileSeverity.good,
+                  onTap: () => _push(context, ExpiryDetailScreen(controller: controller, expiredOnly: false)),
+                ),
+                _MetricCard(
+                  label: 'Count completion', value: '${dashboard.countCompletionPercent.round()}%', icon: Icons.task_alt_outlined,
+                  severity: _percentSeverity(dashboard.countCompletionPercent),
+                ),
+                _MetricCard(
+                  label: 'Stock accuracy', value: '${dashboard.stockAccuracyPercent.round()}%', icon: Icons.verified_outlined,
+                  severity: _percentSeverity(dashboard.stockAccuracyPercent),
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -79,6 +144,66 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 
+  /// Role-aware "what's actually happening right now" tiles, built from data the session already
+  /// has loaded (no extra network round trip to show them). Every role sees the same card format -
+  /// only which tiles appear, and what they count, differs by what that role's work actually is.
+  List<Widget> _liveActivitySection(BuildContext context) {
+    final role = controller.user?.role;
+    final tiles = <Widget>[];
+    if (role == 'WAREHOUSE_PICKER') {
+      final openPicks = openPickTransfers(controller.transfers).length;
+      tiles.add(_ActivityTile(
+        label: 'Pick tasks open', value: openPicks, icon: Icons.local_shipping_outlined,
+        severity: openPicks > 0 ? TileSeverity.warn : TileSeverity.good,
+        onTap: () => _push(context, PickScreen(controller: controller)),
+      ));
+      final putawayOpen = controller.putawayTasks.length;
+      tiles.add(_ActivityTile(
+        label: 'Putaway tasks', value: putawayOpen, icon: Icons.inventory_2_outlined,
+        severity: putawayOpen > 0 ? TileSeverity.warn : TileSeverity.good,
+        onTap: () => _push(context, PutawayScreen(controller: controller)),
+      ));
+    }
+    if (controller.isBlindCountWorker) {
+      final batchKeys = controller.assignments.where((row) => row.status == null || row.status == 'ASSIGNED').map((row) => row.batchKey).toSet();
+      tiles.add(_ActivityTile(
+        label: 'Count batches open', value: batchKeys.length, icon: Icons.fact_check_outlined,
+        severity: batchKeys.isNotEmpty ? TileSeverity.warn : TileSeverity.good,
+        onTap: () => _push(context, CountScreen(controller: controller)),
+      ));
+    }
+    final transfersInScope = controller.transfers.length;
+    tiles.add(_ActivityTile(
+      label: 'Transfers in scope', value: transfersInScope, icon: Icons.swap_horiz,
+      severity: TileSeverity.neutral,
+      onTap: () => _push(context, TransfersScreen(controller: controller)),
+    ));
+    if (tiles.isEmpty) return const [];
+    return [
+      const Text('Live activity', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      SizedBox(
+        height: 92,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: tiles.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          itemBuilder: (context, index) => tiles[index],
+        ),
+      ),
+    ];
+  }
+
+  TileSeverity _percentSeverity(double percent) {
+    if (percent >= 90) return TileSeverity.good;
+    if (percent >= 70) return TileSeverity.warn;
+    return TileSeverity.bad;
+  }
+
+  void _push(BuildContext context, Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  }
+
   String _roleLabel(String role) {
     return role.replaceAll('_', ' ').toLowerCase().replaceFirstMapped(
       RegExp(r'^[a-z]'),
@@ -87,27 +212,101 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
+class _BranchChip extends StatelessWidget {
+  const _BranchChip({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: invexaEmerald.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(999)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.storefront_outlined, size: 14, color: invexaEmerald),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 120),
+            child: Text(name, style: const TextStyle(color: invexaEmerald, fontWeight: FontWeight.w700, fontSize: 12), overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MetricCard extends StatelessWidget {
-  const _MetricCard({required this.label, required this.value, required this.icon});
+  const _MetricCard({required this.label, required this.value, required this.icon, required this.severity, this.onTap});
 
   final String label;
   final String value;
   final IconData icon;
+  final TileSeverity severity;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final color = _severityColor(severity);
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: invexaEmerald),
-            const Spacer(),
-            Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: invexaInk)),
-            const SizedBox(height: 4),
-            Text(label, style: const TextStyle(fontSize: 12, color: invexaMuted)),
-          ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color),
+                  const Spacer(),
+                  if (onTap != null) const Icon(Icons.chevron_right, size: 18, color: invexaMuted),
+                ],
+              ),
+              const Spacer(),
+              Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: invexaInk)),
+              const SizedBox(height: 4),
+              Text(label, style: const TextStyle(fontSize: 12, color: invexaMuted)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityTile extends StatelessWidget {
+  const _ActivityTile({required this.label, required this.value, required this.icon, required this.severity, required this.onTap});
+
+  final String label;
+  final int value;
+  final IconData icon;
+  final TileSeverity severity;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _severityColor(severity);
+    return Material(
+      color: invexaCard,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 150,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: invexaBorder)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(children: [Icon(icon, size: 18, color: color), const Spacer(), Text('$value', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color))]),
+              Text(label, style: const TextStyle(fontSize: 12, color: invexaMuted), maxLines: 2, overflow: TextOverflow.ellipsis),
+            ],
+          ),
         ),
       ),
     );
