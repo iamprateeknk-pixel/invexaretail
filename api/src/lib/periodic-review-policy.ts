@@ -8,7 +8,54 @@
 // location: a full time-phased, multi-echelon DRP that cascades requirements across the whole
 // network is a further, much larger increment, not attempted here.
 
+import { computeSafetyStock } from './demand-forecast.js';
+
 export type ScheduledReceipt = { day: number; quantity: number };
+
+export type PeriodicReviewPolicy = {
+  reviewPeriodDays: number;
+  leadTimeDays: number;
+  /** Protection interval = leadTimeDays + reviewPeriodDays: between one review and the next order's arrival, nothing can be ordered again. */
+  protectionIntervalDays: number;
+  safetyStock: number;
+  /** Order-up-to level (S): expected demand over the protection interval, plus safety stock. */
+  orderUpToLevel: number;
+  /** Reorder point (s): textbook (R,S) orders at every review unless already at/above S, so this equals orderUpToLevel - a caller may lower it to skip small top-ups (a hybrid (R,s,S) policy, same shape projectPeriodicReview already simulates). */
+  reorderPoint: number;
+};
+
+/**
+ * Computes the (R,S) policy's own R-day review-cycle parameters from demand/lead-time inputs -
+ * the second half of "periodic review" this module was missing: projectPeriodicReview could only
+ * simulate a given R/S, not derive S from real demand statistics the way computeSafetyStock
+ * already does for continuous review. Same King's-formula safety stock, with the protection
+ * interval (lead time + review period, not lead time alone) standing in for "lead time": between
+ * one review and the arrival of the order it might trigger, nothing can be ordered again, so the
+ * position must be protected for that whole stretch, not just the supplier's lead time.
+ */
+export function computePeriodicReviewPolicy(input: {
+  avgDailyDemand: number;
+  stdDevDailyDemand: number;
+  leadTimeDays: number;
+  leadTimeStdDevDays?: number;
+  reviewPeriodDays: number;
+  servicePercent?: number;
+}): PeriodicReviewPolicy {
+  const demand = Math.max(0, input.avgDailyDemand);
+  const protectionIntervalDays = Math.max(0, input.leadTimeDays) + Math.max(0, input.reviewPeriodDays);
+  const safetyStock = computeSafetyStock({
+    averageDailyDemand: demand,
+    stdDevDailyDemand: Math.max(0, input.stdDevDailyDemand),
+    averageLeadTimeDays: protectionIntervalDays,
+    leadTimeStdDevDays: input.leadTimeStdDevDays,
+    servicePercent: input.servicePercent,
+  });
+  const orderUpToLevel = demand * protectionIntervalDays + safetyStock;
+  return {
+    reviewPeriodDays: input.reviewPeriodDays, leadTimeDays: input.leadTimeDays, protectionIntervalDays,
+    safetyStock, orderUpToLevel, reorderPoint: orderUpToLevel,
+  };
+}
 
 export type PeriodicReviewInput = {
   /** Current sellable position (on hand minus reserved), day 0. */

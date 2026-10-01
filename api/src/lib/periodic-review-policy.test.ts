@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectPeriodicReview } from './periodic-review-policy.js';
+import { computePeriodicReviewPolicy, projectPeriodicReview } from './periodic-review-policy.js';
+import { serviceLevelZ } from './demand-forecast.js';
 
 test('reviews trigger only on the cycle, and order up to the target level from the opening position', () => {
   const result = projectPeriodicReview({
@@ -42,6 +43,42 @@ test('reports the first projected stockout day and the lowest position reached',
   // Demand of 5/day drains it: day0 closing 0, day1 closing -5 (first stockout), ...
   assert.equal(result.firstStockoutDay, 1);
   assert.equal(result.minPosition, -20);
+});
+
+// The parameter calculator: deriving R/S from demand statistics, not just simulating a given R/S.
+test('computePeriodicReviewPolicy: order-up-to is expected demand over lead time + review period, plus safety stock', () => {
+  const policy = computePeriodicReviewPolicy({
+    avgDailyDemand: 10, stdDevDailyDemand: 0, leadTimeDays: 3, reviewPeriodDays: 7, servicePercent: 95,
+  });
+  assert.equal(policy.protectionIntervalDays, 10, 'lead time + review period, not lead time alone');
+  assert.equal(policy.safetyStock, 0, 'zero demand variability: no safety stock needed');
+  assert.equal(policy.orderUpToLevel, 100, '10/day x 10 protection days');
+  assert.equal(policy.reorderPoint, policy.orderUpToLevel, 'textbook (R,S): order at every review unless already at/above S');
+});
+
+test('computePeriodicReviewPolicy: safety stock grows with demand variability, at the configured service level', () => {
+  const steady = computePeriodicReviewPolicy({ avgDailyDemand: 10, stdDevDailyDemand: 0, leadTimeDays: 3, reviewPeriodDays: 7 });
+  const variable = computePeriodicReviewPolicy({ avgDailyDemand: 10, stdDevDailyDemand: 4, leadTimeDays: 3, reviewPeriodDays: 7 });
+  assert.ok(variable.safetyStock > steady.safetyStock);
+  // King's formula reduces to z x stdDev x sqrt(protectionDays) with no lead-time variability.
+  const z = serviceLevelZ(95);
+  assert.ok(Math.abs(variable.safetyStock - z * 4 * Math.sqrt(10)) < 1e-9);
+});
+
+test('computePeriodicReviewPolicy: a longer review period needs a higher order-up-to level, all else equal', () => {
+  const weekly = computePeriodicReviewPolicy({ avgDailyDemand: 10, stdDevDailyDemand: 2, leadTimeDays: 3, reviewPeriodDays: 7 });
+  const monthly = computePeriodicReviewPolicy({ avgDailyDemand: 10, stdDevDailyDemand: 2, leadTimeDays: 3, reviewPeriodDays: 30 });
+  assert.ok(monthly.orderUpToLevel > weekly.orderUpToLevel, 'a longer gap between orders needs more stock to cover it');
+});
+
+test('a calculated policy run through the simulator never stocks out at steady demand', () => {
+  const policy = computePeriodicReviewPolicy({ avgDailyDemand: 8, stdDevDailyDemand: 1.5, leadTimeDays: 4, reviewPeriodDays: 7, servicePercent: 97 });
+  const result = projectPeriodicReview({
+    onHand: policy.orderUpToLevel, avgDailyDemand: 8, leadTimeDays: policy.leadTimeDays,
+    reviewPeriodDays: policy.reviewPeriodDays, reorderPoint: policy.reorderPoint, orderUpToLevel: policy.orderUpToLevel,
+    horizonDays: 90,
+  });
+  assert.equal(result.firstStockoutDay, null, 'a policy sized for steady demand should not stock out under that same steady demand');
 });
 
 test('never stocking out when the review cycle and lead time keep pace with demand', () => {
