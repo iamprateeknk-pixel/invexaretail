@@ -6,6 +6,8 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import 'dotenv/config';
 import helmet from 'helmet';
+import { responseCompression } from './lib/response-compression.js';
+import { apiRateLimitPerMinute } from './lib/rate-limit-config.js';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
@@ -88,6 +90,7 @@ app.use(helmet({
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
 }));
 
+app.use(responseCompression);
 app.use(morgan('dev'));
 app.use(express.json({
   limit: '2mb',
@@ -107,7 +110,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(requestMetricsMiddleware);
 
 // Rate limiting: General API
-app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.use('/api', rateLimit({ windowMs: 60_000, limit: apiRateLimitPerMinute(), standardHeaders: 'draft-8', legacyHeaders: false }));
 
 // The auth router applies its own per-endpoint limiters. Adding a second one
 // here made every attempt count twice, so a user hit 429 after two or three

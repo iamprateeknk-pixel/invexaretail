@@ -8,6 +8,7 @@
     "build": "prisma generate && tsc --project tsconfig.json",
     "postinstall": "npm run build",
     "start": "node app.js",
+    "load:test": "node scripts/load-test.mjs",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
@@ -43,6 +44,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^26.5.0",
     "bcryptjs": "^3.0.3",
+    "compression": "^1.8.2",
     "cors": "^2.8.6",
     "dotenv": "^18.0.1",
     "express": "^5.2.1",
@@ -60,6 +62,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/pg": "^8.15.6",
     "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.13"

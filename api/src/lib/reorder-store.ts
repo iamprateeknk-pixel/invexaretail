@@ -7,6 +7,7 @@ import {
   listTransfers,
 } from './repository.js';
 import { seedReorderRules } from './seed.js';
+import { replaceContents } from './array-utils.js';
 
 export type ReorderRuleRecord = {
   id: string;
@@ -35,7 +36,7 @@ export function validateReorderQuantities(minQty: number, targetQty: number, dec
 }
 
 export function resetReorderStore(): void {
-  rules.splice(0, rules.length, ...seedReorderRules.map((rule) => ({
+  replaceContents(rules, seedReorderRules.map((rule) => ({
     ...rule,
     createdAt: new Date(0).toISOString(),
   })));
