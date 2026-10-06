@@ -137,6 +137,15 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('discard-local-1')));
     await tester.pumpAndSettle();
+    expect(find.text('Discard this?'), findsOneWidget);
+    await tester.tap(find.text('Keep'));
+    await tester.pumpAndSettle();
+    expect(controller.queuedCounts.map((row) => row.localId), contains('local-1'), reason: 'Keep must not discard');
+
+    await tester.tap(find.byKey(const ValueKey('discard-local-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-discard')));
+    await tester.pumpAndSettle();
     expect(controller.queuedCounts.map((row) => row.localId), ['local-2']);
     expect(find.text('Needs your decision (1)'), findsNothing);
   });

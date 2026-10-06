@@ -1,5 +1,7 @@
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { transferQueueActions } from '../../../lib/transfer-lifecycle';
+import { useState } from 'react';
+import { buildAttentionList, onboardingSteps, onboardingProgress } from '../../../lib/attention';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,7 +9,10 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
+  AlertTriangle,
   ArrowRight,
+  CheckCircle2,
+  Circle,
   ClipboardCheck,
   Clock3,
   PackageOpen,
@@ -19,8 +24,19 @@ export function DashboardPage() {
   const {
         locations, locationId, role, workspaceProfile, clock, dashboardCards,
     pendingCountTasks, countTaskRows, setSelectedCountTask, dashboard, filteredTransfers,
-    changeTransferStatus, openTransferReceipt, navigateTo, setCountStatusFilter,
+    changeTransferStatus, openTransferReceipt, navigateTo, setCountStatusFilter, items, stockRows,
   } = useWorkspace();
+  const attention = buildAttentionList(dashboardCards);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
+    try { return localStorage.getItem('invexa.onboardingDismissed') === '1'; } catch { return false; }
+  });
+  const steps = onboardingSteps({ locationCount: locations?.length ?? 0, itemCount: items?.length ?? 0, hasStock: (stockRows?.length ?? 0) > 0, hasMovement: (filteredTransfers?.length ?? 0) > 0 });
+  const progress = onboardingProgress(steps);
+  const showOnboarding = ['ADMIN', 'ADMIN_USER'].includes(role) && !progress.complete && !onboardingDismissed;
+  const dismissOnboarding = () => {
+    setOnboardingDismissed(true);
+    try { localStorage.setItem('invexa.onboardingDismissed', '1'); } catch { /* storage unavailable */ }
+  };
   const selectedLocation = locations.find((location) => location.id === locationId);
   const operationsRole = role ? role.replaceAll('_', ' ').toLowerCase().replace(/\\b\\w/g, (letter) => letter.toUpperCase()) : 'Team member';
   return (
@@ -51,6 +67,46 @@ export function DashboardPage() {
           <span className="inline-flex items-center gap-1.5"><ShieldCheck className="size-3.5 text-emerald-300" />Role-based access active</span>
         </div>
       </section>
+
+      <section aria-labelledby="attention-heading" className="space-y-3">
+        <h2 id="attention-heading" className="text-sm font-semibold text-muted-foreground">Needs your attention</h2>
+        {attention.length ? (
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {attention.map((card) => (
+              <li key={card.label}>
+                <button type="button" onClick={() => { if (card.filter) setCountStatusFilter(card.filter); navigateTo(card.section); }} className="flex w-full items-center gap-3 rounded-xl border bg-card p-4 text-left transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <AlertTriangle className="size-5 shrink-0 text-amber-500" aria-hidden="true" />
+                  <span className="min-w-0"><span className="block text-2xl font-bold leading-none">{card.value}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{card.label}</span></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="flex items-center gap-2 rounded-xl border bg-card p-4 text-sm text-muted-foreground"><CheckCircle2 className="size-4 text-emerald-500" aria-hidden="true" />All clear. Nothing needs attention right now.</p>
+        )}
+      </section>
+
+      {showOnboarding && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div><CardTitle className="text-base">Get started</CardTitle><p className="mt-1 text-xs text-muted-foreground">{progress.done} of {progress.total} done</p></div>
+            <Button type="button" variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
+          </CardHeader>
+          <CardContent>
+            <ol className="grid gap-2 sm:grid-cols-2">
+              {steps.map((step) => (
+                <li key={step.id}>
+                  <button type="button" disabled={step.done} onClick={() => navigateTo(step.section)} className="flex w-full items-center gap-3 rounded-lg border p-3 text-left text-sm transition hover:bg-accent disabled:opacity-60 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {step.done ? <CheckCircle2 className="size-4 text-emerald-500" aria-hidden="true" /> : <Circle className="size-4 text-muted-foreground" aria-hidden="true" />}
+                    <span className={step.done ? 'line-through' : 'font-medium'}>{step.label}</span>
+                    <span className="sr-only">{step.done ? 'Completed' : 'Not done yet'}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+      )}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {dashboardCards.map((metric) => {

@@ -49,6 +49,9 @@ class SessionController extends ChangeNotifier {
   List<QueuedAction> queuedActions = [];
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  // Set by the quick-scan sheet; the Count screen consumes it when it opens.
+  String? pendingCountItemId;
+  String? pendingCountLotNo;
   LiveStatus liveStatus = LiveStatus.connecting;
   LiveEventClient? _live;
   Timer? _liveDebounce;

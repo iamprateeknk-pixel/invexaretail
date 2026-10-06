@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { takePendingItem } from '../../../lib/pending-item'
 import { useWorkspace } from '../WorkspaceContext'
 import { ItemSearchPanel } from '@/components/inventory/ItemSearchPanel'
 import { StockDetailPanel } from '@/components/inventory/StockDetailPanel'
@@ -18,7 +19,7 @@ const ADJUST_ROLES = ['ADMIN', 'ADMIN_USER'];
 // invalidation" requirement.
 export function ItemStockDetailPage() {
   const { authToken, role } = useWorkspace();
-  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(() => takePendingItem());
   const { detail, refetch } = useStockDetail({ authToken, itemId: selectedItem?.id });
   const { reverse, submitting } = useInventoryAdjustment({ authToken });
 

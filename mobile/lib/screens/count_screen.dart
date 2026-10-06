@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/scan_action.dart';
+
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../services/scan_feedback.dart';
@@ -32,6 +34,36 @@ class _CountScreenState extends State<CountScreen> {
   void initState() {
     super.initState();
     _locationId = widget.controller.selectedLocationId;
+    _consumePendingScan();
+  }
+
+  @override
+  void didUpdateWidget(CountScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Already on the Count tab when the item was scanned: initState will not run again.
+    _consumePendingScan();
+  }
+
+  // The quick-scan sheet hands over an item (and lot) to count. Select its
+  // assignment batch first, then the item, and only keep it if the screen's own
+  // rules still make it countable.
+  void _consumePendingScan() {
+    final controller = widget.controller;
+    final itemId = controller.pendingCountItemId;
+    if (itemId == null) return;
+    final lotNo = controller.pendingCountLotNo;
+    controller.pendingCountItemId = null;
+    controller.pendingCountLotNo = null;
+    final target = resolveCountTarget(assignments: controller.assignments, allowAdHoc: controller.allowAdHocCount, itemId: itemId);
+    if (target == null) return;
+    if (target.batchKey != null) {
+      _selectedBatchKey = target.batchKey;
+      _locationId = target.locationId;
+      if (controller.selectedLocationId != target.locationId && target.locationId != null) {
+        controller.selectLocation(target.locationId!);
+      }
+    }
+    if (_countableItems.any((item) => item.id == itemId)) _pickItem(itemId, lotNo: lotNo);
   }
 
   @override

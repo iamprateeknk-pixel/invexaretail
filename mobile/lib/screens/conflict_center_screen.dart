@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
+import '../services/sync_display.dart';
 import '../state/session_controller.dart';
 
 /// Blueprint v4 §38 Conflict Center: everything the phone could not sync on
@@ -44,7 +45,13 @@ class ConflictCenterScreen extends StatelessWidget {
               if (needsAttention.isEmpty && waiting.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 48),
-                  child: Center(child: Text('Everything is synced.', style: TextStyle(color: invexaMuted))),
+                  child: Column(
+                    children: [
+                      Icon(Icons.cloud_done_outlined, size: 40, color: invexaEmerald),
+                      SizedBox(height: 8),
+                      Text('Everything is synced.', style: TextStyle(color: invexaMuted)),
+                    ],
+                  ),
                 ),
               if (needsAttention.isNotEmpty) ...[
                 Text('Needs your decision (${needsAttention.length})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -54,6 +61,24 @@ class ConflictCenterScreen extends StatelessWidget {
                   style: TextStyle(color: invexaMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 8),
+                if (needsAttention.length > 1)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      key: const ValueKey('retry-all'),
+                      onPressed: () async {
+                        for (final entry in needsAttention) {
+                          if (entry.count != null) {
+                            await controller.retryQueuedCount(entry.localId);
+                          } else {
+                            await controller.retryQueuedAction(entry.localId);
+                          }
+                        }
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry all'),
+                    ),
+                  ),
                 for (final entry in needsAttention) _EntryCard(controller: controller, entry: entry),
               ],
               if (waiting.isNotEmpty) ...[
@@ -105,13 +130,37 @@ class _EntryCard extends StatelessWidget {
   final SessionController controller;
   final _Entry entry;
 
+  Future<void> _confirmDiscard(BuildContext context, String title, bool isCount) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Discard this?'),
+        content: Text('"$title" is saved only on this phone. Discarding removes it permanently; you would need to redo the work.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Keep')),
+          FilledButton(
+            key: const ValueKey('confirm-discard'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (isCount) {
+      await controller.dismissQueued(entry.localId);
+    } else {
+      await controller.dismissQueuedAction(entry.localId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final count = entry.count;
     final title = count != null
         ? '${lookupItemName(controller.items, count.itemId)} · ${count.mode == 'weight' ? 'weight ' : 'qty '}${formatQty(count.physicalQuantity)}'
-        : entry.action!.type;
-    final where = count != null ? lookupLocationName(controller.locations, count.locationId) : entry.action!.path;
+        : queuedActionLabel(entry.action!.type);
+    final where = count != null ? lookupLocationName(controller.locations, count.locationId) : 'Saved on this phone';
     final attention = entry.status != 'pending';
     final color = entry.status == 'conflict' ? invexaAmber : invexaRose;
     return Card(
@@ -141,7 +190,7 @@ class _EntryCard extends StatelessWidget {
             ],
             const SizedBox(height: 4),
             Text(
-              'Saved ${entry.createdAt.split('T').first}${entry.attempts > 0 ? ' · tried ${entry.attempts} time${entry.attempts == 1 ? '' : 's'}' : ''}',
+              'Saved ${relativeSavedTime(entry.createdAt, DateTime.now())}${entry.attempts > 0 ? ' · tried ${entry.attempts} time${entry.attempts == 1 ? '' : 's'}' : ''}',
               style: const TextStyle(color: invexaMuted, fontSize: 11),
             ),
             const SizedBox(height: 8),
@@ -150,7 +199,7 @@ class _EntryCard extends StatelessWidget {
               children: [
                 TextButton.icon(
                   key: ValueKey('discard-${entry.localId}'),
-                  onPressed: () => count != null ? controller.dismissQueued(entry.localId) : controller.dismissQueuedAction(entry.localId),
+                  onPressed: () => _confirmDiscard(context, title, count != null),
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Discard'),
                 ),
