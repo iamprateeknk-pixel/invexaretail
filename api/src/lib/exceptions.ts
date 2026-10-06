@@ -80,6 +80,11 @@ export async function estimateValueAtRisk(
  * callers on hot workflow paths (receiving, counting) must not fail the
  * underlying stock transaction just because the case log is unavailable.
  */
+/** valueAtRisk is a Decimal column; JSON.stringify would emit it as a string, so API responses carry a number. */
+export function serializeExceptionCase<T extends { valueAtRisk?: unknown }>(row: T): Omit<T, 'valueAtRisk'> & { valueAtRisk: number | null } {
+  return { ...row, valueAtRisk: row.valueAtRisk == null ? null : Number(row.valueAtRisk) };
+}
+
 export async function createExceptionCase(input: CreateExceptionCaseInput) {
   try {
     const valueAtRisk = await estimateValueAtRisk({ companyId: input.companyId }, input.itemId, input.quantity);
@@ -113,7 +118,7 @@ export async function createExceptionCase(input: CreateExceptionCaseInput) {
       entityId: exceptionCase.id,
       metadata: { type: input.type, sourceDocument: input.sourceDocument ?? undefined, valueAtRisk, priority },
     }));
-    return exceptionCase;
+    return serializeExceptionCase(exceptionCase);
   } catch (error) {
     console.error('createExceptionCase failed (non-blocking):', error instanceof Error ? error.message : error);
     return null;

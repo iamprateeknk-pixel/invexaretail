@@ -27,7 +27,7 @@ import { buildReplenishmentIntelligence, listReorderRules } from '../lib/reorder
 import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems, listLocations, listStockLedger, listStockLedgerForLocation, updateLotExpiry, updateLotStatus } from '../lib/repository.js';
 import { encryptWebhookSecret, WebhookValidationError } from '../lib/webhook-events.js';
 import { maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
-import { createExceptionCase, applyExceptionDisposition } from '../lib/exceptions.js';
+import { createExceptionCase, applyExceptionDisposition, serializeExceptionCase } from '../lib/exceptions.js';
 import { createPutawayTask } from '../lib/putaway.js';
 import { createOrderWithReservation, fulfillOrder, cancelOrder, expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation, OrderShortageError, InsufficientStockError as OrderInsufficientStockError, listMemoryOrders } from '../lib/orders.js';
 import { decideApprovalRequest } from '../lib/approval-rules.js';
@@ -2308,7 +2308,7 @@ router.get('/exceptions', async (req, res) => {
     take: 300,
   });
   return res.json({
-    cases,
+    cases: cases.map(serializeExceptionCase),
     summary: {
       open: cases.filter((c) => c.status === 'OPEN').length,
       overdue: cases.filter((c) => c.dueAt && c.dueAt < new Date() && !['CLOSED', 'REJECTED', 'RESOLVED'].includes(c.status)).length,
@@ -2373,7 +2373,7 @@ router.patch('/exceptions/:id', async (req, res) => {
     actorId: req.user!.id, actorRole: req.user!.role,
     action: 'EXCEPTION_UPDATED', entityType: 'ExceptionCase', entityId: existing.id, metadata: data,
   }));
-  return res.json({ case: updated });
+  return res.json({ case: serializeExceptionCase(updated) });
 });
 
 router.post('/exceptions/:id/resolve', async (req, res) => {
@@ -2398,7 +2398,7 @@ router.post('/exceptions/:id/resolve', async (req, res) => {
     action: 'EXCEPTION_RESOLVED', entityType: 'ExceptionCase', entityId: existing.id,
     metadata: { disposition, resolutionNotes: resolutionNotes ?? undefined },
   }));
-  return res.json({ case: updated });
+  return res.json({ case: serializeExceptionCase(updated) });
 });
 
 router.get('/locations/:locationId/bin-stock', async (req, res) => {

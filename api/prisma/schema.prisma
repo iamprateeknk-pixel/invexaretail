@@ -1885,7 +1885,8 @@ model ExceptionCase {
   branchId        String?
   branch          Branch?  @relation(fields: [branchId], references: [id])
   quantity        Float?
-  valueAtRisk     Float?
+  // Decimal migration slice 2 (docs/decimal-migration-plan.md): money, Decimal(14,2).
+  valueAtRisk     Decimal?  @db.Decimal(14, 2)
   sourceDocument  String?
   sourceLineId    String?
   ownerId         String?

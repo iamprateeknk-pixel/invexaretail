@@ -114,7 +114,7 @@ export async function listOpenExceptions(ctx: TenantContext, options: { cursor?:
   return {
     items: page.map((row) => ({
       id: row.id, type: row.type, status: row.status, priority: row.priority, title: row.title,
-      dueAt: row.dueAt, itemId: row.itemId, locationId: row.locationId, valueAtRisk: row.valueAtRisk,
+      dueAt: row.dueAt, itemId: row.itemId, locationId: row.locationId, valueAtRisk: row.valueAtRisk == null ? null : Number(row.valueAtRisk),
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,
   };

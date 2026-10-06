@@ -69,7 +69,8 @@ async function makeFixture() {
 }
 
 async function stock(f: { companyId: string; locationId: string }, itemId: string, onHand: number, reserved = 0) {
-  await prisma.stockLedger.create({ data: { itemId, locationId: f.locationId, onHand, reserved, companyId: f.companyId } as never });
+  const lot = await prisma.lot.create({ data: { itemId, lotNo: `LOT-${randomUUID().slice(0, 8)}` } });
+  await prisma.stockLedger.create({ data: { itemId, lotId: lot.id, locationId: f.locationId, onHand, reserved, companyId: f.companyId } });
 }
 
 integration('PUT then GET: availability is limited by the scarcest component, net of reservations', async () => {
