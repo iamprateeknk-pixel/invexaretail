@@ -76,7 +76,8 @@ import {
 } from '../lib/saas.js';
 import { mobileHomeForRole } from '../lib/mobile-role.js';
 import { createCompany, createEnhancedUser, findUserByEmail } from '../lib/enterprise-repository.js';
-import { hashPassword } from '../lib/otp-auth.js';
+import { hashPassword, validatePassword } from '../lib/otp-auth.js';
+import { isKnownDefaultPassword } from '../lib/production-guard.js';
 import {
   createWebhookSubscription,
   listWebhookDeliveries,
@@ -2488,7 +2489,12 @@ router.post('/saas/onboard', async (req, res) => {
     const adminName = String(req.body.adminName ?? '').trim();
     const adminEmail = String(req.body.adminEmail ?? '').trim().toLowerCase();
     const planCode = String(req.body.planCode ?? 'starter');
-    const password = String(req.body.password ?? 'ChangeMe123!');
+    // No default password: a tenant admin created with a value that is public in the
+    // repository can be taken over by anyone who knows the sign-in email.
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+    const passwordCheck = validatePassword(password);
+    if (!passwordCheck.valid) return res.status(400).json({ message: passwordCheck.message ?? 'A strong temporary password is required.' });
+    if (isKnownDefaultPassword(password)) return res.status(400).json({ message: 'That password is publicly known. Choose a different temporary password.' });
     const { tenant, subscription } = provisionTenant({ companyName, adminName, adminEmail, planCode });
     if (findUserByEmail(adminEmail)) {
       return res.status(409).json({ message: 'An account with that admin email already exists.', tenant, subscription });

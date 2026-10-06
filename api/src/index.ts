@@ -8,6 +8,7 @@ import 'dotenv/config';
 import helmet from 'helmet';
 import { responseCompression } from './lib/response-compression.js';
 import { apiRateLimitPerMinute } from './lib/rate-limit-config.js';
+import { assertProductionSecrets } from './lib/production-guard.js';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
@@ -47,6 +48,9 @@ import { isDomainError, statusForErrorCode } from './lib/errors.js';
 if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
   throw new Error('DATABASE_URL is required when REQUIRE_DATABASE=true; refusing unsafe memory-mode startup.');
 }
+
+// Phase 7: fail fast on a missing or placeholder secret instead of serving with a public one.
+assertProductionSecrets();
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);

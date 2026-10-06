@@ -119,6 +119,9 @@ jobs:
       - name: Test the load probe's statistics (Phase 6)
         run: node --test scripts/load-test.test.mjs
 
+      - name: Test the one-command verify script (Phase 7)
+        run: node --test ../scripts/verify.test.mjs
+
       - name: Start API and verify health endpoint
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci

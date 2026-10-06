@@ -21,8 +21,10 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://retail:retail_password@postgres:5432/retail_inventory
-      JWT_SECRET: change-this-in-production
-      SEED_PASSWORD: ChangeMe123!
+      # The image runs with NODE_ENV=production, which refuses placeholder secrets (Phase 7).
+      # Export both before `docker compose up`, e.g. JWT_SECRET=$(openssl rand -base64 32).
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
+      SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD to a non-default password}
       PORT: 4000
       UPLOAD_DIR: /app/uploads
     volumes:
