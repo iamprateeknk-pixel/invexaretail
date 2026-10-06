@@ -19,7 +19,7 @@ import {
   setLotSaleStatus,
   writeOffExpiryLot,
 } from '../lib/expiry-lifecycle.js';
-import { allocateLots } from '../lib/warehouse-workflow.js';
+import { consumeJobLine, JobConsumeError } from '../lib/job-consumption-service.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { respondWhenMemoryUnavailable } from '../lib/memory-mode.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
@@ -86,7 +86,7 @@ import {
 } from '../lib/webhook-store.js';
 import { replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, ownerOfItem, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
-import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
+import { postInventoryMovementInTransaction, NegativeStockBlockedError } from '../lib/inventory-posting-service.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
 
@@ -259,53 +259,37 @@ router.post('/jobs/:id/consume', async (req, res) => {
   if (!lineId || !Number.isFinite(quantity) || quantity <= 0) {
     return res.status(400).json({ message: 'lineId and a positive quantity are required.' });
   }
-  const job = await prisma.job.findFirst({ where: { id: req.params.id, companyId: jobCompany(req) }, include: { lines: true } });
-  if (!job) return res.status(404).json({ message: 'Job not found.' });
-  if (!canAccessLocation(req, job.locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  if (job.status !== 'ACTIVE') return res.status(409).json({ message: 'Start the job before consuming inventory.' });
-  const line = job.lines.find((entry) => entry.id === lineId);
-  if (!line) return res.status(404).json({ message: 'Job line not found.' });
-
-  const item = listItems().find((entry) => entry.id === line.itemId);
-  const sourceStock = listStockLedgerForLocation(job.locationId);
-  const lots = (item?.lots ?? []).map((lot) => ({
-    lotId: lot.id,
-    lotNo: lot.lotNo,
-    expiryDate: lot.expiryDate,
-    available: sourceStock.find((row) => row.itemId === line.itemId && row.lotId === lot.id)?.onHand ?? 0,
-    status: lot.status ?? 'AVAILABLE' as const,
-  }));
-  const requestedLot = typeof req.body.lotId === 'string' ? lots.filter((lot) => lot.lotId === req.body.lotId) : lots;
-  const allocation = allocateLots(requestedLot, quantity, getActiveWorkflow().allocationStrategy);
-  if (allocation.shortage > 1e-8) {
-    return res.status(409).json({ message: `Only ${quantity - allocation.shortage} units are available to consume.` });
-  }
-
-  const updated = await prisma.$transaction(async (tx) => {
-    for (const pick of allocation.allocations) {
-      const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId } },
-      });
-      if (!ledger || ledger.onHand < pick.quantity) throw new Error(`Insufficient stock for lot ${pick.lotNo}.`);
-      await postInventoryMovementInTransaction(tx, {
-        tenant: tenantContextOf(req), itemId: line.itemId, lotId: pick.lotId, locationId: job.locationId,
-        movementType: 'ADJUSTMENT', qtyDelta: -pick.quantity,
-        // One consume request = one movement per lot; the line's running issuedQty makes each request distinct.
-        idempotencyKey: `job-consume:${line.id}:${line.issuedQty}:${pick.lotId}`,
-        reason: 'Job consumption', sourceDocument: job.id, sourceLineId: line.id, correlationId: job.id,
-      });
-    }
-    return tx.jobLine.update({
-      where: { id: line.id },
-      data: { issuedQty: { increment: Math.trunc(quantity) }, usedQty: { increment: Math.trunc(quantity) } },
+  // The idempotency key is the caller's, created once per user action (AGENTS.md: never derived server-side).
+  const headerKey = req.headers['x-mutation-id'];
+  const requestId = typeof req.body.requestId === 'string' && req.body.requestId.trim()
+    ? req.body.requestId.trim()
+    : typeof headerKey === 'string' ? headerKey.trim() : '';
+  if (!requestId) return res.status(400).json({ message: 'requestId (or X-Mutation-Id) is required so a retry can never consume stock twice.', code: 'IDEMPOTENCY_KEY_REQUIRED' });
+  try {
+    const result = await consumeJobLine({
+      tenant: tenantContextOf(req),
+      jobId: req.params.id,
+      lineId,
+      quantity,
+      lotId: typeof req.body.lotId === 'string' ? req.body.lotId : undefined,
+      requestId,
+      strategy: getActiveWorkflow().allocationStrategy,
+      canAccessLocation: (locationId) => canAccessLocation(req, locationId),
     });
-  });
-
-  for (const pick of allocation.allocations) {
-    adjustStockLedger(line.itemId, pick.lotId, job.locationId, -pick.quantity);
+    // The in-memory stock view is only a read cache: keep it in step for the screens that read it,
+    // once per real consume (a replay changes nothing).
+    if (!result.duplicate) {
+      for (const pick of result.allocations) adjustStockLedger(result.itemId, pick.lotId, result.locationId, -pick.quantity);
+    }
+    const company = jobCompany(req);
+    const refreshed = await prisma.job.findFirst({ where: { id: req.params.id, companyId: company }, include: { lines: true } });
+    const line = refreshed?.lines.find((entry) => entry.id === lineId) ?? null;
+    return res.json({ job: refreshed, line, allocations: result.allocations, duplicate: result.duplicate });
+  } catch (error) {
+    if (error instanceof JobConsumeError) return res.status(error.status).json({ message: error.message });
+    if (error instanceof NegativeStockBlockedError) return res.status(409).json({ message: error.message });
+    throw error;
   }
-  const refreshed = await prisma.job.findUnique({ where: { id: job.id }, include: { lines: true } });
-  return res.json({ job: refreshed, line: updated, allocations: allocation.allocations });
 });
 
 /** Memory-mode counterpart of the DB `lot.item.companyId` check (P0-SEC-001). */
