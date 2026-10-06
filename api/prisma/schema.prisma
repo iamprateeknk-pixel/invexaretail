@@ -2020,7 +2020,8 @@ model ExpiryAlert {
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
   quantity        Float
-  value           Float?
+  // Decimal migration slice 3: never written by application code today; money, Decimal(14,2).
+  value           Decimal?  @db.Decimal(14, 2)
   expiryDate      DateTime
   daysUntilExpiry Int
   status          ExpiryAlertStatus @default(ACTIVE)

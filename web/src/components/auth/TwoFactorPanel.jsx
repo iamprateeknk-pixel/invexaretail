@@ -8,10 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/feedback-states'
+import { QrCode } from './QrCode'
 
 // Account security: opt in to an authenticator-app code at sign-in. The
-// authenticator is set up by typing the key (or opening the otpauth link) -
-// no QR image is rendered, so no extra library is shipped.
+// authenticator is set up by scanning the QR code, or by typing the key.
 export function TwoFactorPanel({ authToken }) {
   const { status, setup, backupCodes, busy, error, begin, enable, disable, dismissBackupCodes, cancelSetup } = useTwoFactor({ authToken });
   const [code, setCode] = useState('');
@@ -52,7 +52,9 @@ export function TwoFactorPanel({ authToken }) {
 
         {setup && (
           <div className="space-y-3">
-            <p className="text-sm">In your authenticator app choose “Enter a setup key”, then use:</p>
+            <p className="text-sm">Scan this code with your authenticator app:</p>
+            <QrCode value={setup.otpauthUri} label="QR code for your authenticator app" />
+            <p className="text-sm">Or choose “Enter a setup key” in the app and type:</p>
             <p className="rounded-md bg-muted px-3 py-2 font-mono text-sm break-all" aria-label="Setup key">{setup.secret}</p>
             <a className="text-sm text-primary underline" href={setup.otpauthUri}>Open in authenticator app</a>
             <div className="grid gap-2">

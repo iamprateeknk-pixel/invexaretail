@@ -280,6 +280,13 @@ class InvexaApi {
     }
   }
 
+  /// Starts a transfer (POST /api/v1/transfers). The server reserves the stock
+  /// atomically and may refuse (insufficient stock, expiry block, role).
+  Future<TransferRecord> createTransfer(Map<String, Object> body) async {
+    final payload = await _send('POST', '/api/v1/transfers', body: body);
+    return TransferRecord.fromJson(asMap(payload['transfer']));
+  }
+
   Future<List<TransferRecord>> transfers() async {
     final payload = await _send('GET', '/api/v1/transfers/list');
     return asList(payload['transfers']).map((row) => TransferRecord.fromJson(asMap(row))).toList();

@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import { allocateLots, type FefoLot } from './warehouse-workflow.js';
+import { expandOrderLinesForBundles } from './bundle-expansion.js';
 import { reserveStockForTransfer, releaseReservedStock, InsufficientStockError } from './reservation.js';
 import { rankOrderCandidates, splitLinesAcrossLocations, type LocationCandidate, type LocationAvailability, type RoutingContext } from './order-routing.js';
 import { recordAudit } from './audit.js';
@@ -315,7 +316,10 @@ async function createOrderInner(input: {
   if (!databaseEnabled) return createMemoryReservedOrder(input);
   const companyId = input.companyId;
   if (!companyId) throw new Error('companyId is required for database-backed orders.');
-  const itemIds = [...new Set(input.lines.map((line) => line.itemId))];
+  // A bundle (kit) owns no stock: its lines become component lines, so allocation,
+  // reservation and fulfilment below run on the components exactly as for any item.
+  const lines = await expandOrderLinesForBundles(companyId, input.lines);
+  const itemIds = [...new Set(lines.map((line) => line.itemId))];
   const requestedLocationIds = [...new Set([
     ...(input.fulfillmentLocationId ? [input.fulfillmentLocationId] : []),
     ...(input.candidateLocations ?? []).map((location) => location.locationId),
@@ -336,24 +340,24 @@ async function createOrderInner(input: {
 
   if (fulfillmentLocationId) {
     if (input.allowBackorder) {
-      const outcome = await partialAllocateAtLocation(companyId, input.lines, fulfillmentLocationId);
+      const outcome = await partialAllocateAtLocation(companyId, lines, fulfillmentLocationId);
       resolved.push(...outcome.resolved.map((line) => ({ ...line, locationId: fulfillmentLocationId! })));
       backordered = outcome.backordered;
     } else {
-      const outcome = await tryAllocateAtLocation(companyId, input.lines, fulfillmentLocationId);
+      const outcome = await tryAllocateAtLocation(companyId, lines, fulfillmentLocationId);
       if (outcome.resolved === null) throw new OrderShortageError(outcome.shortages);
       resolved.push(...outcome.resolved.map((line) => ({ ...line, locationId: fulfillmentLocationId! })));
     }
   } else {
     const candidates = input.candidateLocations ?? [];
-    const routed = await routeOrder(companyId, input.lines, candidates, routingCtx);
+    const routed = await routeOrder(companyId, lines, candidates, routingCtx);
     if (routed.locationId !== null && routed.resolved !== null) {
       fulfillmentLocationId = routed.locationId;
       resolved.push(...routed.resolved.map((line) => ({ ...line, locationId: routed.locationId! })));
     } else if (input.allowSplit !== false && candidates.length) {
       const ranked = rankOrderCandidates(candidates, routingCtx);
-      const availability = await itemAvailabilityByLocation(companyId, input.lines.map((line) => line.itemId), ranked.map((row) => row.locationId));
-      const split = splitLinesAcrossLocations(input.lines, ranked, availability);
+      const availability = await itemAvailabilityByLocation(companyId, lines.map((line) => line.itemId), ranked.map((row) => row.locationId));
+      const split = splitLinesAcrossLocations(lines, ranked, availability);
       for (const slice of split.splits) {
         const partial = await partialAllocateAtLocation(companyId, slice.lines, slice.locationId);
         resolved.push(...partial.resolved.map((line) => ({ ...line, locationId: slice.locationId })));
