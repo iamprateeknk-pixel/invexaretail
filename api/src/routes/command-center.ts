@@ -1,3 +1,4 @@
+import { activeReconcilerHealth } from '../lib/repository-reconciler.js';
 import { resolveReportRange, ReportRangeError } from '../lib/report-range.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -165,6 +166,9 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     warehouse: { stuckTransfers: stuckTransfers(listTransfers(), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
     database: { connected: databaseEnabled, ...database },
+    // Plan P1-PERF-002: how fresh the in-memory snapshot is. `stale` (3 failed refreshes in a row,
+    // or no success for 3 intervals) is the signal to alert on.
+    reconciliation: activeReconcilerHealth(),
     outbox: outbox && {
       ...outbox,
       slo: {

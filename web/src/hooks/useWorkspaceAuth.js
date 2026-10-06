@@ -7,7 +7,7 @@ import {
   subscribePersistedSession,
   writePersistedSession,
 } from '../lib/session';
-import { initDB, getPendingSyncActions, removeSyncAction, updateSyncActionRetries } from '../offlineStore';
+import { purgeLegacyOfflineQueue } from '../offlineStore';
 import { isTwoFactorChallenge, normalizeTwoFactorCode } from '../lib/two-factor';
 import { useEffect, useState } from 'react';
 
@@ -238,51 +238,15 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
   }, []);
 
   useEffect(() => {
-    if (!authToken) return;
-
-    const handleOnline = async () => {
-      addNotification('System', 'Back online - syncing pending actions...', 'info');
-      try {
-        await initDB();
-        const pendingActions = await getPendingSyncActions();
-
-        for (const action of pendingActions) {
-          if (action.retries > 3) continue;
-
-          try {
-            const latestToken = readPersistedSession()?.token ?? authToken;
-            const response = await fetch(`${API_BASE}${action.endpoint}`, {
-              method: action.method,
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${latestToken}`,
-              },
-              body: JSON.stringify(action.data),
-            });
-
-            if (response.ok) {
-              await removeSyncAction(action.id);
-              addNotification('Sync Complete', `${action.type} action synced successfully`, 'success');
-            } else {
-              await updateSyncActionRetries(action.id, action.retries + 1);
-            }
-          } catch {
-            await updateSyncActionRetries(action.id, action.retries + 1);
-          }
-        }
-
-        const remainingActions = await getPendingSyncActions();
-        if (remainingActions.length === 0) {
-          addNotification('All synced', 'All pending actions have been synced', 'success');
-        }
-      } catch (error) {
-        console.error('Error syncing pending actions:', error);
+    // Older versions kept one global offline write queue that could replay under another user.
+    // It is discarded once, with a notice, rather than ever being replayed.
+    purgeLegacyOfflineQueue().then((discarded) => {
+      if (discarded > 0) {
+        addNotification('Offline changes discarded', `${discarded} unsent change${discarded === 1 ? '' : 's'} from an older version could not be tied to a user and were removed. Please re-enter them if needed.`, 'warning');
       }
-    };
-
-    window.addEventListener('online', handleOnline);
-    return () => window.removeEventListener('online', handleOnline);
-  }, [authToken, addNotification]);
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     session,

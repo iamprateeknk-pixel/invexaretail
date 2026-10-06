@@ -76,12 +76,4 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-pending') {
-    event.waitUntil(
-      self.clients.matchAll().then((clients) => {
-        clients.forEach((client) => client.postMessage({ type: 'SYNC_PENDING' }));
-      })
-    );
-  }
-});
+// No background sync: the web app does not queue writes offline (src/lib/offline-policy.js).

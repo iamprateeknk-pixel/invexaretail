@@ -10,6 +10,7 @@ import { responseCompression } from './lib/response-compression.js';
 import { apiRateLimitPerMinute } from './lib/rate-limit-config.js';
 import { assertProductionSecrets } from './lib/production-guard.js';
 import { mutationIdempotency } from './lib/mutation-idempotency.js';
+import { RepositoryReconciler, reconcileIntervalMs, setActiveReconciler } from './lib/repository-reconciler.js';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
@@ -61,8 +62,6 @@ const release = process.env.APP_VERSION ?? process.env.GITHUB_SHA?.slice(0, 12) 
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
-let repositoryRefreshedAt = 0;
-let repositoryRefreshInFlight: Promise<void> | null = null;
 
 // Behind the host's reverse proxy every request otherwise looks like it comes
 // from the proxy, which would put all callers in one rate-limit bucket. One
@@ -239,10 +238,9 @@ app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
       await authHydration;
     } else {
       await startupHydration;
-      // Operational routes serve an in-memory snapshot. Refresh it before
-      // stale GETs so direct database imports appear without an API restart.
-      // Parallel browser requests share one database refresh job.
-      if (req.method === 'GET' && req.path !== '/events') await refreshRepositoryIfStale();
+      // Operational routes serve an in-memory snapshot. It is kept current by domain events and
+      // reconciled with the database by lib/repository-reconciler.ts on a timer - never inside a
+      // request (plan P1-PERF-002), so no user GET waits for a full hydration.
     }
     next();
   } catch (error) {
@@ -395,7 +393,6 @@ const hydrateRepository = async () => {
   const { ensureDailySyncSchema } = await import('./lib/runtime-schema.js');
   await ensureDailySyncSchema();
   await hydrateRepositoryFromDatabase();
-  repositoryRefreshedAt = Date.now();
   try {
     const { hydrateControlPlaneFromStore } = await import('./lib/saas/persistence.js');
     const saas = await hydrateControlPlaneFromStore();
@@ -429,29 +426,15 @@ const hydrateRepository = async () => {
   console.log('✅ Inventory repository hydrated from database');
 };
 
-const refreshRepositoryIfStale = async (): Promise<void> => {
-  const configuredInterval = Number(process.env.DATABASE_REFRESH_INTERVAL_MS ?? 30_000);
-  // Committed domain events keep normal screens current. This broader refresh is only a reconciliation path for direct database imports or missed events.
-  const refreshIntervalMs = Number.isFinite(configuredInterval) ? Math.max(5_000, configuredInterval) : 30_000;
-  if (Date.now() - repositoryRefreshedAt < refreshIntervalMs) return;
-
-  if (!repositoryRefreshInFlight) {
-    repositoryRefreshInFlight = (async () => {
-      try {
-        const { databaseEnabled, hydrateRepositoryFromDatabase } = await import('./lib/persistence.js');
-        if (databaseEnabled) await hydrateRepositoryFromDatabase();
-      } catch (error) {
-        // A transient database read must not take down an otherwise usable
-        // workspace. Keep serving the last good snapshot and retry later.
-        console.warn('Database snapshot refresh failed; serving the last good snapshot.', error instanceof Error ? error.message : error);
-      } finally {
-        repositoryRefreshedAt = Date.now();
-      }
-    })().finally(() => {
-      repositoryRefreshInFlight = null;
-    });
-  }
-  await repositoryRefreshInFlight;
+// Background reconciliation of the in-memory snapshot with the database (off the request path).
+let repositoryReconciler: RepositoryReconciler | null = null;
+const startRepositoryReconciler = async (): Promise<void> => {
+  const { databaseEnabled, hydrateRepositoryFromDatabase } = await import('./lib/persistence.js');
+  if (!databaseEnabled) return;
+  repositoryReconciler = new RepositoryReconciler(() => hydrateRepositoryFromDatabase(), reconcileIntervalMs());
+  repositoryReconciler.markFresh();
+  repositoryReconciler.start();
+  setActiveReconciler(repositoryReconciler);
 };
 
 // Bind the HTTP port immediately for Hostinger, then keep API requests behind
@@ -461,6 +444,7 @@ const startServer = () => {
   startupHydration = (async () => {
     await authHydration;
     await hydrateRepository();
+    await startRepositoryReconciler();
     repositoryHydrationState = 'ready';
     if (process.env.RUN_SCHEDULERS !== 'false') {
       const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
@@ -481,6 +465,7 @@ const startServer = () => {
   // database operation or leaving Prisma connections open.
   const shutdown = (signal: string) => {
     console.log(`${signal} received; closing the API server.`);
+    repositoryReconciler?.stop();
     server.close(async () => {
       try {
         const { flushControlPlanePersist } = await import('./lib/saas/persistence.js');

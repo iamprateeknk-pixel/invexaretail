@@ -1,3 +1,6 @@
+import { useEffect, useRef } from 'react';
+import { defaultSectionForRole } from '../lib/workspace';
+import { canAccessSection } from '../lib/permissions';
 import { useWorkspaceAuth } from './useWorkspaceAuth';
 import { useWorkspaceCounts } from './useWorkspaceCounts';
 import { useWorkspaceTransfers } from './useWorkspaceTransfers';
@@ -42,6 +45,20 @@ export function useWorkspaceApp() {
     addNotification,
   });
   const { session, authToken, role } = auth;
+
+  // Plan U1: a person who opens the app with no deep link lands on their own task queue.
+  // An explicit link (#/inventory, a bookmark, a shared investigation URL) is never overridden.
+  const landingApplied = useRef(false);
+  useEffect(() => {
+    if (!session || !role || landingApplied.current) return;
+    landingApplied.current = true;
+    const hash = typeof window === 'undefined' ? '' : window.location.hash.replace(/^#\/?/, '');
+    if (hash) return;
+    const hidden = new Set(core.workspaceProfile.pack?.hide ?? []);
+    const landing = defaultSectionForRole(role, { canAccess: (section) => canAccessSection(section, { role, hiddenModules: hidden }) });
+    if (landing !== 'dashboard') core.navigateTo(landing);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, role]);
 
   const countDomain = useWorkspaceCounts({
     authToken,
