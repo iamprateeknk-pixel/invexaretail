@@ -1,4 +1,5 @@
 import { activeReconcilerHealth } from '../lib/repository-reconciler.js';
+import { latestReconciliation, reconciliationBreached, runAndRecordReconciliation } from '../lib/stock-reconciliation.js';
 import { resolveReportRange, ReportRangeError } from '../lib/report-range.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -169,6 +170,13 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     // Plan P1-PERF-002: how fresh the in-memory snapshot is. `stale` (3 failed refreshes in a row,
     // or no success for 3 intervals) is the signal to alert on.
     reconciliation: activeReconcilerHealth(),
+    stockReconciliation: await (async () => {
+      if (!databaseEnabled) return null;
+      const latest = await latestReconciliation(req.companyId ?? DEFAULT_COMPANY_ID).catch(() => null);
+      if (!latest) return { checked: false, breached: false };
+      const { sample: _sample, ...summary } = latest;
+      return { checked: true, ...summary, breached: reconciliationBreached(latest) };
+    })(),
     outbox: outbox && {
       ...outbox,
       slo: {
@@ -178,6 +186,22 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
       },
     },
   });
+});
+
+// Plan Area B WP4: stock reconciliation evidence for the caller's company (journal sum vs balance).
+// Company scoped by construction: the run, the sample and the history only ever contain this company.
+router.get('/ops/reconciliation', ...guard, async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Reconciliation is for admins and auditors.' });
+  if (!databaseEnabled) return res.json({ latest: null, breached: false, note: 'Reconciliation needs the database.' });
+  const latest = await latestReconciliation(req.companyId ?? DEFAULT_COMPANY_ID);
+  return res.json({ latest, breached: reconciliationBreached(latest) });
+});
+
+router.post('/ops/reconciliation/run', ...guard, async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can run a reconciliation.' });
+  if (!databaseEnabled) return res.status(409).json({ message: 'Reconciliation needs the database.' });
+  const run = await runAndRecordReconciliation({ companyId: req.companyId ?? DEFAULT_COMPANY_ID, trigger: 'manual' });
+  return res.status(201).json({ latest: run, breached: reconciliationBreached(run) });
 });
 
 export default router;

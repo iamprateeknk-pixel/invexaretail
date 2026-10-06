@@ -2496,3 +2496,24 @@ model MutationReceipt {
   @@unique([companyId, userId, mutationId])
   @@index([createdAt])
 }
+
+
+// Plan Area B WP4: one row per stock reconciliation (journal sum vs StockLedger balance).
+// Read-only evidence - reconciliation never edits movements or balances.
+model ReconciliationRun {
+  id               String   @id @default(cuid())
+  companyId        String?
+  trigger          String   @default("manual")
+  startedAt        DateTime
+  finishedAt       DateTime
+  ledgerRows       Int
+  explained        Int
+  mismatches       Int
+  noJournalHistory Int
+  mismatchAbsDelta Float
+  maxAbsDelta      Float
+  sampleJson       String   @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, startedAt])
+}
