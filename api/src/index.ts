@@ -9,6 +9,7 @@ import helmet from 'helmet';
 import { responseCompression } from './lib/response-compression.js';
 import { apiRateLimitPerMinute } from './lib/rate-limit-config.js';
 import { assertProductionSecrets } from './lib/production-guard.js';
+import { mutationIdempotency } from './lib/mutation-idempotency.js';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
@@ -77,7 +78,8 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Invexa-Signature', 'If-Last-Event-ID', 'Last-Event-ID'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Invexa-Signature', 'If-Last-Event-ID', 'Last-Event-ID', 'X-Mutation-Id'],
+  exposedHeaders: ['Idempotent-Replay', 'Retry-After'],
   maxAge: 3600,
 };
 app.use(cors(corsOptions));
@@ -278,6 +280,8 @@ app.use('/api/v1', enforceSuspendedCompany);
 app.use('/api/v1', enforcePlanEntitlements);
 app.use('/api/v1', enforcePlanLimits);
 app.use('/api/v1', enforceApiUsage);
+// Plan P0-SYNC-003: exactly-once replay for any mutation that carries X-Mutation-Id.
+app.use('/api/v1', mutationIdempotency());
 
 app.use('/control/v1', controlRouter);
 app.use('/studio/v1', studioRouter);

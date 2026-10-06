@@ -85,7 +85,7 @@ import {
   setWebhookSubscriptionStatus,
 } from '../lib/webhook-store.js';
 import { replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
-import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, ownerOfItem, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
@@ -127,12 +127,15 @@ function requireAdmin(req: Request, res: Response): boolean {
 router.get('/asset-checkouts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
+  // P0-SEC-002: always company scoped. The admin/auditor branch used to resolve to an empty
+  // where clause, which listed every company's checkouts.
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const where = locationId
-    ? { locationId }
+    ? { companyId, locationId }
     : ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)
-      ? {}
-      : { locationId: { in: req.user!.locationIds ?? [] } };
-  const checkouts = await prisma.assetCheckout.findMany({ where, orderBy: { checkedOutAt: 'desc' } });
+      ? { companyId }
+      : { companyId, locationId: { in: req.user!.locationIds ?? [] } };
+  const checkouts = await prisma.assetCheckout.findMany({ where: { ...where, companyId }, orderBy: { checkedOutAt: 'desc' } });
   return res.json({ checkouts });
 });
 
@@ -142,9 +145,19 @@ router.post('/asset-checkouts', async (req, res) => {
   if (!req.body.itemId || !req.body.locationId || !String(req.body.assigneeName || '').trim() || !Number.isInteger(quantity) || quantity < 1) {
     return res.status(400).json({ message: 'Item, location, assignee and positive quantity are required.' });
   }
+  // The item and the location must both belong to the caller's company: a foreign id is
+  // indistinguishable from a missing one.
+  const checkoutCompany = req.companyId ?? DEFAULT_COMPANY_ID;
+  const [ownedItem, ownedLocation] = await Promise.all([
+    prisma.item.findFirst({ where: { id: String(req.body.itemId), companyId: checkoutCompany }, select: { id: true } }),
+    prisma.location.findFirst({ where: { id: String(req.body.locationId), companyId: checkoutCompany }, select: { id: true } }),
+  ]);
+  if (!ownedItem || !ownedLocation) return res.status(404).json({ message: 'Item or location not found.' });
+  if (!canAccessLocation(req, String(req.body.locationId))) return res.status(403).json({ message: 'Location access denied.' });
   const checkout = await prisma.assetCheckout.create({ data: {
-    itemId: req.body.itemId,
-    locationId: req.body.locationId,
+    companyId: checkoutCompany,
+    itemId: String(req.body.itemId),
+    locationId: String(req.body.locationId),
     assigneeName: String(req.body.assigneeName).trim(),
     quantity,
     dueAt: req.body.dueAt ? new Date(req.body.dueAt) : null,
@@ -155,11 +168,11 @@ router.post('/asset-checkouts', async (req, res) => {
 });
 
 router.patch('/asset-checkouts/:id/return', async (req, res) => {
-  const checkout = await prisma.assetCheckout.findUnique({ where: { id: req.params.id } });
+  const checkout = await prisma.assetCheckout.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!checkout) return res.status(404).json({ message: 'Checkout record not found.' });
   if (!canAccessLocation(req, checkout.locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (checkout.status === 'RETURNED') return res.status(409).json({ message: 'This asset has already been returned.' });
-  const updated = await prisma.assetCheckout.update({ where: { id: checkout.id }, data: {
+  const updated = await prisma.assetCheckout.update({ where: { id: checkout.id, companyId: checkout.companyId }, data: {
     status: 'RETURNED', returnedAt: new Date(), conditionIn: req.body.conditionIn || null,
   } });
   return res.json({ checkout: updated });
@@ -295,6 +308,12 @@ router.post('/jobs/:id/consume', async (req, res) => {
   return res.json({ job: refreshed, line: updated, allocations: allocation.allocations });
 });
 
+/** Memory-mode counterpart of the DB `lot.item.companyId` check (P0-SEC-001). */
+function memoryLotOwnedByCompany(lotId: string, companyId: string): boolean {
+  const item = listItems().find((candidate) => candidate.lots.some((lot) => lot.id === lotId));
+  return Boolean(item && ownerOfItem(item.id) === companyId);
+}
+
 function expiryAlertId(itemId: string, lotId: string, locationId: string): string {
   return `expiry-${createHash('sha1').update(`${itemId}|${lotId}|${locationId}`).digest('hex').slice(0, 24)}`;
 }
@@ -319,6 +338,8 @@ router.patch('/lots/:id/status', async (req, res) => {
   const validStatuses = ['AVAILABLE', 'EXPIRED', 'BLOCKED', 'QUARANTINE'] as const;
   if (!validStatuses.includes(req.body.status)) return res.status(400).json({ message: 'Invalid lot status.' });
   if (!databaseEnabled) {
+    // P0-SEC-001: the in-memory catalogue is company scoped through the lot's item as well.
+    if (!memoryLotOwnedByCompany(req.params.id, req.companyId ?? DEFAULT_COMPANY_ID)) return res.status(404).json({ message: 'Lot not found.' });
     try {
       const lot = setLotSaleStatus(req.params.id, req.body.status);
       await persistAudit(recordAudit({
@@ -331,7 +352,10 @@ router.patch('/lots/:id/status', async (req, res) => {
       return res.status(message.includes('not found') ? 404 : 400).json({ message });
     }
   }
-  const lot = await prisma.lot.update({ where: { id: req.params.id }, data: { status: req.body.status } }).catch(() => null);
+  // P0-SEC-001: resolve the lot through its item's company first, then update only that owned id.
+  const ownedLot = await prisma.lot.findFirst({ where: { id: req.params.id, item: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } });
+  if (!ownedLot) return res.status(404).json({ message: 'Lot not found.' });
+  const lot = await prisma.lot.update({ where: { id: ownedLot.id }, data: { status: req.body.status } }).catch(() => null);
   if (!lot) return res.status(404).json({ message: 'Lot not found.' });
   try {
     updateLotStatus(lot.id, req.body.status);
@@ -352,6 +376,7 @@ router.patch('/lots/:id/expiry', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const raw = req.body.expiryDate;
   if (!databaseEnabled) {
+    if (!memoryLotOwnedByCompany(req.params.id, req.companyId ?? DEFAULT_COMPANY_ID)) return res.status(404).json({ message: 'Lot not found.' });
     try {
       const lot = setLotExpiryDate(req.params.id, raw);
       await persistAudit(recordAudit({
@@ -370,7 +395,9 @@ router.patch('/lots/:id/expiry', async (req, res) => {
     expiryDate = new Date(raw);
     if (Number.isNaN(expiryDate.getTime())) return res.status(400).json({ message: 'Expiry date is invalid.' });
   }
-  const lot = await prisma.lot.update({ where: { id: req.params.id }, data: { expiryDate } }).catch(() => null);
+  const ownedLot = await prisma.lot.findFirst({ where: { id: req.params.id, item: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } });
+  if (!ownedLot) return res.status(404).json({ message: 'Lot not found.' });
+  const lot = await prisma.lot.update({ where: { id: ownedLot.id }, data: { expiryDate } }).catch(() => null);
   if (!lot) return res.status(404).json({ message: 'Lot not found.' });
   try {
     updateLotExpiry(lot.id, lot.expiryDate?.toISOString() ?? null);
@@ -387,9 +414,41 @@ router.patch('/lots/:id/expiry', async (req, res) => {
   return res.json({ lot: { ...lot, expiryDate: lot.expiryDate?.toISOString() ?? null } });
 });
 
+// P0-SEC-003: comments are company scoped, only known entity types are accepted, and the
+// entity must belong to the caller's company (a foreign entity id is indistinguishable from a
+// missing one). Add a resolver here when a new entity type gets a comment thread.
+const COMMENT_ENTITY_RESOLVERS: Record<string, (companyId: string, entityId: string) => Promise<boolean>> = {
+  item: async (companyId, id) => Boolean(await prisma.item.findFirst({ where: { id, companyId }, select: { id: true } })),
+  lot: async (companyId, id) => Boolean(await prisma.lot.findFirst({ where: { id, item: { companyId } }, select: { id: true } })),
+  location: async (companyId, id) => Boolean(await prisma.location.findFirst({ where: { id, companyId }, select: { id: true } })),
+  transfer: async (companyId, id) => Boolean(await prisma.transfer.findFirst({ where: { id, companyId }, select: { id: true } })),
+  order: async (companyId, id) => Boolean(await prisma.order.findFirst({ where: { id, companyId }, select: { id: true } })),
+  count: async (companyId, id) => Boolean(await prisma.stockCount.findFirst({ where: { id, companyId }, select: { id: true } })),
+  exception: async (companyId, id) => Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId }, select: { id: true } })),
+  'purchase-order': async (companyId, id) => Boolean(await prisma.purchaseOrder.findFirst({ where: { id, companyId }, select: { id: true } })),
+};
+
+async function resolveCommentTarget(req: Request, res: Response): Promise<{ companyId: string; entityType: string; entityId: string } | null> {
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const entityType = String(req.params.entityType);
+  const entityId = String(req.params.entityId);
+  const resolver = COMMENT_ENTITY_RESOLVERS[entityType];
+  if (!resolver) {
+    res.status(400).json({ message: `Comments are not available for "${entityType}".` });
+    return null;
+  }
+  if (!(await resolver(companyId, entityId))) {
+    res.status(404).json({ message: 'Record not found.' });
+    return null;
+  }
+  return { companyId, entityType, entityId };
+}
+
 router.get('/comments/:entityType/:entityId', async (req, res) => {
+  const target = await resolveCommentTarget(req, res);
+  if (!target) return;
   const comments = await prisma.contextComment.findMany({
-    where: { entityType: req.params.entityType, entityId: req.params.entityId },
+    where: { companyId: target.companyId, entityType: target.entityType, entityId: target.entityId },
     orderBy: { createdAt: 'asc' },
   });
   return res.json({ comments });
@@ -398,10 +457,13 @@ router.get('/comments/:entityType/:entityId', async (req, res) => {
 router.post('/comments/:entityType/:entityId', async (req, res) => {
   const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
   if (!body) return res.status(400).json({ message: 'Comment cannot be empty.' });
+  const target = await resolveCommentTarget(req, res);
+  if (!target) return;
   const mentions = [...body.matchAll(/@([\w.-]+)/g)].map((match) => match[1]);
   const comment = await prisma.contextComment.create({ data: {
-    entityType: req.params.entityType,
-    entityId: req.params.entityId,
+    companyId: target.companyId,
+    entityType: target.entityType,
+    entityId: target.entityId,
     authorId: req.user!.id,
     authorName: req.user!.name || req.user!.email || req.user!.id,
     body,
@@ -410,9 +472,14 @@ router.post('/comments/:entityType/:entityId', async (req, res) => {
   return res.status(201).json({ comment });
 });
 
+// P0-SEC-004: the inbox is company scoped. Role-wide and global (no user, no role) notices used
+// to be visible to every company.
 router.get('/notification-inbox', async (req, res) => {
   const notifications = await prisma.userNotification.findMany({
-    where: { OR: [{ userId: req.user!.id }, { role: req.user!.role }, { userId: null, role: null }] },
+    where: {
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+      OR: [{ userId: req.user!.id }, { role: req.user!.role }, { userId: null, role: null }],
+    },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
@@ -420,11 +487,11 @@ router.get('/notification-inbox', async (req, res) => {
 });
 
 router.patch('/notification-inbox/:id/read', async (req, res) => {
-  const notice = await prisma.userNotification.findUnique({ where: { id: req.params.id } });
+  const notice = await prisma.userNotification.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!notice || (notice.userId && notice.userId !== req.user!.id) || (notice.role && notice.role !== req.user!.role)) {
     return res.status(404).json({ message: 'Notification not found.' });
   }
-  const notification = await prisma.userNotification.update({ where: { id: notice.id }, data: { readAt: new Date() } });
+  const notification = await prisma.userNotification.update({ where: { id: notice.id, companyId: notice.companyId }, data: { readAt: new Date() } });
   return res.json({ notification });
 });
 

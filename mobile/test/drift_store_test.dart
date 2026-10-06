@@ -10,6 +10,7 @@ import 'package:invexaretail_mobile/services/native_database.dart';
 
 QueuedCount _count(String id, {double qty = 4}) => QueuedCount(
       localId: id,
+      userId: 'u1',
       itemId: 'item-1001',
       locationId: 'loc-1',
       physicalQuantity: qty,
@@ -42,10 +43,10 @@ File _tempFile(String name) {
 void main() {
   test('DriftStore namespaces queued counts by companyId', () async {
     final store = DriftStore.inMemory();
-    await store.saveQueuedCounts([_count('g-1')], 'default-company');
-    await store.saveQueuedCounts([_count('j-1', qty: 2)], 'company-jaipur');
-    expect((await store.loadQueuedCounts('default-company')).single.localId, 'g-1');
-    expect((await store.loadQueuedCounts('company-jaipur')).single.localId, 'j-1');
+    await store.saveQueuedCounts([_count('g-1')], 'default-company', 'u1');
+    await store.saveQueuedCounts([_count('j-1', qty: 2)], 'company-jaipur', 'u1');
+    expect((await store.loadQueuedCounts('default-company', 'u1')).single.localId, 'g-1');
+    expect((await store.loadQueuedCounts('company-jaipur', 'u1')).single.localId, 'j-1');
   });
 
   test('sessions are never written to SQLite (secure storage owns credentials)', () async {
@@ -61,7 +62,7 @@ void main() {
   test('a real SQLite file survives close/reopen and is company scoped', () async {
     final file = _tempFile('reopen');
     final first = DriftStore.native(NativeDatabase.file(file));
-    await first.saveQueuedCounts([_count('p-1', qty: 9)], 'default-company');
+    await first.saveQueuedCounts([_count('p-1', qty: 9)], 'default-company', 'u1');
     first.close();
 
     final head = file.openSync()..setPositionSync(0);
@@ -70,15 +71,15 @@ void main() {
     expect(magic, 'SQLite format 3', reason: 'must be a genuine SQLite database, not JSON');
 
     final second = DriftStore.native(NativeDatabase.file(file));
-    expect((await second.loadQueuedCounts('default-company')).single.localId, 'p-1');
-    expect(await second.loadQueuedCounts('company-jaipur'), isEmpty);
+    expect((await second.loadQueuedCounts('default-company', 'u1')).single.localId, 'p-1');
+    expect(await second.loadQueuedCounts('company-jaipur', 'u1'), isEmpty);
     second.close();
   });
 
   test('migrations are versioned and the schema never holds stock or session tables', () {
     final db = NativeDatabase.memory();
     expect(db.schemaVersion, currentSchemaVersion);
-    expect(db.tableNames, containsAll(['queued_counts', 'queued_actions', 'sync_commands', 'entity_versions']));
+    expect(db.tableNames, containsAll(['queued_counts', 'queued_actions', 'sync_commands', 'entity_versions', 'device_meta']));
     expect(db.tableNames.any((name) => name.contains('stock') || name == 'sessions'), isFalse);
     db.close();
   });
@@ -104,12 +105,14 @@ void main() {
           {'id': 1, 'company_id': 'c1', 'seq': 1, 'envelope': 'opaque', 'created_at': 'x'},
         ],
         'queued_counts': [
-          {'local_id': 'legacy-1', 'company_id': 'c1', 'payload_json': jsonEncode(_count('legacy-1').toJson()), 'seq': 1},
+          {'local_id': 'legacy-1', 'company_id': 'c1', 'payload_json': jsonEncode(_count('legacy-1').toJson()..['userId'] = ''), 'seq': 1},
         ],
       },
     }));
     final store = DriftStore.native(NativeDatabase.file(file));
-    expect((await store.loadQueuedCounts('c1')).single.localId, 'legacy-1');
+    expect(await store.loadQueuedCounts('c1', 'u1'), isEmpty, reason: 'identity-less legacy rows are not handed to anyone by default');
+    await store.adoptLegacyQueues('c1', 'u1');
+    expect((await store.loadQueuedCounts('c1', 'u1')).single.localId, 'legacy-1');
     store.close();
     final bytes = file.readAsBytesSync();
     expect(utf8.decode(bytes, allowMalformed: true).contains('LEAKED'), isFalse, reason: 'legacy plaintext tokens must not survive');
@@ -119,7 +122,7 @@ void main() {
     final file = _tempFile('corrupt');
     file.writeAsStringSync('{ not json at all');
     final store = DriftStore.native(NativeDatabase.file(file));
-    expect(await store.loadQueuedCounts('c1'), isEmpty);
+    expect(await store.loadQueuedCounts('c1', 'u1'), isEmpty);
     store.close();
   });
 

@@ -76,11 +76,15 @@ class SecureLocalStore implements LocalStore {
   @override
   Future<void> clearSession() async { await vault.clear(); await delegate.clearSession(); }
   @override
-  Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']) => delegate.loadQueuedCounts(companyId);
+  Future<List<QueuedCount>> loadQueuedCounts(String companyId, String userId) => delegate.loadQueuedCounts(companyId, userId);
   @override
-  Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) => delegate.saveQueuedCounts(items, companyId);
+  Future<void> saveQueuedCounts(List<QueuedCount> items, String companyId, String userId) => delegate.saveQueuedCounts(items, companyId, userId);
   @override
-  Future<List<QueuedAction>> loadQueuedActions() => delegate.loadQueuedActions();
+  Future<List<QueuedAction>> loadQueuedActions(String companyId, String userId) => delegate.loadQueuedActions(companyId, userId);
   @override
-  Future<void> saveQueuedActions(List<QueuedAction> items) => delegate.saveQueuedActions(items);
+  Future<void> saveQueuedActions(List<QueuedAction> items, String companyId, String userId) => delegate.saveQueuedActions(items, companyId, userId);
+  @override
+  Future<void> adoptLegacyQueues(String companyId, String userId) => delegate.adoptLegacyQueues(companyId, userId);
+  @override
+  Future<String> deviceId() => delegate.deviceId();
 }

@@ -356,7 +356,7 @@ router.put('/suppliers/:id', async (req, res) => {
     if (!Object.keys(fields).length) return res.status(400).json({ message: 'Nothing to update.' });
     const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
     if (!existing) return res.status(404).json({ message: 'Supplier not found.' });
-    const supplier = await prisma.supplier.update({ where: { id: existing.id }, data: fields as never });
+    const supplier = await prisma.supplier.update({ where: { id: existing.id, companyId: existing.companyId }, data: fields as never });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'SUPPLIER_UPDATED', entityType: 'Supplier', entityId: supplier.id, metadata: { fields: Object.keys(fields) } }));
     return res.json({ supplier: presentSupplier(supplier) });
   } catch (error) {

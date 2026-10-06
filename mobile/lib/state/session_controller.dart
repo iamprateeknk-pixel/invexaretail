@@ -74,6 +74,22 @@ class SessionController extends ChangeNotifier {
   bool get showBookQuantity => user != null && canSeeBookQuantity(user!.role);
   bool get allowAdHocCount => user != null && canSubmitAdHocCount(user!.role);
   String get companyId => user?.companyId ?? 'default-company';
+  String get _userId => user?.id ?? '';
+  String? _deviceId;
+
+  /// Loads this user's own queued work (plan P0-SYNC-001). Anything queued by another
+  /// user or company on this phone is neither shown nor replayed.
+  Future<void> _loadQueues() async {
+    queuedCounts = await store.loadQueuedCounts(companyId, _userId);
+    queuedActions = await store.loadQueuedActions(companyId, _userId);
+  }
+
+  @visibleForTesting
+  Future<void> loadQueuesForTest() => _loadQueues();
+
+  Future<void> _saveCounts() => store.saveQueuedCounts(queuedCounts, companyId, _userId);
+  Future<void> _saveActions() => store.saveQueuedActions(queuedActions, companyId, _userId);
+  Future<String> _device() async => _deviceId ??= await store.deviceId();
 
   LocationRecord? get selectedLocation {
     for (final location in locations) {
@@ -87,17 +103,20 @@ class SessionController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      queuedActions = await store.loadQueuedActions();
       final session = await store.loadSession();
       if (session != null) {
         api.token = session.token;
         api.refreshToken = session.refreshToken;
         user = session.user;
-        queuedCounts = await store.loadQueuedCounts(companyId);
+        // Work queued before identity binding existed belongs to the session that was active
+        // when it was queued - this restored one - and to no one who signs in later.
+        await store.adoptLegacyQueues(companyId, _userId);
+        await _loadQueues();
         await refreshAll();
         startLive();
       } else {
         queuedCounts = [];
+        queuedActions = [];
       }
     } on ApiException catch (err) {
       if (err.statusCode == 401) {
@@ -139,7 +158,7 @@ class SessionController extends ChangeNotifier {
       user = result.user;
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
-      queuedCounts = await store.loadQueuedCounts(companyId);
+      await _loadQueues();
       await refreshAll();
       startLive();
       return true;
@@ -170,7 +189,7 @@ class SessionController extends ChangeNotifier {
       user = result.user;
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
-      queuedCounts = await store.loadQueuedCounts(companyId);
+      await _loadQueues();
       await refreshAll();
       startLive();
       return true;
@@ -224,6 +243,7 @@ class SessionController extends ChangeNotifier {
       user = result.user;
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
+      await _loadQueues();
       await refreshAll();
       startLive();
       return true;
@@ -269,6 +289,7 @@ class SessionController extends ChangeNotifier {
     countTasks = [];
     countDrafts.clear();
     queuedCounts = [];
+    queuedActions = [];
     selectedLocationId = null;
     api.clearToken();
     await store.clearSession();
@@ -443,11 +464,19 @@ class SessionController extends ChangeNotifier {
     required String method,
     required String path,
     required Map<String, dynamic> body,
+    String? mutationId,
   }) async {
+    final localId = 'act-${DateTime.now().microsecondsSinceEpoch}';
     queuedActions = [
       ...queuedActions,
       QueuedAction(
-        localId: 'act-${DateTime.now().microsecondsSinceEpoch}',
+        localId: localId,
+        // The idempotency key was made when the person acted; reuse it so a replay after a crash
+        // or restart is recognised by the server (X-Mutation-Id).
+        mutationId: mutationId ?? localId,
+        companyId: companyId,
+        userId: _userId,
+        deviceId: await _device(),
         type: type,
         method: method,
         path: path,
@@ -455,7 +484,7 @@ class SessionController extends ChangeNotifier {
         createdAt: DateTime.now().toIso8601String(),
       ),
     ];
-    await store.saveQueuedActions(queuedActions);
+    await _saveActions();
     notice = 'Offline. $type queued and will sync when the API is reachable.';
     notifyListeners();
     return true;
@@ -471,14 +500,17 @@ class SessionController extends ChangeNotifier {
     notice = null;
     busy = true;
     notifyListeners();
+    // One idempotency key per user action: the body's own requestId when it has one (pick, receive),
+    // otherwise a fresh one. It is reused by the offline queue and every later retry.
+    final mutationId = body['requestId']?.toString().isNotEmpty == true ? body['requestId'].toString() : newRequestId();
     try {
-      await api.sendRaw(method, path, body: body);
+      await api.sendRaw(method, path, body: body, mutationId: mutationId);
       notice = '$type saved.';
       await refreshAll();
       return true;
     } on ApiException catch (err) {
       if (err.isOffline) {
-        return enqueueAction(type: type, method: method, path: path, body: body);
+        return enqueueAction(type: type, method: method, path: path, body: body, mutationId: mutationId);
       }
       error = err.message;
       return false;
@@ -582,6 +614,8 @@ class SessionController extends ChangeNotifier {
       ...queuedCounts,
       QueuedCount(
         localId: localId,
+        userId: _userId,
+        deviceId: await _device(),
         requestId: requestId ?? localId,
         itemId: itemId,
         locationId: locationId,
@@ -591,19 +625,19 @@ class SessionController extends ChangeNotifier {
         createdAt: DateTime.now().toIso8601String(),
       ),
     ];
-    await store.saveQueuedCounts(queuedCounts, companyId);
+    await _saveCounts();
     notifyListeners();
   }
 
   Future<void> dismissQueued(String localId) async {
     queuedCounts = queuedCounts.where((item) => item.localId != localId).toList();
-    await store.saveQueuedCounts(queuedCounts, companyId);
+    await _saveCounts();
     notifyListeners();
   }
 
   Future<void> dismissQueuedAction(String localId) async {
     queuedActions = queuedActions.where((item) => item.localId != localId).toList();
-    await store.saveQueuedActions(queuedActions);
+    await _saveActions();
     notifyListeners();
   }
 
@@ -615,9 +649,10 @@ class SessionController extends ChangeNotifier {
       if (item.localId == localId) {
         item.status = 'pending';
         item.lastError = null;
+        item.nextAttemptAt = null;
       }
     }
-    await store.saveQueuedCounts(queuedCounts, companyId);
+    await _saveCounts();
     notifyListeners();
     await flushQueue();
   }
@@ -627,22 +662,38 @@ class SessionController extends ChangeNotifier {
       if (item.localId == localId) {
         item.status = 'pending';
         item.lastError = null;
+        item.nextAttemptAt = null;
       }
     }
-    await store.saveQueuedActions(queuedActions);
+    await _saveActions();
     notifyListeners();
     await flushQueue();
   }
 
-  Future<void> flushQueue() async {
+  Future<void> flushQueue({DateTime? now, Random? random}) async {
     if (!isSignedIn) return;
     if (queuedCounts.isEmpty && queuedActions.isEmpty) return;
-    final remainingCounts = <QueuedCount>[];
+    final clock = now ?? DateTime.now();
+    final me = _userId;
     var sent = 0;
+
+    // Never replay under a different identity (plan P0-SYNC-001): the lists are loaded per
+    // user, and this guard keeps that true even if something stale is ever in memory.
+    bool mine(String itemUser) => itemUser.isEmpty || itemUser == me;
+
+    final remainingCounts = <QueuedCount>[];
+    var stopCounts = false;
     for (final item in queuedCounts) {
-      // A conflict/rejected item waits for the user's explicit retry
-      // (retryQueuedCount) - never resubmitted silently.
-      if (item.status != 'pending') {
+      // A conflict/rejected item waits for the user's explicit retry (retryQueuedCount) - never
+      // resubmitted silently. A backed-off item waits for its time. Anything after a transient
+      // failure waits too, so the order the person worked in is preserved.
+      if (item.status != 'pending' || !mine(item.userId)) {
+        remainingCounts.add(item);
+        continue;
+      }
+      // A pending item that is backing off holds back everything queued after it.
+      if (stopCounts || !isDueForAttempt(item.nextAttemptAt, clock)) {
+        stopCounts = true;
         remainingCounts.add(item);
         continue;
       }
@@ -668,43 +719,49 @@ class SessionController extends ChangeNotifier {
       } on ApiException catch (err) {
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode);
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
-          remainingCounts.add(item);
-          remainingCounts.addAll(queuedCounts.skip(queuedCounts.indexOf(item) + 1));
-          break;
+          item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
+          stopCounts = true;
+        } else {
+          item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         remainingCounts.add(item);
       }
     }
     queuedCounts = remainingCounts;
-    await store.saveQueuedCounts(queuedCounts, companyId);
+    await _saveCounts();
 
     final remainingActions = <QueuedAction>[];
+    var stopActions = false;
     for (final item in queuedActions) {
-      if (item.status != 'pending') {
+      if (item.status != 'pending' || !mine(item.userId)) {
+        remainingActions.add(item);
+        continue;
+      }
+      if (stopActions || !isDueForAttempt(item.nextAttemptAt, clock)) {
+        stopActions = true;
         remainingActions.add(item);
         continue;
       }
       try {
-        await api.sendRaw(item.method, item.path, body: item.body);
+        await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
         sent += 1;
       } on ApiException catch (err) {
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode);
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
-          remainingActions.add(item);
-          remainingActions.addAll(queuedActions.skip(queuedActions.indexOf(item) + 1));
-          break;
+          item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
+          stopActions = true;
+        } else {
+          item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         remainingActions.add(item);
       }
     }
     queuedActions = remainingActions;
-    await store.saveQueuedActions(queuedActions);
+    await _saveActions();
     if (sent > 0) {
       notice = sent == 1 ? 'Synced 1 queued action.' : 'Synced $sent queued actions.';
       counts = await api.counts();

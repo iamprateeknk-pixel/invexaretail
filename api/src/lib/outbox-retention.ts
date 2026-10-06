@@ -3,6 +3,7 @@
 // docs/week14-outbox-retention.md). Same poll-loop shape as Week 11's
 // lib/import-worker.ts.
 import { pruneDomainEventOutbox } from './event-bus.js';
+import { pruneMutationReceipts } from './mutation-idempotency.js';
 
 let pollTimer: NodeJS.Timeout | null = null;
 
@@ -15,6 +16,8 @@ export function startOutboxRetention(intervalMs = 24 * 60 * 60 * 1000): void {
   if (pollTimer) return;
   pollTimer = setInterval(() => {
     pruneOutboxOnce().catch((error) => console.error('[outbox-retention] prune failed', error));
+    // Plan P0-SYNC-003: replay receipts only need to outlive the longest realistic offline retry window.
+    pruneMutationReceipts().catch((error) => console.error('[outbox-retention] receipt prune failed', error));
   }, intervalMs);
   pollTimer.unref?.();
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,9 +10,18 @@ const sessionRefreshKey = 'invexa.session.refresh';
 const sessionUserKey = 'invexa.session.user';
 const queuedCountsKey = 'invexa.queue.counts';
 const queuedActionsKey = 'invexa.queue.actions';
+const deviceIdKey = 'invexa.device.id';
 
 String queuedCountsKeyFor(String companyId) => 'invexa.queue.counts.$companyId';
+String scopedCountsKey(String companyId, String userId) => 'invexa.queue.counts.$companyId.$userId';
+String scopedActionsKey(String companyId, String userId) => 'invexa.queue.actions.$companyId.$userId';
 
+/// A random id for this installation, created once. It tags queued work so a
+/// support engineer can tell which device a stuck command came from.
+String newDeviceId() {
+  final random = math.Random.secure();
+  return 'dev-${List.generate(16, (_) => random.nextInt(16).toRadixString(16)).join()}';
+}
 
 class PersistedSession {
   const PersistedSession({
@@ -25,20 +35,37 @@ class PersistedSession {
   final AuthUser user;
 }
 
+/// Offline work is bound to who queued it (plan P0-SYNC-001): every queue read
+/// and write names the company AND the user. Rows written before this binding
+/// existed carry no identity; they are never handed to whoever signs in next -
+/// [adoptLegacyQueues] gives them to the user of the *restored* session only
+/// (the session that was active when they were queued), once.
 abstract class LocalStore {
   Future<void> saveSession(PersistedSession session);
   Future<PersistedSession?> loadSession();
   Future<void> clearSession();
-  Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']);
-  Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']);
-  Future<List<QueuedAction>> loadQueuedActions();
-  Future<void> saveQueuedActions(List<QueuedAction> items);
+  Future<List<QueuedCount>> loadQueuedCounts(String companyId, String userId);
+  Future<void> saveQueuedCounts(List<QueuedCount> items, String companyId, String userId);
+  Future<List<QueuedAction>> loadQueuedActions(String companyId, String userId);
+  Future<void> saveQueuedActions(List<QueuedAction> items, String companyId, String userId);
+
+  /// Stamps identity-less (pre-binding) queued work with [companyId]/[userId] and removes
+  /// the legacy copies. Call only with the identity of a restored, persisted session.
+  Future<void> adoptLegacyQueues(String companyId, String userId);
+
+  Future<String> deviceId();
 }
 
 class MemoryStore implements LocalStore {
   PersistedSession? session;
-  final Map<String, List<QueuedCount>> queuedByCompany = {};
-  List<QueuedAction> queuedActions = [];
+  final Map<String, List<QueuedCount>> countsByIdentity = {};
+  final Map<String, List<QueuedAction>> actionsByIdentity = {};
+  // Pre-binding rows (no identity), as an old app version would have left them.
+  List<QueuedCount> legacyCounts = [];
+  List<QueuedAction> legacyActions = [];
+  String? _deviceId;
+
+  String _key(String companyId, String userId) => '$companyId|$userId';
 
   @override
   Future<void> saveSession(PersistedSession next) async {
@@ -54,27 +81,51 @@ class MemoryStore implements LocalStore {
   }
 
   @override
-  Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']) async {
-    final rows = queuedByCompany[companyId] ?? queued;
-    return rows.map((item) => QueuedCount.fromJson(item.toJson())).toList();
+  Future<List<QueuedCount>> loadQueuedCounts(String companyId, String userId) async =>
+      (countsByIdentity[_key(companyId, userId)] ?? const []).map((item) => QueuedCount.fromJson(item.toJson())).toList();
+
+  @override
+  Future<void> saveQueuedCounts(List<QueuedCount> items, String companyId, String userId) async {
+    countsByIdentity[_key(companyId, userId)] = items.map((item) => QueuedCount.fromJson(item.toJson())).toList();
   }
 
   @override
-  Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) async {
-    queuedByCompany[companyId] = items.map((item) => QueuedCount.fromJson(item.toJson())).toList();
-    if (companyId == 'default-company') queued = queuedByCompany[companyId]!;
-  }
-
-  List<QueuedCount> queued = [];
+  Future<List<QueuedAction>> loadQueuedActions(String companyId, String userId) async =>
+      (actionsByIdentity[_key(companyId, userId)] ?? const []).map((item) => QueuedAction.fromJson(item.toJson())).toList();
 
   @override
-  Future<List<QueuedAction>> loadQueuedActions() async =>
-      queuedActions.map((item) => QueuedAction.fromJson(item.toJson())).toList();
+  Future<void> saveQueuedActions(List<QueuedAction> items, String companyId, String userId) async {
+    actionsByIdentity[_key(companyId, userId)] = items.map((item) => QueuedAction.fromJson(item.toJson())).toList();
+  }
 
   @override
-  Future<void> saveQueuedActions(List<QueuedAction> items) async {
-    queuedActions = items.map((item) => QueuedAction.fromJson(item.toJson())).toList();
+  Future<void> adoptLegacyQueues(String companyId, String userId) async {
+    if (legacyCounts.isEmpty && legacyActions.isEmpty) return;
+    final counts = [...?countsByIdentity[_key(companyId, userId)], ...legacyCounts.map((row) => stampCount(row, userId))];
+    final actions = [...?actionsByIdentity[_key(companyId, userId)], ...legacyActions.map((row) => stampAction(row, companyId, userId))];
+    countsByIdentity[_key(companyId, userId)] = counts;
+    actionsByIdentity[_key(companyId, userId)] = actions;
+    legacyCounts = [];
+    legacyActions = [];
   }
+
+  @override
+  Future<String> deviceId() async => _deviceId ??= newDeviceId();
+}
+
+/// Copies of legacy rows with the identity filled in (their ids and idempotency keys are kept).
+QueuedCount stampCount(QueuedCount row, String userId, {String? deviceId}) {
+  final json = row.toJson()..['userId'] = userId;
+  if (deviceId != null) json['deviceId'] = deviceId;
+  return QueuedCount.fromJson(json);
+}
+
+QueuedAction stampAction(QueuedAction row, String companyId, String userId, {String? deviceId}) {
+  final json = row.toJson()
+    ..['companyId'] = companyId
+    ..['userId'] = userId;
+  if (deviceId != null) json['deviceId'] = deviceId;
+  return QueuedAction.fromJson(json);
 }
 
 class PrefsStore implements LocalStore {
@@ -125,28 +176,54 @@ class PrefsStore implements LocalStore {
   }
 
   @override
-  Future<List<QueuedCount>> loadQueuedCounts([String companyId = 'default-company']) async {
+  Future<List<QueuedCount>> loadQueuedCounts(String companyId, String userId) async {
     final prefs = await _ready();
-    final scoped = decodeQueuedCounts(prefs.getString(queuedCountsKeyFor(companyId)));
-    if (scoped.isNotEmpty || companyId != 'default-company') return scoped;
-    return decodeQueuedCounts(prefs.getString(queuedCountsKey));
+    return decodeQueuedCounts(prefs.getString(scopedCountsKey(companyId, userId)));
   }
 
   @override
-  Future<void> saveQueuedCounts(List<QueuedCount> items, [String companyId = 'default-company']) async {
+  Future<void> saveQueuedCounts(List<QueuedCount> items, String companyId, String userId) async {
     final prefs = await _ready();
-    await prefs.setString(queuedCountsKeyFor(companyId), encodeQueuedCounts(items));
+    await prefs.setString(scopedCountsKey(companyId, userId), encodeQueuedCounts(items));
   }
 
   @override
-  Future<List<QueuedAction>> loadQueuedActions() async {
+  Future<List<QueuedAction>> loadQueuedActions(String companyId, String userId) async {
     final prefs = await _ready();
-    return decodeQueuedActions(prefs.getString(queuedActionsKey));
+    return decodeQueuedActions(prefs.getString(scopedActionsKey(companyId, userId)));
   }
 
   @override
-  Future<void> saveQueuedActions(List<QueuedAction> items) async {
+  Future<void> saveQueuedActions(List<QueuedAction> items, String companyId, String userId) async {
     final prefs = await _ready();
-    await prefs.setString(queuedActionsKey, encodeQueuedActions(items));
+    await prefs.setString(scopedActionsKey(companyId, userId), encodeQueuedActions(items));
+  }
+
+  @override
+  Future<void> adoptLegacyQueues(String companyId, String userId) async {
+    final prefs = await _ready();
+    final legacyCountRows = [
+      ...decodeQueuedCounts(prefs.getString(queuedCountsKeyFor(companyId))),
+      ...decodeQueuedCounts(prefs.getString(queuedCountsKey)),
+    ];
+    final legacyActionRows = decodeQueuedActions(prefs.getString(queuedActionsKey));
+    if (legacyCountRows.isEmpty && legacyActionRows.isEmpty) return;
+    final counts = [...await loadQueuedCounts(companyId, userId), ...legacyCountRows.map((row) => stampCount(row, userId))];
+    final actions = [...await loadQueuedActions(companyId, userId), ...legacyActionRows.map((row) => stampAction(row, companyId, userId))];
+    await saveQueuedCounts(counts, companyId, userId);
+    await saveQueuedActions(actions, companyId, userId);
+    await prefs.remove(queuedCountsKeyFor(companyId));
+    await prefs.remove(queuedCountsKey);
+    await prefs.remove(queuedActionsKey);
+  }
+
+  @override
+  Future<String> deviceId() async {
+    final prefs = await _ready();
+    final existing = prefs.getString(deviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final created = newDeviceId();
+    await prefs.setString(deviceIdKey, created);
+    return created;
   }
 }
