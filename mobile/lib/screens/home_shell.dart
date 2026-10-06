@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../config/role_home.dart';
@@ -7,6 +8,8 @@ import '../services/live_events.dart';
 import '../services/label_pdf.dart';
 import '../services/quick_lookup.dart';
 import '../services/scan_action.dart';
+import '../services/transfer_draft.dart';
+import 'new_transfer_screen.dart';
 import '../services/scan_feedback.dart';
 import '../widgets/barcode_scan_sheet.dart';
 import '../state/session_controller.dart';
@@ -128,6 +131,16 @@ class _HomeShellState extends State<HomeShell> {
       showDragHandle: true,
       builder: (sheetContext) => _QuickLookupSheet(
         result: result,
+        onTransfer: roleCanCreateTransfer(controller.user?.role ?? '')
+            ? () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute<bool>(
+                    builder: (_) => NewTransferScreen(controller: controller, item: result.item, initialLotId: result.lot?.id),
+                  ),
+                );
+              }
+            : null,
         onCount: canCount
             ? () {
                 Navigator.of(sheetContext).pop();
@@ -194,10 +207,11 @@ class _LiveStatusIcon extends StatelessWidget {
 }
 
 class _QuickLookupSheet extends StatefulWidget {
-  const _QuickLookupSheet({required this.result, this.onCount});
+  const _QuickLookupSheet({required this.result, this.onCount, this.onTransfer});
 
   final QuickLookupResult result;
   final VoidCallback? onCount;
+  final VoidCallback? onTransfer;
 
   @override
   State<_QuickLookupSheet> createState() => _QuickLookupSheetState();
@@ -208,10 +222,24 @@ class _QuickLookupSheetState extends State<_QuickLookupSheet> {
 
   Future<void> _print() async {
     final result = widget.result;
+    // The built-in PDF font cannot draw Hindi and other scripts, so for such names fetch
+    // Noto Sans (Latin + Devanagari) once; offline, fall back to the default font.
+    pw.ThemeData? theme;
+    if (needsUnicodeFont('${result.item.name}${result.item.code}${result.lot?.lotNo ?? ''}')) {
+      try {
+        theme = pw.ThemeData.withFont(
+          base: await PdfGoogleFonts.notoSansRegular(),
+          bold: await PdfGoogleFonts.notoSansBold(),
+          fontFallback: [await PdfGoogleFonts.notoSansDevanagariRegular()],
+        );
+      } catch (_) {
+        theme = null;
+      }
+    }
     await Printing.layoutPdf(
       name: 'Label ${result.item.code}',
       format: labelPageFormat,
-      onLayout: (_) => buildLabelPdf(result, copies: _copies),
+      onLayout: (_) => buildLabelPdf(result, copies: _copies, theme: theme),
     );
   }
 
@@ -252,6 +280,15 @@ class _QuickLookupSheetState extends State<_QuickLookupSheet> {
                   icon: const Icon(Icons.add_circle_outline),
                 ),
                 const Spacer(),
+                if (widget.onTransfer != null) ...[
+                  OutlinedButton.icon(
+                    key: const ValueKey('transfer-this-item'),
+                    onPressed: widget.onTransfer,
+                    icon: const Icon(Icons.local_shipping_outlined),
+                    label: const Text('Transfer'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 if (widget.onCount != null) ...[
                   OutlinedButton.icon(
                     key: const ValueKey('count-this-item'),

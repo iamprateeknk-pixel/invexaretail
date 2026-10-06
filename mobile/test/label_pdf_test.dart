@@ -21,4 +21,13 @@ void main() {
     expect(latin1.decode(bytes.sublist(0, 4)), '%PDF');
     expect(RegExp(r'/Count 3').hasMatch(latin1.decode(bytes, allowInvalid: true)), isTrue);
   });
+
+  test('only text the built-in font cannot draw asks for a Unicode font', () {
+    expect(needsUnicodeFont('Basmati Rice 5kg'), isFalse);
+    expect(needsUnicodeFont('Café crème – ₹120'), isFalse, reason: 'accents, dash and currency are fine');
+    expect(needsUnicodeFont('बासमती चावल'), isTrue);
+    expect(needsUnicodeFont('Rice (चावल)'), isTrue);
+    expect(needsUnicodeFont('米'), isTrue);
+    expect(needsUnicodeFont(''), isFalse);
+  });
 }

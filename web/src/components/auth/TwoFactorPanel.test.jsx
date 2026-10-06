@@ -26,6 +26,8 @@ test('enrolment walks through setup key, code entry and one-time backup codes', 
   render(React.createElement(TwoFactorPanel, { authToken: 't' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Set up two-factor' }));
   assert.equal((await screen.findByLabelText('Setup key')).textContent, 'JBSWY3DPEHPK3PXP');
+  const qr = await screen.findByAltText(/QR code/);
+  assert.match(qr.getAttribute('src'), /^data:image\/svg\+xml/, 'the setup link is also offered as a scannable QR code');
   const turnOn = screen.getByRole('button', { name: 'Turn on' });
   assert.equal(turnOn.disabled, true, 'needs a full 6-digit code first');
   fireEvent.change(screen.getByLabelText(/6-digit code/), { target: { value: '123456' } });

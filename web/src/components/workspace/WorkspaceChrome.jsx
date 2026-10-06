@@ -19,6 +19,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { AccountSecurityDialog } from '@/components/auth/AccountSecurityDialog';
+import { useState } from 'react';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {
   Bell,
@@ -94,6 +96,7 @@ export function WorkspaceChrome({ children }) {
     setDarkMode,
     notifications,
     handleLogout,
+    authToken,
     pageMeta,
     locationId,
     setLocationId,
@@ -103,6 +106,7 @@ export function WorkspaceChrome({ children }) {
     moduleWarning,
     liveStatus,
   } = useWorkspace();
+  const [securityOpen, setSecurityOpen] = useState(false);
   const workspaceName = workspaceProfile.name || 'Invexa Retail';
   const workspaceIndustry = workspaceProfile.industry || 'Inventory operations';
 
@@ -227,6 +231,7 @@ export function WorkspaceChrome({ children }) {
                 <DropdownMenuLabel>My account</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {role === 'ADMIN' && <DropdownMenuItem onClick={() => navigateTo('admin')}>Administration</DropdownMenuItem>}
+                <DropdownMenuItem onClick={() => setSecurityOpen(true)}>Account security</DropdownMenuItem>
                 <DropdownMenuItem onClick={handleLogout}>Log out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -268,6 +273,7 @@ export function WorkspaceChrome({ children }) {
           {children}
         </main>
       </div>
+      <AccountSecurityDialog open={securityOpen} onOpenChange={setSecurityOpen} authToken={authToken} />
     </div>
   );
 }
