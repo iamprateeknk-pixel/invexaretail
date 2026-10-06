@@ -8,6 +8,14 @@ import 'package:http/http.dart' as http;
 import '../config/env.dart';
 import '../models/models.dart';
 
+/// The server accepted the first factor but wants an authenticator or backup
+/// code before it will issue a session. Not an error to show the user.
+class TwoFactorRequiredException implements Exception {
+  TwoFactorRequiredException(this.challengeToken);
+
+  final String challengeToken;
+}
+
 class InvexaApi {
   InvexaApi({
     String? baseUrl,
@@ -102,6 +110,7 @@ class InvexaApi {
       body: {'email': email.trim().toLowerCase(), 'password': password},
       auth: false,
     );
+    _throwIfTwoFactor(payload);
     final result = LoginResult.fromJson(payload);
     token = result.token;
     refreshToken = result.refreshToken;
@@ -123,6 +132,27 @@ class InvexaApi {
       'POST',
       '/api/v1/auth/verify-otp',
       body: {'email': email.trim().toLowerCase(), 'otpCode': otpCode.trim()},
+      auth: false,
+    );
+    _throwIfTwoFactor(payload);
+    final result = LoginResult.fromJson(payload);
+    token = result.token;
+    refreshToken = result.refreshToken;
+    return result;
+  }
+
+  void _throwIfTwoFactor(Map<String, dynamic> payload) {
+    if (payload['twoFactorRequired'] == true) {
+      throw TwoFactorRequiredException(asString(payload['challengeToken']));
+    }
+  }
+
+  /// Second step of sign-in for accounts with two-factor on.
+  Future<LoginResult> verifyTwoFactor(String challengeToken, String code) async {
+    final payload = await _send(
+      'POST',
+      '/api/v1/auth/2fa/verify-login',
+      body: {'challengeToken': challengeToken, 'code': code.replaceAll(RegExp(r'\s+'), '').toUpperCase()},
       auth: false,
     );
     final result = LoginResult.fromJson(payload);

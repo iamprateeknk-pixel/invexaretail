@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _otp = TextEditingController();
+  final _twoFactor = TextEditingController();
   bool _obscure = true;
   bool _useOtp = false;
   bool _otpSent = false;
@@ -26,6 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _email.dispose();
     _password.dispose();
     _otp.dispose();
+    _twoFactor.dispose();
     super.dispose();
   }
 
@@ -61,12 +63,72 @@ class _LoginScreenState extends State<LoginScreen> {
     await widget.controller.loginWithOtp(email, otpCode);
   }
 
+  Future<void> _submitTwoFactor() async {
+    final code = _twoFactor.text.trim();
+    if (code.isEmpty) {
+      widget.controller.setError('Enter the code from your authenticator app, or a backup code.');
+      return;
+    }
+    await widget.controller.completeTwoFactor(code);
+  }
+
+  Widget _twoFactorStep(SessionController controller) {
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+          children: [
+            const Text('Two-factor check', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: invexaInk)),
+            const SizedBox(height: 8),
+            const Text(
+              'Enter the 6-digit code from your authenticator app, or one of your backup codes.',
+              style: TextStyle(fontSize: 15, color: invexaMuted, height: 1.4),
+            ),
+            const SizedBox(height: 24),
+            TextField(
+              key: const ValueKey('two-factor-code'),
+              controller: _twoFactor,
+              autofocus: true,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submitTwoFactor(),
+              decoration: const InputDecoration(labelText: 'Code', hintText: '123456'),
+            ),
+            if (controller.error != null && (controller.error ?? '').isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(controller.error!, style: const TextStyle(color: invexaRose)),
+            ],
+            const SizedBox(height: 24),
+            FilledButton(
+              key: const ValueKey('two-factor-submit'),
+              onPressed: controller.busy ? null : _submitTwoFactor,
+              child: controller.busy
+                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Verify and sign in'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: controller.busy
+                  ? null
+                  : () {
+                      _twoFactor.clear();
+                      controller.cancelTwoFactor();
+                    },
+              child: const Text('Use a different account'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: widget.controller,
       builder: (context, _) {
         final controller = widget.controller;
+        if (controller.twoFactorChallenge != null) return _twoFactorStep(controller);
         return Scaffold(
           body: SafeArea(
             child: ListView(

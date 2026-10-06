@@ -23,8 +23,55 @@ export function LoginCard({
   onPasswordSubmit,
   onSendOtp,
   onVerifyOtp,
+  twoFactorPending = false,
+  twoFactorCode = '',
+  setTwoFactorCode,
+  onVerifyTwoFactor,
+  onCancelTwoFactor,
 }) {
   const [method, setMethod] = useState('password');
+
+  if (twoFactorPending) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
+        <Toaster richColors position="top-right" />
+        <Card className="w-full max-w-sm">
+          <CardHeader className="items-center gap-3 text-center">
+            <img src={logoFull} alt="InvexaRetail" className="w-44 rounded-xl shadow-lg" />
+            <CardTitle className="text-xl">Two-factor check</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onVerifyTwoFactor} className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="login-2fa">Authenticator or backup code</Label>
+                <Input
+                  id="login-2fa"
+                  autoFocus
+                  autoComplete="one-time-code"
+                  required
+                  value={twoFactorCode}
+                  onChange={(event) => setTwoFactorCode(event.target.value)}
+                  placeholder="123456"
+                />
+                <p className="text-xs text-muted-foreground">Open your authenticator app and enter the 6-digit code, or use one of your backup codes.</p>
+              </div>
+              {authError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{authError}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" className="w-full" disabled={authLoading || !twoFactorCode.trim()}>
+                {authLoading ? 'Verifying…' : 'Verify and sign in'}
+              </Button>
+              <Button type="button" variant="ghost" className="w-full" disabled={authLoading} onClick={onCancelTwoFactor}>
+                Use a different account
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-muted/40 p-4">

@@ -124,7 +124,7 @@ export async function sendOtpEmail(email: string, otpCode: string): Promise<bool
 // lib/session-store.ts for the persisted, hashed, rotating session model.
 import jwt from 'jsonwebtoken';
 
-type TokenType = 'access';
+type TokenType = 'access' | 'twofactor';
 
 function getJwtSecret(): string {
   const configuredSecret = process.env.JWT_SECRET?.trim();
@@ -166,6 +166,19 @@ export function verifyJWT(token: string, expectedType: TokenType = 'access'): { 
   } catch {
     return null;
   }
+}
+
+// Phase 5: after a correct first factor, an account with two-factor on gets
+// this instead of a session. tokenType 'twofactor' means verifyJWT(token,
+// 'access') rejects it, so it can never be used as an access token.
+export const TWO_FACTOR_CHALLENGE_TTL_SECONDS = 5 * 60;
+
+export function generateTwoFactorChallenge(userId: string, companyId: string): string {
+  return generateJWT(userId, companyId, TWO_FACTOR_CHALLENGE_TTL_SECONDS, 'twofactor');
+}
+
+export function verifyTwoFactorChallenge(token: string): { userId: string; companyId: string } | null {
+  return verifyJWT(token, 'twofactor');
 }
 
 // Validation utilities
