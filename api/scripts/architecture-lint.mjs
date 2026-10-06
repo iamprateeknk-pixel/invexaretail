@@ -50,6 +50,8 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   // touch these tables) - no longer needed here.
   // The canonical service itself, and its reconciliation tooling.
   'src/lib/inventory-posting-service.ts',
+  // Read-only journal-vs-balance comparison (SELECT only; never writes stock or history).
+  'src/lib/stock-reconciliation.ts',
 ]);
 
 const RULES = [
