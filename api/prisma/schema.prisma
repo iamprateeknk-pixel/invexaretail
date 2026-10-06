@@ -812,6 +812,7 @@ model Lot {
 
 
   @@unique([itemId, lotNo])
+  @@index([expiryDate])
 }
 
 model StockLedger {
@@ -842,6 +843,7 @@ model StockLedger {
   @@index([companyId])
 
   @@unique([itemId, lotId, locationId])
+  @@index([locationId, itemId])
 }
 
 model StockCount {
@@ -953,7 +955,8 @@ model Transfer {
   companyId   String   @default("default-company")
   @@index([tenantId])
   @@index([companyId])
-
+  @@index([destinationLocationId, status])
+  @@index([sourceLocationId, createdAt])
 }
 
 model TransferLine {

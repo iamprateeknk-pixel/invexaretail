@@ -1,4 +1,5 @@
 import type { CampaignItemRecord, CampaignRecord } from './stock-take-campaign.js';
+import { replaceContents } from './array-utils.js';
 
 // In-memory campaign state, hydrated from the database at startup and written
 // through by lib/campaign-persistence.ts (same shape as lib/repository.ts).
@@ -36,8 +37,8 @@ export function saveCampaignItems(rows: CampaignItemRecord[]): void {
 }
 
 export function replaceCampaignState(nextCampaigns: CampaignRecord[], nextItems: CampaignItemRecord[]): void {
-  campaigns.splice(0, campaigns.length, ...nextCampaigns);
-  campaignItems.splice(0, campaignItems.length, ...nextItems);
+  replaceContents(campaigns, nextCampaigns);
+  replaceContents(campaignItems, nextItems);
 }
 
 export function resetCampaignStateForTests(): void {
