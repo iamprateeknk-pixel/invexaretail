@@ -1,3 +1,6 @@
+# Historical / alternative deployment blueprint. The canonical production topology is in
+# docs/PRODUCTION_RUNBOOK.md (Cloudflare web, Railway API + worker, managed PostgreSQL).
+# Keep this file in step with that runbook's environment contract if you use it.
 databases:
   - name: invexaretail-postgres
     region: oregon
