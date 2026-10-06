@@ -109,9 +109,7 @@ jobs:
         with:
           node-version: 22
 
-      # Advisory only: reports high/critical vulnerabilities without blocking
-      # the PR on transitive advisories the team hasn't triaged yet. Promote
-      # this to a hard failure once the current advisory backlog (if any) is
-      # triaged and tracked, matching how architecture-lint's baseline works.
-      - name: npm audit (high/critical, non-blocking)
-        run: npm audit --audit-level=high || echo "::warning::npm audit found high/critical advisories in ${{ matrix.package }} - review the job log."
+      # Blocking (plan Area J WP5): any high/critical advisory must be fixed or covered by an owned,
+      # time-bounded exception in security/audit-exceptions.json; an expired exception fails again.
+      - name: Dependency audit gate (high/critical, exceptions must be owned and unexpired)
+        run: node ../scripts/audit-gate.mjs ${{ matrix.package }}

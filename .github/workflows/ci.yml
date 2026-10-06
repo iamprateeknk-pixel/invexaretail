@@ -77,6 +77,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
+      - name: Migration matrix - fresh database and upgrade from the previous release (Plan Area J)
+        run: node scripts/migration-matrix.mjs --admin-url postgresql://ci:ci@127.0.0.1:5432/postgres --behind 3
+
       - name: Seed Postgres for readiness smoke
         run: npm run db:seed
         env:
@@ -121,6 +124,9 @@ jobs:
 
       - name: Test the one-command verify script (Phase 7)
         run: node --test ../scripts/verify.test.mjs
+
+      - name: Test the migration matrix and dependency audit gate helpers (Plan Area J)
+        run: node --test scripts/migration-matrix.test.mjs ../scripts/audit-gate.test.mjs
 
       - name: Start API and verify health endpoint
         env:

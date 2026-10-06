@@ -1,0 +1,9 @@
+{
+  "_comment": "Plan Area J WP5. Every high/critical npm advisory is fixed or listed here with a reason, an owner and an expiry. An expired entry fails the build again. Review the api entries when Prisma ships a release whose CLI no longer depends on the affected packages.",
+  "exceptions": [
+    { "scope": "api", "package": "prisma", "reason": "Reaches the advisories below only through the Prisma CLI (dev/deploy tooling). The app talks to PostgreSQL only and never runs the CLI on untrusted input. The suggested fix downgrades Prisma 7 to 6 (breaking).", "owner": "backend-lead", "expires": "2026-12-31" },
+    { "scope": "api", "package": "@prisma/config", "reason": "Transitive of the Prisma CLI (deepmerge-ts); see the prisma entry.", "owner": "backend-lead", "expires": "2026-12-31" },
+    { "scope": "api", "package": "deepmerge-ts", "reason": "Stack exhaustion on recursive object graphs; only reachable by feeding the Prisma CLI a hostile config, which no code path does.", "owner": "backend-lead", "expires": "2026-12-31" },
+    { "scope": "api", "package": "mysql2", "reason": "MySQL protocol issues; this system uses PostgreSQL only and never opens a MySQL connection.", "owner": "backend-lead", "expires": "2026-12-31" }
+  ]
+}
