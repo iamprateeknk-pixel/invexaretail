@@ -32,9 +32,8 @@ component (on hand minus reserved).
 
 ## Not done (honest gaps)
 
-- Selling a bundle does not yet expand into component stock movements; this is
-  availability and definition only. Order ingest would need to expand lines
-  through `lib/inventory-posting-service.ts`.
+- ~~Selling a bundle does not expand into component stock movements.~~ Done in
+  Phase 8 (`lib/bundle-expansion.ts`, see `docs/phase8-remaining-work.md`).
 - DB-only (no in-memory mirror), like branches.
 - Not in the OpenAPI contract yet (only extracted routes are).
 - `routes/bundles.postgres.test.ts` could not be run in the authoring sandbox
