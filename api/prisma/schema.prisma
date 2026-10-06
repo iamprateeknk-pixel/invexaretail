@@ -1368,7 +1368,10 @@ model AssetCheckout {
   createdById  String
   updatedAt    DateTime  @updatedAt
   tenantId    String   @default("tenant-invexa")
+  // P0-SEC-002: real company ownership (backfilled from the checkout's Location).
+  companyId   String   @default("default-company")
   @@index([tenantId])
+  @@index([companyId])
 
 
   @@index([locationId, status])
@@ -1427,8 +1430,11 @@ model ContextComment {
   body       String   @db.Text
   mentions   Json?
   createdAt  DateTime @default(now())
+  // P0-SEC-003: real company ownership (backfilled from the author's User).
+  companyId  String   @default("default-company")
 
   @@index([entityType, entityId, createdAt])
+  @@index([companyId])
 }
 
 model UserNotification {
@@ -1440,9 +1446,13 @@ model UserNotification {
   type      String    @default("info")
   readAt    DateTime?
   createdAt DateTime  @default(now())
+  // P0-SEC-004: real company ownership (backfilled from the recipient User; rows with
+  // no recipient user - role-wide or global notices - cannot be derived and keep the default).
+  companyId String    @default("default-company")
 
   @@index([userId, readAt, createdAt])
   @@index([role, readAt, createdAt])
+  @@index([companyId])
 }
 
 model WebhookSubscription {
@@ -2465,4 +2475,45 @@ model AuthLockout {
   windowStart DateTime  @default(now())
   lockedUntil DateTime?
   updatedAt   DateTime  @updatedAt
+}
+
+
+// Plan P0-SYNC-003: exactly-once replay. One row per (company, user, X-Mutation-Id);
+// the first request claims it (unique constraint), a successful response is stored and
+// replayed for retries. Pruned after 7 days (lib/mutation-idempotency.ts).
+model MutationReceipt {
+  id           String   @id @default(cuid())
+  companyId    String
+  userId       String
+  mutationId   String
+  fingerprint  String
+  state        String   @default("IN_PROGRESS")
+  statusCode   Int?
+  responseBody String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([companyId, userId, mutationId])
+  @@index([createdAt])
+}
+
+
+// Plan Area B WP4: one row per stock reconciliation (journal sum vs StockLedger balance).
+// Read-only evidence - reconciliation never edits movements or balances.
+model ReconciliationRun {
+  id               String   @id @default(cuid())
+  companyId        String?
+  trigger          String   @default("manual")
+  startedAt        DateTime
+  finishedAt       DateTime
+  ledgerRows       Int
+  explained        Int
+  mismatches       Int
+  noJournalHistory Int
+  mismatchAbsDelta Float
+  maxAbsDelta      Float
+  sampleJson       String   @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, startedAt])
 }

@@ -8,24 +8,26 @@ void main() {
     await store.saveQueuedCounts([
       QueuedCount(
         localId: 'g-1',
+        userId: 'u1',
         itemId: 'item-1001',
         locationId: 'loc-1',
         physicalQuantity: 4,
         createdAt: '2026-09-15T00:00:00Z',
       ),
-    ], 'default-company');
+    ], 'default-company', 'u1');
     await store.saveQueuedCounts([
       QueuedCount(
         localId: 'j-1',
+        userId: 'u1',
         itemId: 'item-jaipur-1',
         locationId: 'loc-jaipur-1',
         physicalQuantity: 2,
         createdAt: '2026-09-15T00:00:00Z',
       ),
-    ], 'company-jaipur');
+    ], 'company-jaipur', 'u1');
 
-    final grocery = await store.loadQueuedCounts('default-company');
-    final jaipur = await store.loadQueuedCounts('company-jaipur');
+    final grocery = await store.loadQueuedCounts('default-company', 'u1');
+    final jaipur = await store.loadQueuedCounts('company-jaipur', 'u1');
     expect(grocery.single.localId, 'g-1');
     expect(jaipur.single.localId, 'j-1');
   });

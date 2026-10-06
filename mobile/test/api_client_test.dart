@@ -269,7 +269,7 @@ void main() {
     expect(controller.queuedCounts, hasLength(1));
     expect(controller.queuedCounts.first.itemId, 'item-1004');
     expect(controller.notice, contains('queued'));
-    expect(await store.loadQueuedCounts(), hasLength(1));
+    expect(await store.loadQueuedCounts('default-company', 'user-admin-1'), hasLength(1));
   });
 
   test('flushQueue replays queued counts and drops successes', () async {
@@ -310,20 +310,21 @@ void main() {
         return http.Response('missing', 404);
       }),
     )..token = 'jwt';
-    final store = MemoryStore()
-      ..queued = [
-        QueuedCount(
-          localId: 'local-1',
-          itemId: 'item-1004',
-          locationId: 'loc-1',
-          physicalQuantity: 4,
-          lotNo: 'LOT-EXP',
-          createdAt: '2026-09-14T00:00:00.000Z',
-        ),
-      ];
+    final store = MemoryStore();
+    await store.saveQueuedCounts([
+      QueuedCount(
+        localId: 'local-1',
+        userId: 'user-admin-1',
+        itemId: 'item-1004',
+        locationId: 'loc-1',
+        physicalQuantity: 4,
+        lotNo: 'LOT-EXP',
+        createdAt: '2026-09-14T00:00:00.000Z',
+      ),
+    ], 'default-company', 'user-admin-1');
     final controller = SessionController(api: api, store: store)
       ..user = const AuthUser(id: 'user-admin-1', name: 'Admin', email: 'admin@retail.local', role: 'ADMIN')
-      ..queuedCounts = await store.loadQueuedCounts();
+      ..queuedCounts = await store.loadQueuedCounts('default-company', 'user-admin-1');
 
     await controller.flushQueue();
 

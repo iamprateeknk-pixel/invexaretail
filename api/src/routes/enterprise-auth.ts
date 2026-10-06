@@ -23,6 +23,7 @@ import {
 } from '../lib/otp-auth.js';
 import {
   createOtpChallenge,
+  generateOtpCode,
   verifyOtpChallenge,
   clearOtpChallenge,
   createRefreshFamily,
@@ -36,7 +37,7 @@ import { clearFailures, lockState, registerFailure, type LockState } from '../li
 import { beginEnrollment, confirmEnrollment, disableTwoFactor, isTwoFactorEnabled, twoFactorStatus, verifySecondFactor } from '../lib/two-factor-store.js';
 import { otpauthUri, totpIsConfigured } from '../lib/totp.js';
 import * as repo from '../lib/enterprise-repository.js';
-import { rejectSuspendedCompany } from '../lib/saas/company-access.js';
+import { isCompanySuspended, rejectSuspendedCompany } from '../lib/saas/company-access.js';
 import { ControlPlaneError, apiKeyAllowsMethod, controlPlane } from '../lib/saas/control-plane.js';
 
 const router = Router();
@@ -268,37 +269,39 @@ router.post('/send-otp', otpLimiter, async (req: Request, res: Response) => {
       return res.status(429).json({ error: 'Too many OTP requests for this email' });
     }
 
-    // Find user
+    // Plan Area D WP3 (OTP privacy): the response must not reveal whether an email has an account,
+    // is inactive, or belongs to a suspended company. Every syntactically valid email gets the same
+    // success-shaped answer; only an eligible active account actually receives a code, and the code
+    // is sent in the background so the response time does not tell the two cases apart either.
+    const channel = resolveOtpDeliveryChannel();
+    if (channel === 'none') {
+      // Server configuration, identical for every caller - safe to say plainly.
+      return res.status(503).json({ error: 'Email OTP is not configured. Use password login.' });
+    }
+    const publicResponse = (otpCode?: string) => ({
+      success: true,
+      message: 'If that email has an active account, a sign-in code has been sent.',
+      delivery: channel,
+      expiresIn: 600, // 10 minutes
+      ...(shouldExposeDevOtpCode() ? { otpCode: otpCode ?? generateOtpCode() } : {}),
+    });
+
     const user = repo.findUserByEmail(normalizedEmail);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    if (!user || user.status !== 'active' || isCompanySuspended(user.companyId)) {
+      return res.json(publicResponse());
     }
-
-    if (user.status !== 'active') {
-      return res.status(403).json({ error: 'User account is inactive' });
-    }
-
-    if (rejectSuspendedCompany(user.companyId, res)) return;
 
     // Generate and save OTP - crypto.randomInt (not Math.random), hashed at rest.
     const otpCode = await createOtpChallenge(normalizedEmail, 'LOGIN');
-
-    // Send OTP via email. Delete the short-lived challenge when no provider is
-    // configured so an undelivered code can never be accepted.
-    const delivered = await sendOtpEmail(normalizedEmail, otpCode);
-    if (!delivered) {
-      await clearOtpChallenge(normalizedEmail, 'LOGIN');
-      return res.status(503).json({ error: 'Email OTP is not configured. Use password login.' });
-    }
-
-    const delivery = resolveOtpDeliveryChannel();
-    res.json({
-      success: true,
-      message: 'OTP sent to your email',
-      delivery,
-      expiresIn: 600, // 10 minutes
-      ...(shouldExposeDevOtpCode() ? { otpCode } : {}),
+    // Delete the short-lived challenge when delivery fails so an undelivered code can never be accepted.
+    void sendOtpEmail(normalizedEmail, otpCode).then(async (delivered) => {
+      if (!delivered) await clearOtpChallenge(normalizedEmail, 'LOGIN');
+    }).catch(async (error) => {
+      console.error('OTP delivery failed:', error instanceof Error ? error.message : error);
+      await clearOtpChallenge(normalizedEmail, 'LOGIN').catch(() => undefined);
     });
+
+    return res.json(publicResponse(otpCode));
   } catch (error) {
     console.error('Send OTP error:', error);
     res.status(500).json({ error: 'Failed to send OTP' });

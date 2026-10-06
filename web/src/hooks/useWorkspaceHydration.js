@@ -1,4 +1,5 @@
 import { API_BASE, apiRequest } from '../lib/api-client';
+import { nextPollDelayMs } from '../lib/poll-policy';
 import { LIVE_STATUS, createLiveClient, invalidationsForTopics } from '../lib/live-events';
 import { mapPickerTasks } from '../lib/workspace-queues';
 import {
@@ -236,16 +237,33 @@ export function useWorkspaceHydration({
   }, [authToken, session]);
 
   useEffect(() => {
-    // SSE covers writes made through this API. A slower reconciliation pass
-    // also picks up changes written directly to PostgreSQL by imports or admin
-    // tools, even while the live stream itself is healthy.
+    // Plan P1-PERF-001 (event-first): while the live stream is healthy, events drive targeted
+    // refetches and this pass only reconciles slowly (every ~3 minutes) for writes made
+    // directly in the database. While the stream is degraded it polls as a fallback, with
+    // exponential backoff and jitter. A hidden tab does not poll; it catches up on return.
     if (!session || !authToken) return undefined;
-
-    const pollInterval = setInterval(() => {
-      refreshSlices(new Set(['items', 'counts', 'assignments', 'stock', 'transfers', 'dashboard'])).catch(() => {});
-    }, liveStatus === LIVE_STATUS.live ? 15000 : 12000);
-
-    return () => clearInterval(pollInterval);
+    let timer = null;
+    let cancelled = false;
+    let failures = 0;
+    const schedule = () => {
+      const delay = nextPollDelayMs({ status: liveStatus, consecutiveFailures: failures });
+      if (delay === null || cancelled) return;
+      timer = setTimeout(async () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { schedule(); return; }
+        try {
+          await refreshSlices(new Set(['items', 'counts', 'assignments', 'stock', 'transfers', 'dashboard']));
+          failures = 0;
+        } catch {
+          failures += 1;
+        }
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // refreshSlices reads the latest token, role, location and entities from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken, liveStatus, session]);

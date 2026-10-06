@@ -110,7 +110,7 @@ export const NAVIGATION = [
       { id: 'transfers', label: 'Transfers', icon: Truck },
       { id: 'picking', label: 'Picking & receiving', icon: PackageCheck, roles: ['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'] },
       { id: 'putaway', label: 'Bins & putaway', icon: PackageSearch, roles: ['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'] },
-      { id: 'purchase-orders', label: 'Purchase orders', icon: ShoppingCart, badge: 'P0' },
+      { id: 'purchase-orders', label: 'Purchase orders', icon: ShoppingCart },
       { id: 'orders', label: 'Channel orders', icon: ShoppingBag, roles: ['ADMIN', 'ADMIN_USER'] },
       { id: 'qc', label: 'Quality control', icon: ClipboardList, roles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'] },
       { id: 'assets', label: 'Check-in / out', icon: RotateCcw },
@@ -279,4 +279,21 @@ export function normalizeTransfers(transfers, items, locations) {
     qty: transfer.lines.reduce((total, line) => total + line.quantity, 0),
     status: transfer.status,
   }));
+}
+
+// Plan U1 / P1-WEB-001: each role lands on the page that answers "what do I do now?", not on a
+// generic dashboard. The first entry the role is actually allowed to open wins (permissions are
+// still enforced by lib/permissions.js; this only chooses a starting point).
+export const ROLE_LANDING_PREFERENCES = {
+  STORE_USER: ['counts', 'dashboard'],
+  WAREHOUSE_PICKER: ['picking', 'dashboard'],
+  BRANCH_MANAGER: ['dashboard'],
+  ADMIN: ['dashboard'],
+  ADMIN_USER: ['dashboard'],
+  AUDITOR: ['reports', 'dashboard'],
+};
+
+export function defaultSectionForRole(role, { canAccess = () => true } = {}) {
+  const preferences = ROLE_LANDING_PREFERENCES[role] ?? ['dashboard'];
+  return preferences.find((section) => canAccess(section)) ?? 'dashboard';
 }

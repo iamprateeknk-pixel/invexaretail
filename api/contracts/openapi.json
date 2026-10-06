@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.13.0",
-    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted')."
+    "version": "2026.14.0",
+    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter."
   },
   "servers": [
     {
@@ -31,6 +31,16 @@
         "description": "Client-supplied idempotency key. Mutating endpoints that accept one return the original result on replay instead of double-posting (ADR-006). Most endpoints in this contract take it as a body field, not a query parameter - see each operation.",
         "schema": {
           "type": "string"
+        }
+      },
+      "MutationId": {
+        "name": "X-Mutation-Id",
+        "in": "header",
+        "required": false,
+        "description": "Exactly-once replay key, created once when the person acts and reused on every retry (including after a restart). 8-128 characters of letters, digits and . _ : -. A retry with the same id and the same request returns the original 2xx response with `Idempotent-Replay: true` and does not run again; a concurrent duplicate gets 409 MUTATION_IN_PROGRESS with Retry-After; the same id for a different request is 422 MUTATION_ID_REUSED.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
         }
       }
     },
@@ -889,6 +899,235 @@
           },
           "queues": {
             "$ref": "#/components/schemas/QueueBacklogSummary"
+          }
+        }
+      },
+      "BundleComponent": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "quantity"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "BundleDefinition": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "isBundle",
+          "components",
+          "buildable"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "isBundle": {
+            "type": "boolean"
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleComponent"
+            }
+          },
+          "buildable": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Whole bundles that can be built from sellable component stock (on hand minus reserved)."
+          },
+          "limitingItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "BundleReplaceRequest": {
+        "type": "object",
+        "required": [
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "itemId",
+                "quantity"
+              ],
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "TwoFactorStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "enabled",
+          "pendingSetup",
+          "backupCodesRemaining"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "False when the server has no TOTP_ENCRYPTION_KEY."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "pendingSetup": {
+            "type": "boolean"
+          },
+          "backupCodesRemaining": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "TwoFactorChallenge": {
+        "type": "object",
+        "required": [
+          "twoFactorRequired",
+          "challengeToken"
+        ],
+        "properties": {
+          "twoFactorRequired": {
+            "type": "boolean",
+            "const": true
+          },
+          "challengeToken": {
+            "type": "string",
+            "description": "5-minute single-purpose token; never accepted as an access token."
+          }
+        }
+      },
+      "ReconciliationException": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "JOURNAL_MISMATCH",
+              "NO_JOURNAL_HISTORY"
+            ]
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "onHand": {
+            "type": "number"
+          },
+          "journalSum": {
+            "type": "number"
+          },
+          "movementCount": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "number"
+          }
+        }
+      },
+      "ReconciliationRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "schedule",
+              "manual"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledgerRows": {
+            "type": "integer"
+          },
+          "explained": {
+            "type": "integer"
+          },
+          "mismatches": {
+            "type": "integer",
+            "description": "Rows whose journal does not add up to the balance. Any value above zero is a breach."
+          },
+          "noJournalHistory": {
+            "type": "integer",
+            "description": "Legacy balances with no journal at all; a reported baseline, not an alert."
+          },
+          "mismatchAbsDelta": {
+            "type": "number"
+          },
+          "maxAbsDelta": {
+            "type": "number"
+          },
+          "sample": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationException"
+            }
           }
         }
       }
@@ -1903,6 +2142,432 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/items/{itemId}/bundle": {
+      "get": {
+        "operationId": "getItemBundle",
+        "summary": "A virtual bundle's components and how many can be built now.",
+        "tags": [
+          "Bundles"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The definition (isBundle false when the item is not a bundle).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleDefinition"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item or location not found (also for another company's id)."
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceItemBundle",
+        "summary": "Replace the bundle's components (admin).",
+        "tags": [
+          "Bundles"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleReplaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved."
+          },
+          "400": {
+            "description": "Empty, self-referencing, duplicate, non-positive or nested definition."
+          },
+          "403": {
+            "description": "Admin only."
+          },
+          "404": {
+            "description": "Item or a component not found (also for another company's id)."
+          },
+          "409": {
+            "description": "The item is already a component of another bundle."
+          }
+        },
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "removeItemBundle",
+        "summary": "Remove the bundle definition (admin).",
+        "tags": [
+          "Bundles"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed."
+          },
+          "403": {
+            "description": "Admin only."
+          },
+          "404": {
+            "description": "Item not found."
+          }
+        },
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/2fa/status": {
+      "get": {
+        "operationId": "getTwoFactorStatus",
+        "summary": "The signed-in user's two-factor state.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          }
+        }
+      }
+    },
+    "/auth/2fa/setup": {
+      "post": {
+        "operationId": "beginTwoFactorSetup",
+        "summary": "Start enrolment: returns the setup key and otpauth URI.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret and URI (shown once).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "secret": {
+                      "type": "string"
+                    },
+                    "otpauthUri": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already enabled."
+          },
+          "503": {
+            "description": "Not configured on this server."
+          }
+        }
+      }
+    },
+    "/auth/2fa/enable": {
+      "post": {
+        "operationId": "enableTwoFactor",
+        "summary": "Confirm enrolment with a first code; returns the backup codes once.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "backupCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Code not accepted."
+          },
+          "429": {
+            "description": "Account locked after repeated failures (Retry-After)."
+          }
+        }
+      }
+    },
+    "/auth/2fa/disable": {
+      "post": {
+        "operationId": "disableTwoFactor",
+        "summary": "Turn two-factor off; needs a current or backup code.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Disabled."
+          },
+          "401": {
+            "description": "Code not accepted."
+          },
+          "429": {
+            "description": "Account locked after repeated failures (Retry-After)."
+          }
+        }
+      }
+    },
+    "/auth/2fa/verify-login": {
+      "post": {
+        "operationId": "verifyTwoFactorLogin",
+        "summary": "Second step of sign-in for an account with two-factor on.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "challengeToken",
+                  "code"
+                ],
+                "properties": {
+                  "challengeToken": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "6-digit authenticator code or an unused backup code."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in: access token (and refresh token for native clients)."
+          },
+          "401": {
+            "description": "Invalid or expired challenge, or code not accepted."
+          },
+          "429": {
+            "description": "Locked after repeated failures (Retry-After)."
+          }
+        }
+      }
+    },
+    "/ops/reconciliation": {
+      "get": {
+        "operationId": "getStockReconciliation",
+        "summary": "The latest stock reconciliation for the caller's company (journal sum vs balance).",
+        "tags": [
+          "Operations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest run (null before the first) and whether it breaches the SLO.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "latest": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/ReconciliationRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "breached": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admins and auditors only."
+          }
+        }
+      }
+    },
+    "/ops/reconciliation/run": {
+      "post": {
+        "operationId": "runStockReconciliation",
+        "summary": "Run a reconciliation now for the caller's company (admin). Read-only: never edits stock or history.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The recorded run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "latest": {
+                      "$ref": "#/components/schemas/ReconciliationRun"
+                    },
+                    "breached": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admins only."
           }
         }
       }

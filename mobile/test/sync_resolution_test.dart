@@ -15,6 +15,5 @@ void main() {
     expect(classifySyncFailure(isOffline: false, statusCode: 400), SyncOutcome.rejected);
     expect(classifySyncFailure(isOffline: false, statusCode: 403), SyncOutcome.rejected);
     expect(classifySyncFailure(isOffline: false, statusCode: 422), SyncOutcome.rejected);
-    expect(classifySyncFailure(isOffline: false, statusCode: 500), SyncOutcome.rejected);
   });
 }

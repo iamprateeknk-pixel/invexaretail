@@ -140,11 +140,15 @@ export function useWorkspaceOperations({
   async function consumeJobLine(job, line) {
     const quantityText = window.prompt(`Consume quantity for ${items.find((item) => item.id === line.itemId)?.name ?? line.itemId}`, String(Math.max(1, Number(line.plannedQty || 1) - Number(line.usedQty || 0))));
     if (quantityText === null) return;
+    const quantity = Number(quantityText);
+    if (!Number.isInteger(quantity) || quantity <= 0) { showToast('Enter a whole number greater than zero.', 'error'); return; }
+    // One key per user action: a retry of this same action can never consume the stock twice.
+    const requestId = `job-consume-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
     try {
       setSubmitLoading(true);
       const response = await apiRequest(`/api/v1/jobs/${job.id}/consume`, {
         method: 'POST', headers: { Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ lineId: line.id, quantity: Number(quantityText) }),
+        body: JSON.stringify({ lineId: line.id, quantity, requestId }),
       });
       setJobs((current) => current.map((entry) => entry.id === job.id ? { ...entry, ...response.job } : entry));
       showToast(`Consumed ${quantityText} units into ${job.name}.`, 'success');

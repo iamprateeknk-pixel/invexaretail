@@ -294,6 +294,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{itemId}/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A virtual bundle's components and how many can be built now. */
+        get: operations["getItemBundle"];
+        /** Replace the bundle's components (admin). */
+        put: operations["replaceItemBundle"];
+        post?: never;
+        /** Remove the bundle definition (admin). */
+        delete: operations["removeItemBundle"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in user's two-factor state. */
+        get: operations["getTwoFactorStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start enrolment: returns the setup key and otpauth URI. */
+        post: operations["beginTwoFactorSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm enrolment with a first code; returns the backup codes once. */
+        post: operations["enableTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn two-factor off; needs a current or backup code. */
+        post: operations["disableTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/verify-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Second step of sign-in for an account with two-factor on. */
+        post: operations["verifyTwoFactorLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The latest stock reconciliation for the caller's company (journal sum vs balance). */
+        get: operations["getStockReconciliation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/reconciliation/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run a reconciliation now for the caller's company (admin). Read-only: never edits stock or history. */
+        post: operations["runStockReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -566,11 +704,79 @@ export interface components {
             stockRisk?: components["schemas"]["StockRiskSummary"];
             queues?: components["schemas"]["QueueBacklogSummary"];
         };
+        BundleComponent: {
+            itemId: string;
+            code?: string;
+            name?: string;
+            unit?: string | null;
+            quantity: number;
+        };
+        BundleDefinition: {
+            itemId: string;
+            isBundle: boolean;
+            components: components["schemas"]["BundleComponent"][];
+            /** @description Whole bundles that can be built from sellable component stock (on hand minus reserved). */
+            buildable: number;
+            limitingItemId?: string | null;
+            locationId?: string | null;
+        };
+        BundleReplaceRequest: {
+            components: {
+                itemId: string;
+                quantity: number;
+            }[];
+        };
+        TwoFactorStatus: {
+            /** @description False when the server has no TOTP_ENCRYPTION_KEY. */
+            configured: boolean;
+            enabled: boolean;
+            pendingSetup: boolean;
+            backupCodesRemaining: number;
+        };
+        TwoFactorChallenge: {
+            /** @constant */
+            twoFactorRequired: true;
+            /** @description 5-minute single-purpose token; never accepted as an access token. */
+            challengeToken: string;
+        };
+        ReconciliationException: {
+            /** @enum {string} */
+            kind?: "JOURNAL_MISMATCH" | "NO_JOURNAL_HISTORY";
+            companyId?: string;
+            itemId?: string;
+            lotId?: string;
+            locationId?: string;
+            onHand?: number;
+            journalSum?: number;
+            movementCount?: number;
+            delta?: number;
+        };
+        ReconciliationRun: {
+            id?: string;
+            companyId?: string | null;
+            /** @enum {string} */
+            trigger?: "schedule" | "manual";
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            ledgerRows?: number;
+            explained?: number;
+            /** @description Rows whose journal does not add up to the balance. Any value above zero is a breach. */
+            mismatches?: number;
+            /** @description Legacy balances with no journal at all; a reported baseline, not an alert. */
+            noJournalHistory?: number;
+            mismatchAbsDelta?: number;
+            maxAbsDelta?: number;
+            sample?: components["schemas"]["ReconciliationException"][];
+        };
     };
     responses: never;
     parameters: {
         /** @description Client-supplied idempotency key. Mutating endpoints that accept one return the original result on replay instead of double-posting (ADR-006). Most endpoints in this contract take it as a body field, not a query parameter - see each operation. */
         IdempotencyKey: string;
+        /** @description Exactly-once replay key, created once when the person acts and reused on every retry (including after a restart). 8-128 characters of letters, digits and . _ : -. A retry with the same id and the same request returns the original 2xx response with `Idempotent-Replay: true` and does not run again; a concurrent duplicate gets 409 MUTATION_IN_PROGRESS with Retry-After; the same id for a different request is 422 MUTATION_ID_REUSED. */
+        MutationId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1324,6 +1530,368 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ExceptionListPage"];
                 };
+            };
+        };
+    };
+    getItemBundle: {
+        parameters: {
+            query?: {
+                locationId?: string;
+            };
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The definition (isBundle false when the item is not a bundle). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleDefinition"];
+                };
+            };
+            /** @description Item or location not found (also for another company's id). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    replaceItemBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundleReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Empty, self-referencing, duplicate, non-positive or nested definition. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item or a component not found (also for another company's id). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item is already a component of another bundle. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeItemBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getTwoFactorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorStatus"];
+                };
+            };
+            /** @description No or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    beginTwoFactorSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Secret and URI (shown once). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        secret?: string;
+                        otpauthUri?: string;
+                    };
+                };
+            };
+            /** @description Already enabled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not configured on this server. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    enableTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Enabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success?: boolean;
+                        backupCodes?: string[];
+                    };
+                };
+            };
+            /** @description Code not accepted. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Account locked after repeated failures (Retry-After). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    disableTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Disabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Code not accepted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Account locked after repeated failures (Retry-After). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    verifyTwoFactorLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    challengeToken: string;
+                    /** @description 6-digit authenticator code or an unused backup code. */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Signed in: access token (and refresh token for native clients). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired challenge, or code not accepted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Locked after repeated failures (Retry-After). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStockReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest run (null before the first) and whether it breaches the SLO. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        latest?: components["schemas"]["ReconciliationRun"] | null;
+                        breached?: boolean;
+                    };
+                };
+            };
+            /** @description Admins and auditors only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    runStockReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recorded run. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        latest?: components["schemas"]["ReconciliationRun"];
+                        breached?: boolean;
+                    };
+                };
+            };
+            /** @description Admins only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -3,6 +3,7 @@ import { type Request, type Response, Router } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import * as repo from '../lib/enterprise-repository.js';
 import { hashPassword } from '../lib/otp-auth.js';
+import { revokeAllSessionsForUser } from '../lib/session-store.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
 
 const router = Router();
@@ -325,7 +326,7 @@ router.post('/companies/:companyId/users', (req: Request, res: Response) => {
 });
 
 // Update user
-router.put('/users/:userId', (req: Request, res: Response) => {
+router.put('/users/:userId', async (req: Request, res: Response) => {
   try {
     const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     const { name, phone, role, branchIds, locationIds, status } = req.body;
@@ -351,6 +352,8 @@ router.put('/users/:userId', (req: Request, res: Response) => {
     if (locationIds) user.locationIds = locationIds;
     if (status) user.status = status;
     user.updatedAt = new Date().toISOString();
+    // Disabling an account ends every session it has (plan Area D WP4); it must not come back with old tokens.
+    if (status && status !== 'active') await revokeAllSessionsForUser(user.id).catch((error) => console.error('session revoke failed:', error instanceof Error ? error.message : error));
 
     // Log audit
     repo.logAuditAction({
@@ -382,7 +385,7 @@ router.put('/users/:userId', (req: Request, res: Response) => {
 });
 
 // Delete user (deactivate)
-router.delete('/users/:userId', (req: Request, res: Response) => {
+router.delete('/users/:userId', async (req: Request, res: Response) => {
   try {
     const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
 
@@ -405,6 +408,7 @@ router.delete('/users/:userId', (req: Request, res: Response) => {
 
     user.status = 'inactive';
     user.updatedAt = new Date().toISOString();
+    await revokeAllSessionsForUser(user.id).catch((error) => console.error('session revoke failed:', error instanceof Error ? error.message : error));
 
     // Log audit
     repo.logAuditAction({

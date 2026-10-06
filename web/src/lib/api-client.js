@@ -1,5 +1,4 @@
-import { addSyncAction } from '../offlineStore';
-import { classifyOfflineAction } from './offline-action.js';
+import { OfflineWriteError, shouldRefuseOfflineWrite } from './offline-policy.js';
 import {
   isAuthSessionPath,
   readPersistedSession,
@@ -7,8 +6,6 @@ import {
 } from './session.js';
 
 export const API_BASE = import.meta.env?.VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app';
-
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -47,6 +44,7 @@ export async function refreshSessionAccessToken() {
 
 export async function apiRequest(path, options = {}, attempt = 0) {
   const method = String(options.method || 'GET').toUpperCase();
+  if (shouldRefuseOfflineWrite({ method, onLine: globalThis.navigator?.onLine })) throw new OfflineWriteError();
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
@@ -78,15 +76,8 @@ export async function apiRequest(path, options = {}, attempt = 0) {
     return response.json();
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    if (globalThis.navigator?.onLine === false && MUTATING_METHODS.has(method)) {
-      await addSyncAction({
-        type: classifyOfflineAction(path),
-        endpoint: path,
-        method,
-        data: options.body ? JSON.parse(options.body) : {},
-      });
-      throw new Error('Offline: Action queued for sync when back online');
-    }
+    // The web app does not queue writes offline (lib/offline-policy.js): fail clearly, save nothing.
+    if (shouldRefuseOfflineWrite({ method, onLine: globalThis.navigator?.onLine })) throw new OfflineWriteError();
     if (error instanceof TypeError) {
       throw new Error('Cannot reach the Invexa API. Check the service health and CORS configuration, then retry.');
     }

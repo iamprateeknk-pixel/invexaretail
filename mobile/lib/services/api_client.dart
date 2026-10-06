@@ -31,13 +31,16 @@ class InvexaApi {
   Future<void> Function(String token, String? refreshToken)? onTokensUpdated;
   String? token;
   String? refreshToken;
-  bool _refreshing = false;
+  // Plan P1-AUTH-001: every request that hits a 401 at the same time awaits this ONE refresh,
+  // instead of the second one seeing a boolean lock and giving up.
+  Future<bool>? _refreshInFlight;
 
-  Map<String, String> _headers({bool auth = true}) {
+  Map<String, String> _headers({bool auth = true, Map<String, String>? extra}) {
     return {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       if (auth && token != null && token!.isNotEmpty) 'Authorization': 'Bearer $token',
+      ...?extra,
     };
   }
 
@@ -49,10 +52,13 @@ class InvexaApi {
     Object? body,
     bool auth = true,
     int attempt = 0,
+    String? mutationId,
   }) async {
     try {
       final uri = _uri(path);
-      final headers = _headers(auth: auth);
+      // X-Mutation-Id (plan P0-SYNC-003): created once when the person acts and reused on every
+      // retry, so the server can never apply the same mutation twice.
+      final headers = _headers(auth: auth, extra: mutationId == null || mutationId.isEmpty ? null : {'X-Mutation-Id': mutationId});
       final encoded = body == null ? null : jsonEncode(body);
       late http.Response response;
       switch (method) {
@@ -80,10 +86,10 @@ class InvexaApi {
         return payload;
       }
 
-      if (response.statusCode == 401 && auth && !_refreshing && attempt == 0) {
+      if (response.statusCode == 401 && auth && attempt == 0) {
         final refreshed = await refreshAccessToken();
         if (refreshed) {
-          return await _send(method, path, body: body, auth: true, attempt: 1);
+          return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId);
         }
       }
 
@@ -91,7 +97,11 @@ class InvexaApi {
         payload['message'] ?? payload['error'],
         'Request failed with ${response.statusCode}',
       );
-      throw ApiException(message, statusCode: response.statusCode);
+      throw ApiException(
+        message,
+        statusCode: response.statusCode,
+        retryAfterSeconds: int.tryParse(response.headers['retry-after'] ?? ''),
+      );
     } on ApiException {
       rethrow;
     } on TimeoutException {
@@ -161,10 +171,18 @@ class InvexaApi {
     return result;
   }
 
-  Future<bool> refreshAccessToken() async {
+  /// Refreshes the access token. Concurrent callers share one network call and one result.
+  Future<bool> refreshAccessToken() {
+    final running = _refreshInFlight;
+    if (running != null) return running;
+    final next = _refreshOnce().whenComplete(() => _refreshInFlight = null);
+    _refreshInFlight = next;
+    return next;
+  }
+
+  Future<bool> _refreshOnce() async {
     final currentRefresh = refreshToken;
-    if (currentRefresh == null || currentRefresh.isEmpty || _refreshing) return false;
-    _refreshing = true;
+    if (currentRefresh == null || currentRefresh.isEmpty) return false;
     try {
       final payload = await _send(
         'POST',
@@ -181,8 +199,6 @@ class InvexaApi {
       return true;
     } on ApiException {
       return false;
-    } finally {
-      _refreshing = false;
     }
   }
 
@@ -242,7 +258,7 @@ class InvexaApi {
       'mode': mode,
       if (lotNo != null && lotNo.isNotEmpty) 'lotNo': lotNo,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
-    });
+    }, mutationId: requestId);
     return CountRecord.fromJson(asMap(payload['count']));
   }
 
@@ -259,7 +275,7 @@ class InvexaApi {
       'locationId': locationId,
       'totalQuantity': totalQuantity,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
-    });
+    }, mutationId: requestId);
     return asList(payload['counts']).map((row) => CountRecord.fromJson(asMap(row))).toList();
   }
 
@@ -297,8 +313,8 @@ class InvexaApi {
     return asList(payload['assignments']).map((row) => CountAssignment.fromJson(asMap(row))).toList();
   }
 
-  Future<Map<String, dynamic>> sendRaw(String method, String path, {Object? body}) {
-    return _send(method, path, body: body);
+  Future<Map<String, dynamic>> sendRaw(String method, String path, {Object? body, String? mutationId}) {
+    return _send(method, path, body: body, mutationId: mutationId);
   }
 
   Future<Map<String, dynamic>> mobileHome() async {

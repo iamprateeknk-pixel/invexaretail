@@ -17,7 +17,9 @@ import { createHash } from 'node:crypto';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import * as enterpriseRepo from '../lib/enterprise-repository.js';
 import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
-import { hashPassword } from '../lib/otp-auth.js';
+import { hashPassword, validatePassword } from '../lib/otp-auth.js';
+import { isKnownDefaultPassword } from '../lib/production-guard.js';
+import { revokeAllSessionsForUser } from '../lib/session-store.js';
 import {
   DEFAULT_COMPANY_ID,
   DEFAULT_TENANT_ID,
@@ -584,9 +586,9 @@ router.post('/users', async (req: Request, res: Response) => {
   if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
     return res.status(400).json({ message: 'A valid email is required.' });
   }
-  if (!password || typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ message: 'Password must be at least 6 characters.' });
-  }
+  const passwordProblem = typeof password === 'string' ? validatePassword(password) : { valid: false, message: 'Password is required.' };
+  if (!passwordProblem.valid) return res.status(400).json({ message: passwordProblem.message ?? 'Password does not meet the policy.' });
+  if (isKnownDefaultPassword(password as string)) return res.status(400).json({ message: 'That password is publicly known. Choose a different one.' });
   if (!role || !VALID_ROLES.includes(role as Role)) {
     return res.status(400).json({ message: `Role must be one of: ${VALID_ROLES.join(', ')}.` });
   }
@@ -676,9 +678,10 @@ router.put('/users/:userId', async (req: Request, res: Response) => {
   }
   let passwordHash: string | undefined;
   if (password !== undefined) {
-    if (typeof password !== 'string' || password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters.' });
-    }
+    // The same policy as self-service passwords: an admin-set password is not allowed to be weaker.
+    const check = typeof password === 'string' ? validatePassword(password) : { valid: false, message: 'Password must be text.' };
+    if (!check.valid) return res.status(400).json({ message: check.message ?? 'Password does not meet the policy.' });
+    if (isKnownDefaultPassword(password)) return res.status(400).json({ message: 'That password is publicly known. Choose a different one.' });
     passwordHash = hashPassword(password);
     enhanced.passwordHash = passwordHash;
   }
@@ -688,6 +691,8 @@ router.put('/users/:userId', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(500).json({ message: 'Failed to update user.' });
   }
+  // A changed password means every existing session of that person must end (plan Area D WP4).
+  if (passwordHash && userId !== req.user!.id) await revokeAllSessionsForUser(userId).catch((error) => console.error('session revoke failed:', error instanceof Error ? error.message : error));
 
   return res.json({ user: { id: record.id, name: record.name, email: record.email, role: record.role, assignedLocationIds: record.assignedLocationIds } });
 });

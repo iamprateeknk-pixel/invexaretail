@@ -38,6 +38,10 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   String? _role;
+  // Plan Area H WP2: tabs the person has opened stay alive (scroll position, half-typed forms, an
+  // in-progress count) instead of being rebuilt from scratch on every switch. Unvisited tabs are not
+  // built at all, so opening the app does not fire every screen's requests at once.
+  final Set<int> _visited = {};
 
   @override
   Widget build(BuildContext context) {
@@ -47,9 +51,13 @@ class _HomeShellState extends State<HomeShell> {
       _role = controller.user?.role;
       final defaultIndex = home.destinations.indexWhere((row) => row.id == home.defaultDestination);
       _index = defaultIndex < 0 ? 0 : defaultIndex;
+      _visited.clear();
     }
     final safeIndex = _index.clamp(0, home.destinations.length - 1);
-    final pages = home.destinations.map((dest) => _pageFor(dest.id, controller)).toList();
+    _visited.add(safeIndex);
+    final pages = [
+      for (var i = 0; i < home.destinations.length; i += 1) _visited.contains(i) ? _pageFor(home.destinations[i].id, controller) : const SizedBox.shrink(),
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -87,7 +95,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: pages[safeIndex],
+      body: IndexedStack(index: safeIndex, children: pages),
       floatingActionButton: FloatingActionButton.extended(
         key: const ValueKey('quick-scan'),
         tooltip: 'Scan an item, barcode or lot',

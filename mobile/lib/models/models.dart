@@ -46,10 +46,12 @@ bool canSubmitAdHocCount(String role) =>
     role == 'ADMIN' || role == 'ADMIN_USER' || role == 'BRANCH_MANAGER' || role == 'AUDITOR';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.retryAfterSeconds});
 
   final String message;
   final int? statusCode;
+  // From a Retry-After header (seconds); the sync queue waits at least this long.
+  final int? retryAfterSeconds;
 
   bool get isOffline => statusCode == null;
 
@@ -571,9 +573,18 @@ class QueuedCount {
     this.lastError,
     this.status = 'pending',
     String? requestId,
+    this.userId = '',
+    this.deviceId = '',
+    this.nextAttemptAt,
   }) : requestId = requestId ?? localId;
 
   final String localId;
+  // Plan P0-SYNC-001: who queued this and on which device. A queued item is only ever shown
+  // to, and replayed by, that same user; never by whoever signs in next on the phone.
+  final String userId;
+  final String deviceId;
+  // Earliest time the next automatic attempt may run (backoff after a transient failure).
+  String? nextAttemptAt;
   final String itemId;
   final String locationId;
   final double physicalQuantity;
@@ -605,11 +616,17 @@ class QueuedCount {
       lastError: json['lastError'] == null ? null : asString(json['lastError']),
       status: asString(json['status'], 'pending'),
       requestId: json['requestId'] == null ? null : asString(json['requestId']),
+      userId: asString(json['userId']),
+      deviceId: asString(json['deviceId']),
+      nextAttemptAt: json['nextAttemptAt'] == null ? null : asString(json['nextAttemptAt']),
     );
   }
 
   Map<String, dynamic> toJson() => {
         'localId': localId,
+        'userId': userId,
+        'deviceId': deviceId,
+        'nextAttemptAt': nextAttemptAt,
         'requestId': requestId,
         'itemId': itemId,
         'locationId': locationId,
@@ -673,9 +690,21 @@ class QueuedAction {
     this.attempts = 0,
     this.lastError,
     this.status = 'pending',
-  });
+    this.companyId = '',
+    this.userId = '',
+    this.deviceId = '',
+    String? mutationId,
+    this.nextAttemptAt,
+  }) : mutationId = mutationId ?? localId;
 
   final String localId;
+  // Plan P0-SYNC-001/003: identity binding and a stable idempotency key, created once when the
+  // person acts and sent as X-Mutation-Id on every attempt (including after a restart).
+  final String companyId;
+  final String userId;
+  final String deviceId;
+  final String mutationId;
+  String? nextAttemptAt;
   final String type;
   final String method;
   final String path;
@@ -697,11 +726,21 @@ class QueuedAction {
       attempts: asInt(json['attempts']),
       lastError: json['lastError'] == null ? null : asString(json['lastError']),
       status: asString(json['status'], 'pending'),
+      companyId: asString(json['companyId']),
+      userId: asString(json['userId']),
+      deviceId: asString(json['deviceId']),
+      mutationId: json['mutationId'] == null || asString(json['mutationId']).isEmpty ? null : asString(json['mutationId']),
+      nextAttemptAt: json['nextAttemptAt'] == null ? null : asString(json['nextAttemptAt']),
     );
   }
 
   Map<String, dynamic> toJson() => {
         'localId': localId,
+        'companyId': companyId,
+        'userId': userId,
+        'deviceId': deviceId,
+        'mutationId': mutationId,
+        'nextAttemptAt': nextAttemptAt,
         'type': type,
         'method': method,
         'path': path,

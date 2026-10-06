@@ -11,7 +11,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 ///
 /// Server secrets never live here: sessions and refresh credentials belong to
 /// Keychain/Keystore-backed secure storage. Stock ledger rows are never stored.
-const currentSchemaVersion = 2;
+const currentSchemaVersion = 3;
 
 /// Ordered migrations; index + 1 is the schema version each one produces.
 const _migrations = <String>[
@@ -57,6 +57,13 @@ const _migrations = <String>[
     entity_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     PRIMARY KEY (company_id, entity_type, entity_id)
+  );
+  ''',
+  // v3: per-installation metadata (device id for identity-bound queued work).
+  '''
+  CREATE TABLE IF NOT EXISTS device_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
   ''',
 ];
@@ -207,6 +214,15 @@ class NativeDatabase {
   }
 
   void close() => _db.close();
+
+  /// The stable id of this installation; created with [create] on first use.
+  String deviceId(String Function() create) {
+    final rows = _db.select("SELECT value FROM device_meta WHERE key = 'device_id'");
+    if (rows.isNotEmpty) return rows.first['value'] as String;
+    final id = create();
+    _db.execute("INSERT OR REPLACE INTO device_meta (key, value) VALUES ('device_id', ?)", [id]);
+    return id;
+  }
 
   // ---- legacy count / action queues ---------------------------------------
 

@@ -103,7 +103,7 @@ integration('jobs are company scoped: another company cannot list, extend, chang
     assert.equal((await call('POST', `/jobs/${jobId}/lines`, b.token, { itemId: item.id, plannedQty: 1 })).status, 404);
     assert.equal((await call('PATCH', `/jobs/${jobId}/status`, b.token, { status: 'CANCELLED' })).status, 404);
     assert.equal((await call('PATCH', `/jobs/${jobId}/lines/${line.body.line.id}`, b.token, { issuedQty: 99 })).status, 404);
-    assert.equal((await call('POST', `/jobs/${jobId}/consume`, b.token, { lineId: line.body.line.id, quantity: 1 })).status, 404);
+    assert.equal((await call('POST', `/jobs/${jobId}/consume`, b.token, { lineId: line.body.line.id, quantity: 1, requestId: 'req-cross-tenant-1' })).status, 404);
     assert.equal((await call('POST', '/jobs', b.token, { name: 'Sneaky', locationId: a.loc.id })).status, 404, 'cannot create a job at another company\'s location');
     assert.equal((await prisma.job.findUniqueOrThrow({ where: { id: jobId } })).status, 'DRAFT');
     assert.equal((await prisma.jobLine.findUniqueOrThrow({ where: { id: line.body.line.id } })).issuedQty, 0);

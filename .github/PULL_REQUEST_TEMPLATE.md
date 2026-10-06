@@ -17,6 +17,12 @@
 - Migration/schema change (or `None`):
 - Tenant and permission review:
 
+## Risk and data migration
+
+- Failure modes considered (tenant, stock, retry, offline, migration):
+- Data migration: forward path, backfill, verification, recovery or roll-forward (or `None`):
+- Stop conditions checked (new cross-tenant path, second stock write path, second offline queue, runtime DDL, secrets in client storage, reconciliation drift): none hit / explain
+
 ## Correctness and operations
 
 - Idempotency and concurrency behavior:
@@ -30,6 +36,7 @@
 - Browser/mobile evidence:
 - Migration rehearsal evidence:
 - Performance observation:
+- Acceptance evidence (exact command, run or artifact proving the exit gate):
 
 ## Recovery and review
 

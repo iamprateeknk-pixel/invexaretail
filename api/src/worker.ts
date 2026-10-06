@@ -5,6 +5,7 @@ import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
 import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
 import { startExpirySweep } from './lib/expiry-sweep.js';
+import { startReconciliationSchedule } from './lib/reconciliation-schedule.js';
 import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
 import { deliverPersistedEvent } from './lib/event-bus.js';
 
@@ -35,6 +36,8 @@ async function main() {
   startOutboxWorker(deliverPersistedEvent);
   startOutboxRetention();
   startExpirySweep();
+  // Plan Area B WP4: nightly journal-vs-balance reconciliation, recorded per company.
+  startReconciliationSchedule();
   console.log('Invexa durable worker is running.');
 }
 

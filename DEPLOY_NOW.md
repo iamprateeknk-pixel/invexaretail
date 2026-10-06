@@ -1,3 +1,5 @@
+> **Not the production path.** This is an older one-click Render guide kept for history. The canonical production topology (Cloudflare web, Railway API and worker, managed PostgreSQL) and the release, backup and rollback procedures are in [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md).
+
 # 🚀 Deploy Backend Now - One Click!
 
 The backend is ready to deploy. Click the link below to deploy to Render.com in seconds:

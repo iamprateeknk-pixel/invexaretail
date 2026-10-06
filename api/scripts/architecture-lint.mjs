@@ -50,6 +50,8 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   // touch these tables) - no longer needed here.
   // The canonical service itself, and its reconciliation tooling.
   'src/lib/inventory-posting-service.ts',
+  // Read-only journal-vs-balance comparison (SELECT only; never writes stock or history).
+  'src/lib/stock-reconciliation.ts',
 ]);
 
 const RULES = [
@@ -146,6 +148,8 @@ function findBareStatusWrites(file, lines) {
 const TENANT_SCOPED_MODELS = [
   'item', 'transfer', 'purchaseOrder', 'order', 'stockCount', 'returnRequest',
   'exceptionCase', 'importBatch', 'importRow', 'expiryAlert',
+  // Plan M1 / P0-SEC-002..004: the models that previously had no company column at all.
+  'assetCheckout', 'contextComment', 'userNotification', 'supplier', 'reorderRule',
 ];
 const UNSCOPED_QUERY_WINDOW = 8; // lines to look ahead for a companyId/tenantId mention
 
