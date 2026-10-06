@@ -1,4 +1,4 @@
-# Release scorecard (Week 20 gate) - state as of 2026-09-25
+# Release scorecard (Week 20 gate) - state as of 2026-10-07 (see plan-10of10-tracker.md for the item-level status)
 
 **Recommendation: NO-GO.** Only the human owner can approve production; this page records why the gates are not yet green.
 
@@ -24,6 +24,10 @@
 | 3 | Blind count offline -> conflict -> recount -> approve -> post once | Assignment + contract logic tested; no mobile/server E2E |
 | 4 | Marketplace order replayed twice -> one order, one reservation, reconciled return/refund | Replay -> one order and cross-tenant rejection tested (memory mode); return/refund leg not covered |
 | 5 | Overlapping IDs across two tenants -> zero cross-tenant access | Item repository (5,200 items) and seven route-slice Postgres suites |
+
+## Update 2026-10-07 (Plan 10/10)
+
+Moved since the table above: nightly stock reconciliation with evidence and an SLO flag, exactly-once `X-Mutation-Id` replay, company-scoped assets/lots/comments/notifications, 2FA, a migration restore matrix and a blocking dependency-audit gate with expiring exceptions, a canonical runbook, and identity-bound mobile offline queues. Recommendation is unchanged: **NO-GO** until the `open` rows in `plan-10of10-tracker.md` and the owner-only items are closed.
 
 ## Exceptions register
 
