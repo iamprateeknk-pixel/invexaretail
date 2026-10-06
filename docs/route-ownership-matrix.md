@@ -62,7 +62,7 @@ standing temptation to accidentally mount them.
 | `PATCH /transfers/:transferId`, `DELETE /transfers/:transferId` | 1715, 1757 | Uses `canModifyTransfer`/`EDITABLE_TRANSFER_STATUSES`, still local to `core.ts` - extracting these next also means extracting those two helpers. |
 | `PATCH /transfers/:transferId/status`, `POST /transfers/:transferId/confirm` | 1832, 3189 | Status-lifecycle routes - natural next slice, already backed by `lib/transfer-lifecycle.ts`. |
 | `POST /transfers/:transferId/receive` and its QC/quarantine interaction | 3410 | The largest single handler in the Transfer surface; highest risk to move mechanically, most valuable to eventually service-ify. |
-| `POST /transfers/:transferId/evidence`, evidence GETs | 3683, 3703, 3715 | Thin wrappers around `lib/transfer-evidence.ts` - low-risk future extraction. |
+| ~~`POST /transfers/:transferId/evidence`, evidence GETs~~ **Extracted in Phase 4** to `routes/transfer-evidence.ts` (see `docs/phase4-architecture-db.md`) | 3683, 3703, 3715 | Thin wrappers around `lib/transfer-evidence.ts` - low-risk future extraction. |
 | `GET /transfers/reprint-audit/all`, `GET /transfers/:transferId/reprint-audit`, `GET /transfers/:transferId/label`, `GET /transfers/:transferId/export.xls` | 3355, 3363, 3374, 3234 | Read-only reporting endpoints - low-risk. |
 | Pick waves, picker tasks, replenishment-actions, transfer import preview/commit (11 routes) | 1774, 1888-2020, 2966-2983, 3016-3080, 3736-3754 | Warehouse-picking sub-flow; arguably its own bounded context (Warehouse) rather than Transfer proper - worth re-classifying, not just moving, when picked up. |
 

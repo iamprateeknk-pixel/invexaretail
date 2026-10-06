@@ -1,6 +1,5 @@
 import { exceedsDefaultTolerance } from '../lib/count-tolerance.js';
 import { parseCountReasonCode } from '../lib/count-reason-codes.js';
-import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { canReceiveTransfer, validateReceiptLines, type ReceiptLineInput } from '../lib/receipt-validation.js';
 import { activeCartons } from '../lib/transfer-packing.js';
@@ -12,6 +11,7 @@ import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persist
 // transfers, picker tasks, dashboard, audit and CSV import/export.
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import multer from 'multer';
+import { evidenceMime } from '../lib/transfer-evidence.js';
 import { createHash } from 'node:crypto';
 
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -3735,54 +3735,8 @@ router.delete('/items/:itemId/photos/:photoId', async (req: Request, res: Respon
   } catch { return res.status(503).json({ message: 'Photo storage unavailable.' }); }
 });
 
-router.post('/transfers/:transferId/evidence', upload.single('evidence'), async (req: Request, res: Response) => {
-  const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  const context = accessContext(req.user!);
-  if (!['ADMIN', 'ADMIN_USER', 'STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)
-      || (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId))) {
-    return res.status(403).json({ message: 'Transfer evidence upload access denied.' });
-  }
-  if (!req.file) return res.status(400).json({ message: 'Evidence file is required.' });
-  try { evidenceMime(req.file.buffer); }
-  catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid photo.' }); }
-  try {
-    const evidence = await saveTransferEvidence(transferId, req.user!.id, req.file.originalname, req.file.buffer);
-    return res.status(201).json({ success: true, evidence });
-  } catch {
-    return res.status(503).json({ message: 'Photo was not saved. Check database storage and retry.' });
-  }
-});
-
-router.get('/transfers/:transferId/evidence', async (req: Request, res: Response) => {
-  const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  const context = accessContext(req.user!);
-  if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {
-    return res.status(403).json({ message: 'Transfer location access denied.' });
-  }
-  try { return res.json({ evidence: await listTransferEvidence(transferId) }); }
-  catch { return res.status(503).json({ message: 'Evidence storage unavailable.' }); }
-});
-
-router.get('/transfers/:transferId/evidence/:evidenceId', async (req: Request, res: Response) => {
-  const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  const context = accessContext(req.user!);
-  if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {
-    return res.status(403).json({ message: 'Transfer location access denied.' });
-  }
-  try {
-    const evidence = await readTransferEvidence(transferId, firstParam(req.params.evidenceId));
-    if (!evidence) return res.status(404).json({ message: 'Photo was not found.' });
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.setHeader('Content-Disposition', 'attachment');
-    return res.type(evidence.mimeType).send(Buffer.from(evidence.contents));
-  } catch { return res.status(503).json({ message: 'Evidence storage unavailable.' }); }
-});
+// Transfer evidence routes (POST/GET /transfers/:transferId/evidence[/:evidenceId])
+// moved to routes/transfer-evidence.ts (docs/route-ownership-matrix.md).
 
 // ---------------------------------------------------------------------------
 // Picker tasks
