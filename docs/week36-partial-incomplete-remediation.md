@@ -99,3 +99,6 @@ as a reason to leave the gap in place.
   run (which does have a real `postgres:17` service container) to prove
   out, the same "trust CI, don't claim done until CI green" pattern used
   for this session's earlier mobile crypto change.
+
+
+> Correction (Phase 4): `Order` already has `@@unique([channel, externalReference])` in the schema and the init migration, so the "no DB-level unique constraint" gap described above does not exist. See `docs/phase4-architecture-db.md`.

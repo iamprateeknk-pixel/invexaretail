@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
 
 import '../config/role_home.dart';
 import '../config/theme.dart';
 import '../services/live_events.dart';
+import '../services/label_pdf.dart';
+import '../services/quick_lookup.dart';
+import '../services/scan_action.dart';
+import '../services/scan_feedback.dart';
+import '../widgets/barcode_scan_sheet.dart';
 import '../state/session_controller.dart';
 import 'conflict_center_screen.dart';
 import 'count_screen.dart';
@@ -79,6 +85,13 @@ class _HomeShellState extends State<HomeShell> {
         ],
       ),
       body: pages[safeIndex],
+      floatingActionButton: FloatingActionButton.extended(
+        key: const ValueKey('quick-scan'),
+        tooltip: 'Scan an item, barcode or lot',
+        onPressed: () => _quickScan(controller, home),
+        icon: const Icon(Icons.qr_code_scanner),
+        label: const Text('Scan'),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: safeIndex,
         onDestinationSelected: (value) => setState(() => _index = value),
@@ -90,6 +103,39 @@ class _HomeShellState extends State<HomeShell> {
               label: dest.label,
             ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _quickScan(SessionController controller, MobileRoleHome home) async {
+    final code = await showBarcodeScanner(context, title: 'Scan item or lot');
+    if (code == null || !mounted) return;
+    final locationId = controller.selectedLocationId ?? '';
+    final result = quickLookup(controller.items, controller.stock, locationId, code);
+    if (result == null) {
+      await ScanFeedback.rejected();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No item or lot matches "$code".')));
+      return;
+    }
+    final countIndex = home.destinations.indexWhere((dest) => dest.id == 'count');
+    final workIndex = home.destinations.indexWhere((dest) => dest.id == 'work');
+    final tabIndex = countIndex >= 0 ? countIndex : workIndex;
+    final canCount = tabIndex >= 0 &&
+        resolveCountTarget(assignments: controller.assignments, allowAdHoc: controller.allowAdHocCount, itemId: result.item.id) != null;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => _QuickLookupSheet(
+        result: result,
+        onCount: canCount
+            ? () {
+                Navigator.of(sheetContext).pop();
+                controller.pendingCountItemId = result.item.id;
+                controller.pendingCountLotNo = result.lot?.lotNo;
+                setState(() => _index = tabIndex);
+              }
+            : null,
       ),
     );
   }
@@ -142,6 +188,89 @@ class _LiveStatusIcon extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Icon(icon, size: 20, color: color),
+      ),
+    );
+  }
+}
+
+class _QuickLookupSheet extends StatefulWidget {
+  const _QuickLookupSheet({required this.result, this.onCount});
+
+  final QuickLookupResult result;
+  final VoidCallback? onCount;
+
+  @override
+  State<_QuickLookupSheet> createState() => _QuickLookupSheetState();
+}
+
+class _QuickLookupSheetState extends State<_QuickLookupSheet> {
+  int _copies = 1;
+
+  Future<void> _print() async {
+    final result = widget.result;
+    await Printing.layoutPdf(
+      name: 'Label ${result.item.code}',
+      format: labelPageFormat,
+      onLayout: (_) => buildLabelPdf(result, copies: _copies),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final result = widget.result;
+    final item = result.item;
+    final unit = item.unit ?? 'units';
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item.name, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(result.lot == null ? item.code : '${item.code} · Lot ${result.lot!.lotNo}', style: const TextStyle(color: invexaMuted)),
+            const SizedBox(height: 16),
+            Text('${result.onHand % 1 == 0 ? result.onHand.toInt() : result.onHand} $unit', style: Theme.of(context).textTheme.headlineMedium),
+            const Text('on hand at this location', style: TextStyle(color: invexaMuted)),
+            if (result.lot?.expiryDate != null) ...[
+              const SizedBox(height: 12),
+              Text('Expires ${result.lot!.expiryDate}'),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                IconButton(
+                  tooltip: 'Fewer labels',
+                  onPressed: _copies > 1 ? () => setState(() => _copies--) : null,
+                  icon: const Icon(Icons.remove_circle_outline),
+                ),
+                Text('$_copies', style: Theme.of(context).textTheme.titleMedium),
+                IconButton(
+                  tooltip: 'More labels',
+                  onPressed: _copies < 99 ? () => setState(() => _copies++) : null,
+                  icon: const Icon(Icons.add_circle_outline),
+                ),
+                const Spacer(),
+                if (widget.onCount != null) ...[
+                  OutlinedButton.icon(
+                    key: const ValueKey('count-this-item'),
+                    onPressed: widget.onCount,
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: const Text('Count'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                FilledButton.icon(
+                  key: const ValueKey('print-label'),
+                  onPressed: _print,
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('Print label'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

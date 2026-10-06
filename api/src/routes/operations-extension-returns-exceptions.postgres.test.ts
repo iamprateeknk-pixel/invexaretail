@@ -137,6 +137,28 @@ integration('GET /exceptions: the list endpoint only ever returns the caller\'s 
   });
 });
 
+// Decimal migration slice 2: valueAtRisk is NUMERIC(14,2); the API must still emit a JSON number
+// (a raw Prisma Decimal would serialize as a string) rounded to 2dp, on every response that carries a case.
+integration('exception cases expose valueAtRisk as a 2dp number on list, patch and resolve', async () => {
+  const a = await makeFixture();
+  const row = await prisma.exceptionCase.create({ data: { type: 'DAMAGE', title: 'Valued case', reportedById: a.userId, companyId: a.companyId, valueAtRisk: 123.456 } });
+
+  await withServer(async (call) => {
+    const list = await call('GET', '/exceptions', a.token);
+    const listed = list.body.cases.find((c: { id: string }) => c.id === row.id);
+    assert.equal(typeof listed.valueAtRisk, 'number');
+    assert.equal(listed.valueAtRisk, 123.46);
+
+    const patched = await call('PATCH', `/exceptions/${row.id}`, a.token, { status: 'IN_PROGRESS' });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.case.valueAtRisk, 123.46);
+
+    const resolved = await call('POST', `/exceptions/${row.id}/resolve`, a.token, { disposition: 'NONE' });
+    assert.equal(resolved.status, 200);
+    assert.equal(typeof resolved.body.case.valueAtRisk, 'number');
+  });
+});
+
 integration('PATCH /exceptions/:id: another company\'s exception case id resolves 404, not a field change', async () => {
   const a = await makeFixture();
   const b = await makeFixture();

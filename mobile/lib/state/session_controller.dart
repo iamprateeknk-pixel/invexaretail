@@ -49,6 +49,11 @@ class SessionController extends ChangeNotifier {
   List<QueuedAction> queuedActions = [];
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  // Set when sign-in needs a second factor; the login screen then asks for the code.
+  String? twoFactorChallenge;
+  // Set by the quick-scan sheet; the Count screen consumes it when it opens.
+  String? pendingCountItemId;
+  String? pendingCountLotNo;
   LiveStatus liveStatus = LiveStatus.connecting;
   LiveEventClient? _live;
   Timer? _liveDebounce;
@@ -138,6 +143,9 @@ class SessionController extends ChangeNotifier {
       await refreshAll();
       startLive();
       return true;
+    } on TwoFactorRequiredException catch (challenge) {
+      twoFactorChallenge = challenge.challengeToken;
+      return false;
     } on ApiException catch (err) {
       error = err.message;
       return false;
@@ -148,6 +156,40 @@ class SessionController extends ChangeNotifier {
       busy = false;
       notifyListeners();
     }
+  }
+
+  Future<bool> completeTwoFactor(String code) async {
+    final challenge = twoFactorChallenge;
+    if (challenge == null) return false;
+    busy = true;
+    error = null;
+    notifyListeners();
+    try {
+      final result = await api.verifyTwoFactor(challenge, code);
+      twoFactorChallenge = null;
+      user = result.user;
+      api.refreshToken = result.refreshToken;
+      await persistTokens(result.token, result.refreshToken);
+      queuedCounts = await store.loadQueuedCounts(companyId);
+      await refreshAll();
+      startLive();
+      return true;
+    } on ApiException catch (err) {
+      error = err.message;
+      return false;
+    } catch (err) {
+      error = err.toString();
+      return false;
+    } finally {
+      busy = false;
+      notifyListeners();
+    }
+  }
+
+  void cancelTwoFactor() {
+    twoFactorChallenge = null;
+    error = null;
+    notifyListeners();
   }
 
   Future<bool> sendOtp(String email) async {
@@ -185,6 +227,9 @@ class SessionController extends ChangeNotifier {
       await refreshAll();
       startLive();
       return true;
+    } on TwoFactorRequiredException catch (challenge) {
+      twoFactorChallenge = challenge.challengeToken;
+      return false;
     } on ApiException catch (err) {
       error = err.message;
       return false;

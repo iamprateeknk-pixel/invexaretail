@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { takePendingItem } from '../../../lib/pending-item'
 import { useWorkspace } from '../WorkspaceContext'
 import { ItemSearchPanel } from '@/components/inventory/ItemSearchPanel'
 import { StockDetailPanel } from '@/components/inventory/StockDetailPanel'
 import { AdjustmentWizard } from '@/components/inventory/AdjustmentWizard'
+import { BundlePanel } from '@/components/inventory/BundlePanel'
 import { useInventoryAdjustment } from '@/hooks/useInventoryAdjustment'
 import { useStockDetail } from '@/hooks/useStockDetail'
 import { EmptyState } from '@/components/ui/feedback-states'
@@ -18,7 +20,7 @@ const ADJUST_ROLES = ['ADMIN', 'ADMIN_USER'];
 // invalidation" requirement.
 export function ItemStockDetailPage() {
   const { authToken, role } = useWorkspace();
-  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(() => takePendingItem());
   const { detail, refetch } = useStockDetail({ authToken, itemId: selectedItem?.id });
   const { reverse, submitting } = useInventoryAdjustment({ authToken });
 
@@ -42,6 +44,7 @@ export function ItemStockDetailPage() {
               reversing={submitting}
               onReverse={(movementId) => reverse(selectedItem.id, movementId, 'Manual reversal from stock detail')}
             />
+            <BundlePanel authToken={authToken} itemId={selectedItem.id} canEdit={canAdjust} />
             {canAdjust && detail && (
               <Card>
                 <CardHeader><CardTitle className="text-sm">Post an adjustment</CardTitle></CardHeader>

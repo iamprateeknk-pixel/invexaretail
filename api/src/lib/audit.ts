@@ -1,3 +1,4 @@
+import { replaceContents } from './array-utils.js';
 export type AuditEvent = {
   id: string;
   actorId: string;
@@ -12,7 +13,7 @@ export type AuditEvent = {
 const events: AuditEvent[] = [];
 
 export function replaceAuditEvents(input: AuditEvent[]): void {
-  events.splice(0, events.length, ...input.map((event) => ({ ...event })));
+  replaceContents(events, input.map((event) => ({ ...event })));
 }
 
 export function recordAudit(input: Omit<AuditEvent, 'id' | 'createdAt'>): AuditEvent {

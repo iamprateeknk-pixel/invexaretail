@@ -14,6 +14,7 @@ import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, register
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
+import { replaceContents, pushAll } from './array-utils.js';
 
 export const databaseEnabled = Boolean(resolveDatabaseUrl());
 
@@ -112,13 +113,13 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     prisma.user.findMany({ where: { companyId: { in: companyIds } } }),
   ]);
 
-  locations.splice(0, locations.length, ...dbLocations.map((location) => ({
+  replaceContents(locations, dbLocations.map((location) => ({
     id: location.id,
     name: location.name,
     type: location.type as 'store' | 'warehouse',
   })));
 
-  items.splice(0, items.length, ...dbItems.map((item: any) => ({
+  replaceContents(items, dbItems.map((item: any) => ({
     id: item.id,
     code: item.code,
     name: item.name,
@@ -161,7 +162,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     items: dbItems.map((item) => ({ id: item.id, companyId: (item as { companyId?: string }).companyId })),
   });
 
-  counts.splice(0, counts.length, ...dbCounts.map((count) => ({
+  replaceContents(counts, dbCounts.map((count) => ({
     id: count.id,
     itemId: count.itemId,
     lotId: count.lotId,
@@ -187,7 +188,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     lateMovementKeys: Array.isArray((count as { lateMovementKeys?: unknown }).lateMovementKeys) ? (count as { lateMovementKeys: string[] }).lateMovementKeys : undefined,
   })));
 
-  stockLedger.splice(0, stockLedger.length, ...dbStockLedger.map((row) => ({
+  replaceContents(stockLedger, dbStockLedger.map((row) => ({
     itemId: row.itemId,
     lotId: row.lotId,
     locationId: row.locationId,
@@ -196,7 +197,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     version: row.version,
   })));
 
-  users.splice(0, users.length, ...dbUsers.map((user) => ({
+  replaceContents(users, dbUsers.map((user) => ({
     id: user.id,
     email: user.email,
     name: user.name,
@@ -204,7 +205,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     assignedLocationIds: parseAssignedLocations(user.assignedLocations),
   })));
 
-  countAssignments.splice(0, countAssignments.length, ...dbAssignments.map((row) => ({
+  replaceContents(countAssignments, dbAssignments.map((row) => ({
     id: row.id,
     locationId: row.locationId,
     itemId: row.itemId,
@@ -221,7 +222,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     createdAt: row.createdAt.toISOString(),
   })));
 
-  transfers.splice(0, transfers.length, ...dbTransfers.map((transfer) => ({
+  replaceContents(transfers, dbTransfers.map((transfer) => ({
     id: transfer.id,
     sourceLocationId: transfer.sourceLocationId,
     destinationLocationId: transfer.destinationLocationId,
@@ -237,7 +238,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
 
   try {
     const dbCartons = await prisma.transferCarton.findMany({ orderBy: { createdAt: 'asc' } });
-    transferCartons.splice(0, transferCartons.length, ...dbCartons.map((row) => {
+    replaceContents(transferCartons, dbCartons.map((row) => {
       const contents = (row.contents ?? {}) as { lines?: Array<{ itemId: string; lotId: string; quantity: number }>; packedById?: string; sealedAt?: string; requestId?: string };
       return {
         id: row.id,
@@ -265,7 +266,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
       prisma.inventoryMovement.findMany({ orderBy: { transactionAt: 'desc' }, take: 10_000 }),
       prisma.syncCheckpoint.findMany(),
     ]);
-    dailyMovements.splice(0, dailyMovements.length, ...dbMovements.map((row) => ({
+    replaceContents(dailyMovements, dbMovements.map((row) => ({
       id: row.id,
       dedupeKey: row.dedupeKey,
       itemId: row.itemId,
@@ -280,7 +281,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
       createdById: row.createdById,
       metadata: (row.metadata as Record<string, unknown> | null) ?? undefined,
     })));
-    syncCheckpoints.splice(0, syncCheckpoints.length, ...dbCheckpoints
+    replaceContents(syncCheckpoints, dbCheckpoints
       .filter((row) => row.sourceType === 'SALES' || row.sourceType === 'PURCHASE')
       .map((row) => ({
         locationId: row.locationId,
@@ -558,8 +559,8 @@ export async function persistOpeningStockImport(
     }, { maxWait: 10_000, timeout: 120_000 });
   }
 
-  locations.push(...newLocations);
-  items.push(...newItems);
+  pushAll(locations, newLocations);
+  pushAll(items, newItems);
   for (const location of newLocations) registerLocationCompany(location.id, companyId);
   for (const item of newItems) registerItemCompany(item.id, companyId);
   for (const lot of newLots) {
