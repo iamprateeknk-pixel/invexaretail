@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../config/theme.dart';
+import '../services/scan_feedback.dart';
 
 /// Opens a full-screen camera scanner and returns the first decoded
 /// barcode value, or null if the user backs out or types it manually.
@@ -40,6 +41,7 @@ class _BarcodeScanScreenState extends State<_BarcodeScanScreen> {
   void _accept(String code) {
     if (_handled || code.trim().isEmpty) return;
     _handled = true;
+    ScanFeedback.accepted();
     Navigator.of(context).pop(code.trim());
   }
 
