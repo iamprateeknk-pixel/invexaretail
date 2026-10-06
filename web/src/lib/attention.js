@@ -9,6 +9,14 @@ export function buildAttentionList(cards, limit = 4) {
     .slice(0, limit);
 }
 
+const PLAN_ROLES = ['ADMIN', 'ADMIN_USER'];
+
+// Low stock is a prompt to reorder: admins land on the purchase plan (which
+// drafts POs from reorder rules); everyone else keeps the stock view.
+export function attentionTarget(card, role) {
+  return card.label === 'Low stock' && PLAN_ROLES.includes(role) ? 'purchase-orders' : card.section;
+}
+
 export function onboardingSteps({ locationCount = 0, itemCount = 0, hasStock = false, hasMovement = false } = {}) {
   return [
     { id: 'location', label: 'Add your first location', section: 'admin', done: locationCount > 0 },
