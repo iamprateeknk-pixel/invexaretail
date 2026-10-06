@@ -1,12 +1,18 @@
-# Draft ownership map for the Week 1 containment milestone.
-# Replace the fallback owner after the product and engineering owners are confirmed.
+# Ownership map. High-risk files (schema, inventory posting, reservation, session store, tenant scope,
+# sync engine, deployment workflows) need a code-owner review before merge (plan section 19).
+# Replace the fallback owner per row when product and engineering owners are named.
 
 # Default reviewer
 * @iamprateeknk-pixel
 
 # Security and identity
 /api/src/lib/otp-auth.ts @iamprateeknk-pixel
-/api/src/middleware/auth.ts @iamprateeknk-pixel
+/api/src/lib/session-store.ts @iamprateeknk-pixel
+/api/src/lib/two-factor-store.ts @iamprateeknk-pixel
+/api/src/lib/totp.ts @iamprateeknk-pixel
+/api/src/lib/login-lockout.ts @iamprateeknk-pixel
+/api/src/lib/production-guard.ts @iamprateeknk-pixel
+/api/src/routes/enterprise-auth.ts @iamprateeknk-pixel
 /api/src/lib/saas/ @iamprateeknk-pixel
 
 # Tenant boundaries and inventory integrity
@@ -14,6 +20,11 @@
 /api/src/lib/tenant-*.ts @iamprateeknk-pixel
 /api/src/lib/stock-*.ts @iamprateeknk-pixel
 /api/src/lib/reservation.ts @iamprateeknk-pixel
+/api/src/lib/inventory-posting-service.ts @iamprateeknk-pixel
+/api/src/lib/mutation-idempotency.ts @iamprateeknk-pixel
+/api/src/lib/stock-reconciliation.ts @iamprateeknk-pixel
+/api/src/lib/job-consumption-service.ts @iamprateeknk-pixel
+/api/src/lib/orders.ts @iamprateeknk-pixel
 
 # Database authority and imports
 /api/prisma/ @iamprateeknk-pixel
@@ -24,6 +35,12 @@
 # External ingress and release paths
 /api/src/lib/webhook-*.ts @iamprateeknk-pixel
 /.github/ @iamprateeknk-pixel
+/security/ @iamprateeknk-pixel
+/scripts/ @iamprateeknk-pixel
+/mobile/lib/services/sync_engine.dart @iamprateeknk-pixel
+/mobile/lib/services/local_store.dart @iamprateeknk-pixel
+/mobile/lib/services/drift_store.dart @iamprateeknk-pixel
+/mobile/lib/state/ @iamprateeknk-pixel
 /docker-compose.yml @iamprateeknk-pixel
 /render.yaml @iamprateeknk-pixel
 /docs/ @iamprateeknk-pixel
