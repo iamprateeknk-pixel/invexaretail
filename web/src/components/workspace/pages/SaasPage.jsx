@@ -41,7 +41,7 @@ export function SaasPage() {
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>{saasPlans.map((plan) => <SelectItem key={plan.code} value={plan.code}>{plan.name}</SelectItem>)}</SelectContent>
           </Select>
-          <Input type="password" placeholder="Temp password" value={saasForm.password} onChange={(event) => setSaasForm({ ...saasForm, password: event.target.value })} />
+          <Input type="password" placeholder="Temporary password (8+, upper, lower, number)" autoComplete="new-password" required value={saasForm.password} onChange={(event) => setSaasForm({ ...saasForm, password: event.target.value })} />
           <Button disabled={submitLoading || !saasForm.companyName.trim() || !saasForm.adminEmail.trim()} onClick={onboardTenant}>
             <Building className="size-4" />Provision tenant
           </Button>

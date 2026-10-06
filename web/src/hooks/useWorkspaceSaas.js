@@ -12,7 +12,7 @@ export function useWorkspaceSaas({
   const [saasPlans, setSaasPlans] = useState([]);
   const [saasTenants, setSaasTenants] = useState([]);
   const [saasForm, setSaasForm] = useState({
-    companyName: '', adminName: '', adminEmail: '', planCode: 'starter', password: 'ChangeMe123!',
+    companyName: '', adminName: '', adminEmail: '', planCode: 'starter', password: '',
   });
 
   function loadSaas() {
@@ -43,7 +43,7 @@ export function useWorkspaceSaas({
         body: JSON.stringify(saasForm),
       });
       setSaasTenants((current) => [response.tenant, ...current]);
-      setSaasForm({ companyName: '', adminName: '', adminEmail: '', planCode: 'starter', password: 'ChangeMe123!' });
+      setSaasForm({ companyName: '', adminName: '', adminEmail: '', planCode: 'starter', password: '' });
       showToast(`Tenant ${response.tenant.name} provisioned on ${response.tenant.planCode}.`, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to provision tenant.', 'error');
