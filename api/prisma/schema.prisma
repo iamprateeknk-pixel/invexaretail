@@ -155,6 +155,7 @@ model CompanyProfile {
 }
 
 model User {
+  totp UserTotp?
   id                 String   @id @default(cuid())
   name               String
   email              String   @unique
@@ -2435,4 +2436,29 @@ model ItemBundleComponent {
   @@unique([bundleItemId, componentItemId])
   @@index([companyId])
   @@index([componentItemId])
+}
+
+
+// Phase 5: optional TOTP two-factor sign-in. secretEnc is AES-256-GCM
+// (lib/totp.ts); backup codes are stored only as HMAC hashes (JSON array).
+// lastUsedStep makes each 30-second step usable once (replay protection).
+model UserTotp {
+  userId           String    @id
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secretEnc        String    @db.Text
+  enabledAt        DateTime?
+  lastUsedStep     Int       @default(0)
+  backupCodeHashes String    @default("[]") @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+// Phase 5: per-account sign-in failure counter (lib/login-lockout.ts). `key`
+// is the lowercased email, or "2fa:<userId>" for second-factor attempts.
+model AuthLockout {
+  key         String    @id
+  failedCount Int       @default(0)
+  windowStart DateTime  @default(now())
+  lockedUntil DateTime?
+  updatedAt   DateTime  @updatedAt
 }

@@ -8,6 +8,7 @@ import {
   writePersistedSession,
 } from '../lib/session';
 import { initDB, getPendingSyncActions, removeSyncAction, updateSyncActionRetries } from '../offlineStore';
+import { isTwoFactorChallenge, normalizeTwoFactorCode } from '../lib/two-factor';
 import { useEffect, useState } from 'react';
 
 export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotification }) {
@@ -22,6 +23,9 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
   const [devOtpCode, setDevOtpCode] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  // Set when the server accepted the first factor but wants an authenticator or backup code.
+  const [twoFactorToken, setTwoFactorToken] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
 
   function persistSession(next) {
     writePersistedSession(next);
@@ -41,6 +45,8 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
     setOtpNotice('');
     setDevOtpCode('');
     setAuthError('');
+    setTwoFactorToken('');
+    setTwoFactorCode('');
   }
 
   async function establishSession(login) {
@@ -71,6 +77,7 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
         method: 'POST',
         body: JSON.stringify({ email: normalizedLoginEmail(), password: loginPassword }),
       });
+      if (isTwoFactorChallenge(login)) { setTwoFactorToken(login.challengeToken); return; }
       await establishSession(login);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Invalid email or password.');
@@ -114,12 +121,38 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
         method: 'POST',
         body: JSON.stringify({ email: normalizedLoginEmail(), otpCode: loginOtp.trim() }),
       });
+      if (isTwoFactorChallenge(login)) { setTwoFactorToken(login.challengeToken); return; }
       await establishSession(login);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Invalid or expired code.');
     } finally {
       setAuthLoading(false);
     }
+  }
+
+  async function handleVerifyTwoFactor(event) {
+    event?.preventDefault?.();
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const login = await apiRequest('/api/v1/auth/2fa/verify-login', {
+        method: 'POST',
+        body: JSON.stringify({ challengeToken: twoFactorToken, code: normalizeTwoFactorCode(twoFactorCode) }),
+      });
+      setTwoFactorToken('');
+      setTwoFactorCode('');
+      await establishSession(login);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'That code was not accepted.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function cancelTwoFactor() {
+    setTwoFactorToken('');
+    setTwoFactorCode('');
+    setAuthError('');
   }
 
   async function handleLogout() {
@@ -271,6 +304,11 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
     handleLogin,
     handleSendOtp,
     handleVerifyOtp,
+    twoFactorToken,
+    twoFactorCode,
+    setTwoFactorCode,
+    handleVerifyTwoFactor,
+    cancelTwoFactor,
     handleLogout,
   };
 }

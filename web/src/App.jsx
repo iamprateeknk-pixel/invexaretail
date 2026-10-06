@@ -63,6 +63,11 @@ function AppShell() {
     setMasterDialog,
     setItems,
     locationId,
+    twoFactorToken,
+    twoFactorCode,
+    setTwoFactorCode,
+    handleVerifyTwoFactor,
+    cancelTwoFactor,
   } = useWorkspace();
 
   if (!session) {
@@ -82,6 +87,11 @@ function AppShell() {
         onPasswordSubmit={handleLogin}
         onSendOtp={handleSendOtp}
         onVerifyOtp={handleVerifyOtp}
+        twoFactorPending={Boolean(twoFactorToken)}
+        twoFactorCode={twoFactorCode}
+        setTwoFactorCode={setTwoFactorCode}
+        onVerifyTwoFactor={handleVerifyTwoFactor}
+        onCancelTwoFactor={cancelTwoFactor}
       />
     );
   }

@@ -12,6 +12,8 @@ import {
   shouldExposeDevOtpCode,
   generateJWT,
   verifyJWT,
+  generateTwoFactorChallenge,
+  verifyTwoFactorChallenge,
   ACCESS_TOKEN_TTL_SECONDS,
   validateEmail,
   validatePassword,
@@ -30,6 +32,9 @@ import {
   type SessionMeta,
 } from '../lib/session-store.js';
 import { isAllowedOrigin } from '../lib/cors-origins.js';
+import { clearFailures, lockState, registerFailure, type LockState } from '../lib/login-lockout.js';
+import { beginEnrollment, confirmEnrollment, disableTwoFactor, isTwoFactorEnabled, twoFactorStatus, verifySecondFactor } from '../lib/two-factor-store.js';
+import { otpauthUri, totpIsConfigured } from '../lib/totp.js';
 import * as repo from '../lib/enterprise-repository.js';
 import { rejectSuspendedCompany } from '../lib/saas/company-access.js';
 import { ControlPlaneError, apiKeyAllowsMethod, controlPlane } from '../lib/saas/control-plane.js';
@@ -329,6 +334,11 @@ router.post('/verify-otp', loginLimiter, async (req: Request, res: Response) => 
 
     if (rejectSuspendedCompany(user.companyId, res)) return;
 
+    if (await isTwoFactorEnabled(user.id)) {
+      resetOtpRateLimit(normalizedEmail);
+      return res.json({ twoFactorRequired: true, challengeToken: generateTwoFactorChallenge(user.id, user.companyId) });
+    }
+
     // Update last login
     repo.updateUserLastLogin(user.id);
     resetOtpRateLimit(normalizedEmail);
@@ -395,18 +405,30 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
           code: 'DATABASE_RECONNECTING',
         });
       }
+      // An unknown email counts as a failure too, so the response and the lockout
+      // behaviour cannot be used to tell which emails have accounts.
+      if (respondIfLocked(res, await registerFailure(normalizedEmail))) return;
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    if (respondIfLocked(res, await lockState(normalizedEmail))) return;
+
+    if (!verifyPassword(password, user.passwordHash)) {
+      if (respondIfLocked(res, await registerFailure(normalizedEmail))) return;
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    await clearFailures(normalizedEmail);
+
+    // Checked only after the password is proven, so "inactive" cannot be probed without it.
     if (user.status !== 'active') {
       return res.status(403).json({ error: 'User account is inactive' });
     }
 
-    if (!verifyPassword(password, user.passwordHash)) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
     if (rejectSuspendedCompany(user.companyId, res)) return;
+
+    if (await isTwoFactorEnabled(user.id)) {
+      return res.json({ twoFactorRequired: true, challengeToken: generateTwoFactorChallenge(user.id, user.companyId) });
+    }
 
     // Update last login
     repo.updateUserLastLogin(user.id);
@@ -422,6 +444,101 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
   }
+});
+
+// ============================================
+// TWO-FACTOR (TOTP) - optional, per user
+// ============================================
+
+/** Sends the 429 for a locked key; returns true when it did. */
+function respondIfLocked(res: Response, state: LockState): boolean {
+  if (!state.locked) return false;
+  res.setHeader('Retry-After', String(state.retryAfterSeconds));
+  res.status(429).json({
+    error: `Too many failed attempts. Try again in ${Math.ceil(state.retryAfterSeconds / 60)} minute(s).`,
+    code: 'ACCOUNT_LOCKED',
+    retryAfterSeconds: state.retryAfterSeconds,
+  });
+  return true;
+}
+
+const twoFactorKey = (userId: string) => `2fa:${userId}`;
+
+// Second step of sign-in. The challenge token proves the first factor passed; it is
+// single-purpose (rejected as an access token) and expires in 5 minutes.
+router.post('/2fa/verify-login', loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const challengeToken = typeof req.body?.challengeToken === 'string' ? req.body.challengeToken : '';
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    const challenge = challengeToken ? verifyTwoFactorChallenge(challengeToken) : null;
+    if (!challenge || !code) return res.status(401).json({ error: 'Invalid or expired sign-in. Start again.', code: 'TWO_FACTOR_CHALLENGE_INVALID' });
+
+    const key = twoFactorKey(challenge.userId);
+    if (respondIfLocked(res, await lockState(key))) return;
+
+    const user = repo.findUserById(challenge.userId);
+    if (!user || user.status !== 'active') return res.status(401).json({ error: 'Invalid or expired sign-in. Start again.', code: 'TWO_FACTOR_CHALLENGE_INVALID' });
+    if (rejectSuspendedCompany(user.companyId, res)) return;
+
+    const method = await verifySecondFactor(user.id, code);
+    if (!method) {
+      if (respondIfLocked(res, await registerFailure(key))) return;
+      return res.status(401).json({ error: 'That code was not accepted.', code: 'TWO_FACTOR_INVALID' });
+    }
+    await clearFailures(key);
+
+    repo.updateUserLastLogin(user.id);
+    const tokens = await issueSessionTokens(req, res, user);
+    repo.logAuditAction({
+      companyId: user.companyId, userId: user.id, userName: user.name,
+      action: method === 'backup' ? 'TWO_FACTOR_LOGIN_BACKUP_CODE' : 'TWO_FACTOR_LOGIN', entityType: 'USER', entityId: user.id,
+    });
+    return res.json({ success: true, user: publicUser(user), ...tokens });
+  } catch (error) {
+    console.error('Two-factor verify error:', error);
+    return res.status(500).json({ error: 'Two-factor verification failed' });
+  }
+});
+
+router.get('/2fa/status', extractToken, requireAuth, async (req: Request, res: Response) => {
+  return res.json({ configured: totpIsConfigured(), ...(await twoFactorStatus(req.user!.id)) });
+});
+
+router.post('/2fa/setup', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  if (!totpIsConfigured()) return res.status(503).json({ error: 'Two-factor sign-in is not configured on this server.', code: 'TWO_FACTOR_NOT_CONFIGURED' });
+  const begun = await beginEnrollment(req.user!.id);
+  if ('alreadyEnabled' in begun) return res.status(409).json({ error: 'Two-factor sign-in is already on. Turn it off first to set it up again.', code: 'TWO_FACTOR_ALREADY_ENABLED' });
+  return res.json({ secret: begun.secret, otpauthUri: otpauthUri(req.user!.email, begun.secret) });
+});
+
+router.post('/2fa/enable', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  const key = twoFactorKey(req.user!.id);
+  if (respondIfLocked(res, await lockState(key))) return;
+  const confirmed = code ? await confirmEnrollment(req.user!.id, code) : null;
+  if (!confirmed) {
+    if (respondIfLocked(res, await registerFailure(key))) return;
+    return res.status(400).json({ error: 'That code was not accepted. Check the app and try again.', code: 'TWO_FACTOR_INVALID' });
+  }
+  await clearFailures(key);
+  repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'TWO_FACTOR_ENABLED', entityType: 'USER', entityId: req.user!.id });
+  return res.json({ success: true, backupCodes: confirmed.backupCodes });
+});
+
+router.post('/2fa/disable', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  const key = twoFactorKey(req.user!.id);
+  if (respondIfLocked(res, await lockState(key))) return;
+  // Turning it off needs a current code or an unused backup code, so a stolen session alone cannot remove it.
+  const ok = code ? await verifySecondFactor(req.user!.id, code) : null;
+  if (!ok) {
+    if (respondIfLocked(res, await registerFailure(key))) return;
+    return res.status(401).json({ error: 'That code was not accepted.', code: 'TWO_FACTOR_INVALID' });
+  }
+  await clearFailures(key);
+  await disableTwoFactor(req.user!.id);
+  repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'TWO_FACTOR_DISABLED', entityType: 'USER', entityId: req.user!.id });
+  return res.json({ success: true });
 });
 
 // ============================================
