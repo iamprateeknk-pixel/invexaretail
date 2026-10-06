@@ -1,7 +1,7 @@
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { transferQueueActions } from '../../../lib/transfer-lifecycle';
 import { useState } from 'react';
-import { buildAttentionList, onboardingSteps, onboardingProgress } from '../../../lib/attention';
+import { attentionTarget, buildAttentionList, onboardingSteps, onboardingProgress } from '../../../lib/attention';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -74,7 +74,7 @@ export function DashboardPage() {
           <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {attention.map((card) => (
               <li key={card.label}>
-                <button type="button" onClick={() => { if (card.filter) setCountStatusFilter(card.filter); navigateTo(card.section); }} className="flex w-full items-center gap-3 rounded-xl border bg-card p-4 text-left transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button type="button" onClick={() => { if (card.filter) setCountStatusFilter(card.filter); navigateTo(attentionTarget(card, role)); }} className="flex w-full items-center gap-3 rounded-xl border bg-card p-4 text-left transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <AlertTriangle className="size-5 shrink-0 text-amber-500" aria-hidden="true" />
                   <span className="min-w-0"><span className="block text-2xl font-bold leading-none">{card.value}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{card.label}</span></span>
                 </button>

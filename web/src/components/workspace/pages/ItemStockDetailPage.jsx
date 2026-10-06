@@ -4,6 +4,7 @@ import { useWorkspace } from '../WorkspaceContext'
 import { ItemSearchPanel } from '@/components/inventory/ItemSearchPanel'
 import { StockDetailPanel } from '@/components/inventory/StockDetailPanel'
 import { AdjustmentWizard } from '@/components/inventory/AdjustmentWizard'
+import { BundlePanel } from '@/components/inventory/BundlePanel'
 import { useInventoryAdjustment } from '@/hooks/useInventoryAdjustment'
 import { useStockDetail } from '@/hooks/useStockDetail'
 import { EmptyState } from '@/components/ui/feedback-states'
@@ -43,6 +44,7 @@ export function ItemStockDetailPage() {
               reversing={submitting}
               onReverse={(movementId) => reverse(selectedItem.id, movementId, 'Manual reversal from stock detail')}
             />
+            <BundlePanel authToken={authToken} itemId={selectedItem.id} canEdit={canAdjust} />
             {canAdjust && detail && (
               <Card>
                 <CardHeader><CardTitle className="text-sm">Post an adjustment</CardTitle></CardHeader>
