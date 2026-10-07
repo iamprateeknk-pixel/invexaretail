@@ -319,9 +319,17 @@ plain numbers and the API still returns JSON numbers. Found and fixed while trac
 read an item's prices; both now filter by company. Proven in
 `catalog-procurement-price-list.postgres.test.ts`.
 
-Deliberately left Float (each needs its own reviewed slice): `Item.mrp` (flows through the in-memory
-item records and many raw item rows), `Location.shippingCostPerKm` (routing/replenishment cost
+Deliberately left Float (each needs its own reviewed slice): `Location.shippingCostPerKm` (routing/replenishment cost
 maths), and the PurchaseOrder/SupplierInvoice cost and total fields (landed-cost arithmetic).
+
+## Slice 6: `Item.mrp`
+
+Decimal(14,2) by `20261121090000_item_mrp_decimal`. Every whole-row Item read that reaches item
+records or the API goes through `lib/repositories/item-repository.ts` (`toItemRecord` converts to a
+plain number, an absent MRP stays absent) and the hydration in `lib/persistence.ts`; the remaining
+direct `prisma.item` reads select ids/categories or are internal. Proven in
+`lib/repositories/item-mrp-decimal.postgres.test.ts` (2dp rounding, number from find/list/search,
+JSON number).
 
 ## Exception-record policy
 
