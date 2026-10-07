@@ -1,4 +1,5 @@
 import { prisma } from './db.js';
+import { thresholdsAsNumbers } from './decimal-json.js';
 import { estimateValueAtRisk } from './exceptions.js';
 import type { TenantContext } from './tenant-context.js';
 
@@ -99,7 +100,7 @@ export async function getCountRecommendation(tenant: TenantContext, input: {
     ]);
 
     const ctx: ToleranceContext = { category: item?.category ?? null, branchId: location?.branchId ?? null, variancePercent, varianceValue };
-    const matched = evaluateTolerance(rules, ctx);
+    const matched = evaluateTolerance(rules.map(thresholdsAsNumbers), ctx);
     if (matched) {
       return {
         recommendRecount: true,

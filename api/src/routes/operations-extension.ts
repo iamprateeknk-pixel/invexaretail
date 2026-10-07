@@ -1,4 +1,5 @@
 import { loadSalesEvents, signedSalesQty, totalsByItem } from '../lib/sales-demand.js';
+import { thresholdsAsNumbers } from '../lib/decimal-json.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
@@ -1809,10 +1810,10 @@ router.get('/orders/:id/returns', async (req, res) => {
 async function returnQcContext(companyId: string, returnRequestId: string, itemIds: string[]) {
   const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
   const templates: Array<{ id: string; category: string | null; active: boolean }> = databaseEnabled
-    ? await prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
+    ? await prisma.qcChecklistTemplate.findMany({ where: { active: true, createdBy: { companyId } } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
     : listMemoryQcTemplates().filter((row) => row.active);
   const inspections: InspectionLike[] = databaseEnabled
-    ? await prisma.qcInspection.findMany({ where: { sourceDocument: returnRequestId } }).catch(() => [])
+    ? await prisma.qcInspection.findMany({ where: { sourceDocument: returnRequestId, inspectedBy: { companyId } } }).catch(() => [])
     : listMemoryQcInspections().filter((row) => row.sourceDocument === returnRequestId);
   const categories = new Map<string, string | null>();
   if (databaseEnabled && itemIds.length) {
@@ -2031,10 +2032,11 @@ router.post('/orders/:id/retry-backorder', async (req, res) => {
 router.get('/approval-rules', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const rules = await prisma.approvalRule.findMany({
+    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { branch: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
   }).catch(() => []);
-  return res.json({ rules });
+  return res.json({ rules: rules.map(thresholdsAsNumbers) });
 });
 
 router.post('/approval-rules', async (req, res) => {
@@ -2051,7 +2053,7 @@ router.post('/approval-rules', async (req, res) => {
       data: { label, triggerType, valueThreshold, requiredApproverRole, branchId: req.body.branchId || null, createdById: req.user!.id },
       include: { branch: { select: { id: true, name: true } } },
     });
-    return res.status(201).json({ rule });
+    return res.status(201).json({ rule: thresholdsAsNumbers(rule) });
   } catch (error) {
     return res.status(503).json({ message: error instanceof Error ? error.message : 'Approval rules are not available on this database yet.' });
   }
@@ -2065,9 +2067,10 @@ router.patch('/approval-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.valueThreshold !== undefined) data.valueThreshold = Number(req.body.valueThreshold);
   if (req.body.requiredApproverRole !== undefined) data.requiredApproverRole = req.body.requiredApproverRole;
-  const rule = await prisma.approvalRule.update({ where: { id: req.params.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null);
+  const ownedApprovalRule = await prisma.approvalRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const rule = ownedApprovalRule ? await prisma.approvalRule.update({ where: { id: ownedApprovalRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Approval rule not found.' });
-  return res.json({ rule });
+  return res.json({ rule: thresholdsAsNumbers(rule) });
 });
 
 router.get('/approval-requests', async (req, res) => {
@@ -2108,10 +2111,11 @@ router.post('/approval-requests/:id/decide', async (req, res) => {
 router.get('/tolerance-rules', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const rules = await prisma.toleranceRule.findMany({
+    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { branch: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
   }).catch(() => []);
-  return res.json({ rules });
+  return res.json({ rules: rules.map(thresholdsAsNumbers) });
 });
 
 router.post('/tolerance-rules', async (req, res) => {
@@ -2132,7 +2136,7 @@ router.post('/tolerance-rules', async (req, res) => {
       },
       include: { branch: { select: { id: true, name: true } } },
     });
-    return res.status(201).json({ rule });
+    return res.status(201).json({ rule: thresholdsAsNumbers(rule) });
   } catch (error) {
     return res.status(503).json({ message: error instanceof Error ? error.message : 'Tolerance rules are not available on this database yet.' });
   }
@@ -2147,9 +2151,10 @@ router.patch('/tolerance-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.valueThreshold !== undefined) data.valueThreshold = req.body.valueThreshold === '' || req.body.valueThreshold === null ? null : Number(req.body.valueThreshold);
   if (req.body.percentThreshold !== undefined) data.percentThreshold = req.body.percentThreshold === '' || req.body.percentThreshold === null ? null : Number(req.body.percentThreshold);
-  const rule = await prisma.toleranceRule.update({ where: { id: req.params.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null);
+  const ownedToleranceRule = await prisma.toleranceRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const rule = ownedToleranceRule ? await prisma.toleranceRule.update({ where: { id: ownedToleranceRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Tolerance rule not found.' });
-  return res.json({ rule });
+  return res.json({ rule: thresholdsAsNumbers(rule) });
 });
 
 // ============================================================================
@@ -2160,10 +2165,11 @@ router.patch('/tolerance-rules/:id', async (req, res) => {
 router.get('/evidence-rules', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const rules = await prisma.evidenceRule.findMany({
+    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { branch: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
   }).catch(() => []);
-  return res.json({ rules });
+  return res.json({ rules: rules.map(thresholdsAsNumbers) });
 });
 
 router.post('/evidence-rules', async (req, res) => {
@@ -2185,7 +2191,7 @@ router.post('/evidence-rules', async (req, res) => {
       },
       include: { branch: { select: { id: true, name: true } } },
     });
-    return res.status(201).json({ rule });
+    return res.status(201).json({ rule: thresholdsAsNumbers(rule) });
   } catch (error) {
     return res.status(503).json({ message: error instanceof Error ? error.message : 'Evidence rules are not available on this database yet.' });
   }
@@ -2200,9 +2206,10 @@ router.patch('/evidence-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.quantityThreshold !== undefined) data.quantityThreshold = req.body.quantityThreshold === '' || req.body.quantityThreshold === null ? null : Number(req.body.quantityThreshold);
   if (req.body.valueThreshold !== undefined) data.valueThreshold = req.body.valueThreshold === '' || req.body.valueThreshold === null ? null : Number(req.body.valueThreshold);
-  const rule = await prisma.evidenceRule.update({ where: { id: req.params.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null);
+  const ownedEvidenceRule = await prisma.evidenceRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const rule = ownedEvidenceRule ? await prisma.evidenceRule.update({ where: { id: ownedEvidenceRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Evidence rule not found.' });
-  return res.json({ rule });
+  return res.json({ rule: thresholdsAsNumbers(rule) });
 });
 
 // ============================================================================
@@ -2213,6 +2220,7 @@ router.patch('/evidence-rules/:id', async (req, res) => {
 router.get('/qc-templates', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const templates = await prisma.qcChecklistTemplate.findMany({
+    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { createdBy: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
   }).catch(() => []);
@@ -2246,7 +2254,8 @@ router.patch('/qc-templates/:id', async (req, res) => {
   if (req.body.label !== undefined) data.label = String(req.body.label).trim();
   if (req.body.category !== undefined) data.category = req.body.category || null;
   if (Array.isArray(req.body.checks)) data.checks = req.body.checks;
-  const template = await prisma.qcChecklistTemplate.update({ where: { id: req.params.id }, data }).catch(() => null);
+  const ownedTemplate = await prisma.qcChecklistTemplate.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const template = ownedTemplate ? await prisma.qcChecklistTemplate.update({ where: { id: ownedTemplate.id }, data }).catch(() => null) : null;
   if (template) return res.json({ template });
   const memory = patchMemoryQcTemplate(req.params.id, {
     active: data.active as boolean | undefined,
@@ -2262,7 +2271,7 @@ router.get('/qc-inspections', async (req, res) => {
   const sourceDocument = typeof req.query.sourceDocument === 'string' ? req.query.sourceDocument : undefined;
   const sourceLineId = typeof req.query.sourceLineId === 'string' ? req.query.sourceLineId : undefined;
   const inspections = await prisma.qcInspection.findMany({
-    where: { ...(sourceDocument ? { sourceDocument } : {}), ...(sourceLineId ? { sourceLineId } : {}) },
+    where: { inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...(sourceDocument ? { sourceDocument } : {}), ...(sourceLineId ? { sourceLineId } : {}) },
     include: {
       template: { select: { id: true, label: true } },
       item: { select: { id: true, code: true, name: true } },

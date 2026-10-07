@@ -14,24 +14,6 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 596,
-    "snippet": "valueThreshold   Float?"
-  },
-  {
-    "rule": "float-money",
-    "file": "prisma/schema.prisma",
-    "line": 625,
-    "snippet": "valueThreshold       Float"
-  },
-  {
-    "rule": "float-money",
-    "file": "prisma/schema.prisma",
-    "line": 652,
-    "snippet": "valueThreshold    Float?"
-  },
-  {
-    "rule": "float-money",
-    "file": "prisma/schema.prisma",
     "line": 735,
     "snippet": "mrp               Float?"
   },

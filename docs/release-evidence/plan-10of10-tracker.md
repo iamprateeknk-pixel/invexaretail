@@ -11,7 +11,8 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | B Stock integrity | Canonical posting, job consumption in one transaction | done | `lib/job-consumption-service.ts` + 8 Postgres tests |
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |
 | B | Virtual bundles/kits | done | `routes/bundles.ts`, contract entries |
-| B | Remaining Float -> Decimal fields | partial | Slices shipped; `docs/decimal-migration-plan.md` lists the rest |
+| B | Remaining Float -> Decimal fields | partial | Slice 4 (rule thresholds) shipped, 12 tracked money Floats left (PurchaseOrder/Invoice costs and totals, PriceList, Item.mrp ...); `docs/decimal-migration-plan.md` |
+| C | Approval/tolerance/evidence rules and QC templates company-scoped | done | Lists, PATCH (404 on foreign id) and `checkApprovalGate`; Postgres test fails on the old code |
 | C Tenant security | Asset checkouts, lots, comments, notifications company-scoped (404 not 403) | done | Migration `20261114090000`; 9 negative cross-tenant Postgres tests that failed on the old code |
 | C | Lint covers all tenant models | done | `scripts/architecture-lint.mjs` widened, baseline regenerated |
 | D Auth | Non-enumerating OTP, password policy, session revoke on disable/change | done | `otp-privacy.http.test.ts`, `admin-user-security.http.test.ts` |

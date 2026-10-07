@@ -287,6 +287,29 @@ the ~24 files performing real arithmetic, not just storage/comparison) still nee
 each with the same discipline: real-Postgres verification before merge, and any comparison or
 arithmetic call site converted in the same change as its schema type.
 
+## Slice 4: rule thresholds (`ApprovalRule`/`EvidenceRule`/`ToleranceRule.valueThreshold`)
+
+Decimal(14,2) by migration `20261117090000_rule_thresholds_decimal` (round-half-up to 2dp; the
+exception-detection query is in the migration header). This closes the comparison concern the
+slice-1 note raised: the rows are converted to plain numbers at the loading boundary
+(`lib/decimal-json.ts` `thresholdsAsNumbers`, used in `checkApprovalGate`, the tolerance and
+evidence gates) so `value >= threshold` never compares a number with a `Prisma.Decimal`, and every
+rule route returns JSON numbers, not Decimal strings. Proven in
+`src/routes/operations-extension-rules.postgres.test.ts` (2dp rounding, number on the wire).
+
+The same slice fixed a tenant-isolation gap found while tracing these loaders: the approval/
+tolerance/evidence rule lists and QC template list returned every company's rows, their PATCH
+handlers updated by bare id, and `checkApprovalGate` applied *any* company's approval rule to the
+caller's action. Lists and loaders now filter by the creator's company, PATCH resolves a foreign id as
+404, and `checkApprovalGate` requires a `companyId`. The same test file proves it (it fails on the
+previous route code).
+
+The QC subsystem had the same shape and is fixed too: every QC template lookup (receiving, transfer
+receive, returns, the PO scorecard) and every QC inspection list now filters by the creating user's
+company, and the default checklist is created per company (`default-qc-template:<companyId>`) instead
+of one shared fixed id. Before this, one company's active QC template made QC mandatory for every
+other company's receipts.
+
 ## Exception-record policy
 
 Any row flagged during the real (non-rehearsal) migration run is copied to
