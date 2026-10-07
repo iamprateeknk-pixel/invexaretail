@@ -44,15 +44,15 @@ function deny(res: Response) {
 }
 
 // The parts only the database holds; a failure here never takes the dashboard down.
-async function databaseExtras() {
+async function databaseExtras(companyId: string) {
   if (!databaseEnabled) return undefined;
   try {
     const open = ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] as never[];
     const [openCount, critical, overdue, pending] = await Promise.all([
-      prisma.exceptionCase.count({ where: { status: { in: open } } }),
-      prisma.exceptionCase.count({ where: { status: { in: open }, priority: 'CRITICAL' } }),
-      prisma.exceptionCase.count({ where: { status: { in: open }, dueAt: { lt: new Date() } } }),
-      prisma.approvalRequest.count({ where: { status: 'PENDING' } }),
+      prisma.exceptionCase.count({ where: { companyId, status: { in: open } } }),
+      prisma.exceptionCase.count({ where: { companyId, status: { in: open }, priority: 'CRITICAL' } }),
+      prisma.exceptionCase.count({ where: { companyId, status: { in: open }, dueAt: { lt: new Date() } } }),
+      prisma.approvalRequest.count({ where: { status: 'PENDING', requestedBy: { companyId } } }),
     ]);
     return { exceptions: { open: openCount, critical, overdue }, approvals: { pending } };
   } catch (error) {
@@ -77,7 +77,7 @@ router.get('/command-center', ...guard, async (req: Request, res: Response) => {
     audit: companyAudit(companyId),
     userNames: users,
     live: { clients: subscriberCount(), lastEventId: latestEventId() },
-    extras: await databaseExtras(),
+    extras: await databaseExtras(companyId),
   });
   return res.json({ commandCenter: center });
 });

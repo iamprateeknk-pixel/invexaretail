@@ -12,6 +12,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |
 | B | Virtual bundles/kits | done | `routes/bundles.ts`, contract entries |
 | B | Remaining Float -> Decimal fields | partial | Slice 4 (rule thresholds) shipped, 12 tracked money Floats left (PurchaseOrder/Invoice costs and totals, PriceList, Item.mrp ...); `docs/decimal-migration-plan.md` |
+| C | Webhook subscriptions/deliveries, approval requests, saved reports, serial numbers and command-center counts company-scoped | done | Events deliver only to the producing company's hooks (unattributable events are dropped); migrations `20261118090000`, `20261119090000`; Postgres suites `operations-extension-webhooks`, `tenant-sweep-approvals-reports-serials`, unit tests in `webhook-dispatcher.test.ts` |
 | C | Approval/tolerance/evidence rules and QC templates company-scoped | done | Lists, PATCH (404 on foreign id) and `checkApprovalGate`; Postgres test fails on the old code |
 | C Tenant security | Asset checkouts, lots, comments, notifications company-scoped (404 not 403) | done | Migration `20261114090000`; 9 negative cross-tenant Postgres tests that failed on the old code |
 | C | Lint covers all tenant models | done | `scripts/architecture-lint.mjs` widened, baseline regenerated |

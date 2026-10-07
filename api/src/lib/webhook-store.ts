@@ -21,10 +21,14 @@ export type WebhookSubscriptionRecord = {
   status: WebhookStatus;
   createdAt: string;
   updatedAt: string;
+  /** The company whose events this subscription receives - and the only one that may see or change it. */
+  companyId: string;
 };
 
 export type WebhookDeliveryRecord = {
   id: string;
+  /** Owning company, copied from the event that produced the delivery. */
+  companyId?: string;
   subscriptionId: string;
   eventType: string;
   entityId: string | null;
@@ -39,7 +43,7 @@ export type WebhookDeliveryRecord = {
   body: string | null;
 };
 
-export type PublicWebhookSubscription = Omit<WebhookSubscriptionRecord, 'signingSecret' | 'secretHash'>;
+export type PublicWebhookSubscription = Omit<WebhookSubscriptionRecord, 'signingSecret' | 'secretHash' | 'companyId'>;
 
 const subscriptions: WebhookSubscriptionRecord[] = [];
 const deliveries: WebhookDeliveryRecord[] = [];
@@ -61,15 +65,16 @@ export function toPublicSubscription(record: WebhookSubscriptionRecord): PublicW
   };
 }
 
-export function listWebhookSubscriptions(): PublicWebhookSubscription[] {
-  return [...subscriptions]
+export function listWebhookSubscriptions(companyId: string): PublicWebhookSubscription[] {
+  return subscriptions
+    .filter((subscription) => subscription.companyId === companyId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map(toPublicSubscription);
 }
 
-export function listMatchingSubscriptions(eventType: string): WebhookSubscriptionRecord[] {
+export function listMatchingSubscriptions(eventType: string, companyId: string): WebhookSubscriptionRecord[] {
   return subscriptions.filter((subscription) =>
-    subscription.status === 'ACTIVE' && subscription.events.includes(eventType as WebhookEventType),
+    subscription.companyId === companyId && subscription.status === 'ACTIVE' && subscription.events.includes(eventType as WebhookEventType),
   );
 }
 
@@ -84,6 +89,7 @@ export function createWebhookSubscription(input: {
   allowPrivate?: boolean;
   id?: string;
   signingSecret?: string;
+  companyId: string;
 }): { subscription: PublicWebhookSubscription; signingSecret: string } {
   const name = parseWebhookName(input.name);
   const events = parseWebhookEvents(input.events);
@@ -100,29 +106,32 @@ export function createWebhookSubscription(input: {
     status: 'ACTIVE',
     createdAt: now,
     updatedAt: now,
+    companyId: input.companyId,
   };
   subscriptions.unshift(record);
   return { subscription: toPublicSubscription(record), signingSecret };
 }
 
-export function setWebhookSubscriptionStatus(id: string, status: string): PublicWebhookSubscription {
+export function setWebhookSubscriptionStatus(id: string, status: string, companyId: string): PublicWebhookSubscription {
   if (status !== 'ACTIVE' && status !== 'PAUSED') {
     throw new Error('Status must be ACTIVE or PAUSED.');
   }
-  const record = subscriptions.find((subscription) => subscription.id === id);
+  // A foreign company's id is indistinguishable from a missing one.
+  const record = subscriptions.find((subscription) => subscription.id === id && subscription.companyId === companyId);
   if (!record) throw new Error('Webhook subscription was not found.');
   record.status = status;
   record.updatedAt = new Date().toISOString();
   return toPublicSubscription(record);
 }
 
-export function listWebhookDeliveries(limit = 100): WebhookDeliveryRecord[] {
-  return deliveries.slice(0, limit).map((row) => ({ ...row }));
+export function listWebhookDeliveries(limit = 100, companyId?: string): WebhookDeliveryRecord[] {
+  return (companyId === undefined ? deliveries : deliveries.filter((row) => row.companyId === companyId)).slice(0, limit).map((row) => ({ ...row }));
 }
 
 export function recordWebhookDelivery(input: Omit<WebhookDeliveryRecord, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): WebhookDeliveryRecord {
   const record: WebhookDeliveryRecord = {
     id: input.id ?? `whdel-${randomBytes(6).toString('hex')}`,
+    companyId: input.companyId,
     subscriptionId: input.subscriptionId,
     eventType: input.eventType,
     entityId: input.entityId,

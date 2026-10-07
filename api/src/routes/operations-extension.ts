@@ -1083,8 +1083,9 @@ router.post('/intelligence/:locationId/dismiss', async (req, res) => {
 
 router.get('/webhook-subscriptions', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  if (!databaseEnabled) return res.json({ subscriptions: listWebhookSubscriptions() });
+  if (!databaseEnabled) return res.json({ subscriptions: listWebhookSubscriptions(req.companyId ?? DEFAULT_COMPANY_ID) });
   const subscriptions = await prisma.webhookSubscription.findMany({
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     select: { id: true, name: true, endpointUrl: true, events: true, status: true, createdAt: true, updatedAt: true },
     orderBy: { createdAt: 'desc' },
   });
@@ -1099,11 +1100,13 @@ router.post('/webhook-subscriptions', async (req, res) => {
       endpointUrl: req.body.endpointUrl,
       events: req.body.events,
       allowPrivate: !databaseEnabled,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (databaseEnabled) {
       await prisma.webhookSubscription.create({
         data: {
           id: created.subscription.id,
+          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
           name: created.subscription.name,
           endpointUrl: created.subscription.endpointUrl,
           events: created.subscription.events,
@@ -1123,12 +1126,11 @@ router.post('/webhook-subscriptions', async (req, res) => {
 router.patch('/webhook-subscriptions/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const subscription = setWebhookSubscriptionStatus(req.params.id, req.body.status);
+    const subscription = setWebhookSubscriptionStatus(req.params.id, req.body.status, req.companyId ?? DEFAULT_COMPANY_ID);
     if (databaseEnabled) {
-      await prisma.webhookSubscription.update({
-        where: { id: req.params.id },
+      await prisma.webhookSubscription.updateMany({
+        where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
         data: { status: req.body.status },
-        select: { id: true, name: true, endpointUrl: true, events: true, status: true, createdAt: true, updatedAt: true },
       }).catch(() => undefined);
     }
     return res.json({ subscription });
@@ -1395,21 +1397,21 @@ router.post('/items/:itemId/serials', async (req, res) => {
 router.get('/items/:itemId/serials', async (req, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
   const serials = await prisma.serialNumber.findMany({
-    where: { itemId: req.params.itemId, ...(status ? { status } : {}) },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: req.params.itemId, ...(status ? { status } : {}) },
     orderBy: { receivedAt: 'desc' },
   });
   return res.json({ serials });
 });
 
 router.get('/serials/:serial', async (req, res) => {
-  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial } });
+  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!record) return res.status(404).json({ message: 'Serial was not found.' });
   const movements = await prisma.serialMovement.findMany({ where: { serialNumberId: record.id }, orderBy: { createdAt: 'asc' } });
   return res.json({ serial: record, trace: buildRecallTrace(movements) });
 });
 
 router.post('/serials/:serial/move', async (req, res) => {
-  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial } });
+  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!record) return res.status(404).json({ message: 'Serial was not found.' });
   const toLocationId = typeof req.body.toLocationId === 'string' ? req.body.toLocationId : null;
   if (toLocationId && !canAccessLocation(req, toLocationId)) return res.status(403).json({ message: 'Location access denied.' });
@@ -2077,7 +2079,7 @@ router.get('/approval-requests', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const status = typeof req.query.status === 'string' ? req.query.status : 'PENDING';
   const requests = await prisma.approvalRequest.findMany({
-    where: status === 'all' ? {} : { status },
+    where: { requestedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...(status === 'all' ? {} : { status }) },
     include: {
       rule: { select: { id: true, label: true, requiredApproverRole: true } },
       requestedBy: { select: { id: true, name: true } },
@@ -2096,7 +2098,7 @@ router.post('/approval-requests/:id/decide', async (req, res) => {
   const decision = req.body.decision === 'APPROVED' || req.body.decision === 'REJECTED' ? req.body.decision : null;
   if (!decision) return res.status(400).json({ message: 'decision must be APPROVED or REJECTED.' });
   try {
-    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, req.body.notes || null);
+    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, req.body.notes || null, req.companyId ?? DEFAULT_COMPANY_ID);
     // valueAtStake is Decimal (docs/decimal-migration-plan.md) - see the same note on GET /approval-requests.
     return res.json({ request: { ...request, valueAtStake: Number(request.valueAtStake) } });
   } catch (error) {
@@ -2672,9 +2674,9 @@ router.post('/connectors/:id/ingest', async (req, res) => {
 
 router.get('/webhook-deliveries', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const memory = listWebhookDeliveries();
+  const memory = listWebhookDeliveries(100, req.companyId ?? DEFAULT_COMPANY_ID);
   if (!databaseEnabled) return res.json({ deliveries: memory });
-  const persisted = await prisma.webhookDeliveryLog.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
+  const persisted = await prisma.webhookDeliveryLog.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'desc' }, take: 100 });
   const seen = new Set(memory.map((row) => row.id));
   return res.json({
     deliveries: [
@@ -2691,7 +2693,7 @@ router.get('/webhook-deliveries', async (req, res) => {
 router.post('/webhook-deliveries/:id/replay', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
-    const delivery = await replayDelivery(req.params.id);
+    const delivery = await replayDelivery(req.params.id, req.companyId ?? DEFAULT_COMPANY_ID);
     return res.json({ delivery });
   } catch (error) {
     if (error instanceof WebhookReplayError) return res.status(409).json({ message: error.message });
@@ -2705,7 +2707,7 @@ router.post('/webhook-deliveries/:id/replay', async (req, res) => {
 // drives dead-letter recovery from here.
 router.post('/webhook-deliveries/retry-due', async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  const result = await retryDueDeliveries();
+  const result = await retryDueDeliveries(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json(result);
 });
 
