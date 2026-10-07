@@ -11,6 +11,11 @@ import { ownerOfItem } from '../saas/tenant-scope.js';
 import { items as memoryItems, type ItemRecord } from '../repository.js';
 import type { TenantContext } from '../tenant-context.js';
 
+/** mrp is Decimal(14,2) in the database; item records (and the API built on them) carry a plain number. */
+function toItemRecord(row: { mrp?: unknown }): ItemRecord {
+  return { ...row, mrp: row.mrp == null ? undefined : Number(row.mrp) } as unknown as ItemRecord;
+}
+
 export class ItemNotFoundError extends Error {
   constructor(itemId: string) {
     // Deliberately the same message/shape whether the item does not exist at
@@ -25,7 +30,7 @@ export class ItemNotFoundError extends Error {
 export async function findItemById(ctx: TenantContext, itemId: string): Promise<ItemRecord | null> {
   if (databaseEnabled) {
     const row = await prisma.item.findFirst({ where: { id: itemId, companyId: ctx.companyId } });
-    return row as unknown as ItemRecord | null;
+    return row ? toItemRecord(row) : null;
   }
   if (ownerOfItem(itemId) !== ctx.companyId) return null;
   return memoryItems.find((item) => item.id === itemId) ?? null;
@@ -41,7 +46,7 @@ export async function requireItemById(ctx: TenantContext, itemId: string): Promi
 export async function listItems(ctx: TenantContext, filter: { status?: string } = {}): Promise<ItemRecord[]> {
   if (databaseEnabled) {
     const rows = await prisma.item.findMany({ where: { companyId: ctx.companyId, ...(filter.status ? { status: filter.status } : {}) } });
-    return rows as unknown as ItemRecord[];
+    return rows.map(toItemRecord);
   }
   return memoryItems.filter((item) => ownerOfItem(item.id) === ctx.companyId && (!filter.status || item.status === filter.status));
 }
@@ -91,7 +96,7 @@ export async function searchItems(ctx: TenantContext, filter: ItemSearchFilter =
     });
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    return { items: page as unknown as ItemRecord[], nextCursor: hasMore ? page[page.length - 1].id : null };
+    return { items: page.map(toItemRecord), nextCursor: hasMore ? page[page.length - 1].id : null };
   }
 
   const matches = memoryItems

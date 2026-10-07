@@ -140,7 +140,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     barcode: item.barcode ?? undefined,
     hsn: item.hsn ?? undefined,
     gstRate: item.gstRate ?? undefined,
-    mrp: item.mrp ?? undefined,
+    mrp: item.mrp == null ? undefined : Number(item.mrp),
     leadTimeDays: item.leadTimeDays ?? undefined,
     shelfLifeDays: item.shelfLifeDays ?? undefined,
     aliases: Array.isArray(item.aliases) ? (item.aliases as string[]) : undefined,

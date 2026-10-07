@@ -732,7 +732,8 @@ model Item {
   barcode           String?
   hsn               String?
   gstRate           Float?
-  mrp               Float?
+  // Decimal migration slice 6 (docs/decimal-migration-plan.md): money, Decimal(14,2).
+  mrp               Decimal?          @db.Decimal(14, 2)
   leadTimeDays      Int?
   shelfLifeDays     Int?
   // ERP aliases / alternate names and codes used to resolve import rows.
