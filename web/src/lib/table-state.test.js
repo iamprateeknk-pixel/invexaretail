@@ -106,3 +106,13 @@ test('filterRows matches every word across the chosen fields, and returns all ro
   assert.deepEqual(filterRows(rows, 'nothing', fields), []);
   assert.deepEqual(filterRows(undefined, 'x', fields), []);
 });
+
+test('table state round-trips through the location hash without touching the section path', async () => {
+  const { readTableStateFromHash, hashWithTableState } = await import('./table-state.js');
+  assert.deepEqual(readTableStateFromHash('#/orders'), DEFAULT_TABLE_STATE);
+  const hash = hashWithTableState('#/orders', { ...DEFAULT_TABLE_STATE, q: 'web store', density: 'compact' });
+  assert.equal(hash, '#/orders?q=web+store&density=compact');
+  assert.deepEqual(readTableStateFromHash(hash), { ...DEFAULT_TABLE_STATE, q: 'web store', density: 'compact' });
+  assert.equal(hashWithTableState(hash, DEFAULT_TABLE_STATE), '#/orders', 'defaults leave a clean URL');
+  assert.equal(hashWithTableState('#/orders?q=old', { ...DEFAULT_TABLE_STATE, q: 'new' }), '#/orders?q=new', 'an old query is replaced, not appended');
+});
