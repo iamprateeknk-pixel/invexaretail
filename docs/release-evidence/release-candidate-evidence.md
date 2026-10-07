@@ -11,7 +11,7 @@ alone: "a feature existing in source code is not evidence that the production wo
 |---|---|
 | Commit | `git rev-parse HEAD` of the merge commit on `main` (this file is committed with it) |
 | Runtime | Node 24.19, PostgreSQL 17 (Docker), Flutter/Dart per `mobile/pubspec.yaml` |
-| Contract | OpenAPI `2026.17.0`, 41 paths (`api/contracts/openapi.json`), generated client in CI drift check |
+| Contract | OpenAPI `2026.18.0`: all 264 operations the API serves are listed (221 paths); 45 are fully specified, 219 are marked `x-contract-level: path-only` (verified method, path, parameters, auth; body shapes still free-form). A ratchet test (`contract-coverage.test.ts`, floors in `contracts/coverage-floor.json`) fails CI if either number drops. Generated client in the CI drift check |
 | Migrations | 38 (`api/prisma/migrations`), all additive for one release window; money columns widen/round in place (see rollback) |
 
 ## 2. Evidence by Appendix B item
@@ -168,7 +168,7 @@ Legend: **E** evidence in this repository, **P** partial, **N** not done.
 | E | Major queues share DataTable patterns | `TableToolbar` + `useTableView` on exceptions, orders, purchase orders, QC, assets, jobs, transfers, count tasks, connectors: search, density, saved views, URL state, CSV export (formula-injection safe), column manager (purchase orders, transfers); client-side filtering of loaded rows, **not** server-side pagination |
 | E | Routes lazy load | every page `lazy()`; build chunks |
 | E | Keyboard, responsive and non-color-only checks | real browser: 28 sections at 375 px with no horizontal page scroll; 474 interactive controls across all 28 sections, all with an accessible name (10 unnamed controls found and fixed); statuses are text badges |
-| P | Dashboard KPIs reconcile and charts drill down | KPI cards link to the exact filtered queue; a numeric reconciliation test of every card against its source queue was not written |
+| E | Dashboard KPIs reconcile and charts drill down | KPI cards link to the exact filtered queue; `dashboard-reconciliation.postgres.test.ts` proves the open-exception headline, the status and priority breakdowns and the overdue count each equal the rows behind them across pages (closed cases and other companies excluded) |
 | E | Global search / command palette, saved views, density | `CommandPaletteDialog` (items + pages), saved views per user, density |
 | E | Lot/Location/Transfer/Count/User 360 + timelines (Item 360 is the stock-detail page) | `GET /entities/:type/:id/360`, `Entity360Page`, `entities.postgres.test.ts`; opened in a real browser from a location to a transfer |
 | P | Loading/empty/error/offline/stale/conflict states | shared `feedback-states` components and tests; "stale" is the mobile snapshot banner; no chart-fallback regression test |

@@ -11,7 +11,7 @@
 | UX | Five golden journeys pass desktop/tablet/mobile + keyboard | Partial | Shared DataTable pattern, Entity 360, a11y names verified on all 28 sections in a real browser, no overflow at 375 px; 3 Playwright specs authored (not executed here); no usability tests |
 | Mobile | Signed build, secure storage, real offline DB, sync recovery | Partial | One SQLite outbox, offline read model (cold-start snapshot), identity-bound queues, no second login; **no signed build and no device matrix** |
 | Observability | Trace, logs, SLO alerts, business reconciliation visible | Partial | Reconciliation, sync health and outbox SLOs queryable and pushed to `ALERT_WEBHOOK_URL` (tested); no collector, hosted dashboard or configured destination |
-| Documentation | README, ADRs, API, deploy, rollback, incident docs current | Mostly met | Canonical runbook with rollback and incident handling, evidence package, tracker; OpenAPI covers 41 paths, not every route |
+| Documentation | README, ADRs, API, deploy, rollback, incident docs current | Mostly met | Canonical runbook with rollback and incident handling, evidence package, tracker; OpenAPI lists every served operation (264); 45 are fully specified, the rest path-only |
 | Governance | Protected main, review gates, evidence, release owner | Unverified | Branch protection, required reviewers, signed tag and SBOM cannot be checked from the repository |
 | Operations | Canary and rollback exercised; 30-day review scheduled | **Not done** | Local rollback rehearsal only; canary needs a staging/canary environment |
 
