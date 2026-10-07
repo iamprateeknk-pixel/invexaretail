@@ -29,7 +29,7 @@ Real SQLite (`sqlite3` package), replacing the earlier JSON file that only imita
 
 - Location: application-support directory (`invexa_drift.sqlite`), WAL mode.
 - Versioned migrations tracked in `PRAGMA user_version`; a database newer than the app is refused, not downgraded. Each migration and every multi-row write runs in one transaction (a failing write rolls back completely).
-- Tables: `queued_counts`, `queued_actions` (legacy queues), `sync_commands` (the durable command queue: `command_id` PK, tenant, actor, type, entity, `base_version`, payload, `status` PENDING/SYNCED/CONFLICT/REJECTED, `attempts`, `last_error`, `server_version`), `entity_versions`.
+- Tables (schema v4): `sync_commands` is the single outbox - queued counts and actions are rows of type `COUNT` / `ACTION` (the legacy `queued_counts`/`queued_actions` tables were migrated into it and dropped), alongside typed offline commands. Columns: `command_id` PK, tenant, actor, type, entity, `base_version`, payload, `status` PENDING/SYNCED/CONFLICT/REJECTED, `attempts`, `last_error`, `server_version`), `entity_versions`.
 - `enqueueCommand` is idempotent on `commandId`; commands replay in creation order per company; attempts, errors and conflicts survive process death; a conflicted command can be rebased and retried.
 - **No secrets in SQLite.** Sessions and refresh tokens live in Keychain/Keystore-backed `flutter_secure_storage` (`SecureLocalStore`). `DriftStore` deliberately stores no session.
 - The custom XOR `SyncVault` was removed - it was never wired to a production key, and the database is app-private. No app-layer crypto remains; add a reviewed AEAD library only if a threat model requires it.
@@ -40,6 +40,6 @@ On first launch after upgrade, an existing `invexa_drift.sqlite` that is really 
 
 ### Not done / not verified
 
-- `sync_commands` is built and tested but nothing enqueues into it yet (see above); the live queue is `queued_counts`/`queued_actions`, drained by `SessionController.flushQueue`.
+- One outbox is in place at the storage layer (v4 migration, tested). Typed offline commands (`enqueueCommand`, conflict versions) are still not produced by the app screens, and `SessionController.flushQueue` still drains count/action rows through the existing per-type send paths.
 - Cold-start-offline, crash-during-transaction on a real device, camera permission flows and physical-device navigation tests were not run (no device in this environment). The native count/pick/receive/putaway/scan screens already existed; their behaviour on hardware is unverified.
 - Orders destination now shows a native read-only list from `GET /api/v1/orders` (it opened Transfers by mistake). The full-workspace WebView is pinned to trusted hosts and now grants **camera only**; every other permission request is denied.
