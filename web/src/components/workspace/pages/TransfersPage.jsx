@@ -4,6 +4,9 @@ import { logisticsLabel } from '../../../lib/transfer-packing';
 import TransferPackingDialog from '../../transfers/TransferPackingDialog';
 import { statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -25,14 +28,15 @@ export function TransfersPage() {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [pendingDelete, setPendingDelete] = useState([]);
   const itemsById = new Map((items ?? []).map((item) => [item.id, item]));
+  const view = useTableView(filteredTransfers, (transfer) => [transfer.id, transfer.item, transfer.fromName, transfer.toName, transfer.status, ...(transfer.cartons ?? []).map((carton) => carton.packageId)]);
 
   const canModify = (transfer) => EDITABLE_STATUSES.has(transfer.status)
     && ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER'].includes(role)
     && (role !== 'STORE_USER' || transfer.requestedBy === session?.user?.id);
   const selectableIds = useMemo(
-    () => filteredTransfers.filter(canModify).map((transfer) => transfer.id),
+    () => view.visible.filter(canModify).map((transfer) => transfer.id),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filteredTransfers, role, session?.user?.id],
+    [view.visible, role, session?.user?.id],
   );
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
 
@@ -58,6 +62,7 @@ export function TransfersPage() {
 
   return (
     <>
+      <TableToolbar tableId="transfers" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search transfers" />
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
           <div><CardTitle className="text-base">Transfer queue</CardTitle><p className="mt-1 text-xs text-muted-foreground">Import → FEFO pick slips → admin confirm → dispatch → receive</p></div>
@@ -71,11 +76,11 @@ export function TransfersPage() {
           <Table>
             <TableHeader><TableRow><TableHead className="w-10"><Checkbox aria-label="Select all editable transfers" checked={allSelected} onCheckedChange={(checked) => toggleAll(checked === true)} disabled={!selectableIds.length} /></TableHead><TableHead>Transfer</TableHead><TableHead>Route</TableHead><TableHead>Quantity</TableHead><TableHead>Cartons</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
             <TableBody>
-              {filteredTransfers.map((transfer) => {
+              {view.visible.map((transfer) => {
                 const actions = transferQueueActions(role, transfer.status);
                 const editable = canModify(transfer);
                 return (
-                  <TableRow key={transfer.id} data-state={selectedIds.has(transfer.id) ? 'selected' : undefined}>
+                  <TableRow key={transfer.id} data-state={selectedIds.has(transfer.id) ? 'selected' : undefined} className={view.compact ? '[&_td]:py-1' : ''}>
                     <TableCell><Checkbox aria-label={`Select transfer ${transfer.id}`} checked={selectedIds.has(transfer.id)} onCheckedChange={(checked) => toggleSelected(transfer.id, checked === true)} disabled={!editable} /></TableCell>
                     <TableCell><p className="font-medium">{transfer.item}</p><p className="text-xs text-muted-foreground">{transfer.id}</p></TableCell>
                     <TableCell>{transfer.fromName} <ArrowRight className="mx-1 inline size-3" /> {transfer.toName}</TableCell>

@@ -4,6 +4,9 @@ import { ItemSearchSelect } from '../../ItemSearchSelect';
 import { StockTakeCampaigns } from '../../counts/StockTakeCampaigns';
 import { formatDateTime, statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,6 +32,7 @@ export function CountsPage() {
     evidenceRules, evidenceRuleForm, setEvidenceRuleForm, createEvidenceRule, toggleEvidenceRule, deleteCountAssignments,
   } = useWorkspace();
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const { session } = useWorkspace();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   // A store user may only submit a blind count against an item that was
   // actually assigned to them at this location - a free-text item field let
@@ -48,15 +52,16 @@ export function CountsPage() {
   const queue = activeSection === 'approvals' && countStatusFilter === 'all'
     ? countTaskRows.filter((task) => String(task.status).toLowerCase().includes('pending'))
     : countTaskRows;
+  const view = useTableView(queue, (task) => [task.item, task.itemId, task.id, task.lot, task.locationName, task.assignedToName, task.status, task.priority]);
   const canDeleteSelected = ['ADMIN', 'ADMIN_USER'].includes(role) && selectedTaskIds.length > 0;
-  const allVisibleSelected = queue.length > 0 && queue.every((task) => selectedTaskIds.includes(task.id));
-  const someVisibleSelected = queue.some((task) => selectedTaskIds.includes(task.id));
+  const allVisibleSelected = view.visible.length > 0 && view.visible.every((task) => selectedTaskIds.includes(task.id));
+  const someVisibleSelected = view.visible.some((task) => selectedTaskIds.includes(task.id));
 
   function toggleTaskSelection(taskId, checked) {
     setSelectedTaskIds((current) => checked ? [...new Set([...current, taskId])] : current.filter((id) => id !== taskId));
   }
   function toggleAllVisible(checked) {
-    const visibleIds = queue.map((task) => task.id);
+    const visibleIds = view.visible.map((task) => task.id);
     setSelectedTaskIds((current) => checked ? [...new Set([...current, ...visibleIds])] : current.filter((id) => !visibleIds.includes(id)));
   }
   async function confirmDeleteSelected() {
@@ -162,13 +167,15 @@ export function CountsPage() {
         </Card>
       )}
 
+      <TableToolbar tableId="count-tasks" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search count tasks" />
+
       <Card>
         <CardContent className="p-0">
           <Table>
             <TableHeader><TableRow>{canManageCounts && <TableHead className="w-12"><Checkbox checked={allVisibleSelected || (someVisibleSelected && 'indeterminate')} onCheckedChange={toggleAllVisible} aria-label="Select all visible tasks" /></TableHead>}<TableHead>Task</TableHead><TableHead>Location</TableHead><TableHead>Assigned to</TableHead><TableHead>Created</TableHead><TableHead>Due</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Progress</TableHead></TableRow></TableHeader>
             <TableBody>
-              {queue.length ? queue.map((task) => (
-                <TableRow key={task.id} className="cursor-pointer" onClick={() => setSelectedCountTask(task)}>
+              {view.visible.length ? view.visible.map((task) => (
+                <TableRow key={task.id} className={`cursor-pointer ${view.compact ? '[&_td]:py-1' : ''}`} onClick={() => setSelectedCountTask(task)}>
                   <TableCell><p className="font-medium">{task.item ?? task.itemId}</p><p className="text-xs text-muted-foreground">{task.id} · {task.lot}</p></TableCell>
                   {canManageCounts && <TableCell onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedTaskIds.includes(task.id)} onCheckedChange={(checked) => toggleTaskSelection(task.id, checked === true)} aria-label={`Select ${task.item ?? task.itemId}`} /></TableCell>}
                   <TableCell>{task.locationName}</TableCell><TableCell>{task.assignedToName}</TableCell>
