@@ -24,7 +24,11 @@ jobs:
     # of individually-named steps that had drifted into being a complete duplicate of that same
     # loop. Removing the duplicate steps should bring this comfortably back under 15 minutes: this
     # bump is headroom for continued suite growth, not a workaround for the duplication itself.
-    timeout-minutes: 20
+    # Raised from 20 to 45: the suite is now 59 real-Postgres files, each its own process against a shared
+    # database (they cannot run in parallel), and the job hit the 20-minute limit and was cancelled on the
+    # commit that added the legacy-import journal tests. A fresh run takes roughly 22 minutes. If it keeps
+    # growing, split the loop into shards with one Postgres service container each rather than raising this again.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:17
