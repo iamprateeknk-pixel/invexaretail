@@ -35,7 +35,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure. Local equivalents done: restore case of the migration matrix and a rollback rehearsal (older release on the newer schema) - see `release-candidate-evidence.md` |
 | J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
-| K API contract | OpenAPI v2026.16.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in/session, sync health, webhooks, approvals | partial | 38 paths documented; most other routes still open |
+| K API contract | OpenAPI v2026.18.0: every operation served (264) is listed; 45 fully specified, 219 path-only | partial | Ratchet test keeps both numbers from dropping. Turning path-only entries into full request/response schemas is ongoing |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 
 ## What still blocks a GO
@@ -57,3 +57,5 @@ The API (Railway) has not been redeployed with this work: new migrations apply o
 | B | Zero unexplained reconciliation deltas | done | opening-journal backfill + `opening-journal-backfill.postgres.test.ts`; live run 11/11 explained |
 | J | Alerts pushed to a destination | done (needs `ALERT_WEBHOOK_URL`) | `lib/alerting.ts`, unit + Postgres tests |
 | J | Rollback rehearsal | done locally | `release-candidate-evidence.md` |
+| F | Dashboard KPIs reconcile to their source queues | done | `dashboard-reconciliation.postgres.test.ts` |
+| K | OpenAPI coverage measured and ratcheted | done | `src/contract-coverage.test.ts`, `contracts/coverage-floor.json` |
