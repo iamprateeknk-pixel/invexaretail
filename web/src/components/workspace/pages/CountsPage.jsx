@@ -20,6 +20,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { OpsMetricCard, OpsPageHeader, OpsSyncStatus, OpsWorkflowStepper } from '../../ops/OpsKit';
 
+const EXPORT_COLUMNS = [
+  { label: 'Task', value: (r) => r.id }, { label: 'Item', value: (r) => r.item ?? r.itemId }, { label: 'Lot', value: (r) => r.lot },
+  { label: 'Location', value: (r) => r.locationName }, { label: 'Assigned to', value: (r) => r.assignedToName }, { label: 'Created', value: (r) => r.createdAt },
+  { label: 'Due', value: (r) => r.dueAt }, { label: 'Priority', value: (r) => r.priority }, { label: 'Status', value: (r) => r.status },
+];
+
 export function CountsPage() {
   const {
         activeSection, countStatusFilter, setCountStatusFilter, countTaskRows, canManageCounts,
@@ -167,7 +173,7 @@ export function CountsPage() {
         </Card>
       )}
 
-      <TableToolbar tableId="count-tasks" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search count tasks" />
+      <TableToolbar tableId="count-tasks" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search count tasks" exportCsv={{ filename: 'count-tasks', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardContent className="p-0">

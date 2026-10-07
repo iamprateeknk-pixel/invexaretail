@@ -27,6 +27,7 @@ const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage').then((mod
 const AlertsPage = lazy(() => import('./pages/AlertsPage').then((module) => ({ default: module.AlertsPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })));
 const ImportWizardPage = lazy(() => import('./pages/ImportWizardPage').then((module) => ({ default: module.ImportWizardPage })));
+const Entity360Page = lazy(() => import('./pages/Entity360Page').then((module) => ({ default: module.Entity360Page })));
 const InventoryHealthPage = lazy(() => import('./pages/InventoryHealthPage').then((module) => ({ default: module.InventoryHealthPage })));
 import { EmptyState, LoadingState, PermissionDeniedState } from '@/components/ui/feedback-states';
 
@@ -59,6 +60,7 @@ const SECTION_PAGES = {
   integrations: IntegrationsPage,
   alerts: AlertsPage,
   admin: AdminPage,
+  entity: Entity360Page,
 };
 
 export function Workspace() {

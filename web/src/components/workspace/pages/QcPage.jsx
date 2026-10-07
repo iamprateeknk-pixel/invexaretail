@@ -9,6 +9,11 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ClipboardList } from 'lucide-react';
 
+const EXPORT_COLUMNS = [
+  { label: 'Item', value: (r) => r.item?.name || r.itemId }, { label: 'Source document', value: (r) => r.sourceDocument },
+  { label: 'Result', value: (r) => r.overallResult }, { label: 'Recorded', value: (r) => r.createdAt },
+];
+
 export function QcPage() {
   const {
     qcTemplates, qcInspections, qcForm, setQcForm, createQcTemplate, setQcTemplateActive, submitLoading,
@@ -54,7 +59,7 @@ export function QcPage() {
         </CardContent>
       </Card>
 
-      <TableToolbar tableId="qc-inspections" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search inspections" />
+      <TableToolbar tableId="qc-inspections" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search inspections" exportCsv={{ filename: 'qc-inspections', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Recent inspections</CardTitle></CardHeader>

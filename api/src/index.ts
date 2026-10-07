@@ -25,6 +25,7 @@ import transferEvidenceRouter from './routes/transfer-evidence.js';
 import transferLabelsRouter from './routes/transfer-labels.js';
 import importsRouter from './routes/imports.js';
 import reportsRouter from './routes/reports.js';
+import entitiesRouter from './routes/entities.js';
 import catalogProcurementRouter from './routes/catalog-procurement.js';
 import operationsExtensionRouter from './routes/operations-extension.js';
 import eventsRouter, { publishMutationEvents } from './routes/events.js';
@@ -315,6 +316,7 @@ app.use('/api/v1', transferEvidenceRouter);
 app.use('/api/v1', transferLabelsRouter);
 app.use('/api/v1', importsRouter);
 app.use('/api/v1', reportsRouter);
+app.use('/api/v1', entitiesRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 

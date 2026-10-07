@@ -72,6 +72,14 @@ export function enforcePlanLimits(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+/** UTC calendar day as a number such as 20261007, the unit of the daily request meter. */
+export function usageDayKey(now: Date): number {
+  return now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+}
+
+/** Swappable in tests so a day rollover can be exercised without waiting for midnight. */
+export const apiUsageClock = { now: (): Date => new Date() };
+
 export function enforceApiUsage(req: Request, res: Response, next: NextFunction): void {
   if (req.method === 'OPTIONS' || req.method === 'HEAD' || isAuthRoute(req)) {
     next();
@@ -83,6 +91,14 @@ export function enforceApiUsage(req: Request, res: Response, next: NextFunction)
     return;
   }
   const usage = controlPlane.usage.get(companyId) ?? {};
+  // "per day" has to mean per day: the counter restarts when the UTC date changes. Before this it only
+  // ever grew, so a company on a 20,000/day plan was locked out for good after 20,000 lifetime requests.
+  const today = usageDayKey(apiUsageClock.now());
+  if (usage.api_requests_day !== today) {
+    usage.api_requests = 0;
+    usage.api_requests_day = today;
+    controlPlane.usage.set(companyId, usage);
+  }
   const nextCount = (usage.api_requests ?? 0) + 1;
   const max = controlPlane.effectiveLimits(companyId).api_requests_per_day;
   if (typeof max === 'number' && nextCount > max) {

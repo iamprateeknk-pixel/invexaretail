@@ -654,6 +654,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/entities/{type}/{id}/360": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Everything about one lot, location, transfer, count or user: summary, what it is connected to, and what happened. Read-only and company scoped. */
+        get: operations["getEntity360"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/web-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A one-time code (about a minute) that opens the web workspace already signed in, so a native app never shows a second login. */
+        post: operations["createWebHandoff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/web-handoff/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trade the one-time code for a normal web session (HttpOnly refresh cookie). A code works once. */
+        post: operations["exchangeWebHandoff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1059,6 +1110,31 @@ export interface components {
             status?: "PENDING" | "APPROVED" | "REJECTED";
             requestedById?: string;
             decidedById?: string | null;
+        };
+        Entity360: {
+            /** @enum {string} */
+            type: "lot" | "location" | "transfer" | "count" | "user";
+            id: string;
+            title: string;
+            subtitle: string;
+            summary: {
+                label: string;
+                value: string;
+            }[];
+            related: {
+                kind: string;
+                id: string;
+                label: string;
+                detail?: string;
+            }[];
+            /** @description Newest first, at most 60 entries. */
+            timeline: {
+                /** Format: date-time */
+                at: string;
+                kind: string;
+                title: string;
+                detail?: string;
+            }[];
         };
     };
     responses: never;
@@ -2704,6 +2780,109 @@ export interface operations {
             };
             /** @description Not found (also for another company's id) or already decided. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getEntity360: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: "lot" | "location" | "transfer" | "count" | "user";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The 360 view. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        entity?: components["schemas"]["Entity360"];
+                    };
+                };
+            };
+            /** @description Unknown type, missing id, another company's id, or (for users) a caller below a management role - all the same answer. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The server runs without a database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createWebHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The code. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success?: boolean;
+                        code?: string;
+                        expiresInSeconds?: number;
+                    };
+                };
+            };
+            /** @description No or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    exchangeWebHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description A session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            /** @description Invalid, used or expired code, or the user is no longer active. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

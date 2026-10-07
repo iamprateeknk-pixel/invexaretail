@@ -6,6 +6,7 @@ import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.j
 import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
 import { startExpirySweep } from './lib/expiry-sweep.js';
 import { startReconciliationSchedule } from './lib/reconciliation-schedule.js';
+import { startAlertSweep } from './lib/alerting.js';
 import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
 import { deliverPersistedEvent } from './lib/event-bus.js';
 
@@ -38,6 +39,8 @@ async function main() {
   startExpirySweep();
   // Plan Area B WP4: nightly journal-vs-balance reconciliation, recorded per company.
   startReconciliationSchedule();
+  // Release checklist (Operations): breaches of the ops SLOs are pushed to ALERT_WEBHOOK_URL (a no-op when unset).
+  startAlertSweep();
   console.log('Invexa durable worker is running.');
 }
 

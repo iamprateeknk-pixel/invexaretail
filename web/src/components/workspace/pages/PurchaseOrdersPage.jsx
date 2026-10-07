@@ -4,6 +4,7 @@ import { statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { TableToolbar } from '@/components/ui/table-toolbar';
 import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { hiddenColumnCss, hiddenColumnIds } from '../../../lib/table-state';
 import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -78,6 +79,16 @@ function PurchasePlan({ locations, suppliers, plan, loadPurchasePlan, draftFromP
   );
 }
 
+const COLUMNS = [{ id: 'number', label: 'PO number' }, { id: 'supplier', label: 'Supplier' }, { id: 'destination', label: 'Destination' }, { id: 'expected', label: 'Expected' }, { id: 'status', label: 'Status' }, { id: 'amount', label: 'Amount' }];
+const EXPORT_COLUMNS = [
+  { label: 'PO number', value: (r) => r.number },
+  { label: 'Supplier', value: (r) => r.supplier?.name ?? r.supplierId },
+  { label: 'Destination', value: (r) => r.locationId },
+  { label: 'Expected', value: (r) => r.expectedAt },
+  { label: 'Status', value: (r) => r.status },
+  { label: 'Amount', value: (r) => r.totalAmount },
+];
+
 export function PurchaseOrdersPage() {
   const {
     role, newSupplier, setNewSupplier, createSupplier, submitLoading, purchaseOrderForm,
@@ -132,7 +143,7 @@ export function PurchaseOrdersPage() {
               <ItemSearchSelect items={items} value={purchaseOrderForm.itemId} onChange={(itemId) => setPurchaseOrderForm({ ...purchaseOrderForm, itemId })} />
               <Input type="number" min="1" value={purchaseOrderForm.quantity} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, quantity: Number(event.target.value) })} placeholder="Quantity" />
               <Input type="number" min="0" value={purchaseOrderForm.unitCost} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, unitCost: Number(event.target.value) })} placeholder="Unit cost" />
-              <Input type="date" value={purchaseOrderForm.expectedAt} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, expectedAt: event.target.value })} />
+              <Input type="date" aria-label="Expected delivery date" value={purchaseOrderForm.expectedAt} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, expectedAt: event.target.value })} />
               <Textarea className="md:col-span-2" value={purchaseOrderForm.notes} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, notes: event.target.value })} placeholder="Notes" />
               <Button className="md:col-span-2" onClick={createPurchaseOrder} disabled={submitLoading || !purchaseOrderForm.supplierId || !purchaseOrderForm.locationId || !purchaseOrderForm.itemId}>Create purchase order</Button>
             </CardContent>
@@ -142,11 +153,12 @@ export function PurchaseOrdersPage() {
 
       {isAdmin && <PurchasePlan locations={locations} suppliers={suppliers} plan={purchasePlan} loadPurchasePlan={loadPurchasePlan} draftFromPlan={draftFromPlan} submitLoading={submitLoading} />}
 
-      <TableToolbar tableId="purchase-orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search purchase orders" />
+      <TableToolbar tableId="purchase-orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search purchase orders" columns={COLUMNS} exportCsv={{ filename: 'purchase-orders', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Purchase order register</CardTitle></CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 tv-purchase-orders">
+          <style>{hiddenColumnCss('tv-purchase-orders', COLUMNS.map((column) => column.id), hiddenColumnIds(view.state))}</style>
           <Table>
             <TableHeader><TableRow><TableHead>PO number</TableHead><TableHead>Supplier</TableHead><TableHead>Destination</TableHead><TableHead>Expected</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
             <TableBody>

@@ -7,7 +7,11 @@ import '../config/env.dart';
 import '../config/theme.dart';
 
 class WorkspaceScreen extends StatefulWidget {
-  const WorkspaceScreen({super.key});
+  const WorkspaceScreen({super.key, this.fetchHandoffCode});
+
+  /// Asks the API for a one-time code so the workspace opens already signed in. Null or failing
+  /// (offline, older server) falls back to the plain workspace, which then shows its own sign-in.
+  final Future<String> Function()? fetchHandoffCode;
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
@@ -69,7 +73,24 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         }
       });
     }
-    _controller.loadRequest(_workspaceUri);
+    _openWorkspace();
+  }
+
+  /// The URL to load: the workspace root, plus `#/handoff?code=...` when a one-time code could be
+  /// obtained. A fragment is never sent to a server or leaked in a referrer.
+  Future<Uri> _workspaceTarget() async {
+    final fetch = widget.fetchHandoffCode;
+    if (fetch == null) return _workspaceUri;
+    try {
+      final code = await fetch();
+      return _workspaceUri.replace(fragment: '/handoff?code=${Uri.encodeQueryComponent(code)}');
+    } catch (_) {
+      return _workspaceUri;
+    }
+  }
+
+  Future<void> _openWorkspace() async {
+    await _controller.loadRequest(await _workspaceTarget());
   }
 
   Future<void> _reloadWorkspace() async {
@@ -77,7 +98,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _mainFrameFailed = false;
       _progress = 0;
     });
-    await _controller.loadRequest(_workspaceUri);
+    await _openWorkspace(); // a reload needs a fresh code: the previous one was single-use
   }
 
   Future<bool> _handleBack() async {

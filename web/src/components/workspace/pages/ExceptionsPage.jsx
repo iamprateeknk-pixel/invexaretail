@@ -28,6 +28,12 @@ const FILTERS = [
   { id: 'CLOSED', label: 'Closed' },
 ];
 
+const EXPORT_COLUMNS = [
+  { label: 'Title', value: (r) => r.title }, { label: 'Type', value: (r) => r.type }, { label: 'Priority', value: (r) => r.priority },
+  { label: 'Status', value: (r) => r.status }, { label: 'Item', value: (r) => r.item?.code }, { label: 'Location', value: (r) => r.location?.name },
+  { label: 'Owner', value: (r) => r.owner?.name }, { label: 'Due', value: (r) => r.dueAt }, { label: 'Value at risk', value: (r) => r.valueAtRisk },
+];
+
 export function ExceptionsPage() {
   const {
     role, session, exceptionCases, exceptionSummary, exceptionStatusFilter, setExceptionStatusFilter,
@@ -75,7 +81,7 @@ export function ExceptionsPage() {
         ))}
       </div>
 
-      <TableToolbar tableId="exceptions" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search exceptions" />
+      <TableToolbar tableId="exceptions" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search exceptions" exportCsv={{ filename: 'exceptions', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Exception inbox</CardTitle><p className="text-xs text-muted-foreground">Every damage, shortage, wrong-item and pick exception, owned through to a closed disposition.</p></CardHeader>

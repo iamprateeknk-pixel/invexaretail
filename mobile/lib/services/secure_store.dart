@@ -87,4 +87,10 @@ class SecureLocalStore implements LocalStore {
   Future<void> adoptLegacyQueues(String companyId, String userId) => delegate.adoptLegacyQueues(companyId, userId);
   @override
   Future<String> deviceId() => delegate.deviceId();
+  @override
+  Future<void> putReadModel(String scope, String path, String body) => delegate.putReadModel(scope, path, body);
+  @override
+  Future<CachedRead?> getReadModel(String scope, String path) => delegate.getReadModel(scope, path);
+  @override
+  Future<void> clearReadModel(String scope) => delegate.clearReadModel(scope);
 }

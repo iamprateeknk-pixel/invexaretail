@@ -82,7 +82,7 @@ class _HomeShellState extends State<HomeShell> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const WorkspaceScreen(),
+                  builder: (_) => WorkspaceScreen(fetchHandoffCode: controller.api.webHandoffCode),
                 ),
               );
             },
@@ -95,7 +95,25 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: IndexedStack(index: safeIndex, children: pages),
+      body: Column(
+        children: [
+          if (controller.snapshotFetchedAt != null)
+            Semantics(
+              liveRegion: true,
+              child: Container(
+                key: const ValueKey('offline-snapshot-banner'),
+                width: double.infinity,
+                color: Colors.amber.shade100,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: Text(
+                  'Offline - showing data saved ${snapshotAge(controller.snapshotFetchedAt!)}. Changes you make are queued.',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          Expanded(child: IndexedStack(index: safeIndex, children: pages)),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         key: const ValueKey('quick-scan'),
         tooltip: 'Scan an item, barcode or lot',
@@ -319,4 +337,13 @@ class _QuickLookupSheetState extends State<_QuickLookupSheet> {
       ),
     );
   }
+}
+
+/// "5 min ago", "2 h ago", "3 d ago" - how old the snapshot on screen is.
+String snapshotAge(DateTime fetchedAt, {DateTime? now}) {
+  final age = (now ?? DateTime.now().toUtc()).difference(fetchedAt.toUtc());
+  if (age.inMinutes < 1) return 'just now';
+  if (age.inMinutes < 60) return '${age.inMinutes} min ago';
+  if (age.inHours < 48) return '${age.inHours} h ago';
+  return '${age.inDays} d ago';
 }

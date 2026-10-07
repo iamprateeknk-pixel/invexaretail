@@ -8,7 +8,7 @@
 
 export const DENSITIES = ['comfortable', 'compact'];
 
-export const DEFAULT_TABLE_STATE = Object.freeze({ q: '', filter: '', sort: '', page: 1, size: 25, density: 'comfortable' });
+export const DEFAULT_TABLE_STATE = Object.freeze({ q: '', filter: '', sort: '', page: 1, size: 25, density: 'comfortable', cols: '' });
 
 const SORT_PATTERN = /^[A-Za-z][\w.]*:(asc|desc)$/;
 
@@ -16,6 +16,11 @@ function clampInt(value, fallback, min, max) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(Math.max(number, min), max);
+}
+
+/** `cols` is the comma list of HIDDEN column ids; anything that is not a plain id is dropped. */
+function cleanCols(value) {
+  return String(value).split(',').map((id) => id.trim()).filter((id) => /^[A-Za-z][\w-]{0,30}$/.test(id)).slice(0, 30).join(',');
 }
 
 /** URL query string (with or without a leading ?) -> table state, always valid. */
@@ -30,6 +35,7 @@ export function parseTableQuery(search = '', defaults = DEFAULT_TABLE_STATE) {
     page: clampInt(params.get('page'), defaults.page, 1, 100_000),
     size: [10, 25, 50, 100].includes(Number(params.get('size'))) ? Number(params.get('size')) : defaults.size,
     density: DENSITIES.includes(density) ? density : defaults.density,
+    cols: cleanCols(params.get('cols') ?? defaults.cols),
   };
 }
 
@@ -125,4 +131,29 @@ export function readTableStateFromHash(hash, defaults = DEFAULT_TABLE_STATE) {
 /** The same hash with its query replaced by `state` (section path untouched, defaults omitted). */
 export function hashWithTableState(hash, state, defaults = DEFAULT_TABLE_STATE) {
   return joinHash(splitHash(hash).path, serializeTableQuery(state, defaults));
+}
+
+// ---- column manager ------------------------------------------------------------------------
+
+export function hiddenColumnIds(state) {
+  return new Set(String(state.cols ?? '').split(',').filter(Boolean));
+}
+
+/** The state with `columnId` shown or hidden. At least one column always stays visible. */
+export function toggleColumn(state, columnId, allColumnIds) {
+  const hidden = hiddenColumnIds(state);
+  if (hidden.has(columnId)) hidden.delete(columnId);
+  else if (allColumnIds.filter((id) => !hidden.has(id)).length > 1) hidden.add(columnId);
+  return { ...state, cols: allColumnIds.filter((id) => hidden.has(id)).join(','), page: 1 };
+}
+
+/**
+ * CSS that hides the chosen columns of the table wrapped in `.${tableClass}`. `columns` lists the table's
+ * column ids in DOM order; `offset` is how many leading cells are not manageable (a select-all checkbox).
+ */
+export function hiddenColumnCss(tableClass, columns, hidden, offset = 0) {
+  return columns
+    .map((id, index) => (hidden.has(id) ? `.${tableClass} th:nth-child(${index + 1 + offset}),.${tableClass} td:nth-child(${index + 1 + offset}){display:none}` : ''))
+    .filter(Boolean)
+    .join('');
 }

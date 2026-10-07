@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { APP_SECTIONS } from '../hooks/useSectionRoute.js';
+import { APP_SECTIONS, LINK_ONLY_SECTIONS } from '../hooks/useSectionRoute.js';
 import {
   DEFAULT_WORKSPACE_PROFILE,
   NAVIGATION,
@@ -18,8 +18,8 @@ import {
 
 test('navigation ids stay inside the hash-route catalog', () => {
   const navIds = NAVIGATION.flatMap((group) => group.items.map((item) => item.id));
-  assert.deepEqual([...new Set(navIds)].sort(), [...APP_SECTIONS].sort());
-  for (const id of navIds) {
+  assert.deepEqual([...new Set(navIds), ...LINK_ONLY_SECTIONS].sort(), [...APP_SECTIONS].sort());
+  for (const id of [...navIds, ...LINK_ONLY_SECTIONS]) {
     assert.ok(PAGE_META[id], `missing page meta for ${id}`);
   }
 });

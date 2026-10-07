@@ -38,6 +38,7 @@ import { beginEnrollment, confirmEnrollment, disableTwoFactor, isTwoFactorEnable
 import { otpauthUri, totpIsConfigured } from '../lib/totp.js';
 import * as repo from '../lib/enterprise-repository.js';
 import { isCompanySuspended, rejectSuspendedCompany } from '../lib/saas/company-access.js';
+import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 import { ControlPlaneError, apiKeyAllowsMethod, controlPlane } from '../lib/saas/control-plane.js';
 
 const router = Router();
@@ -547,6 +548,37 @@ router.post('/2fa/disable', extractToken, requireAuth, loginLimiter, async (req:
 // ============================================
 // REFRESH TOKEN
 // ============================================
+
+// ============================================
+// ONE-TIME WEB HANDOFF (native app -> full web workspace)
+// ============================================
+// The mobile app is already signed in. Opening the full web workspace in a WebView used to show a
+// second login. The app now asks for a code (authenticated), loads the workspace at
+// `#/handoff?code=...` (a URL fragment: never sent to a server or a referrer), and the web app trades
+// the code for its own session. The access token itself is never placed in a URL.
+router.post('/web-handoff', extractToken, requireAuth, loginLimiter, (req: Request, res: Response) => {
+  const { code, expiresInSeconds } = createHandoff({ userId: req.user!.id }, Date.now(), 'web');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(201).json({ success: true, code, expiresInSeconds });
+});
+
+router.post('/web-handoff/exchange', loginLimiter, async (req: Request, res: Response) => {
+  try {
+    if (rejectCrossSiteOrigin(req, res)) return;
+    const redeemed = redeemHandoff(String(req.body?.code ?? ''), Date.now(), 'web') as { userId?: string } | null;
+    const user = redeemed?.userId ? repo.findUserById(redeemed.userId) : undefined;
+    if (!user || user.status !== 'active') {
+      return res.status(401).json({ error: 'Handoff code is invalid or expired', code: 'HANDOFF_INVALID' });
+    }
+    if (rejectSuspendedCompany(user.companyId, res)) return;
+    const tokens = await issueSessionTokens(req, res, user);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, user: publicUser(user), ...tokens });
+  } catch (error) {
+    console.error('Web handoff error:', error);
+    res.status(500).json({ error: 'Handoff failed' });
+  }
+});
 
 router.post('/refresh-token', async (req: Request, res: Response) => {
   try {

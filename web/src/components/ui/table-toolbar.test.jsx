@@ -56,3 +56,29 @@ test('density control can be hidden for card lists where it would do nothing', (
   assert.equal(screen.queryByRole('group', { name: 'Row density' }), null);
   assert.ok(screen.getByLabelText('Search'));
 });
+
+test('the column manager lists columns as checkboxes, hides one, and never lets the last one go', () => {
+  const columns = [{ id: 'item', label: 'Item' }, { id: 'qty', label: 'Quantity' }];
+  function ColumnsHarness() {
+    const [state, setState] = React.useState(DEFAULT_TABLE_STATE);
+    return React.createElement('div', null,
+      React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state, onChange: setState, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), columns }),
+      React.createElement('output', { 'data-testid': 'cols' }, state.cols));
+  }
+  render(React.createElement(ColumnsHarness));
+  const qty = screen.getByRole('checkbox', { name: 'Quantity' });
+  assert.equal(qty.checked, true);
+  fireEvent.click(qty);
+  assert.equal(screen.getByTestId('cols').textContent, 'qty');
+  assert.equal(screen.getByRole('checkbox', { name: 'Quantity' }).checked, false);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Item' }));
+  assert.equal(screen.getByTestId('cols').textContent, 'qty', 'the last visible column stays');
+});
+
+test('Export CSV is a real button, disabled with no rows, and shows how many rows it will export', () => {
+  const exportCsv = { filename: 'x', columns: [{ label: 'A', value: (r) => r.a }], rows: [{ a: 1 }, { a: 2 }] };
+  const { rerender } = render(React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state: DEFAULT_TABLE_STATE, onChange: () => {}, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), exportCsv }));
+  assert.equal(screen.getByRole('button', { name: 'Export CSV (2)' }).disabled, false);
+  rerender(React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state: DEFAULT_TABLE_STATE, onChange: () => {}, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), exportCsv: { ...exportCsv, rows: [] } }));
+  assert.equal(screen.getByRole('button', { name: 'Export CSV' }).disabled, true);
+});

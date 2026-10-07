@@ -54,9 +54,36 @@ abstract class LocalStore {
   Future<void> adoptLegacyQueues(String companyId, String userId);
 
   Future<String> deviceId();
+
+  /// Offline read model: the last good answer of a read-only feed, per identity scope.
+  Future<void> putReadModel(String scope, String path, String body);
+  Future<CachedRead?> getReadModel(String scope, String path);
+  Future<void> clearReadModel(String scope);
+}
+
+/// A cached read-only response and when it was fetched.
+class CachedRead {
+  const CachedRead(this.body, this.fetchedAt);
+  final String body;
+  final DateTime fetchedAt;
 }
 
 class MemoryStore implements LocalStore {
+  final Map<String, CachedRead> readModel = {};
+
+  @override
+  Future<void> putReadModel(String scope, String path, String body) async {
+    readModel['$scope|$path'] = CachedRead(body, DateTime.now().toUtc());
+  }
+
+  @override
+  Future<CachedRead?> getReadModel(String scope, String path) async => readModel['$scope|$path'];
+
+  @override
+  Future<void> clearReadModel(String scope) async {
+    readModel.removeWhere((key, _) => key.startsWith('$scope|'));
+  }
+
   PersistedSession? session;
   final Map<String, List<QueuedCount>> countsByIdentity = {};
   final Map<String, List<QueuedAction>> actionsByIdentity = {};
@@ -130,6 +157,16 @@ QueuedAction stampAction(QueuedAction row, String companyId, String userId, {Str
 
 class PrefsStore implements LocalStore {
   PrefsStore({SharedPreferences? prefs}) : _prefs = prefs;
+
+  // Legacy preference-backed store: no offline read model (the SQLite store provides it).
+  @override
+  Future<void> putReadModel(String scope, String path, String body) async {}
+
+  @override
+  Future<CachedRead?> getReadModel(String scope, String path) async => null;
+
+  @override
+  Future<void> clearReadModel(String scope) async {}
 
   SharedPreferences? _prefs;
 

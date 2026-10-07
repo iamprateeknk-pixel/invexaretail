@@ -17,6 +17,11 @@ import { RotateCcw, ShoppingBag } from 'lucide-react';
 
 const CHANNELS = ['WEBSTORE', 'MARKETPLACE', 'POS', 'MANUAL'];
 
+const EXPORT_COLUMNS = [
+  { label: 'Channel', value: (r) => r.channel }, { label: 'Customer', value: (r) => r.customerName }, { label: 'Status', value: (r) => r.status },
+  { label: 'External reference', value: (r) => r.externalReference }, { label: 'Created', value: (r) => r.createdAt },
+];
+
 export function OrdersPage() {
   const { items, locations, orders, orderForm, setOrderForm, createOrder, fulfillOrder, cancelOrder, retryBackorder, submitLoading, authToken, role } = useWorkspace();
   const { session } = useWorkspace();
@@ -40,7 +45,7 @@ export function OrdersPage() {
           </Select>
           <Input placeholder="Customer name (optional)" value={orderForm.customerName} onChange={(event) => setOrderForm({ ...orderForm, customerName: event.target.value })} />
           <ItemSearchSelect items={items} value={orderForm.itemId} onChange={(itemId) => setOrderForm({ ...orderForm, itemId })} />
-          <Input type="number" min="1" value={orderForm.quantity} onChange={(event) => setOrderForm({ ...orderForm, quantity: Number(event.target.value) })} />
+          <Input type="number" aria-label="Quantity" min="1" value={orderForm.quantity} onChange={(event) => setOrderForm({ ...orderForm, quantity: Number(event.target.value) })} />
           <Select
             value={orderForm.autoRoute ? 'auto' : orderForm.fulfillmentLocationId}
             onValueChange={(value) => value === 'auto' ? setOrderForm({ ...orderForm, autoRoute: true, fulfillmentLocationId: '' }) : setOrderForm({ ...orderForm, autoRoute: false, fulfillmentLocationId: value })}
@@ -69,7 +74,7 @@ export function OrdersPage() {
         </CardContent>
       </Card>
 
-      <TableToolbar tableId="orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search orders" />
+      <TableToolbar tableId="orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search orders" exportCsv={{ filename: 'orders', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Orders</CardTitle></CardHeader>

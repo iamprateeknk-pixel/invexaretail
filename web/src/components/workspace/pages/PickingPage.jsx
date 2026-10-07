@@ -82,7 +82,7 @@ export function PickingPage() {
             <TableBody>
               {pickerTasks.length ? pickerTasks.map((task) => (
                 <TableRow key={task.id}>
-                  {canManageWaves && <TableCell><Checkbox checked={selectedTransferIds.includes(task.transferId)} disabled={Boolean(selectedLocationId) && task.locationId !== selectedLocationId} onCheckedChange={() => toggleTransferSelection(task.transferId)} /></TableCell>}
+                  {canManageWaves && <TableCell><Checkbox aria-label={`Select transfer ${task.transferId} for a pick wave`} checked={selectedTransferIds.includes(task.transferId)} disabled={Boolean(selectedLocationId) && task.locationId !== selectedLocationId} onCheckedChange={() => toggleTransferSelection(task.transferId)} /></TableCell>}
                   <TableCell className="font-medium">{task.line}</TableCell>
                   <TableCell>{task.transferId}</TableCell>
                   <TableCell>{task.qty} units</TableCell>

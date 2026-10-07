@@ -52,6 +52,8 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   'src/lib/inventory-posting-service.ts',
   // Read-only journal-vs-balance comparison (SELECT only; never writes stock or history).
   'src/lib/stock-reconciliation.ts',
+  // Adds ONE opening-balance journal row to balances that have no history; never edits a balance or a movement.
+  'src/lib/opening-journal-backfill.ts',
 ]);
 
 const RULES = [

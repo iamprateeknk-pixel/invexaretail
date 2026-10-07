@@ -130,4 +130,16 @@ class DriftStore implements LocalStore {
 
   @override
   Future<String> deviceId() async => _db.deviceId(newDeviceId);
+
+  @override
+  Future<void> putReadModel(String scope, String path, String body) async => _db.putReadModel(scope, path, body);
+
+  @override
+  Future<CachedRead?> getReadModel(String scope, String path) async {
+    final row = _db.getReadModel(scope, path);
+    return row == null ? null : CachedRead(row.body, row.fetchedAt);
+  }
+
+  @override
+  Future<void> clearReadModel(String scope) async => _db.clearReadModel(scope);
 }

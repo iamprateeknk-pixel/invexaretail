@@ -9,10 +9,12 @@ import {
 } from '../lib/session';
 import { purgeLegacyOfflineQueue } from '../offlineStore';
 import { isTwoFactorChallenge, normalizeTwoFactorCode } from '../lib/two-factor';
+import { WEB_HANDOFF_EXCHANGE_PATH, handoffCodeFromHash, urlWithoutHandoff } from '../lib/web-handoff';
 import { useEffect, useState } from 'react';
 
 export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotification }) {
-  const [session, setSession] = useState(() => readPersistedSession());
+  // Opened by the native app with a one-time code: whatever session this browser held belongs to someone else.
+  const [session, setSession] = useState(() => (handoffCodeFromHash(window.location.hash) ? null : readPersistedSession()));
   const authToken = session?.token ?? '';
   const role = session?.user?.role ?? null;
   const [loginEmail, setLoginEmail] = useState('');
@@ -169,6 +171,28 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
     resetLoginForm();
     onLogout?.();
   }
+
+  // Signed-in native app -> this workspace without a second login (see lib/web-handoff.js).
+  useEffect(() => {
+    const code = handoffCodeFromHash(window.location.hash);
+    if (!code) return undefined;
+    window.history.replaceState(null, '', urlWithoutHandoff(window.location.pathname, window.location.search));
+    // Deliberately not cancellable: the code is one-time and already removed from the URL, so a
+    // re-run of this effect (React strict mode, a remount) could never exchange it a second time.
+    (async () => {
+      setAuthLoading(true);
+      try {
+        const login = await apiRequest(WEB_HANDOFF_EXCHANGE_PATH, { method: 'POST', body: JSON.stringify({ code }) });
+        await establishSession(login);
+      } catch {
+        setAuthError('Could not open the workspace from the app. Please sign in.');
+      } finally {
+        setAuthLoading(false);
+      }
+    })();
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => subscribePersistedSession((next) => {
     setSession(next);

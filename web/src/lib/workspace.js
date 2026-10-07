@@ -191,6 +191,7 @@ export const PAGE_META = {
   'stock-update': ['Stock update', 'Add, remove or set branch stock manually or from a 5,000+ row lot-wise Excel file.'],
   'import-wizard': ['ERP file import', 'Preview, validate and post purchase, sales, return or opening-stock files in safe batches - then reconcile or reverse.'],
   'item-search': ['Item search and stock detail', 'Search items, inspect branch balances, lots and movement history, and post guided adjustments/reversals.'],
+  entity: ['Investigate', 'Everything about one lot, location, transfer, count or person: what it is, what it touches and what happened.'],
   'inventory-health': ['Inventory health', 'Stock value, turns, ageing, dead and slow stock, fill rate and count accuracy for a location.'],
   expiry: ['Lots and expiry', 'FEFO action queue for expired, near-expiry and missing-date lots, with write-off and date repair.'],
   catalog: ['Tags and custom fields', 'Create a flexible product catalogue without changing core retail fields.'],
