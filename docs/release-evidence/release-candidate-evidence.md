@@ -146,7 +146,7 @@ Legend: **E** evidence in this repository, **P** partial, **N** not done.
 
 | | | Evidence |
 |---|---|---|
-| P | All stock mutations use canonical posting/reservation services | the canonical service and posting coverage doc exist; a number of legacy call sites remain allowlisted in `architecture-lint` (`docs/inventory-posting-coverage.md`) |
+| E | Every on-hand change is journalled by the canonical path | posting service for single movements; `import-journal-sync` for the legacy bulk paths (opening/daily/adjustment imports and reversal), proven by `import-journal-sync.postgres.test.ts`. Not on this path, by design: the `reserved`, `inTransit` and `quarantine` buckets (reservation service and bucket moves), which do not change `onHand` (`docs/inventory-posting-coverage.md`) |
 | E | Zero unexplained reconciliation deltas | table above: 11/11 explained, 0 mismatches, 0 baseline after the opening-journal backfill; nightly runs + evidence table + alert on breach |
 | E | No critical money field uses Float | `float-money` lint reports zero; decimal slices 1-7 |
 | E | Concurrent reservation/posting prove no lost update | `reservation.postgres.test.ts`, `inventory-posting-service.postgres.test.ts` (real overlapping calls) |

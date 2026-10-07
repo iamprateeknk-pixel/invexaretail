@@ -74,6 +74,21 @@ damaged/write-off decision is journalled with **`qtyDelta` 0** and the bucket
 move in `metadata` - the old rows recorded `-qty` against quarantine, which made
 journal-sum-vs-on-hand reconciliation drift.
 
+**Update (checklist completion): the legacy bulk paths are journalled too.** The Stock Update screen's opening-stock
+import, daily/adjustment imports and import reversal used to change balances with raw SQL and write no
+`StockMovement` row, so every import re-opened the "balance with no explanation" gap - and they also stamped no
+`companyId` on the ledger row or the import batch (a non-default company's stock landed under the default company;
+the batch could not be reversed by its own company). They now stamp the real company and call
+`lib/import-journal-sync.ts` inside the same transaction: one journal row per touched balance whose quantity is exactly
+the difference between the balance and what the journal already adds up to (the whole balance for a balance with no
+history, the net change for one that has history, the negative of the import for a reversal). It only adds rows, is
+idempotent per batch, and writes nothing when journal and balance already agree. Proven in
+`import-journal-sync.postgres.test.ts` (opening import, a second opening import with a different quantity, a daily
+import and its reversal - reconciliation reports 0 mismatches and 0 unexplained after each). Existing environments run
+`scripts/backfill-opening-journal.cjs` once for balances that predate this.
+
+With that, **every change to `onHand` is journalled**. What stays outside the posting service are the non-`onHand` buckets.
+
 **Still baseline (not migrated), and why:** `lib/reservation.ts` and the reserve/
 release calls in `lib/persistence.ts` (the `reserved` dimension has no service
 command); `lib/import-reversal.ts` and the legacy opening-stock/daily-import

@@ -14,6 +14,7 @@ import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, register
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
+import { journalTypeForImport, syncJournalToBalances } from './import-journal-sync.js';
 import { replaceContents, pushAll } from './array-utils.js';
 
 export const databaseEnabled = Boolean(resolveDatabaseUrl());
@@ -512,6 +513,7 @@ export async function persistOpeningStockImport(
         create: {
           id: batchId,
           type: 'OPENING_STOCK',
+          companyId,
           fileName,
           sourceFormat: preview.format,
           importedById: importedBy,
@@ -548,13 +550,18 @@ export async function persistOpeningStockImport(
           skipDuplicates: true,
         });
         await tx.$executeRaw(Prisma.sql`
-          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt")
+          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt", "companyId")
           VALUES ${Prisma.join(chunk.map(({ row, item, lot, location }) => Prisma.sql`(
             ${importId('stock', `${item.id}|${lot.id}|${location.id}`)}, ${item.id}, ${lot.id}, ${location.id},
-            ${row.quantity ?? 0}, 0, 0, 1, NOW()
+            ${row.quantity ?? 0}, 0, 0, 1, NOW(), ${companyId}
           )`))}
           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
+        // The movement journal must explain this balance too (lib/import-journal-sync.ts).
+        await syncJournalToBalances(tx, chunk.map(({ item, lot, location }) => ({ itemId: item.id, lotId: lot.id, locationId: location.id })), {
+          companyId, batchId, actor: importedBy, movementType: 'OPENING_STOCK',
+          reason: 'Opening stock import: balance set by file',
+        });
       }
     }, { maxWait: 10_000, timeout: 120_000 });
   }
@@ -580,8 +587,9 @@ export async function persistOpeningStockImport(
   return { batchId, importedItems: newItems.length, importedLots: newLots.length, importedLocations: newLocations.length, stockRows: prepared.length };
 }
 
-export async function persistDailyMovementImport(input: { batchId: string; importType: 'SALES' | 'PURCHASE' | 'ADJUSTMENT' | string; fileName: string; importedBy: string; totalRows: number; invalidRows: number; duplicateRows: number; transactionFrom?: string; transactionTo?: string; movements: DailyMovementRecord[]; lots: LotRecord[]; checkpoints: SyncCheckpointRecord[]; fileHash?: string; branchId?: string | null; sourceFormat?: string; metadata?: Record<string, unknown> }): Promise<{ committedRows: number }> {
+export async function persistDailyMovementImport(input: { batchId: string; importType: 'SALES' | 'PURCHASE' | 'ADJUSTMENT' | string; fileName: string; importedBy: string; totalRows: number; invalidRows: number; duplicateRows: number; transactionFrom?: string; transactionTo?: string; movements: DailyMovementRecord[]; lots: LotRecord[]; checkpoints: SyncCheckpointRecord[]; fileHash?: string; branchId?: string | null; sourceFormat?: string; metadata?: Record<string, unknown>; companyId?: string }): Promise<{ committedRows: number }> {
   if (!databaseEnabled) return { committedRows: input.movements.length };
+  const companyId = input.companyId || 'default-company';
   requireDatabase();
   let committedRows = 0;
   await prisma.$transaction(async (tx) => {
@@ -591,6 +599,7 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
       create: {
         id: input.batchId,
         type: input.importType,
+        companyId,
         fileName: input.fileName,
         sourceFormat: input.sourceFormat ?? 'daily-erp-export',
         importedById: input.importedBy,
@@ -634,13 +643,18 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
       const ledgerRows = fresh.filter((movement) => movement.lotId);
       if (ledgerRows.length) {
         await tx.$executeRaw(Prisma.sql`
-          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt")
+          INSERT INTO "StockLedger" (id, "itemId", "lotId", "locationId", "onHand", reserved, "inTransit", version, "lastUpdatedAt", "companyId")
           VALUES ${Prisma.join(ledgerRows.map((movement) => Prisma.sql`(
             ${importId('stock', `${movement.itemId}|${movement.lotId}|${movement.locationId}`)},
-            ${movement.itemId}, ${movement.lotId!}, ${movement.locationId}, ${movement.qtyDelta}, 0, 0, 1, NOW()
+            ${movement.itemId}, ${movement.lotId!}, ${movement.locationId}, ${movement.qtyDelta}, 0, 0, 1, NOW(), ${companyId}
           )`))}
           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
+        // Journal the net effect of this chunk (lib/import-journal-sync.ts); a re-sent file adds nothing.
+        await syncJournalToBalances(tx, ledgerRows.map((movement) => ({ itemId: movement.itemId, lotId: movement.lotId!, locationId: movement.locationId })), {
+          companyId, batchId: input.batchId, actor: input.importedBy, movementType: journalTypeForImport(String(input.importType)),
+          reason: `${input.importType} import ${input.fileName}`,
+        });
       }
     }
     for (const checkpoint of input.checkpoints) {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db.js';
 import { databaseEnabled } from './persistence.js';
+import { syncJournalToBalances } from './import-journal-sync.js';
 
 export type ReversibleMovement = {
   id: string;
@@ -158,6 +159,11 @@ export async function reverseImportBatch(input: {
         ) AS d("itemId", "lotId", "locationId", "qtyDelta")
         WHERE sl."companyId" = ${input.companyId} AND sl."itemId" = d."itemId" AND sl."lotId" = d."lotId" AND sl."locationId" = d."locationId"
       `);
+      // The reversal changed balances; the journal records it too (lib/import-journal-sync.ts).
+      await syncJournalToBalances(tx, chunk.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: line.locationId })), {
+        companyId: input.companyId, batchId: reversalBatchId, actor: input.actorId, movementType: 'ADJUSTMENT',
+        reason: `Reversal of import ${batch.id}: ${reason}`,
+      });
     }
     await tx.importBatch.update({
       where: { id: batch.id, companyId: input.companyId },
