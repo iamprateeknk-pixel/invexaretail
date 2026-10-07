@@ -1194,7 +1194,8 @@ router.patch('/bins/:id', async (req, res) => {
   if (req.body.isPickFace !== undefined) data.isPickFace = req.body.isPickFace === true;
   if (req.body.pickFaceMin !== undefined) data.pickFaceMin = req.body.pickFaceMin === null ? null : Number(req.body.pickFaceMin);
   if (req.body.pickFaceMax !== undefined) data.pickFaceMax = req.body.pickFaceMax === null ? null : Number(req.body.pickFaceMax);
-  const bin = await prisma.bin.update({ where: { id: req.params.id }, data }).catch(() => null);
+  const ownedBin = await prisma.bin.findFirst({ where: { id: req.params.id, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const bin = ownedBin ? await prisma.bin.update({ where: { id: ownedBin.id }, data }).catch(() => null) : null;
   if (!bin) return res.status(404).json({ message: 'Bin not found.' });
   return res.json({ bin });
 });
@@ -1301,8 +1302,8 @@ router.get('/putaway-tasks', async (req, res) => {
 });
 
 router.post('/putaway-tasks/:id/confirm', async (req, res) => {
-  const task = await prisma.putawayTask.findUnique({
-    where: { id: req.params.id },
+  const task = await prisma.putawayTask.findFirst({
+    where: { id: req.params.id, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { suggestedBin: { select: { id: true, code: true } } },
   });
   if (!task) return res.status(404).json({ message: 'Putaway task not found.' });

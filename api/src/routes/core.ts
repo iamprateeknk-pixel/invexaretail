@@ -265,6 +265,9 @@ router.get('/users/:userId/permissions', async (req: Request, res: Response) => 
   if (req.user!.role !== 'ADMIN') return res.status(403).json({ message: 'Only Main Admin can view user permissions.' });
   if (!databaseEnabled) return res.json({ permissions: [] });
   const userId = firstParam(req.params.userId);
+  // Another company's user looks exactly like a missing one.
+  const subject = await prisma.user.findFirst({ where: { id: userId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true } });
+  if (!subject) return res.status(404).json({ message: 'User not found.' });
   const permissions = await prisma.userPermission.findMany({
     where: { userId },
     include: { permission: { select: { module: true, action: true, description: true } } },
@@ -277,7 +280,7 @@ router.put('/users/:userId/permissions', async (req: Request, res: Response) => 
   if (req.user!.role !== 'ADMIN') return res.status(403).json({ message: 'Only Main Admin can change user permissions.' });
   const userId = firstParam(req.params.userId);
   if (userId === req.user!.id) return res.status(400).json({ message: 'Main Admin permissions cannot be restricted.' });
-  const target = await prisma.user.findUnique({ where: { id: userId } });
+  const target = await prisma.user.findFirst({ where: { id: userId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!target) return res.status(404).json({ message: 'User not found.' });
   if (target.role === 'ADMIN') return res.status(400).json({ message: 'Another Main Admin cannot be restricted here.' });
   const entries = Array.isArray(req.body.permissions) ? req.body.permissions : [];
@@ -1980,8 +1983,8 @@ router.get('/pick-waves/:id', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
     return res.status(403).json({ message: 'Pick wave access denied.' });
   }
-  const wave = await prisma.pickWave.findUnique({
-    where: { id: firstParam(req.params.id) },
+  const wave = await prisma.pickWave.findFirst({
+    where: { id: firstParam(req.params.id), location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { location: { select: { id: true, code: true, name: true } }, assignedTo: { select: { id: true, name: true } } },
   }).catch(() => null);
   if (!wave) return res.status(404).json({ message: 'Pick wave not found.' });
@@ -2039,7 +2042,7 @@ router.get('/pick-waves/:id', async (req: Request, res: Response) => {
 });
 
 router.patch('/pick-waves/:id', async (req: Request, res: Response) => {
-  const wave = await prisma.pickWave.findUnique({ where: { id: firstParam(req.params.id) } }).catch(() => null);
+  const wave = await prisma.pickWave.findFirst({ where: { id: firstParam(req.params.id), location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => null);
   if (!wave) return res.status(404).json({ message: 'Pick wave not found.' });
   const context = accessContext(req.user!);
   const isAdmin = context.role === 'ADMIN' || context.role === 'ADMIN_USER';
@@ -3645,9 +3648,19 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   }
 });
 
+// An item photo is only reachable through an item of the caller's own company. A foreign item id
+// looks exactly like a missing one (404).
+async function callerOwnsItem(req: Request, itemId: string): Promise<boolean> {
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  if (databaseEnabled) {
+    return Boolean(await prisma.item.findFirst({ where: { id: itemId, companyId }, select: { id: true } }).catch(() => null));
+  }
+  return itemsForCompany(companyId, listItems()).some((candidate) => candidate.id === itemId);
+}
+
 router.post('/items/:itemId/photos', upload.single('photo'), async (req: Request, res: Response) => {
   const itemId = firstParam(req.params.itemId);
-  if (!listItems().some((candidate) => candidate.id === itemId)) {
+  if (!(await callerOwnsItem(req, itemId))) {
     return res.status(404).json({ message: 'Item was not found.' });
   }
   if (!isOperationalAdmin(req.user!.role) && req.user!.role !== 'STORE_USER' && req.user!.role !== 'WAREHOUSE_PICKER') {
@@ -3666,7 +3679,7 @@ router.post('/items/:itemId/photos', upload.single('photo'), async (req: Request
 
 router.get('/items/:itemId/photos', async (req: Request, res: Response) => {
   const itemId = firstParam(req.params.itemId);
-  if (!listItems().some((candidate) => candidate.id === itemId)) {
+  if (!(await callerOwnsItem(req, itemId))) {
     return res.status(404).json({ message: 'Item was not found.' });
   }
   try { return res.json({ photos: await listItemPhotos(itemId) }); }
@@ -3675,6 +3688,7 @@ router.get('/items/:itemId/photos', async (req: Request, res: Response) => {
 
 router.get('/items/:itemId/photos/:photoId', async (req: Request, res: Response) => {
   const itemId = firstParam(req.params.itemId);
+  if (!(await callerOwnsItem(req, itemId))) return res.status(404).json({ message: 'Photo was not found.' });
   try {
     const photo = await readItemPhoto(itemId, firstParam(req.params.photoId));
     if (!photo) return res.status(404).json({ message: 'Photo was not found.' });
@@ -3686,6 +3700,7 @@ router.get('/items/:itemId/photos/:photoId', async (req: Request, res: Response)
 router.delete('/items/:itemId/photos/:photoId', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access required.' });
   const itemId = firstParam(req.params.itemId);
+  if (!(await callerOwnsItem(req, itemId))) return res.status(404).json({ message: 'Photo was not found.' });
   try {
     await deleteItemPhoto(itemId, firstParam(req.params.photoId));
     return res.json({ success: true });
