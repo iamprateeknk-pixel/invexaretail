@@ -253,7 +253,7 @@ model Location {
   latitude              Float?
   longitude             Float?
   deliverySlaHours      Float?
-  shippingCostPerKm     Float?
+  shippingCostPerKm     Decimal? @db.Decimal(14, 4)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -1159,14 +1159,14 @@ model PurchaseOrder {
   closedAt     DateTime?
   closeNote    String?  @db.Text
   notes       String?  @db.Text
-  totalAmount Float    @default(0)
+  totalAmount Decimal  @default(0) @db.Decimal(14, 2)
   // Blueprint P7 "Landed cost": extra charges allocated across the PO's
   // lines on receipt (lib/landed-cost.ts), so each received lot's cost
   // attributes carry the true landed cost, not just the PO unit price.
-  freightCost   Float?  @default(0)
-  customsCost   Float?  @default(0)
-  insuranceCost Float?  @default(0)
-  handlingCost  Float?  @default(0)
+  freightCost   Decimal? @default(0) @db.Decimal(14, 2)
+  customsCost   Decimal? @default(0) @db.Decimal(14, 2)
+  insuranceCost Decimal? @default(0) @db.Decimal(14, 2)
+  handlingCost  Decimal? @default(0) @db.Decimal(14, 2)
   landedCostMethod String? @default("VALUE")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1195,7 +1195,7 @@ model PurchaseOrderLine {
   item            Item     @relation(fields: [itemId], references: [id])
   quantity        Int
   receivedQty     Int      @default(0)
-  unitCost        Float    @default(0)
+  unitCost        Decimal  @default(0) @db.Decimal(18, 4)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1235,7 +1235,7 @@ model SupplierInvoice {
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
   invoiceNumber   String
   invoiceDate     DateTime?
-  totalAmount     Float    @default(0)
+  totalAmount     Decimal  @default(0) @db.Decimal(14, 2)
   status          String   @default("PENDING")
   matchResult     Json?
   createdById     String
@@ -1255,8 +1255,7 @@ model SupplierInvoiceLine {
   supplierInvoice   SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
   itemId            String
   invoicedQty       Float
-  unitCost          Float
-
+  unitCost          Decimal  @db.Decimal(18, 4)
   @@index([supplierInvoiceId])
 }
 

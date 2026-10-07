@@ -1,5 +1,5 @@
 import { loadSalesEvents, signedSalesQty, totalsByItem } from '../lib/sales-demand.js';
-import { thresholdsAsNumbers } from '../lib/decimal-json.js';
+import { decimalsToNumbers, thresholdsAsNumbers } from '../lib/decimal-json.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
@@ -891,7 +891,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       available: 0,
       latitude: entry.location.latitude,
       longitude: entry.location.longitude,
-      shippingCostPerKm: entry.location.shippingCostPerKm,
+      shippingCostPerKm: entry.location.shippingCostPerKm == null ? null : Number(entry.location.shippingCostPerKm),
       deliverySlaHours: entry.location.deliverySlaHours,
     };
     source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved, lot: entry.lot });
@@ -932,7 +932,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       incoming: incoming.get(rule.itemId) ?? 0,
       minQty: rule.minQty, targetQty: rule.targetQty,
       network: [...(network.get(rule.itemId)?.values() ?? [])].map((row) => ({ ...row, protectedQty: minimumAt(rule.itemId, row.locationId) })),
-      destination: destinationLocation ?? undefined,
+      destination: destinationLocation ? decimalsToNumbers(destinationLocation) : undefined,
     });
     const available = plan.position;
     const suggestedOrderQty = plan.suggestedOrderQty;
@@ -1528,7 +1528,7 @@ router.post('/orders', async (req, res) => {
             latitude: location.latitude,
             longitude: location.longitude,
             deliverySlaHours: location.deliverySlaHours,
-            shippingCostPerKm: location.shippingCostPerKm,
+            shippingCostPerKm: location.shippingCostPerKm == null ? null : Number(location.shippingCostPerKm),
             openOrderCount: workload.get(location.id) ?? 0,
           }));
         })();

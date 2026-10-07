@@ -1,4 +1,5 @@
 import { loadSalesEvents } from '../lib/sales-demand.js';
+import { decimalsToNumbers, type DecimalsAsNumbers } from '../lib/decimal-json.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { suggestReorderRule } from '../lib/reorder-suggestion.js';
 import { computeDemandStats } from '../lib/demand-forecast.js';
@@ -236,12 +237,12 @@ router.post('/reorder-rules/suggestions/:itemId/accept', async (req, res) => {
   if (!suggestion) return res.status(404).json({ message: 'No demand history to derive a suggestion from for this item at this location.' });
   const quantityProblem = validateReorderQuantities(suggestion.suggestedMin, suggestion.suggestedTarget, suggestion.decimal);
   if (quantityProblem) return res.status(400).json({ message: quantityProblem });
-  const rule = await prisma.reorderRule.upsert({
+  const rule = decimalsToNumbers(await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
     update: { minQty: suggestion.suggestedMin, targetQty: suggestion.suggestedTarget },
     create: { itemId: req.params.itemId, locationId, minQty: suggestion.suggestedMin, targetQty: suggestion.suggestedTarget, companyId },
     include: { item: true },
-  });
+  }));
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'REORDER_RULE_ACCEPTED_FROM_SUGGESTION',
     entityType: 'ReorderRule', entityId: rule.id,
@@ -324,12 +325,12 @@ router.put('/reorder-rules/:itemId', async (req, res) => {
   }
   const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!location) return res.status(404).json({ message: 'Location not found.' });
-  const rule = await prisma.reorderRule.upsert({
+  const rule = decimalsToNumbers(await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
     update: { minQty, targetQty, ...(orderMultiple !== undefined ? { orderMultiple } : {}) },
     create: { itemId: req.params.itemId, locationId, minQty, targetQty, orderMultiple: orderMultiple ?? null, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { item: true },
-  });
+  }));
   return res.json({ rule });
 });
 
@@ -399,10 +400,10 @@ router.get('/suppliers/:id/score', async (req, res) => {
   const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
 
-  const orders = await prisma.purchaseOrder.findMany({
+  const orders = decimalsToNumbers(await prisma.purchaseOrder.findMany({
     where: { supplierId: supplier.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     include: { lines: true },
-  });
+  }));
   // Completion is when the last goods arrived, not when finance later closed the order.
   const lastReceiptAt = new Map<string, Date>();
   for (const receipt of await prisma.purchaseReceipt.findMany({ where: { purchaseOrderId: { in: orders.map((order) => order.id) } }, select: { purchaseOrderId: true, createdAt: true } }).catch(() => [])) {
@@ -453,13 +454,13 @@ router.get('/purchase-orders', async (req, res) => {
   const requested = Number(req.query.limit);
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 200;
   const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
-  const rows = await prisma.purchaseOrder.findMany({
+  const rows = decimalsToNumbers(await prisma.purchaseOrder.findMany({
     where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
     include: { supplier: true, lines: { include: { item: true } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  }));
   const purchaseOrders = rows.slice(0, limit);
   return res.json({ purchaseOrders, nextCursor: rows.length > limit ? purchaseOrders[purchaseOrders.length - 1].id : null });
 });
@@ -486,7 +487,7 @@ router.post('/purchase-orders', async (req, res) => {
   const inactive = lineItems.find((row) => (row as { status?: string }).status && (row as { status?: string }).status !== 'ACTIVE');
   if (inactive) return res.status(400).json({ message: `Item ${inactive.code} is ${String((inactive as { status?: string }).status).toLowerCase()} and cannot be ordered.` });
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
-  const purchaseOrder = await prisma.purchaseOrder.create({
+  const purchaseOrder = decimalsToNumbers(await prisma.purchaseOrder.create({
     data: {
       number: newDocumentNumber('PO'),
       supplierId: req.body.supplierId,
@@ -505,7 +506,7 @@ router.post('/purchase-orders', async (req, res) => {
       lines: { create: normalized },
     },
     include: { supplier: true, lines: { include: { item: true } } },
-  });
+  }));
   return res.status(201).json({ purchaseOrder });
 });
 
@@ -522,7 +523,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     return res.json({ ...(priorReceipt.result as Record<string, unknown>), duplicate: true });
   }
 
-  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
+  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
   if (!isReceivablePo(order.status)) return res.status(409).json({ message: `A purchase order in ${order.status} cannot be received. It must be approved and still open.` });
 
@@ -566,7 +567,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   );
   const postings = gated.lines.map((line) => ({ ...line, goodQty: line.receivedQty, arrivedQty: Math.round((line.receivedQty + line.damagedQty) * 1000) / 1000 }));
 
-  let outcome: { purchaseOrder: Awaited<ReturnType<typeof prisma.purchaseOrder.findUniqueOrThrow>>; postedStock: Array<{ itemId: string; lotId: string; lotNo: string; quantity: number; quarantined: number; beforeBalance: number; afterBalance: number }> };
+  let outcome: { purchaseOrder: DecimalsAsNumbers<Awaited<ReturnType<typeof prisma.purchaseOrder.findUniqueOrThrow>>>; postedStock: Array<{ itemId: string; lotId: string; lotNo: string; quantity: number; quarantined: number; beforeBalance: number; afterBalance: number }> };
   try {
     outcome = await prisma.$transaction(async (tx) => {
       const postedStock: Array<{ itemId: string; lotId: string; lotNo: string; quantity: number; quarantined: number; beforeBalance: number; afterBalance: number }> = [];
@@ -615,11 +616,11 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
       const lines = await tx.purchaseOrderLine.findMany({ where: { purchaseOrderId: order.id } });
       const status = statusAfterReceipt(order.lines, postings);
       void lines;
-      const purchaseOrder = await tx.purchaseOrder.update({
+      const purchaseOrder = decimalsToNumbers(await tx.purchaseOrder.update({
         where: { id: order.id },
         data: { status },
         include: { supplier: true, lines: { include: { item: true } } },
-      });
+      }));
       await tx.purchaseReceipt.create({
         data: { requestId, purchaseOrderId: order.id, receivedById: req.user!.id, result: JSON.parse(JSON.stringify({ purchaseOrder, stockPosted: postedStock })) },
       });
@@ -704,7 +705,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const to = req.body.status;
   if (!isPoStatus(to)) return res.status(400).json({ message: 'Invalid purchase order status.' });
-  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } });
+  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } }));
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
   const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
   const check = checkPoMove({
@@ -791,7 +792,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const sold = sum(sales, (row) => [row.itemId, row.qty]);
   // The supplier an item was last bought from is the default; the buyer can change it in the draft.
   const lastSupplier = new Map<string, { supplierId: string; unitCost: number }>();
-  for (const line of lastLines) if (!lastSupplier.has(line.itemId)) lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: line.unitCost });
+  for (const line of lastLines) if (!lastSupplier.has(line.itemId)) lastSupplier.set(line.itemId, { supplierId: line.purchaseOrder.supplierId, unitCost: Number(line.unitCost) });
   const catalog = new Map(items.map((item) => [item.id, item]));
 
   // Lead time measured from each supplier's own completed orders (placed -> last receipt), so the plan
@@ -852,7 +853,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
     if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
     if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} cannot receive new purchase orders.` });
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
-    const purchaseOrder = await prisma.purchaseOrder.create({
+    const purchaseOrder = decimalsToNumbers(await prisma.purchaseOrder.create({
       data: {
         number: newDocumentNumber('PO'),
         supplierId: supplier.id, locationId, createdById: req.user!.id,
@@ -863,7 +864,7 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
         lines: { create: lines },
       },
       include: { supplier: true, lines: { include: { item: true } } },
-    });
+    }));
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PURCHASE_ORDER_DRAFTED_FROM_PLAN', entityType: 'PurchaseOrder', entityId: purchaseOrder.id, metadata: { lines: lines.length } }));
     created.push(purchaseOrder);
   }
@@ -872,11 +873,11 @@ router.post('/purchase-orders/plan/draft', async (req, res) => {
 
 router.get('/purchase-orders/:id/invoices', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
-  const invoices = await prisma.supplierInvoice.findMany({
+  const invoices = decimalsToNumbers(await prisma.supplierInvoice.findMany({
     where: { purchaseOrderId: req.params.id, purchaseOrder: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     include: { lines: true },
     orderBy: { createdAt: 'desc' },
-  });
+  }));
   return res.json({ invoices });
 });
 
@@ -892,14 +893,14 @@ router.post('/purchase-orders/:id/invoices', async (req, res) => {
     .filter((line: { itemId: string; invoicedQty: number; unitCost: number }) => line.itemId && Number.isFinite(line.invoicedQty) && line.invoicedQty > 0);
   if (!normalizedLines.length) return res.status(400).json({ message: 'Every line requires an item and a positive invoiced quantity.' });
 
-  const order = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
+  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
   if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
 
   const poLines = order.lines.map((line) => ({ itemId: line.itemId, orderedQty: line.quantity, receivedQty: line.receivedQty, unitCost: line.unitCost }));
   const tolerancePercent = Number.isFinite(Number(req.body.tolerancePercent)) ? Number(req.body.tolerancePercent) : undefined;
   const matchResult = matchThreeWay(poLines, normalizedLines, tolerancePercent);
 
-  const invoice = await prisma.supplierInvoice.create({
+  const invoice = decimalsToNumbers(await prisma.supplierInvoice.create({
     data: {
       purchaseOrderId: order.id,
       invoiceNumber,
@@ -911,7 +912,7 @@ router.post('/purchase-orders/:id/invoices', async (req, res) => {
       lines: { create: normalizedLines },
     },
     include: { lines: true },
-  });
+  }));
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'SUPPLIER_INVOICE_MATCHED',
     entityType: 'SupplierInvoice', entityId: invoice.id,
