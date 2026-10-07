@@ -54,6 +54,8 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   'src/lib/stock-reconciliation.ts',
   // Adds ONE opening-balance journal row to balances that have no history; never edits a balance or a movement.
   'src/lib/opening-journal-backfill.ts',
+  // Adds ONE journal row per touched balance after a legacy bulk stock change; never edits a balance or a movement.
+  'src/lib/import-journal-sync.ts',
 ]);
 
 const RULES = [

@@ -2515,7 +2515,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     const batchId = `adjust-manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movement = { id: `move-${batchId}`, dedupeKey: `ADJUSTMENT|MANUAL|${requestId}`, itemId: item.id, lotId, locationId: location.id, movementType: `MANUAL_${mode}`, qtyDelta, transactionAt: new Date().toISOString(), sourceType: 'ADJUSTMENT' as const, sourceReference: requestId, importBatchId: batchId, createdById: req.user!.id, metadata: { reason, mode, requestedQuantity: Number(req.body.quantity), previousQty: currentQty, resultingQty: currentQty + qtyDelta } };
     const newLots = existingLot ? [] : [{ id: lotId, itemId: item.id, lotNo, expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate).toISOString() : null, attributes: { source: 'manual-stock-update' } }];
-    const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: 'Manual stock update', importedBy: req.user!.id, totalRows: 1, invalidRows: 0, duplicateRows: 0, movements: [movement], lots: newLots, checkpoints: [] });
+    const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: 'Manual stock update', importedBy: req.user!.id, totalRows: 1, invalidRows: 0, duplicateRows: 0, movements: [movement], lots: newLots, checkpoints: [], companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     if (newLots[0]) ensureLotRecord(item.id, lotNo, newLots[0].expiryDate, newLots[0].attributes, lotId);
     if (result.committedRows) { recordDailyMovement(movement); adjustStockLedger(item.id, lotId, location.id, qtyDelta); }
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_MANUALLY_UPDATED', entityType: 'StockLedger', entityId: `${item.id}|${lotId}|${location.id}`, metadata: movement.metadata }));
@@ -2571,7 +2571,7 @@ router.post('/stock-adjustments/import/commit', upload.single('file'), async (re
     const transactionAt = new Date().toISOString();
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `ADJUSTMENT|${mode}|${fileHash}|${entry.item.id}|${entry.lotId}|${entry.location.id}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.location.id, movementType: `BULK_${mode}`, qtyDelta: entry.qtyDelta, transactionAt, sourceType: 'ADJUSTMENT' as const, sourceReference: req.file!.originalname, importBatchId: batchId, createdById: req.user!.id, metadata: { sourceRow: entry.row.rowNumber, mode, previousQty: entry.currentQty, resultingQty: entry.resultingQty } }));
     const lots = plan.prepared.filter((entry) => entry.isNewLot).map((entry) => ({ id: entry.lotId, itemId: entry.item.id, lotNo: entry.lotNo, expiryDate: entry.expiryDate ?? null, attributes: { source: 'bulk-stock-update' } }));
-    const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, movements, lots, checkpoints: [] });
+    const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, movements, lots, checkpoints: [], companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     for (const lot of lots) ensureLotRecord(lot.itemId, lot.lotNo, lot.expiryDate, lot.attributes, lot.id);
     if (result.committedRows) for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, mode, rows: result.committedRows, fileHash } }));
@@ -2737,8 +2737,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       fileHash: batch.fileHash ?? undefined,
       branchId: batch.branchId,
       sourceFormat: batch.sourceFormat,
-      metadata: batch.metadata ?? undefined,
-    });
+      metadata: batch.metadata ?? undefined, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
     // Movements dated before an existing count make that count's book quantity stale.
     await applyLateMovementsQuietly(movements, req.user!.id);
@@ -2849,8 +2848,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       checkpoints: [],
       fileHash,
       branchId: batch.branchId,
-      sourceFormat: batch.sourceFormat,
-    });
+      sourceFormat: batch.sourceFormat, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await applyDailyLedger(movements, lots, [], persisted.committedRows);
     await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batch.id, metadata: { fileName: batch.fileName, mode, rows: persisted.committedRows, fileHash } }));
@@ -2932,7 +2930,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
     const latestByLocation = new Map<string, string>(); for (const movement of movements) latestByLocation.set(movement.locationId, [latestByLocation.get(movement.locationId), movement.transactionAt].filter(Boolean).sort().at(-1)!);
     const checkpoints = [...latestByLocation.entries()].map(([locationId, syncedThroughAt]) => ({ locationId, sourceType: importType, syncedThroughAt, lastImportBatchId: batchId }));
-    const persisted = await persistDailyMovementImport({ batchId, importType, fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, movements, lots: plan.prepared.flatMap((entry) => entry.newLot ? [entry.newLot] : []), checkpoints });
+    const persisted = await persistDailyMovementImport({ batchId, importType, fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, movements, lots: plan.prepared.flatMap((entry) => entry.newLot ? [entry.newLot] : []), checkpoints, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     for (const entry of plan.prepared) if (entry.newLot) ensureLotRecord(entry.newLot.itemId, entry.newLot.lotNo, entry.newLot.expiryDate, entry.newLot.attributes, entry.newLot.id);
     for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);

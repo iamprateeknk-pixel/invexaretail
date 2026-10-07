@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { TableToolbar } from '@/components/ui/table-toolbar';
 import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
 import { useTableView } from '../../../hooks/useTableView';
+import { entityHref } from '../../../lib/entity-360';
 import { formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -99,6 +100,14 @@ export function ExceptionsPage() {
                     {overdue && <Badge variant="destructive">SLA overdue</Badge>}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+                  {(item.lotId || item.locationId) && (
+                    <p className="mt-1 text-xs">
+                      Investigate:{' '}
+                      {item.lotId && <a href={entityHref('lot', item.lotId)} className="font-medium underline-offset-2 hover:underline">this lot</a>}
+                      {item.lotId && item.locationId && ' · '}
+                      {item.locationId && <a href={entityHref('location', item.locationId)} className="font-medium underline-offset-2 hover:underline">this location</a>}
+                    </p>
+                  )}
                   <p className="mt-1 text-xs text-muted-foreground">
                     {item.item ? `${item.item.code} - ${item.item.name}` : null}
                     {item.quantity ? ` · Qty ${item.quantity}` : ''}

@@ -59,3 +59,4 @@ The API (Railway) has not been redeployed with this work: new migrations apply o
 | J | Rollback rehearsal | done locally | `release-candidate-evidence.md` |
 | F | Dashboard KPIs reconcile to their source queues | done | `dashboard-reconciliation.postgres.test.ts` |
 | K | OpenAPI coverage measured and ratcheted | done | `src/contract-coverage.test.ts`, `contracts/coverage-floor.json` |
+| B | Legacy bulk stock imports and reversal journalled; company stamped on ledger and batch | done | `lib/import-journal-sync.ts`, `import-journal-sync.postgres.test.ts` (fixed a real tenant bug: a non-default company's imported stock landed under the default company) |
