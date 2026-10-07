@@ -58,7 +58,7 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
   const entityId = `ard-entity-${randomUUID()}`;
   const gate = await checkApprovalGate({
     triggerType, entityType: 'TestEntity', entityId, branchId: null,
-    value: 1234.567, requestedById: requesterId, // deliberately 3 decimal places to exercise the 2dp rounding policy
+    value: 1234.567, requestedById: requesterId, companyId, // deliberately 3 decimal places to exercise the 2dp rounding policy
   });
   assert.equal(gate.blocked, true, JSON.stringify(gate));
 

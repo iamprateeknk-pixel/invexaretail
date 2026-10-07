@@ -593,7 +593,7 @@ model ToleranceRule {
   category         String?
   branchId         String?
   branch           Branch?  @relation(fields: [branchId], references: [id])
-  valueThreshold   Float?
+  valueThreshold   Decimal? @db.Decimal(14, 2)
   percentThreshold Float?
   active           Boolean  @default(true)
   createdById      String
@@ -622,7 +622,7 @@ model ApprovalRule {
   category             String?
   branchId             String?
   branch               Branch?  @relation(fields: [branchId], references: [id])
-  valueThreshold       Float
+  valueThreshold       Decimal @db.Decimal(14, 2)
   requiredApproverRole String
   active               Boolean  @default(true)
   createdById          String
@@ -649,7 +649,7 @@ model EvidenceRule {
   branchId          String?
   branch            Branch?  @relation(fields: [branchId], references: [id])
   quantityThreshold Float?
-  valueThreshold    Float?
+  valueThreshold    Decimal? @db.Decimal(14, 2)
   active            Boolean  @default(true)
   createdById       String
   createdBy         User     @relation(fields: [createdById], references: [id])

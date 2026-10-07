@@ -419,7 +419,7 @@ router.get('/suppliers/:id/score', async (req, res) => {
   }));
 
   const inspections = await prisma.qcInspection.findMany({
-    where: { sourceDocument: { in: orders.map((order) => order.number) } },
+    where: { sourceDocument: { in: orders.map((order) => order.number) }, inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
     select: { overallResult: true },
   }).catch(() => []);
   const quality = inspections.length
@@ -545,8 +545,8 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   // QC gate (blueprint §25): a checklist must exist for every good-stock line, and a failed one
   // sends that line's goods to quarantine instead of sellable stock.
   const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
-  const templates = await prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active));
-  const inspections = (await prisma.qcInspection.findMany({ where: { sourceDocument: order.number } }).catch(() => listMemoryQcInspections().filter((row) => row.sourceDocument === order.number))) as unknown as InspectionLike[];
+  const templates = await prisma.qcChecklistTemplate.findMany({ where: { active: true, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcTemplates().filter((row) => row.active));
+  const inspections = (await prisma.qcInspection.findMany({ where: { sourceDocument: order.number, inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcInspections().filter((row) => row.sourceDocument === order.number))) as unknown as InspectionLike[];
   const bodyInspections: InspectionLike[] = (Array.isArray(req.body.qcInspections) ? req.body.qcInspections : []).map((entry: { itemId?: string; lineId?: string; results?: Record<string, QcCheckResult> }) => ({
     itemId: entry.itemId ?? null, sourceLineId: entry.lineId ?? null, results: entry.results ?? null,
   }));
@@ -720,6 +720,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
     const gate = await checkApprovalGate({
       triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: order.id,
       branchId: location?.branchId ?? null, value: order.totalAmount, requestedById: req.user!.id,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
   }

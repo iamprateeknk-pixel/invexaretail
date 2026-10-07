@@ -156,16 +156,18 @@ export async function recordQcInspection(input: RecordQcInspectionInput) {
   }
   let templateId = input.templateId ?? null;
   if (!templateId) {
-    const templates = await prisma.qcChecklistTemplate.findMany({ where: { active: true } });
+    const templates = await prisma.qcChecklistTemplate.findMany({ where: { active: true, createdBy: { companyId: input.companyId } } });
     const matched = findTemplateForCategory(templates, input.itemCategory ?? null);
     templateId = matched?.id ?? null;
   }
   if (!templateId) {
+    // One default checklist per company: a shared fixed id would be visible to (or owned by) whichever company created it first.
+    const fallbackId = `default-qc-template:${input.companyId}`;
     const fallback = await prisma.qcChecklistTemplate.upsert({
-      where: { id: 'default-qc-template' },
+      where: { id: fallbackId },
       update: {},
       create: {
-        id: 'default-qc-template', label: 'Default QC checklist', category: null,
+        id: fallbackId, label: 'Default QC checklist', category: null,
         checks: DEFAULT_QC_CHECKS, active: true, createdById: input.inspectedById,
       },
     });

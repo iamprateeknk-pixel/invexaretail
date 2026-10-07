@@ -1,4 +1,5 @@
 import { prisma } from './db.js';
+import { thresholdsAsNumbers } from './decimal-json.js';
 import { recordAudit } from './audit.js';
 import { persistAudit } from './persistence.js';
 
@@ -48,10 +49,12 @@ export async function checkApprovalGate(input: {
   branchId: string | null;
   value: number;
   requestedById: string;
+  /** Only this company's rules apply; another company's thresholds must never gate this one. */
+  companyId: string;
 }): Promise<GateResult> {
   try {
-    const rules = await prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true } });
-    const matched = findTriggeredRule(rules, { category: input.category ?? null, branchId: input.branchId, value: input.value });
+    const rules = await prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: input.companyId } } });
+    const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId: input.branchId, value: input.value });
     if (!matched) return { blocked: false };
 
     const existingApproved = await prisma.approvalRequest.findFirst({

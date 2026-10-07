@@ -1,4 +1,5 @@
 import { prisma } from './db.js';
+import { thresholdsAsNumbers } from './decimal-json.js';
 import { estimateValueAtRisk } from './exceptions.js';
 import { listTransferEvidence } from './transfer-evidence.js';
 import type { TenantContext } from './tenant-context.js';
@@ -70,7 +71,7 @@ export async function requireEvidenceForDamage(tenant: TenantContext, input: {
     if (rules.length === 0) return { blocked: false };
 
     const ctx: EvidenceContext = { category: item?.category ?? null, branchId: input.branchId, quantity: input.damagedQty, value: damagedValue ?? 0 };
-    const matched = findTriggeredEvidenceRule(rules, ctx);
+    const matched = findTriggeredEvidenceRule(rules.map(thresholdsAsNumbers), ctx);
     if (!matched) return { blocked: false };
 
     const existing = await listTransferEvidence(input.transferId);

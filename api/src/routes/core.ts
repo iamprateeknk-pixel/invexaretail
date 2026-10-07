@@ -2505,6 +2505,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     const gate = await checkApprovalGate({
       triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
       category: item.category ?? null, branchId: adjustmentLocation?.branchId ?? null, value: adjustmentValue, requestedById: req.user!.id,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole, requestId });
 
@@ -3264,6 +3265,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   const gate = await checkApprovalGate({
     triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: transfer.id,
     branchId: sourceLocation?.branchId ?? null, value: totalValue, requestedById: req.user!.id,
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   });
   if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
@@ -3481,10 +3483,10 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   {
     const { listMemoryQcTemplates, listMemoryQcInspections } = await import('../lib/qc-inspection.js');
     const templates = databaseEnabled
-      ? await prisma.qcChecklistTemplate.findMany({ where: { active: true } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
+      ? await prisma.qcChecklistTemplate.findMany({ where: { active: true, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcTemplates().filter((row) => row.active))
       : listMemoryQcTemplates().filter((row) => row.active);
     const inspections = databaseEnabled
-      ? await prisma.qcInspection.findMany({ where: { sourceDocument: transferId } }).catch(() => listMemoryQcInspections())
+      ? await prisma.qcInspection.findMany({ where: { sourceDocument: transferId, inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcInspections())
       : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
     const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
     const itemsById = new Map(listItems().map((item) => [item.id, item]));
