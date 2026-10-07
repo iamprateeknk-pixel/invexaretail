@@ -31,7 +31,7 @@ export function FileDropZone({ accept = '.xlsx,.xls,.csv', file, onFile, disable
       </div>
       <p className="text-sm font-medium">{file ? file.name : label}</p>
       <p className="text-xs text-muted-foreground">{file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : 'XLSX, XLS or CSV up to the server limit'}</p>
-      <Input type="file" accept={accept} disabled={disabled} onChange={(event) => takeFile(event.target.files?.[0] || null)} />
+      <Input type="file" aria-label="Choose a spreadsheet or CSV file" accept={accept} disabled={disabled} onChange={(event) => takeFile(event.target.files?.[0] || null)} />
     </div>
   );
 }

@@ -22,7 +22,19 @@ class SessionController extends ChangeNotifier {
     required this.store,
   }) {
     api.onTokensUpdated = persistTokens;
+    api.cachePut = (scope, path, body) => store.putReadModel(scope, path, body);
+    api.cacheGet = (scope, path) async {
+      final cached = await store.getReadModel(scope, path);
+      return cached == null ? null : (body: cached.body, fetchedAt: cached.fetchedAt);
+    };
   }
+
+  /// The offline read model is only ever read or written for the signed-in identity.
+  String get _cacheScope => '$companyId|$_userId';
+  void _bindReadModel() => api.cacheScope = user == null ? null : _cacheScope;
+
+  /// When non-null, what is on screen is the last saved copy from this time (no network at start-up).
+  DateTime? get snapshotFetchedAt => api.servedFromCacheAt;
 
   final InvexaApi api;
   final LocalStore store;
@@ -108,6 +120,7 @@ class SessionController extends ChangeNotifier {
         api.token = session.token;
         api.refreshToken = session.refreshToken;
         user = session.user;
+        _bindReadModel();
         // Work queued before identity binding existed belongs to the session that was active
         // when it was queued - this restored one - and to no one who signs in later.
         await store.adoptLegacyQueues(companyId, _userId);
@@ -156,6 +169,7 @@ class SessionController extends ChangeNotifier {
     try {
       final result = await api.login(email, password);
       user = result.user;
+      _bindReadModel();
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
@@ -187,6 +201,7 @@ class SessionController extends ChangeNotifier {
       final result = await api.verifyTwoFactor(challenge, code);
       twoFactorChallenge = null;
       user = result.user;
+      _bindReadModel();
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
@@ -241,6 +256,7 @@ class SessionController extends ChangeNotifier {
     try {
       final result = await api.loginWithOtp(email, otpCode);
       user = result.user;
+      _bindReadModel();
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
@@ -278,6 +294,10 @@ class SessionController extends ChangeNotifier {
     try {
       await api.logout();
     } catch (_) {}
+    final scope = user == null ? null : _cacheScope;
+    api.cacheScope = null;
+    api.servedFromCacheAt = null;
+    if (scope != null) await store.clearReadModel(scope); // a signed-out phone keeps no stock data
     user = null;
     dashboard = null;
     locations = [];
@@ -389,6 +409,7 @@ class SessionController extends ChangeNotifier {
 
   Future<void> refreshAll() async {
     error = null;
+    api.servedFromCacheAt = null;
     final locationFuture = api.locations();
     final itemFuture = api.items();
     final dashFuture = api.dashboard();

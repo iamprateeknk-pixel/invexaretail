@@ -29,6 +29,26 @@ class InvexaApi {
   final http.Client httpClient;
   final Duration timeout;
   Future<void> Function(String token, String? refreshToken)? onTokensUpdated;
+
+  /// Offline read model (see local_store.dart). When set together with [cacheScope], successful reads
+  /// of the whitelisted screen feeds are remembered and, when the network is unreachable, the last
+  /// good answer is served instead of an error. [servedFromCacheAt] says when the data being shown is from.
+  Future<void> Function(String scope, String path, String body)? cachePut;
+  Future<({String body, DateTime fetchedAt})?> Function(String scope, String path)? cacheGet;
+  String? cacheScope;
+  DateTime? servedFromCacheAt;
+
+  static const _cacheablePrefixes = [
+    '/api/v1/locations', '/api/v1/items', '/api/v1/dashboard', '/api/v1/counts', '/api/v1/transfers',
+    '/api/v1/stock/', '/api/v1/mobile/work', '/api/v1/count-assignments', '/api/v1/putaway-tasks', '/api/v1/orders',
+  ];
+
+  static bool isCacheable(String method, String path) {
+    if (method != 'GET') return false;
+    final clean = path.split('?').first;
+    return _cacheablePrefixes.any((prefix) => clean == prefix || clean.startsWith(prefix.endsWith('/') ? prefix : '$prefix/') || clean.startsWith(prefix));
+  }
+
   String? token;
   String? refreshToken;
   // Plan P1-AUTH-001: every request that hits a 401 at the same time awaits this ONE refresh,
@@ -83,6 +103,11 @@ class InvexaApi {
       }
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        final scope = cacheScope;
+        if (scope != null && cachePut != null && isCacheable(method, path)) {
+          servedFromCacheAt = null;
+          await cachePut!(scope, path, response.body);
+        }
         return payload;
       }
 
@@ -105,12 +130,28 @@ class InvexaApi {
     } on ApiException {
       rethrow;
     } on TimeoutException {
-      throw ApiException('Cannot reach the Invexa API. Check the service and retry.');
+      return await _offlineFallback(method, path);
     } on SocketException {
-      throw ApiException('Cannot reach the Invexa API. Check the service and retry.');
+      return await _offlineFallback(method, path);
     } on http.ClientException {
-      throw ApiException('Cannot reach the Invexa API. Check the service and retry.');
+      return await _offlineFallback(method, path);
     }
+  }
+
+  /// Unreachable network: serve the last good copy of a cacheable read, otherwise fail as before.
+  Future<Map<String, dynamic>> _offlineFallback(String method, String path) async {
+    final scope = cacheScope;
+    if (scope != null && cacheGet != null && isCacheable(method, path)) {
+      final cached = await cacheGet!(scope, path);
+      if (cached != null) {
+        final decoded = jsonDecode(cached.body);
+        if (decoded is Map) {
+          servedFromCacheAt = cached.fetchedAt;
+          return Map<String, dynamic>.from(decoded);
+        }
+      }
+    }
+    throw ApiException('Cannot reach the Invexa API. Check the service and retry.');
   }
 
   Future<LoginResult> login(String email, String password) async {

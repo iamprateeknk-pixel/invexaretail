@@ -11,7 +11,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 ///
 /// Server secrets never live here: sessions and refresh credentials belong to
 /// Keychain/Keystore-backed secure storage. Stock ledger rows are never stored.
-const currentSchemaVersion = 4;
+const currentSchemaVersion = 5;
 
 /// Ordered migrations; index + 1 is the schema version each one produces.
 const _migrations = <String>[
@@ -77,6 +77,18 @@ const _migrations = <String>[
     FROM queued_actions;
   DROP TABLE queued_counts;
   DROP TABLE queued_actions;
+  ''',
+  // v5: the offline read model. The last successful answer of each read-only screen feed, scoped to
+  // company + user, so a cold start with no network still shows the last known stock, items and
+  // tasks (clearly marked as a snapshot). Never holds credentials; removed on sign-out.
+  '''
+  CREATE TABLE IF NOT EXISTS read_model (
+    scope TEXT NOT NULL,
+    path TEXT NOT NULL,
+    body TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (scope, path)
+  );
   ''',
 ];
 
@@ -228,6 +240,34 @@ class NativeDatabase {
     _db.execute("INSERT OR REPLACE INTO device_meta (key, value) VALUES ('device_id', ?)", [id]);
     return id;
   }
+
+  // ---- offline read model ---------------------------------------------------------------------
+
+  static const _maxReadModelRows = 200;
+  static const _maxReadModelBodyBytes = 2 * 1024 * 1024;
+
+  void putReadModel(String scope, String path, String body, {DateTime? now}) {
+    if (utf8.encode(body).length > _maxReadModelBodyBytes) return; // an unusually large feed is not cached
+    _transaction(() {
+      _db.execute(
+        'INSERT OR REPLACE INTO read_model (scope, path, body, fetched_at) VALUES (?, ?, ?, ?)',
+        [scope, path, body, (now ?? DateTime.now()).toUtc().toIso8601String()],
+      );
+      // Bounded: keep the most recently fetched rows only.
+      _db.execute(
+        'DELETE FROM read_model WHERE rowid IN (SELECT rowid FROM read_model ORDER BY fetched_at DESC LIMIT -1 OFFSET ?)',
+        [_maxReadModelRows],
+      );
+    });
+  }
+
+  ({String body, DateTime fetchedAt})? getReadModel(String scope, String path) {
+    final rows = _db.select('SELECT body, fetched_at FROM read_model WHERE scope = ? AND path = ?', [scope, path]);
+    if (rows.isEmpty) return null;
+    return (body: rows.first['body'] as String, fetchedAt: DateTime.parse(rows.first['fetched_at'] as String));
+  }
+
+  void clearReadModel(String scope) => _db.execute('DELETE FROM read_model WHERE scope = ?', [scope]);
 
   // ---- count / action queues (stored as sync_commands of type COUNT / ACTION) ----------------
 

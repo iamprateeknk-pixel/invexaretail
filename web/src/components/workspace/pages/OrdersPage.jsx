@@ -45,7 +45,7 @@ export function OrdersPage() {
           </Select>
           <Input placeholder="Customer name (optional)" value={orderForm.customerName} onChange={(event) => setOrderForm({ ...orderForm, customerName: event.target.value })} />
           <ItemSearchSelect items={items} value={orderForm.itemId} onChange={(itemId) => setOrderForm({ ...orderForm, itemId })} />
-          <Input type="number" min="1" value={orderForm.quantity} onChange={(event) => setOrderForm({ ...orderForm, quantity: Number(event.target.value) })} />
+          <Input type="number" aria-label="Quantity" min="1" value={orderForm.quantity} onChange={(event) => setOrderForm({ ...orderForm, quantity: Number(event.target.value) })} />
           <Select
             value={orderForm.autoRoute ? 'auto' : orderForm.fulfillmentLocationId}
             onValueChange={(value) => value === 'auto' ? setOrderForm({ ...orderForm, autoRoute: true, fulfillmentLocationId: '' }) : setOrderForm({ ...orderForm, autoRoute: false, fulfillmentLocationId: value })}

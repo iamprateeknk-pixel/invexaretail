@@ -143,7 +143,7 @@ export function PurchaseOrdersPage() {
               <ItemSearchSelect items={items} value={purchaseOrderForm.itemId} onChange={(itemId) => setPurchaseOrderForm({ ...purchaseOrderForm, itemId })} />
               <Input type="number" min="1" value={purchaseOrderForm.quantity} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, quantity: Number(event.target.value) })} placeholder="Quantity" />
               <Input type="number" min="0" value={purchaseOrderForm.unitCost} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, unitCost: Number(event.target.value) })} placeholder="Unit cost" />
-              <Input type="date" value={purchaseOrderForm.expectedAt} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, expectedAt: event.target.value })} />
+              <Input type="date" aria-label="Expected delivery date" value={purchaseOrderForm.expectedAt} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, expectedAt: event.target.value })} />
               <Textarea className="md:col-span-2" value={purchaseOrderForm.notes} onChange={(event) => setPurchaseOrderForm({ ...purchaseOrderForm, notes: event.target.value })} placeholder="Notes" />
               <Button className="md:col-span-2" onClick={createPurchaseOrder} disabled={submitLoading || !purchaseOrderForm.supplierId || !purchaseOrderForm.locationId || !purchaseOrderForm.itemId}>Create purchase order</Button>
             </CardContent>
