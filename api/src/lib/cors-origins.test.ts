@@ -10,6 +10,7 @@ test('keeps the live website even when ALLOWED_ORIGINS is empty or API-only', ()
   assert.ok(origins.includes('https://www.invexaretail.com'));
   assert.ok(origins.includes('https://invexaretail-web.iamprateek-nk.workers.dev'));
   assert.ok(origins.includes('https://invexaretail.prateek160298.workers.dev'));
+  assert.ok(origins.includes('https://control.invexaretail.com'));
   assert.ok(origins.includes('https://api.invexaretail.com'));
 });
 

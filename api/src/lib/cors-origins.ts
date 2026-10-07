@@ -1,6 +1,7 @@
 export const REQUIRED_WEB_ORIGINS = [
   'https://invexaretail.com',
   'https://www.invexaretail.com',
+  'https://control.invexaretail.com',
   'https://invexaretail-web.iamprateek-nk.workers.dev',
   'https://invexaretail.prateek160298.workers.dev',
   'http://localhost:5173',
