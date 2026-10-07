@@ -1,5 +1,6 @@
 import { activeReconcilerHealth } from '../lib/repository-reconciler.js';
 import { latestReconciliation, reconciliationBreached, runAndRecordReconciliation } from '../lib/stock-reconciliation.js';
+import { getSyncHealth } from '../lib/sync-health.js';
 import { resolveReportRange, ReportRangeError } from '../lib/report-range.js';
 import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -195,6 +196,13 @@ router.get('/ops/reconciliation', ...guard, async (req: Request, res: Response) 
   if (!databaseEnabled) return res.json({ latest: null, breached: false, note: 'Reconciliation needs the database.' });
   const latest = await latestReconciliation(req.companyId ?? DEFAULT_COMPANY_ID);
   return res.json({ latest, breached: reconciliationBreached(latest) });
+});
+
+// Offline-command health for the caller's company: receipts completed, in flight, and stuck.
+router.get('/ops/sync-health', ...guard, async (req: Request, res: Response) => {
+  if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Sync health is for admins and auditors.' });
+  if (!databaseEnabled) return res.json({ available: false, note: 'Sync health needs the database.' });
+  return res.json({ available: true, ...(await getSyncHealth(req.companyId ?? DEFAULT_COMPANY_ID)) });
 });
 
 router.post('/ops/reconciliation/run', ...guard, async (req: Request, res: Response) => {
