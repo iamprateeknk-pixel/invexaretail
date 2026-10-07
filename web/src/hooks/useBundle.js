@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api-client.js';
 
+/**
+ * A bundle answer with every field the panel reads, whatever the server sent. An older API, a proxy error
+ * page or an empty body must show "not a bundle", never crash the whole stock-detail screen.
+ */
+export function normalizeBundle(raw) {
+  const value = raw && typeof raw === 'object' ? raw : {};
+  const components = Array.isArray(value.components) ? value.components.filter((c) => c && typeof c === 'object') : [];
+  return {
+    isBundle: value.isBundle === true && components.length > 0,
+    components,
+    buildable: Number.isFinite(Number(value.buildable)) ? Number(value.buildable) : 0,
+    limitingItemId: typeof value.limitingItemId === 'string' ? value.limitingItemId : null,
+    locationId: typeof value.locationId === 'string' ? value.locationId : null,
+  };
+}
+
 // Per-screen query for an item's virtual bundle definition and how many
 // bundles current component stock can build.
 export function useBundle({ authToken, itemId }) {
@@ -14,7 +30,7 @@ export function useBundle({ authToken, itemId }) {
     setLoading(true);
     setError(null);
     try {
-      setBundle(await apiRequest(`/api/v1/items/${itemId}/bundle`, { headers: { Authorization: `Bearer ${authToken}` } }));
+      setBundle(normalizeBundle(await apiRequest(`/api/v1/items/${itemId}/bundle`, { headers: { Authorization: `Bearer ${authToken}` } })));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bundle.');
     } finally {

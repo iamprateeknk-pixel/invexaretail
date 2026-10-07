@@ -15,6 +15,9 @@ test.beforeEach(async ({ page }) => {
     if (path === '/api/v1/items/item-1/stock-detail') {
       return route.fulfill({ json: { itemId: 'item-1', itemName: 'Basmati Rice', itemCode: 'RICE-01', branches: [{ locationId: 'loc-1', locationName: 'Main Store', onHand: 10, reserved: 1, available: 9 }], lots: [{ lotId: 'lot-1', lotNo: 'LOT-1', expiryDate: null, status: 'AVAILABLE', totalOnHand: 10 }], movements: [], reconciliation: [{ onHand: 10, journalSum: 10, delta: 0, explained: true }] } });
     }
+    if (path === '/api/v1/items/item-1/bundle') {
+      return route.fulfill({ json: { itemId: 'item-1', isBundle: false, components: [], buildable: 0, limitingItemId: null, locationId: null } });
+    }
     if (path === '/api/v1/items/item-1/adjust') {
       return route.fulfill({ json: { movement: { id: 'move-1' }, duplicate: false } });
     }
