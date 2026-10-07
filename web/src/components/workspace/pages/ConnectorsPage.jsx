@@ -1,5 +1,8 @@
 import { formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +18,8 @@ export function ConnectorsPage() {
     connectors, connectorForm, setConnectorForm, ingestPayload, setIngestPayload,
     lastIngest, createConnector, ingestConnector, submitLoading,
   } = useWorkspace();
+  const { session } = useWorkspace();
+  const view = useTableView(connectors, (connector) => [connector.name, connector.platform, connector.id]);
 
   return (
     <div className="space-y-6">
@@ -47,11 +52,13 @@ export function ConnectorsPage() {
         </CardContent>
       </Card>
 
+      <TableToolbar tableId="connectors" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search connectors" />
+
       <Card>
         <CardHeader><CardTitle className="text-base">Connectors</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {connectors.length ? connectors.map((connector) => (
-            <div key={connector.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3">
+          {view.visible.length ? view.visible.map((connector) => (
+            <div key={connector.id} className={`flex flex-wrap items-start justify-between gap-3 rounded-lg border ${view.rowPadding}`}>
               <div>
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-medium">{connector.name}</p>
