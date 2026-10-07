@@ -28,7 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/sonner';
 import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
-import { clearControlSession, consumeSessionHandoff, controlRequest, readControlSession, writeControlSession } from './control-api';
+import { clearControlSession, exchangeSessionHandoff, handoffCodeFromHash, controlRequest, readControlSession, writeControlSession } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
 
 function stripeSessionFromLocation() {
@@ -56,7 +56,18 @@ const NAV = [
 ];
 
 export function ControlPlaneApp() {
-  const [session, setSession] = useState(() => consumeSessionHandoff() ?? readControlSession());
+  const [session, setSession] = useState(() => readControlSession());
+  const [exchanging, setExchanging] = useState(() => Boolean(handoffCodeFromHash()));
+  useEffect(() => {
+    if (!exchanging) return;
+    let cancelled = false;
+    exchangeSessionHandoff().then((next) => {
+      if (cancelled) return;
+      if (next) { setSession(next); setCompanies(next.companies ?? []); }
+      setExchanging(false);
+    });
+    return () => { cancelled = true; };
+  }, [exchanging]);
   const [email, setEmail] = useState('superadmin@invexa.local');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -276,6 +287,10 @@ export function ControlPlaneApp() {
       </Badge>
     ) : <Badge variant="outline">No company locked</Badge>
   ), [company]);
+
+  if (exchanging) {
+    return <div role="status" className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">Opening the Control Plane…</div>;
+  }
 
   if (!platformToken) {
     return (

@@ -42,7 +42,9 @@ test('Worker serves login HTML with no-store cache headers', async () => {
 test('locking a company hands the session off to the web app instead of rendering a dead-end panel', () => {
   const html = controlPlaneHtml('https://invexaretail.onrender.com', 'https://invexaretail.com');
   assert.match(html, /const WEB_APP_URL = "https:\/\/invexaretail\.com"/);
-  assert.match(html, /window\.location\.href = WEB_APP_URL \+ "\/#\/control\?session=" \+ encodeURIComponent\(JSON\.stringify\(session\)\)/);
+  assert.match(html, /window\.location\.href = WEB_APP_URL \+ "\/#\/control\?code=" \+ encodeURIComponent\(result\.code\)/);
+  assert.match(html, /\/control\/v1\/sessions\/handoff/);
+  assert.equal(html.includes('?session='), false, 'the session object never goes in the URL');
   assert.equal(html.includes('id="company-name"'), false);
   assert.equal(html.includes('id="locked-lede"'), false);
 });
@@ -50,5 +52,7 @@ test('locking a company hands the session off to the web app instead of renderin
 test('App.jsx redirects to the web app Control Plane once a company is locked', () => {
   const app = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8');
   assert.match(app, /WEB_APP_URL/);
-  assert.match(app, /window\.location\.href = `\$\{WEB_APP_URL\}\/#\/control\?session=/);
+  assert.match(app, /window\.location\.href = `\$\{WEB_APP_URL\}\/#\/control\?code=/);
+  assert.match(app, /sessions\/handoff/);
+  assert.equal(app.includes('?session='), false);
 });

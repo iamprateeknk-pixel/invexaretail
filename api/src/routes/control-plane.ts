@@ -6,6 +6,7 @@ import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeChecko
 import * as enterprise from '../lib/enterprise-repository.js';
 import { persistEnterpriseUser } from '../lib/persistence.js';
 import { validateEmail } from '../lib/otp-auth.js';
+import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof ControlPlaneError) {
@@ -164,6 +165,31 @@ controlRouter.post('/sessions/select-company', requirePlatform, (req: Request, r
   } catch (error) {
     sendError(res, error);
   }
+});
+
+// One-time handoff of a locked-company session from the admin panel to the Control Plane UI
+// (different origins). Only a short code travels in the URL; see lib/saas/session-handoff.ts.
+controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res: Response) => {
+  try {
+    const session = req.body?.session;
+    // The caller can only hand off the session it is itself authenticated with.
+    if (!session || typeof session !== 'object' || (session as { controlToken?: unknown }).controlToken !== bearer(req)) {
+      throw new ControlPlaneError("Handoff must carry the caller's own control session", 'INVALID_HANDOFF', 400);
+    }
+    res.status(201).json({ success: true, ...createHandoff(session) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) => {
+  const session = redeemHandoff(String(req.body?.code ?? ''));
+  if (!session) {
+    res.status(401).json({ error: 'Handoff code is invalid or expired', code: 'HANDOFF_INVALID' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ success: true, session });
 });
 
 controlRouter.post('/sessions/exit', requireLockedCompany, (req: Request, res: Response) => {

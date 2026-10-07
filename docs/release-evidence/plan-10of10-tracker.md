@@ -17,7 +17,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | D Auth | Non-enumerating OTP, password policy, session revoke on disable/change | done | `otp-privacy.http.test.ts`, `admin-user-security.http.test.ts` |
 | D | TOTP two-factor with backup codes and lockout | done | `UserTotp`/`AuthLockout`, `/auth/2fa/*` |
 | D | Passkeys / WebAuthn | open | Not started |
-| D | Control Plane HttpOnly session | open | Not started |
+| D | Control Plane session handoff | partial | One-time 60 s code instead of the session in the URL (`lib/saas/session-handoff.ts`, `/control/v1/sessions/handoff[/exchange]`, 7 tests); web control session now in sessionStorage, admin-panel clears its copy. True HttpOnly cookie not possible across the two origins; handoff store is in-memory (single API replica) |
 | E Realtime/perf | Event-first polling with safety poll | done | `lib/poll-policy.js` + test |
 | E | Exactly-once mutation replay (`X-Mutation-Id`) | done | `lib/mutation-idempotency.ts` unit + Postgres tests |
 | F Web UX | Role landing pages, no offline write queue, fail-clearly policy | done | `lib/workspace.js`, `lib/offline-policy.js` + tests |

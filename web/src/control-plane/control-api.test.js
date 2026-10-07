@@ -40,17 +40,26 @@ test('App and Cloudflare admin-panel always mount the Control Plane login', () =
 
 // control-api.js pulls in api-client.js, which imports offlineStore.ts -
 // plain `node --test` (no TS loader) can't resolve that chain, so this
-// checks consumeSessionHandoff's source instead of importing and running it.
-test('consumeSessionHandoff picks the locked-company session out of the URL fragment', () => {
+// checks the handoff source instead of importing and running it.
+test('the handoff carries only a one-time code in the URL, never the session', () => {
   const controlApi = readFileSync(new URL('./control-api.js', import.meta.url), 'utf8');
-  assert.match(controlApi, /export function consumeSessionHandoff/);
-  assert.match(controlApi, /new URLSearchParams\(query\)\.get\('session'\)/);
-  assert.match(controlApi, /JSON\.parse\(raw\)/);
-  assert.match(controlApi, /writeControlSession\(session\)/);
-  assert.match(controlApi, /history\?\.replaceState\?\./);
+  assert.match(controlApi, /export async function exchangeSessionHandoff/);
+  assert.match(controlApi, /\/control\/v1\/sessions\/handoff\/exchange/);
+  assert.match(controlApi, /get\('code'\)/);
+  assert.equal(/get\('session'\)/.test(controlApi), false, 'the old session-in-URL path is gone');
+  assert.match(controlApi, /history\?\.replaceState\?\./, 'the code is scrubbed from the address bar before the exchange');
 });
 
-test('ControlPlaneApp consumes a handed-off session before falling back to local storage', () => {
+test('the control session lives in sessionStorage and the old localStorage copy is removed', () => {
+  const controlApi = readFileSync(new URL('./control-api.js', import.meta.url), 'utf8');
+  assert.match(controlApi, /sessionStorage\?\.setItem/);
+  assert.equal(/localStorage\?\.setItem/.test(controlApi), false);
+  assert.match(controlApi, /localStorage\?\.removeItem/);
+});
+
+test('ControlPlaneApp exchanges a handoff code before showing the login form', () => {
   const login = readFileSync(new URL('./ControlPlaneApp.jsx', import.meta.url), 'utf8');
-  assert.match(login, /consumeSessionHandoff\(\) \?\? readControlSession\(\)/);
+  assert.match(login, /exchangeSessionHandoff\(\)/);
+  assert.match(login, /Opening the Control Plane/);
+  assert.equal(login.includes('consumeSessionHandoff'), false);
 });
