@@ -319,8 +319,7 @@ plain numbers and the API still returns JSON numbers. Found and fixed while trac
 read an item's prices; both now filter by company. Proven in
 `catalog-procurement-price-list.postgres.test.ts`.
 
-Deliberately left Float (each needs its own reviewed slice): `Location.shippingCostPerKm` (routing/replenishment cost
-maths), and the PurchaseOrder/SupplierInvoice cost and total fields (landed-cost arithmetic).
+(Slice 7 below finished the remaining purchasing and shipping fields.)
 
 ## Slice 6: `Item.mrp`
 
@@ -330,6 +329,24 @@ plain number, an absent MRP stays absent) and the hydration in `lib/persistence.
 direct `prisma.item` reads select ids/categories or are internal. Proven in
 `lib/repositories/item-mrp-decimal.postgres.test.ts` (2dp rounding, number from find/list/search,
 JSON number).
+
+## Slice 7: purchasing and shipping money (the last tracked Float money fields)
+
+`PurchaseOrder.totalAmount/freightCost/customsCost/insuranceCost/handlingCost` -> NUMERIC(14,2),
+`PurchaseOrderLine.unitCost` and `SupplierInvoiceLine.unitCost` -> NUMERIC(18,4) (a per-unit cost keeps
+4dp, matching `StockMovement.unitCost`), `SupplierInvoice.totalAmount` -> NUMERIC(14,2),
+`Location.shippingCostPerKm` -> NUMERIC(14,4) - migration `20261122090000_purchase_money_decimal`.
+
+Because these rows travel with nested relations (a purchase order carries its lines, each line its
+whole `Item`, which has a Decimal `mrp`), conversion uses one tested walker, `decimalsToNumbers` in
+`lib/decimal-json.ts`, applied at every read/create/update that feeds arithmetic or a response:
+the PO list/create/receive/status/draft-from-plan routes, supplier score, invoices, reorder-rule
+upserts (which include the item), `transitionPurchaseOrderStatus`, and the shipping-cost reads in the
+intelligence and order-routing code. The stored receipt replay payload is converted before it is
+written, so a replayed receipt returns numbers too. `tsc` found the arithmetic sites (10 errors, all
+fixed); the response sites were audited by hand and are asserted by
+`catalog-procurement-purchase-money.postgres.test.ts` (a recursive check that no money value in any
+response is a Decimal string). With this slice `architecture-lint`'s `float-money` rule reports zero.
 
 ## Exception-record policy
 

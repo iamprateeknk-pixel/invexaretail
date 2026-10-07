@@ -15,6 +15,7 @@
 // status field had no transition map at all before this week; both are new
 // here. QcInspection is the one entity where "transition map" does not
 // apply - see the note below.
+import { decimalsToNumbers } from './decimal-json.js';
 import { randomUUID } from 'node:crypto';
 import { DomainError, newTraceId } from './errors.js';
 import { prisma } from './db.js';
@@ -150,10 +151,10 @@ export async function transitionPurchaseOrderStatus(input: {
     actorId: input.actorId,
     actorRole: input.actorRole,
   });
-  return prisma.purchaseOrder.update({
+  return decimalsToNumbers(await prisma.purchaseOrder.update({
     where: { id: input.entityId, companyId: input.companyId, status: current.status },
     data: { ...(input.data ?? {}), status: input.to },
-  });
+  }));
 }
 
 export { PO_STATUSES };
