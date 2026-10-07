@@ -8,6 +8,7 @@ import { TableToolbar } from '@/components/ui/table-toolbar';
 import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
 import { hiddenColumnCss, hiddenColumnIds } from '../../../lib/table-state';
 import { useTableView } from '../../../hooks/useTableView';
+import { entityHref } from '../../../lib/entity-360';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -95,7 +96,7 @@ export function TransfersPage() {
                 return (
                   <TableRow key={transfer.id} data-state={selectedIds.has(transfer.id) ? 'selected' : undefined} className={view.compact ? '[&_td]:py-1' : ''}>
                     <TableCell><Checkbox aria-label={`Select transfer ${transfer.id}`} checked={selectedIds.has(transfer.id)} onCheckedChange={(checked) => toggleSelected(transfer.id, checked === true)} disabled={!editable} /></TableCell>
-                    <TableCell><p className="font-medium">{transfer.item}</p><p className="text-xs text-muted-foreground">{transfer.id}</p></TableCell>
+                    <TableCell><p className="font-medium">{transfer.item}</p><p className="text-xs text-muted-foreground"><a href={entityHref('transfer', transfer.id)} className="underline-offset-2 hover:underline" aria-label={`Open the full story of transfer ${transfer.id}`}>{transfer.id}</a></p></TableCell>
                     <TableCell>{transfer.fromName} <ArrowRight className="mx-1 inline size-3" /> {transfer.toName}</TableCell>
                     <TableCell>{transfer.qty} units</TableCell>
                     <TableCell>{transfer.cartonCount || '—'}{(transfer.cartons ?? []).length > 0 && <p className="text-xs text-muted-foreground">{transfer.cartons.map((carton) => carton.packageId).join(', ')}</p>}</TableCell>
