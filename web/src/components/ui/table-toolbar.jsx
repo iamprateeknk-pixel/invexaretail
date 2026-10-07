@@ -3,7 +3,7 @@ import { DENSITIES, deleteView, loadSavedViews, saveView } from '../../lib/table
 
 // One toolbar for every operational list: search, density and per-user saved views.
 // Controlled: the page owns `state`; saved views live in storage (presentation only).
-export function TableToolbar({ tableId, userId, state, onChange, defaults, searchLabel = 'Search', storage = globalThis.localStorage }) {
+export function TableToolbar({ tableId, userId, state, onChange, defaults, searchLabel = 'Search', showDensity = true, storage = globalThis.localStorage }) {
   const searchId = useId();
   const [views, setViews] = useState(() => loadSavedViews(storage, userId, tableId, defaults));
   const [name, setName] = useState('');
@@ -21,13 +21,13 @@ export function TableToolbar({ tableId, userId, state, onChange, defaults, searc
         <label htmlFor={searchId} className="text-xs text-muted-foreground">{searchLabel}</label>
         <input id={searchId} type="search" value={state.q} onChange={(event) => apply({ q: event.target.value })} className="h-8 w-56 rounded-md border bg-background px-2 text-sm" />
       </div>
-      <div role="group" aria-label="Row density" className="flex gap-1">
+      {showDensity && <div role="group" aria-label="Row density" className="flex gap-1">
         {DENSITIES.map((density) => (
           <button key={density} type="button" aria-pressed={state.density === density} onClick={() => apply({ density })} className="h-8 rounded-md border px-2 text-xs capitalize aria-pressed:bg-primary aria-pressed:text-primary-foreground">
             {density}
           </button>
         ))}
-      </div>
+      </div>}
       <div className="flex items-end gap-1">
         <div className="flex flex-col gap-1">
           <label htmlFor={`${searchId}-name`} className="text-xs text-muted-foreground">Save view as</label>

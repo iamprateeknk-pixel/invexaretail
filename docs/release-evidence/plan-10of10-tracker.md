@@ -21,7 +21,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | E Realtime/perf | Event-first polling with safety poll | done | `lib/poll-policy.js` + test |
 | E | Exactly-once mutation replay (`X-Mutation-Id`) | done | `lib/mutation-idempotency.ts` unit + Postgres tests |
 | F Web UX | Role landing pages, no offline write queue, fail-clearly policy | done | `lib/workspace.js`, `lib/offline-policy.js` + tests |
-| F | DataTable state: URL query, per-user saved views, density | partial | `lib/table-state.js` + 9 tests. `components/ui/table-toolbar.jsx` (search, density, saved views; 3 RTL tests) adopted on the Exceptions page. URL-synced state not wired (hash router would need to carry a query); other list pages not yet migrated |
+| F | DataTable state: URL query, per-user saved views, density | partial | `lib/table-state.js` + 9 tests. `components/ui/table-toolbar.jsx` (search, density, saved views; 3 RTL tests) adopted on Exceptions, Orders, Purchase orders, QC inspections, Assets and Jobs (`hooks/useTableView.js`). URL-synced state not wired (hash router would need to carry a query); other list pages not yet migrated |
 | F | Playwright golden journeys (4 of 5 missing) | open | Not runnable in this environment |
 | G/H Mobile | Identity-bound offline queues, retry classifier, backoff, ordering, single-flight refresh | done | `offline_identity_test.dart`, `sync_resolution` tests |
 | G | Environment/flavor hardening, lazy tabs | done | `env_test.dart`, `tab_state_test.dart` |

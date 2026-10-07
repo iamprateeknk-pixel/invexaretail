@@ -95,3 +95,14 @@ test('storage that throws (private window, quota) never breaks the table', () =>
   assert.doesNotThrow(() => saveView(broken, 'alice', 't', 'x', DEFAULT_TABLE_STATE));
   assert.deepEqual(loadSavedViews(undefined, 'alice', 't'), []);
 });
+
+test('filterRows matches every word across the chosen fields, and returns all rows for an empty query', async () => {
+  const { filterRows } = await import('./table-state.js');
+  const rows = [{ a: 'Rice bag', b: 'Delhi' }, { a: 'Rice sack', b: 'Pune' }, { a: 'Milk', b: null }];
+  const fields = (row) => [row.a, row.b];
+  assert.equal(filterRows(rows, '', fields), rows);
+  assert.deepEqual(filterRows(rows, 'rice pune', fields).map((r) => r.a), ['Rice sack']);
+  assert.deepEqual(filterRows(rows, '  MILK ', fields).map((r) => r.a), ['Milk']);
+  assert.deepEqual(filterRows(rows, 'nothing', fields), []);
+  assert.deepEqual(filterRows(undefined, 'x', fields), []);
+});
