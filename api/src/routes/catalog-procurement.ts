@@ -930,13 +930,15 @@ router.get('/items/:itemId/prices', async (req, res) => {
   const branchId = typeof req.query.branchId === 'string' ? req.query.branchId : undefined;
   const priceLists = await prisma.priceList.findMany({
     where: {
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       itemId: req.params.itemId,
       ...(priceType ? { priceType } : {}),
       ...(branchId ? { branchId } : {}),
     },
     orderBy: [{ priceType: 'asc' }, { branchId: 'asc' }, { effectiveFrom: 'desc' }],
   });
-  return res.json({ priceLists });
+  // price is Decimal(14,2) in the database; the API keeps returning a JSON number.
+  return res.json({ priceLists: priceLists.map((row) => ({ ...row, price: Number(row.price) })) });
 });
 
 // Blueprint P9 price resolution: the one price that actually applies to
@@ -949,10 +951,10 @@ router.get('/items/:itemId/price', async (req, res) => {
   const branchId = typeof req.query.branchId === 'string' ? req.query.branchId : null;
   const customerGroup = typeof req.query.customerGroup === 'string' ? req.query.customerGroup : null;
   const at = typeof req.query.at === 'string' ? req.query.at : undefined;
-  const candidates = await prisma.priceList.findMany({ where: { itemId: req.params.itemId, priceType } });
+  const candidates = await prisma.priceList.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: req.params.itemId, priceType } });
   const resolved = resolvePrice(
     candidates.map((row) => ({
-      id: row.id, price: row.price, branchId: row.branchId, customerGroup: row.customerGroup,
+      id: row.id, price: Number(row.price), branchId: row.branchId, customerGroup: row.customerGroup,
       effectiveFrom: row.effectiveFrom.toISOString(), effectiveTo: row.effectiveTo?.toISOString() ?? null, status: row.status,
     })),
     { branchId, customerGroup, at },
@@ -1001,7 +1003,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
     entityType: 'PriceList', entityId: priceList.id,
     metadata: { itemId: item.id, priceType, price: proposedPrice, warnings: guardrail.violations.map((v) => v.code) },
   }));
-  return res.status(201).json({ priceList, guardrail });
+  return res.status(201).json({ priceList: { ...priceList, price: Number(priceList.price) }, guardrail });
 });
 
 router.get('/saved-reports', async (req, res) => {

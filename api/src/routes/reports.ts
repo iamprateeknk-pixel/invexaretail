@@ -196,7 +196,7 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
     const priceRows = await prisma.priceList.findMany({ where: { itemId: { in: soldItemIds }, priceType: 'RETAIL', companyId } });
     for (const row of priceRows) {
       const list = priceCandidatesByItem.get(row.itemId) ?? [];
-      list.push({ id: row.id, price: row.price, branchId: row.branchId, customerGroup: row.customerGroup, effectiveFrom: row.effectiveFrom.toISOString(), effectiveTo: row.effectiveTo?.toISOString() ?? null, status: row.status });
+      list.push({ id: row.id, price: Number(row.price), branchId: row.branchId, customerGroup: row.customerGroup, effectiveFrom: row.effectiveFrom.toISOString(), effectiveTo: row.effectiveTo?.toISOString() ?? null, status: row.status });
       priceCandidatesByItem.set(row.itemId, list);
     }
   }

@@ -310,6 +310,19 @@ company, and the default checklist is created per company (`default-qc-template:
 of one shared fixed id. Before this, one company's active QC template made QC mandatory for every
 other company's receipts.
 
+## Slice 5: `PriceList.price`
+
+Decimal(14,2) by `20261120090000_price_list_price_decimal`. Reads convert with `Number()` at the
+three boundaries (price list, price resolution, the GMROI report) so `resolvePrice` still compares
+plain numbers and the API still returns JSON numbers. Found and fixed while tracing the readers:
+`GET /items/:itemId/prices` and `/price` filtered by item id only, so another company's admin could
+read an item's prices; both now filter by company. Proven in
+`catalog-procurement-price-list.postgres.test.ts`.
+
+Deliberately left Float (each needs its own reviewed slice): `Item.mrp` (flows through the in-memory
+item records and many raw item rows), `Location.shippingCostPerKm` (routing/replenishment cost
+maths), and the PurchaseOrder/SupplierInvoice cost and total fields (landed-cost arithmetic).
+
 ## Exception-record policy
 
 Any row flagged during the real (non-rehearsal) migration run is copied to

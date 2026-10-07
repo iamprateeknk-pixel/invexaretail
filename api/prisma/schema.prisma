@@ -1272,7 +1272,8 @@ model PriceList {
   priceType     String
   branchId      String?
   customerGroup String?
-  price         Float
+  // Decimal migration slice 5 (docs/decimal-migration-plan.md): money, Decimal(14,2).
+  price         Decimal   @db.Decimal(14, 2)
   effectiveFrom DateTime  @default(now())
   effectiveTo   DateTime?
   status        String    @default("ACTIVE")

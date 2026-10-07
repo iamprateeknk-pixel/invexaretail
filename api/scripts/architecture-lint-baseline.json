@@ -64,11 +64,5 @@
     "file": "prisma/schema.prisma",
     "line": 1257,
     "snippet": "unitCost          Float"
-  },
-  {
-    "rule": "float-money",
-    "file": "prisma/schema.prisma",
-    "line": 1275,
-    "snippet": "price         Float"
   }
 ]
