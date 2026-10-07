@@ -25,7 +25,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | F | Playwright golden journeys (4 of 5 missing) | open | Not runnable in this environment |
 | G/H Mobile | Identity-bound offline queues, retry classifier, backoff, ordering, single-flight refresh | done | `offline_identity_test.dart`, `sync_resolution` tests |
 | G | Environment/flavor hardening, lazy tabs | done | `env_test.dart`, `tab_state_test.dart` |
-| H | Single SQLite outbox, cold-start offline read model | open | Needs a device/emulator to verify |
+| H | Single SQLite outbox | partial | Schema v4 moves queued counts/actions into `sync_commands` (migration + coexistence tests). Typed-command producers and cold-start offline read model still open; device verification needed |
 | I Testing/CI | Migration matrix (fresh, upgrade, restore) | done | `scripts/migration-matrix.mjs` + CI step |
 | I | Blocking audit gate with owned, expiring exceptions | done | `scripts/audit-gate.mjs`, `security/audit-exceptions.json` (expire 2026-12-31) |
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |

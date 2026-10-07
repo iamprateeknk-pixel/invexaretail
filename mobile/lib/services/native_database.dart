@@ -11,7 +11,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 ///
 /// Server secrets never live here: sessions and refresh credentials belong to
 /// Keychain/Keystore-backed secure storage. Stock ledger rows are never stored.
-const currentSchemaVersion = 3;
+const currentSchemaVersion = 4;
 
 /// Ordered migrations; index + 1 is the schema version each one produces.
 const _migrations = <String>[
@@ -65,6 +65,18 @@ const _migrations = <String>[
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  ''',
+  // v4: one outbox. Queued counts/actions move into sync_commands (type COUNT / ACTION) so the
+  // durable command queue is the only offline mutation store; the two legacy tables are dropped.
+  '''
+  INSERT OR IGNORE INTO sync_commands (command_id, company_id, actor_id, type, entity_type, entity_id, base_version, occurred_at, payload_json, created_seq)
+    SELECT 'COUNT:' || company_id || ':' || local_id, company_id, '', 'COUNT', 'count', local_id, 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), payload_json, seq
+    FROM queued_counts;
+  INSERT OR IGNORE INTO sync_commands (command_id, company_id, actor_id, type, entity_type, entity_id, base_version, occurred_at, payload_json, created_seq)
+    SELECT 'ACTION:' || local_id, '', '', 'ACTION', 'action', local_id, 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), payload_json, seq
+    FROM queued_actions;
+  DROP TABLE queued_counts;
+  DROP TABLE queued_actions;
   ''',
 ];
 
@@ -191,26 +203,19 @@ class NativeDatabase {
   void _importLegacy(Map<String, dynamic> legacy) {
     final tables = legacy['tables'];
     if (tables is! Map) return;
-    _transaction(() {
-      final counts = tables['queued_counts'];
-      if (counts is List) {
-        for (final row in counts.whereType<Map>()) {
-          _db.execute(
-            'INSERT OR REPLACE INTO queued_counts (local_id, company_id, payload_json, seq) VALUES (?, ?, ?, ?)',
-            [row['local_id'], row['company_id'], row['payload_json'], (row['seq'] as num?)?.toInt() ?? 0],
-          );
-        }
+    final countsByCompany = <String, List<String>>{};
+    final counts = tables['queued_counts'];
+    if (counts is List) {
+      for (final row in counts.whereType<Map>()) {
+        final company = row['company_id']?.toString() ?? '';
+        (countsByCompany[company] ??= []).add(row['payload_json'].toString());
       }
-      final actions = tables['queued_actions'];
-      if (actions is List) {
-        for (final row in actions.whereType<Map>()) {
-          _db.execute(
-            'INSERT OR REPLACE INTO queued_actions (local_id, payload_json, seq) VALUES (?, ?, ?)',
-            [row['local_id'], row['payload_json'], (row['seq'] as num?)?.toInt() ?? 0],
-          );
-        }
-      }
-    });
+    }
+    countsByCompany.forEach(replaceCounts);
+    final actions = tables['queued_actions'];
+    if (actions is List) {
+      replaceActions([for (final row in actions.whereType<Map>()) row['payload_json'].toString()]);
+    }
   }
 
   void close() => _db.close();
@@ -224,43 +229,47 @@ class NativeDatabase {
     return id;
   }
 
-  // ---- legacy count / action queues ---------------------------------------
+  // ---- count / action queues (stored as sync_commands of type COUNT / ACTION) ----------------
+
+  int _nextSeq() => _db.select('SELECT COALESCE(MAX(created_seq), 0) + 1 AS next FROM sync_commands').first['next'] as int;
+
+  void _replaceQueue(String type, String entityType, String? companyId, List<String> payloads) {
+    _transaction(() {
+      if (companyId == null) {
+        _db.execute('DELETE FROM sync_commands WHERE type = ?', [type]);
+      } else {
+        _db.execute('DELETE FROM sync_commands WHERE type = ? AND company_id = ?', [type, companyId]);
+      }
+      var seq = _nextSeq();
+      for (var index = 0; index < payloads.length; index += 1) {
+        final decoded = jsonDecode(payloads[index]);
+        final localId = decoded is Map ? decoded['localId']?.toString() ?? '$entityType-$index' : '$entityType-$index';
+        final owner = type == 'COUNT' ? companyId! : (decoded is Map ? decoded['companyId']?.toString() ?? '' : '');
+        final actor = decoded is Map ? decoded['userId']?.toString() ?? '' : '';
+        final commandId = type == 'COUNT' ? 'COUNT:$owner:$localId' : 'ACTION:$localId';
+        _db.execute(
+          'INSERT OR REPLACE INTO sync_commands (command_id, company_id, actor_id, type, entity_type, entity_id, base_version, occurred_at, payload_json, created_seq) '
+          'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
+          [commandId, owner, actor, type, entityType, localId, DateTime.now().toUtc().toIso8601String(), payloads[index], seq],
+        );
+        seq += 1;
+      }
+    });
+  }
 
   List<String> loadCounts(String companyId) => _db
-      .select('SELECT payload_json FROM queued_counts WHERE company_id = ? ORDER BY seq', [companyId])
+      .select("SELECT payload_json FROM sync_commands WHERE type = 'COUNT' AND company_id = ? ORDER BY created_seq", [companyId])
       .map((row) => row['payload_json'] as String)
       .toList();
 
-  void replaceCounts(String companyId, List<String> payloads) {
-    _transaction(() {
-      _db.execute('DELETE FROM queued_counts WHERE company_id = ?', [companyId]);
-      for (var index = 0; index < payloads.length; index += 1) {
-        final decoded = jsonDecode(payloads[index]);
-        final localId = decoded is Map ? decoded['localId']?.toString() ?? 'count-$index' : 'count-$index';
-        _db.execute(
-          'INSERT OR REPLACE INTO queued_counts (local_id, company_id, payload_json, seq) VALUES (?, ?, ?, ?)',
-          [localId, companyId, payloads[index], index + 1],
-        );
-      }
-    });
-  }
+  void replaceCounts(String companyId, List<String> payloads) => _replaceQueue('COUNT', 'count', companyId, payloads);
 
-  List<String> loadActions() =>
-      _db.select('SELECT payload_json FROM queued_actions ORDER BY seq').map((row) => row['payload_json'] as String).toList();
+  List<String> loadActions() => _db
+      .select("SELECT payload_json FROM sync_commands WHERE type = 'ACTION' ORDER BY created_seq")
+      .map((row) => row['payload_json'] as String)
+      .toList();
 
-  void replaceActions(List<String> payloads) {
-    _transaction(() {
-      _db.execute('DELETE FROM queued_actions');
-      for (var index = 0; index < payloads.length; index += 1) {
-        final decoded = jsonDecode(payloads[index]);
-        final localId = decoded is Map ? decoded['localId']?.toString() ?? 'action-$index' : 'action-$index';
-        _db.execute(
-          'INSERT OR REPLACE INTO queued_actions (local_id, payload_json, seq) VALUES (?, ?, ?)',
-          [localId, payloads[index], index + 1],
-        );
-      }
-    });
-  }
+  void replaceActions(List<String> payloads) => _replaceQueue('ACTION', 'action', null, payloads);
 
   // ---- durable offline command queue --------------------------------------
 

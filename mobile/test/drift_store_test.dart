@@ -79,7 +79,9 @@ void main() {
   test('migrations are versioned and the schema never holds stock or session tables', () {
     final db = NativeDatabase.memory();
     expect(db.schemaVersion, currentSchemaVersion);
-    expect(db.tableNames, containsAll(['queued_counts', 'queued_actions', 'sync_commands', 'entity_versions', 'device_meta']));
+    expect(db.tableNames, containsAll(['sync_commands', 'entity_versions', 'device_meta']));
+    expect(db.tableNames, isNot(contains('queued_counts')), reason: 'one outbox: the legacy queue tables are gone');
+    expect(db.tableNames, isNot(contains('queued_actions')));
     expect(db.tableNames.any((name) => name.contains('stock') || name == 'sessions'), isFalse);
     db.close();
   });
@@ -123,6 +125,42 @@ void main() {
     file.writeAsStringSync('{ not json at all');
     final store = DriftStore.native(NativeDatabase.file(file));
     expect(await store.loadQueuedCounts('c1', 'u1'), isEmpty);
+    store.close();
+  });
+
+  test('v3 queues are moved into the single sync_commands outbox, in order, without loss', () async {
+    final file = _tempFile('v3');
+    final raw = sqlite.sqlite3.open(file.path);
+    raw.execute('''
+      CREATE TABLE queued_counts (local_id TEXT NOT NULL, company_id TEXT NOT NULL, payload_json TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (company_id, local_id));
+      CREATE TABLE queued_actions (local_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, seq INTEGER NOT NULL);
+      CREATE TABLE sync_commands (command_id TEXT PRIMARY KEY, company_id TEXT NOT NULL, actor_id TEXT NOT NULL, type TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, base_version INTEGER NOT NULL, occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, server_version INTEGER, created_seq INTEGER NOT NULL);
+      CREATE TABLE entity_versions (company_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, version INTEGER NOT NULL, PRIMARY KEY (company_id, entity_type, entity_id));
+      CREATE TABLE device_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      PRAGMA user_version = 3;
+    ''');
+    final first = jsonEncode(_count('c-1').toJson()..['userId'] = 'u1');
+    final second = jsonEncode(_count('c-2').toJson()..['userId'] = 'u1');
+    raw.execute("INSERT INTO queued_counts VALUES ('c-1', 'c1', ?, 1)", [first]);
+    raw.execute("INSERT INTO queued_counts VALUES ('c-2', 'c1', ?, 2)", [second]);
+    raw.execute("INSERT INTO queued_actions VALUES ('a-1', ?, 1)", [jsonEncode({'localId': 'a-1', 'userId': 'u1', 'companyId': 'c1', 'type': 'x', 'payload': {}})]);
+    raw.close();
+
+    final db = NativeDatabase.file(file);
+    expect(db.schemaVersion, currentSchemaVersion);
+    expect(db.tableNames, isNot(contains('queued_counts')));
+    expect(db.loadCounts('c1'), [first, second], reason: 'same rows, same order');
+    expect(db.loadActions(), hasLength(1));
+    db.close();
+  });
+
+  test('counts, actions and typed commands share one table without disturbing each other', () async {
+    final store = DriftStore.inMemory();
+    await store.saveQueuedCounts([_count('k-1')], 'c1', 'u1');
+    await store.saveQueuedCounts([_count('k-2')], 'c2', 'u1');
+    await store.saveQueuedCounts([_count('k-3')], 'c1', 'u1'); // replaces only c1's own rows
+    expect((await store.loadQueuedCounts('c1', 'u1')).map((c) => c.localId), ['k-3']);
+    expect((await store.loadQueuedCounts('c2', 'u1')).map((c) => c.localId), ['k-2'], reason: 'another company is untouched');
     store.close();
   });
 
