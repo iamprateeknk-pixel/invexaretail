@@ -31,7 +31,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure |
 | J | Remove committed `api/dist` | open | A second deploy path still needs it (ADR-006 addendum) |
-| K API contract | OpenAPI v2026.14.0: bundles, 2FA, reconciliation, `X-Mutation-Id` | partial | Full route coverage still open |
+| K API contract | OpenAPI v2026.15.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in and session endpoints | partial | 31 paths documented; most other routes still open |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 
 ## What still blocks a GO
