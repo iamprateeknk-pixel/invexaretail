@@ -36,6 +36,8 @@ API and worker (never commit values; set in the platform's secret store):
 | `RUN_SCHEDULERS` | API: `false` | Schedulers belong to the worker. |
 | `RECONCILE_INTERVAL_HOURS` | worker, default 24 | Nightly stock reconciliation. |
 | `DATABASE_REFRESH_INTERVAL_MS` | optional, default 30000 | Snapshot reconciliation interval (off the request path). |
+| `ALERT_WEBHOOK_URL` | strongly recommended | Where breaches are pushed (outbox POISON or stuck >15 min, stock mismatch, stuck offline commands). A Slack incoming webhook or any endpoint accepting JSON. Unset = nothing is sent. Runs in the worker. |
+| `ALERT_SWEEP_MINUTES` | optional, default 5 | How often the worker checks. A standing breach is announced once, repeated every 6 h, and reported as resolved when it clears. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | optional | Tracing; unset = off. |
 | `APP_VERSION` / `GITHUB_SHA` | set by CI | Reported by `/health` and `/meta`. |
 
@@ -56,6 +58,17 @@ private hosts.
    `/assets/index-*.js` hash changed.
 6. Watch `GET /ops/metrics` for 30 minutes: `outbox.slo.breached`,
    `stockReconciliation.breached`, `reconciliation.stale` must all be false.
+
+### One-time data steps (per environment)
+
+- **Opening-balance journal.** Balances created before the posting service have no movement history and show up as
+  `NO_JOURNAL_HISTORY`. Give each one an opening row so the journal explains it:
+  `cd api && npm run build && DATABASE_URL=... node scripts/backfill-opening-journal.cjs` (dry run), then
+  `--apply` (optionally `--company <id>`). It only adds rows, never edits a balance or movement, and is safe to re-run.
+  Then `POST /ops/reconciliation/run` and expect `noJournalHistory: 0, mismatches: 0`.
+- **Money columns.** The migrations that turned Float money columns into NUMERIC round existing values (2 dp for totals and
+  charges, 4 dp for unit costs). Each migration's header has the query that lists rows whose value would change; run it
+  on a backup first and review any row it returns.
 
 ### Migration policy
 

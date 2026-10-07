@@ -4,16 +4,16 @@
 
 | Dimension | Pass condition (guide) | State | Blocking evidence still needed |
 |---|---|---|---|
-| Data integrity | Zero unexplained stock delta; all mutation paths canonical | **Not met** (much closer) | On-hand paths for PO/transfer receipt, pick-confirm, counts, orders, expiry and returns now post canonically and atomically. Still open: `reserved`/`inTransit`/`quarantine` dimensions, legacy bulk-import writes, and Float->Decimal (`docs/inventory-posting-coverage.md`) |
-| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | Partial | Replay/isolation suites exist and pass; the covered `unscoped-tenant-query` baseline is now zero after the marketplace, OMS, import, count, expiry, return and exception slices. Dependency-audit exceptions still need owner acceptance (`docs/security-gates.md`) |
-| Reliability | Backup/restore, migration rollback, worker replay pass | Partial | Local restore rehearsal only; no staging restore, rollback or replay drill |
-| Performance | p95 budgets pass at target volume | **Not measured** | No load test; budgets are proposals (`docs/slo-and-alerting.md`) |
-| UX | Five golden journeys pass desktop/tablet/mobile + keyboard | Partial | Item-search journey has Playwright coverage; the other four journeys have none |
-| Mobile | Signed build, secure storage, real offline DB, sync recovery | Partial | Real SQLite + secure storage in code and tested; **no signed build (no keystore secret) and no device matrix** |
-| Observability | Trace, logs, SLO alerts, business reconciliation visible | Partial | OpenTelemetry tracing is opt-in code; no collector, dashboard or alert routing |
-| Documentation | README, ADRs, API, deploy, rollback, incident docs current | Partial | README/security/SLO/offline docs rewritten this pass; no incident runbook, `AGENTS.md` week narratives predate the real guide (`docs/guide-status.md`) |
+| Data integrity | Zero unexplained stock delta; all mutation paths canonical | **Mostly met** | Reconciliation 11/11 explained, 0 mismatches after the opening-journal backfill; no Float money fields; concurrency suites green. Still open: some legacy stock-write call sites remain allowlisted (`docs/inventory-posting-coverage.md`) |
+| Security | No P0/P1 auth/tenant issue; replay/isolation suites pass | **Met in code** | Tenant sweep closed ~20 cross-company leaks, each with a negative test that fails on the old code; 2FA, lockout, non-enumerating OTP, one-time handoff codes. Dependency exceptions are owned and expire 2026-12-31 |
+| Reliability | Backup/restore, migration rollback, worker replay pass | Partial | Migration matrix (fresh/upgrade/restore) green; local rollback rehearsal passed (older release on newer schema, reads and writes); managed-database restore and Railway rollback not rehearsed |
+| Performance | p95 budgets pass at target volume | Partial | Local read probe at 20k items: all four endpoints p95 <= 163 ms (budget 500). Mutations, managed DB and staging not measured |
+| UX | Five golden journeys pass desktop/tablet/mobile + keyboard | Partial | Shared DataTable pattern, Entity 360, a11y names verified on all 28 sections in a real browser, no overflow at 375 px; 3 Playwright specs authored (not executed here); no usability tests |
+| Mobile | Signed build, secure storage, real offline DB, sync recovery | Partial | One SQLite outbox, offline read model (cold-start snapshot), identity-bound queues, no second login; **no signed build and no device matrix** |
+| Observability | Trace, logs, SLO alerts, business reconciliation visible | Partial | Reconciliation, sync health and outbox SLOs queryable and pushed to `ALERT_WEBHOOK_URL` (tested); no collector, hosted dashboard or configured destination |
+| Documentation | README, ADRs, API, deploy, rollback, incident docs current | Mostly met | Canonical runbook with rollback and incident handling, evidence package, tracker; OpenAPI covers 41 paths, not every route |
 | Governance | Protected main, review gates, evidence, release owner | Unverified | Branch protection, required reviewers, signed tag and SBOM cannot be checked from the repository |
-| Operations | Canary and rollback exercised; 30-day review scheduled | **Not done** | Needs a staging/canary environment |
+| Operations | Canary and rollback exercised; 30-day review scheduled | **Not done** | Local rollback rehearsal only; canary needs a staging/canary environment |
 
 ## Five golden journeys (guide) - automation state
 
@@ -25,9 +25,14 @@
 | 4 | Marketplace order replayed twice -> one order, one reservation, reconciled return/refund | Replay -> one order and cross-tenant rejection tested (memory mode); return/refund leg not covered |
 | 5 | Overlapping IDs across two tenants -> zero cross-tenant access | Item repository (5,200 items) and seven route-slice Postgres suites |
 
-## Update 2026-10-07 (Plan 10/10)
+## Update 2026-10-07 (checklist completion)
 
-Moved since the table above: nightly stock reconciliation with evidence and an SLO flag, exactly-once `X-Mutation-Id` replay, company-scoped assets/lots/comments/notifications, 2FA, a migration restore matrix and a blocking dependency-audit gate with expiring exceptions, a canonical runbook, and identity-bound mobile offline queues. Recommendation is unchanged: **NO-GO** until the `open` rows in `plan-10of10-tracker.md` and the owner-only items are closed.
+The full evidence is in [release-candidate-evidence.md](release-candidate-evidence.md); item-level status is in
+[plan-10of10-tracker.md](plan-10of10-tracker.md). What changed since the table was first written: every code-level item in the plan's
+section 20 checklist now has evidence in the repository, and what remains is verification that needs devices, a staging stack or people
+(Android golden journeys, usability tests, a production-like load run, a managed restore and rollback drill, configuring the alert destination).
+
+**Recommendation: NO-GO until those are done** - a smaller, better-defined gap than before, with every remaining item named and owned.
 
 ## Exceptions register
 

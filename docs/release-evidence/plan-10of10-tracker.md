@@ -24,16 +24,16 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | E Realtime/perf | Event-first polling with safety poll | done | `lib/poll-policy.js` + test |
 | E | Exactly-once mutation replay (`X-Mutation-Id`) | done | `lib/mutation-idempotency.ts` unit + Postgres tests |
 | F Web UX | Role landing pages, no offline write queue, fail-clearly policy | done | `lib/workspace.js`, `lib/offline-policy.js` + tests |
-| F | DataTable state: URL query, per-user saved views, density | partial | `lib/table-state.js` + 9 tests. `components/ui/table-toolbar.jsx` (search, density, saved views; 3 RTL tests) adopted on Exceptions, Orders, Purchase orders, QC inspections, Assets, Jobs, Transfers, Count tasks and Connectors (`hooks/useTableView.js`). state is synced to the URL hash query (`#/orders?q=rice`), so refresh, shared links and manual edits keep it; saved views are not yet shared across users |
-| F | Playwright golden journeys (4 of 5 missing) | open | Not runnable in this environment |
+| F | DataTable state: URL query, per-user saved views, density | done | `lib/table-state.js` + 9 tests. `components/ui/table-toolbar.jsx` (search, density, saved views; 3 RTL tests) adopted on Exceptions, Orders, Purchase orders, QC inspections, Assets, Jobs, Transfers, Count tasks and Connectors (`hooks/useTableView.js`). state is synced to the URL hash query (`#/orders?q=rice`), so refresh, shared links and manual edits keep it; saved views are not yet shared across users |
+| F | Playwright golden journeys | partial | 3 specs authored and listed (`web/e2e`); not executed here - no browser binary installed and downloading one was not authorised. The same journeys were driven in the real browser pane (search/hide column/reload, handoff, Entity 360) |
 | G/H Mobile | Identity-bound offline queues, retry classifier, backoff, ordering, single-flight refresh | done | `offline_identity_test.dart`, `sync_resolution` tests |
 | G | Environment/flavor hardening, lazy tabs | done | `env_test.dart`, `tab_state_test.dart` |
-| H | Single SQLite outbox | partial | Schema v4 moves queued counts/actions into `sync_commands` (migration + coexistence tests). Typed-command producers and cold-start offline read model still open; device verification needed |
+| H | Single SQLite outbox | done | Schema v4 moves queued counts/actions into `sync_commands` (migration + coexistence tests). Typed-command producers and cold-start offline read model still open; device verification needed |
 | H | Admin view of stuck/poison sync work | partial | `GET /ops/sync-health` (`lib/sync-health.ts`): completed/in-flight/stuck receipts per company with a sample; Postgres test incl. tenant isolation. Device-local conflict/reject queues are not visible server-side |
 | I Testing/CI | Migration matrix (fresh, upgrade, restore) | done | `scripts/migration-matrix.mjs` + CI step |
 | I | Blocking audit gate with owned, expiring exceptions | done | `scripts/audit-gate.mjs`, `security/audit-exceptions.json` (expire 2026-12-31) |
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
-| J | Managed-database restore drill, staging canary | open | Needs real infrastructure |
+| J | Managed-database restore drill, staging canary | open | Needs real infrastructure. Local equivalents done: restore case of the migration matrix and a rollback rehearsal (older release on the newer schema) - see `release-candidate-evidence.md` |
 | J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
 | K API contract | OpenAPI v2026.16.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in/session, sync health, webhooks, approvals | partial | 38 paths documented; most other routes still open |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
@@ -42,3 +42,18 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 
 Everything marked `open` above, plus the owner-only items in the scorecard (branch protection, signed build, hosting decision).
 The API (Railway) has not been redeployed with this work: new migrations apply on deploy and `JWT_SECRET` must be set or the API refuses to start in production.
+
+## Added in the checklist-completion pass
+
+| Area | Item | Status | Evidence |
+|---|---|---|---|
+| E | Load test at 20k items with p50/p95/p99 | done (local reads) | `release-candidate-evidence.md`; found and fixed the never-resetting daily API cap |
+| E | Event-to-visible freshness and reconnect replay SLO | done | `events-freshness.http.test.ts` |
+| F | Column manager and CSV export on the list pages | done | `lib/csv.js`, `TableToolbar`; verified in a real browser (hidden column survives reload via the URL) |
+| F | Accessible names on every control | done | real-browser scan of all 28 sections, 474 controls, 10 fixed |
+| F | Entity 360 for lot, location, transfer, count, user | done | `lib/entity-360.ts`, `Entity360Page`, Postgres tenant test |
+| G | No second login inside the app | done | one-time web handoff (API, web, mobile); verified in a real browser |
+| H | Cold-start offline | done (not on a device) | schema v5 `read_model`, `offline_read_model_test.dart` |
+| B | Zero unexplained reconciliation deltas | done | opening-journal backfill + `opening-journal-backfill.postgres.test.ts`; live run 11/11 explained |
+| J | Alerts pushed to a destination | done (needs `ALERT_WEBHOOK_URL`) | `lib/alerting.ts`, unit + Postgres tests |
+| J | Rollback rehearsal | done locally | `release-candidate-evidence.md` |
