@@ -82,7 +82,7 @@ class _HomeShellState extends State<HomeShell> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const WorkspaceScreen(),
+                  builder: (_) => WorkspaceScreen(fetchHandoffCode: controller.api.webHandoffCode),
                 ),
               );
             },

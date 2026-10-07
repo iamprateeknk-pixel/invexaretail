@@ -178,6 +178,16 @@ class InvexaApi {
     return SendOtpResult.fromJson(payload);
   }
 
+  /// A one-time code (valid about a minute) that lets the web workspace open already signed in as this
+  /// user, so a capability shown inside the app never asks for a second login. The access token itself
+  /// is never put in a URL.
+  Future<String> webHandoffCode() async {
+    final payload = await _send('POST', '/api/v1/auth/web-handoff', body: const <String, Object?>{});
+    final code = asString(payload['code']);
+    if (code.isEmpty) throw ApiException('The server did not return a handoff code.');
+    return code;
+  }
+
   Future<LoginResult> loginWithOtp(String email, String otpCode) async {
     final payload = await _send(
       'POST',
