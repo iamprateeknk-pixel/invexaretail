@@ -114,3 +114,15 @@ export function filterRows(rows, query, getFields) {
     return words.every((word) => text.includes(word));
   });
 }
+
+// ---- URL hash binding ---------------------------------------------------------------------
+
+/** The table state carried by `#/section?q=..&density=..` (defaults when the hash has no query). */
+export function readTableStateFromHash(hash, defaults = DEFAULT_TABLE_STATE) {
+  return parseTableQuery(splitHash(hash).query, defaults);
+}
+
+/** The same hash with its query replaced by `state` (section path untouched, defaults omitted). */
+export function hashWithTableState(hash, state, defaults = DEFAULT_TABLE_STATE) {
+  return joinHash(splitHash(hash).path, serializeTableQuery(state, defaults));
+}

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { TableToolbar } from '@/components/ui/table-toolbar';
 import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -33,17 +34,13 @@ export function ExceptionsPage() {
     refreshExceptions, claimException, resolveException, submitLoading,
   } = useWorkspace();
   const [resolvingCase, setResolvingCase] = useState(null);
-  const [tableState, setTableState] = useState(DEFAULT_TABLE_STATE);
   const [disposition, setDisposition] = useState('');
   const [resolutionNotes, setResolutionNotes] = useState('');
   const isManager = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role);
 
-  const visibleCases = useMemo(() => {
-    const needle = tableState.q.trim().toLowerCase();
-    if (!needle) return exceptionCases;
-    return exceptionCases.filter((item) => [item.title, item.description, item.item?.code, item.item?.name, item.location?.name, item.owner?.name].some((value) => String(value ?? '').toLowerCase().includes(needle)));
-  }, [exceptionCases, tableState.q]);
-  const rowPadding = tableState.density === 'compact' ? 'p-2' : 'p-3';
+  const view = useTableView(exceptionCases, (item) => [item.title, item.description, item.item?.code, item.item?.name, item.location?.name, item.owner?.name]);
+  const visibleCases = view.visible;
+  const rowPadding = view.rowPadding;
 
   function selectFilter(id) {
     setExceptionStatusFilter(id);
@@ -78,7 +75,7 @@ export function ExceptionsPage() {
         ))}
       </div>
 
-      <TableToolbar tableId="exceptions" userId={session?.user?.id} state={tableState} onChange={setTableState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search exceptions" />
+      <TableToolbar tableId="exceptions" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search exceptions" />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Exception inbox</CardTitle><p className="text-xs text-muted-foreground">Every damage, shortage, wrong-item and pick exception, owned through to a closed disposition.</p></CardHeader>
