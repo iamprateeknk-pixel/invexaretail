@@ -80,6 +80,7 @@ export function buildWebhookEnvelope(input: {
 export async function deliverSubscription(
   subscription: WebhookSubscriptionRecord,
   event: WebhookEmitInput,
+  companyId: string = subscription.companyId,
 ): Promise<WebhookDeliveryRecord> {
   const createdAt = new Date().toISOString();
   const deliveryId = `whdel-${randomBytes(6).toString('hex')}`;
@@ -92,6 +93,7 @@ export async function deliverSubscription(
   const payloadHash = hashPayload(body);
   const pending = recordWebhookDelivery({
     id: deliveryId,
+    companyId,
     subscriptionId: subscription.id,
     eventType: event.type,
     entityId: event.entityId ?? null,
@@ -160,6 +162,7 @@ export async function persistDelivery(row: WebhookDeliveryRecord): Promise<void>
     },
     create: {
       id: row.id,
+      companyId: row.companyId ?? 'default-company',
       subscriptionId: row.subscriptionId,
       eventType: row.eventType,
       entityId: row.entityId,
@@ -185,9 +188,10 @@ export class WebhookReplayError extends Error {}
  * can be replayed - a DELIVERED one is done, and a PENDING one is still in
  * flight.
  */
-export async function replayDelivery(deliveryId: string): Promise<WebhookDeliveryRecord> {
+export async function replayDelivery(deliveryId: string, companyId?: string): Promise<WebhookDeliveryRecord> {
   const record = await findDeliveryForReplay(deliveryId);
-  if (!record) throw new WebhookReplayError('Delivery was not found.');
+  // A foreign company's delivery is indistinguishable from a missing one.
+  if (!record || (companyId !== undefined && record.companyId !== companyId)) throw new WebhookReplayError('Delivery was not found.');
   if (record.status !== 'FAILED') throw new WebhookReplayError(`Only a FAILED delivery can be replayed (this one is ${record.status}).`);
   if (!record.body) throw new WebhookReplayError('This delivery has no stored payload to replay.');
   const subscription = getWebhookSubscription(record.subscriptionId);
@@ -242,19 +246,19 @@ async function findDeliveryForReplay(deliveryId: string): Promise<WebhookDeliver
   const row = await prisma.webhookDeliveryLog.findUnique({ where: { id: deliveryId } }).catch(() => null);
   if (!row) return undefined;
   return {
-    id: row.id, subscriptionId: row.subscriptionId, eventType: row.eventType, entityId: row.entityId,
+    id: row.id, companyId: row.companyId, subscriptionId: row.subscriptionId, eventType: row.eventType, entityId: row.entityId,
     status: row.status as WebhookDeliveryRecord['status'], attemptCount: row.attemptCount, responseCode: row.responseCode,
     lastError: row.lastError, createdAt: row.createdAt.toISOString(), deliveredAt: row.deliveredAt ? row.deliveredAt.toISOString() : null,
     payloadHash: row.payloadHash, nextRetryAt: row.nextRetryAt ? row.nextRetryAt.toISOString() : null, body: row.body,
   };
 }
 
-export async function retryDueDeliveries(): Promise<{ retried: number; delivered: number }> {
+export async function retryDueDeliveries(companyId?: string): Promise<{ retried: number; delivered: number }> {
   const now = new Date();
-  const dueIds = new Set(listDueRetries(now.toISOString()).map((row) => row.id));
+  const dueIds = new Set(listDueRetries(now.toISOString()).filter((row) => companyId === undefined || row.companyId === companyId).map((row) => row.id));
   if (databaseEnabled) {
     const persistedDue = await prisma.webhookDeliveryLog.findMany({
-      where: { status: 'FAILED', nextRetryAt: { lte: now } },
+      where: { status: 'FAILED', nextRetryAt: { lte: now }, ...(companyId === undefined ? {} : { companyId }) },
       select: { id: true },
     }).catch(() => []);
     for (const row of persistedDue) dueIds.add(row.id);
@@ -272,12 +276,15 @@ export async function retryDueDeliveries(): Promise<{ retried: number; delivered
 }
 
 export async function dispatchWebhookEvent(event: WebhookEmitInput): Promise<WebhookDeliveryRecord[]> {
-  const targets = listMatchingSubscriptions(event.type);
   const delivered: WebhookDeliveryRecord[] = [];
-  for (const subscription of targets) {
-    delivered.push(await deliverSubscription(subscription, event));
-  }
+  // An event is only ever delivered to subscriptions of the company that produced it. If the
+  // company cannot be determined the event is dropped: guessing would send one tenant's data to another.
   const companyId = resolveCompanyIdFromEvent(event.data);
+  if (companyId) {
+    for (const subscription of listMatchingSubscriptions(event.type, companyId)) {
+      delivered.push(await deliverSubscription(subscription, event, companyId));
+    }
+  }
   if (companyId) {
     for (const hook of listControlPlaneWebhookTargets(companyId, event.type)) {
       delivered.push(await deliverSubscription({
@@ -290,7 +297,8 @@ export async function dispatchWebhookEvent(event: WebhookEmitInput): Promise<Web
         status: 'ACTIVE',
         createdAt: hook.createdAt,
         updatedAt: hook.createdAt,
-      }, event));
+        companyId,
+      }, event, companyId));
     }
   }
   return delivered;

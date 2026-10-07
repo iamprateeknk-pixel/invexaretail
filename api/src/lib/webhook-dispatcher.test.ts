@@ -29,6 +29,7 @@ test('subscriptions hide signing secrets and pause skips delivery', async () => 
   controlPlane.reset();
   resetWebhookStore();
   const created = createWebhookSubscription({
+    companyId: 'default-company',
     name: 'Ops',
     endpointUrl: 'http://127.0.0.1:9/hooks',
     events: ['count.reviewed'],
@@ -36,13 +37,13 @@ test('subscriptions hide signing secrets and pause skips delivery', async () => 
   });
   assert.equal('signingSecret' in created.subscription, false);
   assert.match(created.signingSecret, /^[a-f0-9]{64}$/);
-  assert.equal(listWebhookSubscriptions()[0].name, 'Ops');
+  assert.equal(listWebhookSubscriptions('default-company')[0].name, 'Ops');
 
-  setWebhookSubscriptionStatus(created.subscription.id, 'PAUSED');
+  setWebhookSubscriptionStatus(created.subscription.id, 'PAUSED', 'default-company');
   const paused = await dispatchWebhookEvent({
     type: 'count.reviewed',
     entityId: 'count-1',
-    data: { countId: 'count-1', status: 'APPROVED' },
+    data: { companyId: 'default-company', countId: 'count-1', status: 'APPROVED' },
   });
   assert.deepEqual(paused, []);
 });
@@ -57,11 +58,13 @@ test('dispatcher signs the body and records delivered and failed attempts', asyn
     return { status: 204 };
   });
   const ok = createWebhookSubscription({
+    companyId: 'default-company',
     name: 'OK',
     endpointUrl: 'https://hooks.example.com/ok',
     events: ['transfer.updated'],
   });
   createWebhookSubscription({
+    companyId: 'default-company',
     name: 'Fail',
     endpointUrl: 'https://hooks.example.com/fail',
     events: ['transfer.updated'],
@@ -70,7 +73,7 @@ test('dispatcher signs the body and records delivered and failed attempts', asyn
   const deliveries = await dispatchWebhookEvent({
     type: 'transfer.updated',
     entityId: 'transfer-1',
-    data: { transferId: 'transfer-1', status: 'DISPATCHED' },
+    data: { companyId: 'default-company', transferId: 'transfer-1', status: 'DISPATCHED' },
   });
   resetWebhookTransport();
 
@@ -96,6 +99,7 @@ test('a failed delivery is dead-lettered with a next-retry time, and replay rese
     return { status: calls === 1 ? 500 : 204 };
   });
   createWebhookSubscription({
+    companyId: 'default-company',
     name: 'Flaky',
     endpointUrl: 'https://hooks.example.com/flaky',
     events: ['transfer.updated'],
@@ -104,7 +108,7 @@ test('a failed delivery is dead-lettered with a next-retry time, and replay rese
   const [first] = await dispatchWebhookEvent({
     type: 'transfer.updated',
     entityId: 'transfer-2',
-    data: { transferId: 'transfer-2', status: 'DISPATCHED' },
+    data: { companyId: 'default-company', transferId: 'transfer-2', status: 'DISPATCHED' },
   });
   assert.equal(first.status, 'FAILED');
   assert.equal(first.attemptCount, 1);
@@ -127,6 +131,7 @@ test('retryDueDeliveries only replays deliveries whose next-retry time has passe
   resetWebhookStore();
   setWebhookTransport(async () => ({ status: 500 }));
   createWebhookSubscription({
+    companyId: 'default-company',
     name: 'AlwaysDown',
     endpointUrl: 'https://hooks.example.com/down',
     events: ['transfer.updated'],
@@ -134,7 +139,7 @@ test('retryDueDeliveries only replays deliveries whose next-retry time has passe
   await dispatchWebhookEvent({
     type: 'transfer.updated',
     entityId: 'transfer-3',
-    data: { transferId: 'transfer-3', status: 'DISPATCHED' },
+    data: { companyId: 'default-company', transferId: 'transfer-3', status: 'DISPATCHED' },
   });
 
   const tooSoon = await retryDueDeliveries();
@@ -159,6 +164,7 @@ test('stock.low fires only when on-hand crosses the reorder minimum', async () =
     return { status: 200 };
   });
   createWebhookSubscription({
+    companyId: 'default-company',
     name: 'Low',
     endpointUrl: 'https://hooks.example.com/low',
     events: ['stock.low'],
@@ -186,6 +192,7 @@ test('emitWebhookEvent swallows transport crashes', async () => {
     throw new Error('boom');
   });
   createWebhookSubscription({
+    companyId: 'default-company',
     name: 'Crash',
     endpointUrl: 'https://hooks.example.com/crash',
     events: ['purchase-order.received'],
@@ -193,8 +200,57 @@ test('emitWebhookEvent swallows transport crashes', async () => {
   const rows = await emitWebhookEvent({
     type: 'purchase-order.received',
     entityId: 'po-1',
-    data: { purchaseOrderId: 'po-1', status: 'RECEIVED' },
+    data: { companyId: 'default-company', purchaseOrderId: 'po-1', status: 'RECEIVED' },
   });
   resetWebhookTransport();
   assert.equal(rows[0]?.status, 'FAILED');
+});
+
+test('events are delivered only to the subscriptions of the company that produced them', async () => {
+  controlPlane.reset();
+  resetWebhookStore();
+  const urls: string[] = [];
+  setWebhookTransport(async (url) => { urls.push(url); return { status: 204 }; });
+  try {
+    createWebhookSubscription({ companyId: 'company-a', name: 'A hook', endpointUrl: 'http://127.0.0.1:9/a', events: ['count.reviewed'], allowPrivate: true });
+    createWebhookSubscription({ companyId: 'company-b', name: 'B hook', endpointUrl: 'http://127.0.0.1:9/b', events: ['count.reviewed'], allowPrivate: true });
+
+    const forA = await dispatchWebhookEvent({ type: 'count.reviewed', data: { companyId: 'company-a', countId: 'c1' } });
+    assert.equal(forA.length, 1);
+    assert.deepEqual(urls, ['http://127.0.0.1:9/a'], 'company B must never receive company A\'s event');
+    assert.equal(forA[0].companyId, 'company-a');
+
+    urls.length = 0;
+    const unattributable = await dispatchWebhookEvent({ type: 'count.reviewed', data: { countId: 'c2' } });
+    assert.deepEqual(unattributable, [], 'an event whose company cannot be determined is dropped, not broadcast');
+    assert.deepEqual(urls, []);
+  } finally {
+    resetWebhookTransport();
+  }
+});
+
+test('subscription lists, status changes, delivery logs and replay are company scoped (foreign id looks missing)', async () => {
+  controlPlane.reset();
+  resetWebhookStore();
+  let status = 500;
+  setWebhookTransport(async () => ({ status }));
+  try {
+    const a = createWebhookSubscription({ companyId: 'company-a', name: 'A hook', endpointUrl: 'http://127.0.0.1:9/a', events: ['count.reviewed'], allowPrivate: true });
+    createWebhookSubscription({ companyId: 'company-b', name: 'B hook', endpointUrl: 'http://127.0.0.1:9/b', events: ['count.reviewed'], allowPrivate: true });
+
+    assert.deepEqual(listWebhookSubscriptions('company-a').map((row) => row.name), ['A hook']);
+    assert.deepEqual(listWebhookSubscriptions('company-b').map((row) => row.name), ['B hook']);
+    assert.throws(() => setWebhookSubscriptionStatus(a.subscription.id, 'PAUSED', 'company-b'), /not found/);
+    assert.equal(setWebhookSubscriptionStatus(a.subscription.id, 'ACTIVE', 'company-a').status, 'ACTIVE', 'the identical call works for the owner');
+
+    const [failed] = await dispatchWebhookEvent({ type: 'count.reviewed', data: { companyId: 'company-a', countId: 'c1' } });
+    assert.equal(failed.status, 'FAILED');
+    assert.equal(listWebhookDeliveries(100, 'company-b').length, 0, 'company B sees none of company A\'s delivery payloads');
+    assert.equal(listWebhookDeliveries(100, 'company-a').length, 1);
+    await assert.rejects(() => replayDelivery(failed.id, 'company-b'), WebhookReplayError);
+    status = 204;
+    assert.equal((await replayDelivery(failed.id, 'company-a')).status, 'DELIVERED');
+  } finally {
+    resetWebhookTransport();
+  }
 });

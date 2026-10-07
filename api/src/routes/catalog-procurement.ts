@@ -1007,7 +1007,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
 router.get('/saved-reports', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const savedReports = await prisma.savedReport.findMany({
-    where: { OR: [{ ownerId: req.user!.id }, { isShared: true }] },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user!.id }, { isShared: true }] },
     orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
   });
   return res.json({ savedReports });
@@ -1028,6 +1028,7 @@ router.post('/saved-reports', async (req, res) => {
   const savedReport = await prisma.savedReport.create({
     data: {
       ownerId: req.user!.id,
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       name,
       reportType,
       locationId,
@@ -1040,7 +1041,7 @@ router.post('/saved-reports', async (req, res) => {
 
 router.delete('/saved-reports/:id', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
-  const savedReport = await prisma.savedReport.findUnique({ where: { id: req.params.id } });
+  const savedReport = await prisma.savedReport.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!savedReport) return res.status(404).json({ message: 'Saved report not found.' });
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && savedReport.ownerId !== req.user!.id) {
     return res.status(403).json({ message: 'Only the report owner or an Admin can delete this report.' });

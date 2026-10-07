@@ -87,8 +87,9 @@ export async function checkApprovalGate(input: {
   }
 }
 
-export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes?: string | null) {
-  const request = await prisma.approvalRequest.findUnique({ where: { id: requestId }, include: { rule: true } });
+export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string) {
+  // A request of another company is indistinguishable from a missing one.
+  const request = await prisma.approvalRequest.findFirst({ where: { id: requestId, requestedBy: { companyId } }, include: { rule: true } });
   if (!request) throw new Error('Approval request was not found.');
   if (request.status !== 'PENDING') throw new Error(`This request is already ${request.status}.`);
   if (!roleMeetsRequirement(deciderRole, request.rule.requiredApproverRole)) {
