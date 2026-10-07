@@ -115,6 +115,7 @@ export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT
       const API_BASE = ${JSON.stringify(safeApiBase)};
       const WEB_APP_URL = ${JSON.stringify(safeWebAppUrl)};
       const STORAGE_KEY = "invexa_control_session";
+      let handoffStarted = false;
       const loginView = document.getElementById("login-view");
       const companyView = document.getElementById("company-view");
       const lockedView = document.getElementById("locked-view");
@@ -178,7 +179,19 @@ export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT
           lockedView.hidden = false;
           loginView.hidden = true;
           companyView.hidden = true;
-          window.location.href = WEB_APP_URL + "/#/control?session=" + encodeURIComponent(JSON.stringify(session));
+          if (!handoffStarted) {
+            handoffStarted = true;
+            // Only a one-time code (single use, 60 s) goes in the URL, never the session itself.
+            controlRequest("/control/v1/sessions/handoff", { token: controlToken, method: "POST", body: { session: session } })
+              .then(function (result) {
+                clearSession();
+                window.location.href = WEB_APP_URL + "/#/control?code=" + encodeURIComponent(result.code);
+              })
+              .catch(function (error) {
+                handoffStarted = false;
+                showError(companyError, error && error.message ? error.message : "Could not open the Control Plane");
+              });
+          }
           return;
         }
         loginView.hidden = Boolean(platformToken);

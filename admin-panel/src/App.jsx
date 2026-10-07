@@ -68,12 +68,23 @@ export default function App() {
     setError('');
   }
 
-  // Locking a company only issues the token; the full Control Plane
-  // dashboard (users, billing, studio, etc.) lives in the web app, so hand
-  // the session off via the URL fragment instead of rendering it here.
+  // Locking a company only issues the token; the full Control Plane dashboard (users, billing,
+  // studio, etc.) lives in the web app. Only a one-time code (single use, 60 s) goes in the URL;
+  // the session itself is exchanged server-side and never appears in the address bar or history.
   useEffect(() => {
-    if (!controlToken) return;
-    window.location.href = `${WEB_APP_URL}/#/control?session=${encodeURIComponent(JSON.stringify(session))}`;
+    if (!controlToken) return undefined;
+    let cancelled = false;
+    controlRequest('/control/v1/sessions/handoff', { token: controlToken, method: 'POST', body: { session } })
+      .then(({ code }) => {
+        if (cancelled) return;
+        clearControlSession();
+        window.location.href = `${WEB_APP_URL}/#/control?code=${encodeURIComponent(code)}`;
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not open the Control Plane');
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlToken]);
 
   if (!platformToken) {
