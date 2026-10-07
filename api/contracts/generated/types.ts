@@ -534,6 +534,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ops/sync-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Offline-command health for the caller's company: completed, in-flight and stuck mutation receipts. */
+        get: operations["getSyncHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhook-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's company's webhook subscriptions (admin). Another company's hooks are never listed. */
+        get: operations["listWebhookSubscriptions"];
+        put?: never;
+        /** Create a subscription. Events are delivered only for the caller's own company. */
+        post: operations["createWebhookSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhook-subscriptions/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Pause or resume a subscription. */
+        patch: operations["setWebhookSubscriptionStatus"];
+        trace?: never;
+    };
+    "/webhook-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent deliveries of the caller's company (admin). */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhook-deliveries/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay a FAILED delivery with its stored payload. */
+        post: operations["replayWebhookDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/approval-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Approval requests of the caller's company. */
+        get: operations["listApprovalRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/approval-requests/{id}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or reject a pending request. */
+        post: operations["decideApprovalRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -881,6 +1001,64 @@ export interface components {
             user: {
                 [key: string]: unknown;
             };
+        };
+        SyncHealth: {
+            /** @description False when the server runs without a database. */
+            available: boolean;
+            windowHours?: number;
+            /** Format: date-time */
+            generatedAt?: string;
+            completed?: number;
+            inProgress?: number;
+            /** @description Mutation receipts still IN_PROGRESS past the stale window; never deleted automatically. */
+            stuck?: number;
+            stuckSample?: {
+                userId?: string;
+                mutationId?: string;
+                ageSeconds?: number;
+                /** Format: date-time */
+                claimedAt?: string;
+            }[];
+            /** @description True when anything is stuck. */
+            breached?: boolean;
+        };
+        WebhookSubscription: {
+            id?: string;
+            name?: string;
+            endpointUrl?: string;
+            events?: string[];
+            /** @enum {string} */
+            status?: "ACTIVE" | "PAUSED";
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        WebhookDelivery: {
+            id?: string;
+            companyId?: string;
+            subscriptionId?: string;
+            eventType?: string;
+            /** @enum {string} */
+            status?: "PENDING" | "DELIVERED" | "FAILED";
+            attemptCount?: number;
+            responseCode?: number | null;
+            lastError?: string | null;
+            /** Format: date-time */
+            nextRetryAt?: string | null;
+        };
+        ApprovalRequest: {
+            id?: string;
+            ruleId?: string;
+            triggerType?: string;
+            entityType?: string;
+            entityId?: string;
+            /** @description Decimal(14,2) in the database, a JSON number on the wire. */
+            valueAtStake?: number;
+            /** @enum {string} */
+            status?: "PENDING" | "APPROVED" | "REJECTED";
+            requestedById?: string;
+            decidedById?: string | null;
         };
     };
     responses: never;
@@ -2234,6 +2412,298 @@ export interface operations {
             };
             /** @description No or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSyncHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Health snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncHealth"];
+                };
+            };
+            /** @description Admins and auditors only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listWebhookSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscriptions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        subscriptions?: components["schemas"]["WebhookSubscription"][];
+                    };
+                };
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createWebhookSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** Format: uri */
+                    endpointUrl: string;
+                    events: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Created; the signing secret is shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        subscription?: components["schemas"]["WebhookSubscription"];
+                        signingSecret?: string;
+                    };
+                };
+            };
+            /** @description Invalid name, endpoint or events. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setWebhookSubscriptionStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    status: "ACTIVE" | "PAUSED";
+                };
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        subscription?: components["schemas"]["WebhookSubscription"];
+                    };
+                };
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found (also for another company's id). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deliveries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        deliveries?: components["schemas"]["WebhookDelivery"][];
+                    };
+                };
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    replayWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Replayed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        delivery?: components["schemas"]["WebhookDelivery"];
+                    };
+                };
+            };
+            /** @description Admin only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found (also for another company's id) or not replayable. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listApprovalRequests: {
+        parameters: {
+            query?: {
+                /** @description A status, or `all`. */
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requests?: components["schemas"]["ApprovalRequest"][];
+                    };
+                };
+            };
+            /** @description Admin or branch manager only. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    decideApprovalRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    decision: "APPROVED" | "REJECTED";
+                    notes?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Decided. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        request?: components["schemas"]["ApprovalRequest"];
+                    };
+                };
+            };
+            /** @description The caller's role is below the rule's required approver role. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found (also for another company's id) or already decided. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

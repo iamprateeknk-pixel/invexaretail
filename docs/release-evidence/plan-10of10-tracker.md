@@ -12,6 +12,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |
 | B | Virtual bundles/kits | done | `routes/bundles.ts`, contract entries |
 | B | Remaining Float -> Decimal fields | partial | Slice 4 (rule thresholds) shipped, 12 tracked money Floats left (PurchaseOrder/Invoice costs and totals, PriceList, Item.mrp ...); `docs/decimal-migration-plan.md` |
+| C | Item photos, user permissions, pick waves, bins, putaway tasks company-scoped | done | 404 on foreign ids; Postgres suites `core-photos-permissions`, `warehouse-tenant` (both fail on the old code) |
 | C | Webhook subscriptions/deliveries, approval requests, saved reports, serial numbers and command-center counts company-scoped | done | Events deliver only to the producing company's hooks (unattributable events are dropped); migrations `20261118090000`, `20261119090000`; Postgres suites `operations-extension-webhooks`, `tenant-sweep-approvals-reports-serials`, unit tests in `webhook-dispatcher.test.ts` |
 | C | Approval/tolerance/evidence rules and QC templates company-scoped | done | Lists, PATCH (404 on foreign id) and `checkApprovalGate`; Postgres test fails on the old code |
 | C Tenant security | Asset checkouts, lots, comments, notifications company-scoped (404 not 403) | done | Migration `20261114090000`; 9 negative cross-tenant Postgres tests that failed on the old code |
@@ -34,7 +35,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure |
 | J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
-| K API contract | OpenAPI v2026.15.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in and session endpoints | partial | 31 paths documented; most other routes still open |
+| K API contract | OpenAPI v2026.16.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in/session, sync health, webhooks, approvals | partial | 38 paths documented; most other routes still open |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 
 ## What still blocks a GO
