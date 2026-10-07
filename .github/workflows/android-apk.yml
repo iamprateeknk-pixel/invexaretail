@@ -61,7 +61,12 @@ jobs:
             echo "INVEXA_KEYSTORE_BASE64 secret is not configured; refusing to build an unsigned release." >&2
             exit 1
           fi
-          echo "$INVEXA_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/invexa-release.jks"
+          # A secret pasted from Windows can carry CR/LF or spaces; strip all whitespace before decoding.
+          printf '%s' "$INVEXA_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/invexa-release.jks" || {
+            echo "INVEXA_KEYSTORE_BASE64 is not valid base64. Re-create the secret from the .jks file (see docs/PRODUCTION_RUNBOOK.md)." >&2
+            exit 1
+          }
+          if [ ! -s "$RUNNER_TEMP/invexa-release.jks" ]; then echo "Decoded keystore is empty." >&2; exit 1; fi
           echo "INVEXA_KEYSTORE_FILE=$RUNNER_TEMP/invexa-release.jks" >> "$GITHUB_ENV"
           echo "INVEXA_REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV"
       - name: Build release AAB and APK
