@@ -1,5 +1,5 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app';
-export const WEB_APP_URL = import.meta.env.VITE_WEB_APP_URL || 'https://control.invexaretail.com';
+export const WEB_APP_URL = import.meta.env.VITE_WEB_APP_URL || 'https://invexaretail-web.iamprateek-nk.workers.dev';
 
 export async function controlRequest(path, { token, method = 'GET', body } = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
