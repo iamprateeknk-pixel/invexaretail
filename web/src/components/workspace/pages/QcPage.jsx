@@ -1,5 +1,8 @@
 import { formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +13,8 @@ export function QcPage() {
   const {
     qcTemplates, qcInspections, qcForm, setQcForm, createQcTemplate, setQcTemplateActive, submitLoading,
   } = useWorkspace();
+  const { session } = useWorkspace();
+  const view = useTableView(qcInspections, (inspection) => [inspection.item?.name, inspection.itemId, inspection.sourceDocument, inspection.status, inspection.result]);
 
   return (
     <div className="space-y-6">
@@ -49,11 +54,13 @@ export function QcPage() {
         </CardContent>
       </Card>
 
+      <TableToolbar tableId="qc-inspections" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search inspections" />
+
       <Card>
         <CardHeader><CardTitle className="text-base">Recent inspections</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {qcInspections.length ? qcInspections.map((inspection) => (
-            <div key={inspection.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+          {view.visible.length ? view.visible.map((inspection) => (
+            <div key={inspection.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border ${view.rowPadding}`}>
               <div>
                 <p className="text-sm font-medium">{inspection.item?.name || inspection.itemId || 'Inspection'}</p>
                 <p className="text-xs text-muted-foreground">

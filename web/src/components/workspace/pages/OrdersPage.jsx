@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { statusBadgeVariant, formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import OrderReturnsPanel from '../../OrderReturnsPanel';
 import { ItemSearchSelect } from '../../ItemSearchSelect';
 import { Button } from '@/components/ui/button';
@@ -16,6 +19,8 @@ const CHANNELS = ['WEBSTORE', 'MARKETPLACE', 'POS', 'MANUAL'];
 
 export function OrdersPage() {
   const { items, locations, orders, orderForm, setOrderForm, createOrder, fulfillOrder, cancelOrder, retryBackorder, submitLoading, authToken, role } = useWorkspace();
+  const { session } = useWorkspace();
+  const view = useTableView(orders, (order) => [order.channel, order.customerName, order.status, order.externalReference, order.number, order.id]);
   const [returnsOrder, setReturnsOrder] = useState(null);
 
   return (
@@ -64,11 +69,13 @@ export function OrdersPage() {
         </CardContent>
       </Card>
 
+      <TableToolbar tableId="orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search orders" />
+
       <Card>
         <CardHeader><CardTitle className="text-base">Orders</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {orders.length ? orders.map((order) => (
-            <div key={order.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3">
+          {view.visible.length ? view.visible.map((order) => (
+            <div key={order.id} className={`flex flex-wrap items-start justify-between gap-3 rounded-lg border ${view.rowPadding}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-sm font-medium">{order.channel}{order.customerName ? ` · ${order.customerName}` : ''}</p>

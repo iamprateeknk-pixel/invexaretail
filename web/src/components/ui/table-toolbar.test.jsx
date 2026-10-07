@@ -50,3 +50,9 @@ test('a saved view can be applied and deleted, and Save is disabled until it has
   fireEvent.click(screen.getByRole('button', { name: 'Delete view Dairy' }));
   assert.equal(screen.queryByRole('button', { name: 'Dairy' }), null);
 });
+
+test('density control can be hidden for card lists where it would do nothing', () => {
+  render(React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state: DEFAULT_TABLE_STATE, onChange: () => {}, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), showDensity: false }));
+  assert.equal(screen.queryByRole('group', { name: 'Row density' }), null);
+  assert.ok(screen.getByLabelText('Search'));
+});

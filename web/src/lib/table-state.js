@@ -102,3 +102,15 @@ export function deleteView(storage, userId, tableId, viewId, defaults = DEFAULT_
   writeViews(storage, userId, tableId, next);
   return next;
 }
+
+// ---- client-side search -------------------------------------------------------------------
+
+/** Rows whose searchable text (from `getFields(row)`) contains every word of the query. */
+export function filterRows(rows, query, getFields) {
+  const words = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return rows;
+  return (rows ?? []).filter((row) => {
+    const text = getFields(row).map((value) => String(value ?? '').toLowerCase()).join(' ');
+    return words.every((word) => text.includes(word));
+  });
+}

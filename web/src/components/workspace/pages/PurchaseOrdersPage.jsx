@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { poActions, receiptProgress, urgencyVariant } from '../../../lib/procurement';
 import { statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { TableToolbar } from '@/components/ui/table-toolbar';
+import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -81,6 +84,8 @@ export function PurchaseOrdersPage() {
     setPurchaseOrderForm, suppliers, locations, items, createPurchaseOrder, purchaseOrders,
     openPurchaseReceipt, changePurchaseOrderStatus, purchasePlan, loadPurchasePlan, draftFromPlan,
   } = useWorkspace();
+  const { session } = useWorkspace();
+  const view = useTableView(purchaseOrders, (order) => [order.number, order.supplier?.name, order.supplierId, order.status, order.locationId, locations.find((location) => location.id === order.locationId)?.name]);
   const isAdmin = ['ADMIN', 'ADMIN_USER'].includes(role);
   const field = (key) => ({ value: newSupplier[key], onChange: (event) => setNewSupplier({ ...newSupplier, [key]: event.target.value }) });
 
@@ -137,17 +142,19 @@ export function PurchaseOrdersPage() {
 
       {isAdmin && <PurchasePlan locations={locations} suppliers={suppliers} plan={purchasePlan} loadPurchasePlan={loadPurchasePlan} draftFromPlan={draftFromPlan} submitLoading={submitLoading} />}
 
+      <TableToolbar tableId="purchase-orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search purchase orders" />
+
       <Card>
         <CardHeader><CardTitle className="text-base">Purchase order register</CardTitle></CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader><TableRow><TableHead>PO number</TableHead><TableHead>Supplier</TableHead><TableHead>Destination</TableHead><TableHead>Expected</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
             <TableBody>
-              {purchaseOrders.length ? purchaseOrders.map((order) => {
+              {view.visible.length ? view.visible.map((order) => {
                 const actions = poActions(role, order.status);
                 const progress = receiptProgress(order);
                 return (
-                  <TableRow key={order.id}>
+                  <TableRow key={order.id} className={view.compact ? '[&_td]:py-1' : ''}>
                     <TableCell className="font-medium">{order.number}</TableCell>
                     <TableCell>{order.supplier?.name ?? order.supplierId}</TableCell>
                     <TableCell>{locations.find((location) => location.id === order.locationId)?.name ?? order.locationId}</TableCell>
