@@ -30,7 +30,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | I | Blocking audit gate with owned, expiring exceptions | done | `scripts/audit-gate.mjs`, `security/audit-exceptions.json` (expire 2026-12-31) |
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure |
-| J | Remove committed `api/dist` | open | A second deploy path still needs it (ADR-006 addendum) |
+| J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
 | K API contract | OpenAPI v2026.15.0: bundles, 2FA, reconciliation, `X-Mutation-Id`, sign-in and session endpoints | partial | 31 paths documented; most other routes still open |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 

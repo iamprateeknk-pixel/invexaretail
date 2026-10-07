@@ -16,8 +16,6 @@ pnpm-lock.yaml
 
 # Build outputs
 dist/
-!api/dist/
-!api/dist/**
 build/
 *.tsbuildinfo
 
