@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  hiddenColumnCss, hiddenColumnIds, toggleColumn,
   DEFAULT_TABLE_STATE, deleteView, joinHash, loadSavedViews, parseTableQuery, saveView, serializeTableQuery, splitHash, viewsStorageKey,
 } from './table-state.js';
 
@@ -115,4 +116,30 @@ test('table state round-trips through the location hash without touching the sec
   assert.deepEqual(readTableStateFromHash(hash), { ...DEFAULT_TABLE_STATE, q: 'web store', density: 'compact' });
   assert.equal(hashWithTableState(hash, DEFAULT_TABLE_STATE), '#/orders', 'defaults leave a clean URL');
   assert.equal(hashWithTableState('#/orders?q=old', { ...DEFAULT_TABLE_STATE, q: 'new' }), '#/orders?q=new', 'an old query is replaced, not appended');
+});
+
+test('hidden columns round-trip through the URL and hostile ids are dropped', () => {
+  const state = { ...DEFAULT_TABLE_STATE, cols: 'cartons,route' };
+  const query = serializeTableQuery(state);
+  assert.equal(query, 'cols=cartons%2Croute');
+  assert.deepEqual(parseTableQuery(query).cols, 'cartons,route');
+  assert.equal(parseTableQuery('cols=ok,<script>,a b,drop;table').cols, 'ok');
+  assert.equal(parseTableQuery('').cols, '');
+});
+
+test('toggling a column hides or shows it but always leaves one column visible', () => {
+  const all = ['item', 'route', 'qty'];
+  let state = toggleColumn(DEFAULT_TABLE_STATE, 'route', all);
+  assert.equal(state.cols, 'route');
+  assert.deepEqual([...hiddenColumnIds(state)], ['route']);
+  state = toggleColumn(state, 'qty', all);
+  assert.equal(state.cols, 'route,qty');
+  assert.equal(toggleColumn(state, 'item', all).cols, 'route,qty', 'the last visible column cannot be hidden');
+  assert.equal(toggleColumn(state, 'route', all).cols, 'qty', 'toggling a hidden column shows it again');
+});
+
+test('hiddenColumnCss targets the right cells, honouring a leading checkbox column', () => {
+  const css = hiddenColumnCss('tv-x', ['item', 'route', 'qty'], new Set(['route']), 1);
+  assert.equal(css, '.tv-x th:nth-child(3),.tv-x td:nth-child(3){display:none}');
+  assert.equal(hiddenColumnCss('tv-x', ['item'], new Set()), '');
 });

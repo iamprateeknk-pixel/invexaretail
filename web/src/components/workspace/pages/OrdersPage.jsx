@@ -17,6 +17,11 @@ import { RotateCcw, ShoppingBag } from 'lucide-react';
 
 const CHANNELS = ['WEBSTORE', 'MARKETPLACE', 'POS', 'MANUAL'];
 
+const EXPORT_COLUMNS = [
+  { label: 'Channel', value: (r) => r.channel }, { label: 'Customer', value: (r) => r.customerName }, { label: 'Status', value: (r) => r.status },
+  { label: 'External reference', value: (r) => r.externalReference }, { label: 'Created', value: (r) => r.createdAt },
+];
+
 export function OrdersPage() {
   const { items, locations, orders, orderForm, setOrderForm, createOrder, fulfillOrder, cancelOrder, retryBackorder, submitLoading, authToken, role } = useWorkspace();
   const { session } = useWorkspace();
@@ -69,7 +74,7 @@ export function OrdersPage() {
         </CardContent>
       </Card>
 
-      <TableToolbar tableId="orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search orders" />
+      <TableToolbar tableId="orders" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search orders" exportCsv={{ filename: 'orders', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Orders</CardTitle></CardHeader>

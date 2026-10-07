@@ -13,6 +13,10 @@ import { Plug } from 'lucide-react';
 
 const PLATFORMS = ['AMAZON', 'FLIPKART', 'WEBSITE', 'CUSTOM'];
 
+const EXPORT_COLUMNS = [
+  { label: 'Name', value: (r) => r.name }, { label: 'Platform', value: (r) => r.platform }, { label: 'Last ingest', value: (r) => r.lastIngestedAt },
+];
+
 export function ConnectorsPage() {
   const {
     connectors, connectorForm, setConnectorForm, ingestPayload, setIngestPayload,
@@ -52,7 +56,7 @@ export function ConnectorsPage() {
         </CardContent>
       </Card>
 
-      <TableToolbar tableId="connectors" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search connectors" />
+      <TableToolbar tableId="connectors" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search connectors" exportCsv={{ filename: 'connectors', columns: EXPORT_COLUMNS, rows: view.visible }} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Connectors</CardTitle></CardHeader>

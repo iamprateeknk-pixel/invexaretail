@@ -6,6 +6,7 @@ import { statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { TableToolbar } from '@/components/ui/table-toolbar';
 import { DEFAULT_TABLE_STATE } from '../../../lib/table-state';
+import { hiddenColumnCss, hiddenColumnIds } from '../../../lib/table-state';
 import { useTableView } from '../../../hooks/useTableView';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,6 +17,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ArrowRight, Pencil, Trash2 } from 'lucide-react';
 
 const EDITABLE_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'REQUESTED']);
+
+const COLUMNS = [{ id: 'transfer', label: 'Transfer' }, { id: 'route', label: 'Route' }, { id: 'quantity', label: 'Quantity' }, { id: 'cartons', label: 'Cartons' }, { id: 'status', label: 'Status' }];
+const EXPORT_COLUMNS = [
+  { label: 'Transfer', value: (r) => r.id },
+  { label: 'Item', value: (r) => r.item },
+  { label: 'From', value: (r) => r.fromName },
+  { label: 'To', value: (r) => r.toName },
+  { label: 'Quantity', value: (r) => r.qty },
+  { label: 'Cartons', value: (r) => r.cartonCount },
+  { label: 'Status', value: (r) => r.status },
+];
 
 export function TransfersPage() {
   const {
@@ -62,7 +74,7 @@ export function TransfersPage() {
 
   return (
     <>
-      <TableToolbar tableId="transfers" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search transfers" />
+      <TableToolbar tableId="transfers" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search transfers" columns={COLUMNS} exportCsv={{ filename: 'transfers', columns: EXPORT_COLUMNS, rows: view.visible }} />
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
           <div><CardTitle className="text-base">Transfer queue</CardTitle><p className="mt-1 text-xs text-muted-foreground">Import → FEFO pick slips → admin confirm → dispatch → receive</p></div>
@@ -72,7 +84,8 @@ export function TransfersPage() {
             {canCreateTransfer(role) && <Button onClick={() => setModalOpen('transfer')}>{role === 'STORE_USER' ? 'Request transfer' : 'Create transfer'}</Button>}
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 tv-transfers">
+          <style>{hiddenColumnCss('tv-transfers', COLUMNS.map((column) => column.id), hiddenColumnIds(view.state), 1)}</style>
           <Table>
             <TableHeader><TableRow><TableHead className="w-10"><Checkbox aria-label="Select all editable transfers" checked={allSelected} onCheckedChange={(checked) => toggleAll(checked === true)} disabled={!selectableIds.length} /></TableHead><TableHead>Transfer</TableHead><TableHead>Route</TableHead><TableHead>Quantity</TableHead><TableHead>Cartons</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
             <TableBody>
