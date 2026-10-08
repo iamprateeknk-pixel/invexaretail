@@ -23,7 +23,9 @@ import { revokeAllSessionsForUser } from '../lib/session-store.js';
 import {
   DEFAULT_COMPANY_ID,
   DEFAULT_TENANT_ID,
+  companyOwnsLocation,
   itemsForCompany,
+  locationsForCompany,
   registerItemCompany,
   registerLocationCompany,
 } from '../lib/saas/tenant-scope.js';
@@ -1562,7 +1564,7 @@ router.get('/count-assignments', (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const assignments = listCountAssignments()
     .filter((assignment) => assignment.status === 'ASSIGNED')
-    .filter((assignment) => context.role !== 'BRANCH_MANAGER' || canAccessLocation(context, assignment.locationId));
+    .filter((assignment) => canAccessLocation(context, assignment.locationId));
   return res.json({ assignments });
 });
 
@@ -2094,7 +2096,10 @@ router.get('/audit', (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {
     return res.status(403).json({ message: 'Audit access denied.' });
   }
-  return res.json({ events: listAuditEvents() });
+  // Audit events carry no company of their own; they belong to the company of the user who acted.
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const events = listAuditEvents().filter((event) => (enterpriseRepo.findUserById(event.actorId)?.companyId ?? DEFAULT_COMPANY_ID) === companyId);
+  return res.json({ events });
 });
 
 // ============================================
@@ -2108,11 +2113,13 @@ router.get('/export/:type', (req: Request, res: Response) => {
 
   const today = new Date().toISOString().split('T')[0];
   const type = firstParam(req.params.type);
+  // Every list below is process-wide; an export is the caller's company's data only.
+  const exportCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
 
   if (type === 'stock') {
     const csv = [
       ['ID', 'Code', 'Name', 'Category', 'Unit', 'Lots'].join(','),
-      ...listItems().map((item) => [
+      ...itemsForCompany(exportCompanyId, listItems()).map((item) => [
         item.id, item.code, item.name, item.category ?? '', item.unit ?? '',
         item.lots.map((lot) => `${lot.lotNo}(${lot.id})`).join(';'),
       ].map(csvEscape).join(',')),
@@ -2123,7 +2130,7 @@ router.get('/export/:type', (req: Request, res: Response) => {
   if (type === 'counts') {
     const csv = [
       ['ID', 'Item', 'Lot', 'Location', 'Physical', 'Book', 'Variance', 'Status', 'Submitted By', 'Created'].join(','),
-      ...listCounts().map((count) => [
+      ...listCounts().filter((count) => companyOwnsLocation(exportCompanyId, count.locationId)).map((count) => [
         count.id, count.itemId, count.lotId, count.locationId, count.physicalQuantity,
         count.bookQty ?? 0, count.physicalQuantity - (count.bookQty ?? 0),
         count.status ?? 'PENDING_REVIEW', count.submittedBy, count.createdAt,
@@ -2135,7 +2142,7 @@ router.get('/export/:type', (req: Request, res: Response) => {
   if (type === 'transfers') {
     const csv = [
       ['ID', 'From', 'To', 'Item', 'Qty', 'Status', 'Requested By', 'Created'].join(','),
-      ...listTransfers().map((transfer) => [
+      ...listTransfers().filter((transfer) => companyOwnsLocation(exportCompanyId, transfer.sourceLocationId) || companyOwnsLocation(exportCompanyId, transfer.destinationLocationId)).map((transfer) => [
         transfer.id, transfer.sourceLocationId, transfer.destinationLocationId,
         transfer.lines.map((line) => line.itemId).join(';'),
         transfer.lines.reduce((sum, line) => sum + line.quantity, 0),
@@ -2270,7 +2277,11 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
 
 router.get('/imports/history', (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access required.' });
-  return res.json({ movements: listDailyMovements().sort((a, b) => b.transactionAt.localeCompare(a.transactionAt)).slice(0, 500) });
+  // The movement list is process-wide. Only movements at locations the caller's company owns belong in its history;
+  // a location with no known owner belongs to nobody, so it is left out rather than shown to everyone.
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const mine = listDailyMovements().filter((movement) => companyOwnsLocation(companyId, movement.locationId));
+  return res.json({ movements: mine.sort((a, b) => b.transactionAt.localeCompare(a.transactionAt)).slice(0, 500) });
 });
 
 router.get('/imports/:batchToken/errors', async (req: Request, res: Response, next: NextFunction) => {
@@ -2955,7 +2966,7 @@ router.post('/imports/purchases/commit', upload.single('file'), (req, res) => co
 
 router.get('/sync-status', (req: Request, res: Response) => {
   const checkpoints = listSyncCheckpoints();
-  return res.json({ locations: listLocations().map((location) => ({ locationId: location.id, locationName: location.name, salesSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'SALES')?.syncedThroughAt ?? null, purchaseSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'PURCHASE')?.syncedThroughAt ?? null })) });
+  return res.json({ locations: locationsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listLocations()).map((location) => ({ locationId: location.id, locationName: location.name, salesSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'SALES')?.syncedThroughAt ?? null, purchaseSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'PURCHASE')?.syncedThroughAt ?? null })) });
 });
 
 // ---------------------------------------------------------------------------
@@ -3788,7 +3799,11 @@ router.get('/expiry-dashboard', (req: Request, res: Response) => {
   }
   const filter = typeof req.query.filter === 'string' ? req.query.filter : 'all';
 
-  const dashboard = buildExpiryDashboard(listItems(), listStockLedgerForLocation(locationId ?? 'all'));
+  const expiryCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const dashboard = buildExpiryDashboard(
+    itemsForCompany(expiryCompanyId, listItems()),
+    listStockLedgerForLocation(locationId ?? 'all').filter((row) => companyOwnsLocation(expiryCompanyId, row.locationId)),
+  );
 
   if (filter === 'expired') dashboard.allExpiringItems = dashboard.expiredItems;
   else if (filter === 'this-month') dashboard.allExpiringItems = dashboard.expiringThisMonth;
