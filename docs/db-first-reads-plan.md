@@ -72,3 +72,21 @@ Run each file on its own, as CI does: running them together against one database
 
 - CI running the `*.postgres.test.ts` files again (blocked on GitHub Actions billing); locally the recipe above works.
 - A parity-test helper that boots both modes and diffs JSON for a list of requests.
+
+## Progress
+
+- **Corrected survey (2026-10-09).** The 130+ figure counts every call site, including the memory-mode branch of
+  handlers that already read Postgres when `databaseEnabled` (for example `GET /stock/:locationId`). Counting
+  handlers instead: 55 handlers across the six route files read the snapshot, 28 of them mutating; of the 27 `GET`
+  handlers, 22 have no database branch at all: `/locations`, `/items`, `/counts`, `/count-assignments(/mine)`,
+  `/mobile/work`, `/cycle-counts/:locationId`, `/picker-tasks`, `/pick-waves/:id`, `/dashboard`, `/export/:type`,
+  `/imports/history`, `/sync-status`, `/expiry-dashboard`, `/reports/variance/:locationId`, `/reports/:locationId`,
+  `/picker/transfers/:transferId`, `/transfers/:transferId/export.xls`, `/command-center`,
+  `/reports/transfer-cycle`, `/reports/count-accuracy`, `/transfers/by-package/:packageId`.
+- **Slice 1 done: `GET /locations`** via `lib/repositories/location-repository.ts` (`listLocationsForCompany`, scoped by
+  `TenantContext`, stable order). Parity and tenant isolation proven on real Postgres in
+  `location-repository.postgres.test.ts`: the repository equals the hydrated snapshot for the same company, and a
+  location created after boot is visible without hydration. The pattern for the next slices is the same: scoped
+  repository function + a Postgres parity test against the hydrated snapshot.
+- Next (single-entity, one or two reads each): `/items` (needs the web poll changed to page), `/counts`,
+  `/count-assignments`, `/imports/history`.
