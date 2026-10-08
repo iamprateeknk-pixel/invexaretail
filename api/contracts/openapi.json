@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.30.0",
+    "version": "2026.31.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -3845,6 +3845,147 @@
           "quantity": {
             "type": "number",
             "exclusiveMinimum": 0
+          }
+        }
+      },
+      "Shipment": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "carrierProvider",
+          "awbNumber",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "packSessionId": {
+            "type": "string"
+          },
+          "carrierProvider": {
+            "type": "string"
+          },
+          "awbNumber": {
+            "type": "string",
+            "description": "The carrier's air waybill number."
+          },
+          "serviceCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labelUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "manifestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "weightKg": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "CANCELLED once cancelled with the carrier."
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReturnLine": {
+        "type": "object",
+        "required": [
+          "orderLineId",
+          "itemId",
+          "quantity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "returnRequestId": {
+            "type": "string"
+          },
+          "orderLineId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "disposition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set at inspection; only a RESTOCK disposition ever puts stock back on the ledger."
+          }
+        }
+      },
+      "ReturnRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReturnLine"
+            }
           }
         }
       }
@@ -11369,40 +11510,9 @@
     "/orders/{id}/returns": {
       "get": {
         "operationId": "getOrdersIdReturns",
-        "summary": "GET /orders/{id}/returns",
+        "summary": "An order's return requests with their lines, newest first. Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Returns"
         ],
         "parameters": [
           {
@@ -11413,44 +11523,58 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "post": {
-        "operationId": "postOrdersIdReturns",
-        "summary": "POST /orders/{id}/returns",
-        "tags": [
-          "orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "returnRequests": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReturnRequest"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed (Admin or Warehouse picker), or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "post": {
+        "operationId": "postOrdersIdReturns",
+        "summary": "Open a return (RMA) for lines of an order. Quantities may not exceed what was fulfilled less what was already returned. Admin or Warehouse picker.",
+        "tags": [
+          "Returns"
         ],
         "parameters": [
           {
@@ -11463,56 +11587,115 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "lines"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "orderLineId",
+                        "quantity"
+                      ],
+                      "properties": {
+                        "orderLineId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
-      }
-    },
-    "/orders/{id}/shipment": {
-      "get": {
-        "operationId": "getOrdersIdShipment",
-        "summary": "GET /orders/{id}/shipment",
-        "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Opened.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "returnRequest": {
+                      "$ref": "#/components/schemas/ReturnRequest"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid return lines.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed (Admin or Warehouse picker), or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/orders/{id}/shipment": {
+      "get": {
+        "operationId": "getOrdersIdShipment",
+        "summary": "The order's latest shipment and its live tracking (both null when none was booked; tracking is null when the carrier cannot be reached). Admin or Warehouse picker.",
+        "tags": [
+          "Shipping"
         ],
         "parameters": [
           {
@@ -11522,6 +11705,62 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "shipment": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/Shipment"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tracking": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed (Admin or Warehouse picker), or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -17672,105 +17911,83 @@
     "/orders/expire-reservations": {
       "post": {
         "operationId": "postOrdersExpireReservations",
-        "summary": "POST /orders/expire-reservations",
+        "summary": "Release the company's reservations that have passed their expiry (also done lazily whenever orders are listed). Admin only.",
         "tags": [
-          "orders"
+          "Orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "expiredCount": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/orders/retry-backorders": {
       "post": {
         "operationId": "postOrdersRetryBackorders",
-        "summary": "POST /orders/retry-backorders",
+        "summary": "Try to fill every BACKORDERED order of the company from current stock (also done lazily when orders are listed). Admin only.",
         "tags": [
-          "orders"
+          "Orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "filledCount": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/orders/{id}/cancel": {
@@ -18201,40 +18418,9 @@
     "/orders/{id}/retry-backorder": {
       "post": {
         "operationId": "postOrdersIdRetryBackorder",
-        "summary": "POST /orders/{id}/retry-backorder",
+        "summary": "Try to fill one backordered order from current stock. Admin only.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Orders"
         ],
         "parameters": [
           {
@@ -18246,57 +18432,56 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/ship": {
       "post": {
         "operationId": "postOrdersIdShip",
-        "summary": "POST /orders/{id}/ship",
+        "summary": "Book a shipment with a carrier for an order whose pack session is sealed. provider defaults to the local adapter. Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Shipping"
         ],
         "parameters": [
           {
@@ -18309,17 +18494,99 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "default": "local"
+                  },
+                  "originPincode": {
+                    "type": "string"
+                  },
+                  "destinationPincode": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Booked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "shipment": {
+                      "$ref": "#/components/schemas/Shipment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown carrier provider.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed (Admin or Warehouse picker), or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Seal a pack session before shipping this order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The carrier could not book the shipment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/pick-waves/{id}/scan": {
@@ -19236,40 +19503,9 @@
     "/shipments/{awb}/cancel": {
       "post": {
         "operationId": "postShipmentsAwbCancel",
-        "summary": "POST /shipments/{awb}/cancel",
+        "summary": "Cancel a shipment with the carrier by its AWB number and mark it CANCELLED. Admin or Warehouse picker.",
         "tags": [
-          "shipments"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Shipping"
         ],
         "parameters": [
           {
@@ -19281,18 +19517,58 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "Cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "shipment": {
+                      "$ref": "#/components/schemas/Shipment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed (Admin or Warehouse picker), or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shipment not found (also for another company's shipment).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The carrier refused or the shipment cannot be cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/stock-adjustments/import/commit": {
