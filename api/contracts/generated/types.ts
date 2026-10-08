@@ -1170,10 +1170,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /exceptions */
+        /** The caller's company exception cases, highest priority first (max 300), with their item, lot, location, owner and reporter. Closed and rejected cases are hidden unless status asks for them. Managers and auditors see all locations; others only their assigned ones; mine=true limits to cases they own. */
         get: operations["getExceptions"];
         put?: never;
-        /** POST /exceptions */
+        /** Open an exception case. Any item, lot or owner named must belong to the caller's company (404 otherwise). Priority and the value at risk are derived; the due time defaults to 24 hours. */
         post: operations["postExceptions"];
         delete?: never;
         options?: never;
@@ -1188,7 +1188,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /expiry-alerts */
+        /** Lots at a location that hold stock and have an expiry date, soonest first, computed live from the ledger. Requires access to the location. */
         get: operations["getExpiryAlerts"];
         put?: never;
         post?: never;
@@ -2457,7 +2457,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /exceptions/{id} */
+        /** Change an exception case. Managers may change owner, priority, due date and status; the case's owner may change its status only. The new owner must belong to the caller's company. */
         patch: operations["patchExceptionsId"];
         trace?: never;
     };
@@ -2474,7 +2474,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /expiry-alerts/{id}/status */
+        /** Acknowledge or resolve a stored expiry alert. Resolving needs a reason of at least 5 characters. Admin only. */
         patch: operations["patchExpiryAlertsIdStatus"];
         trace?: never;
     };
@@ -2776,7 +2776,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /exceptions/{id}/resolve */
+        /** Resolve and close a case with a disposition; the disposition is applied (for example a write-off or recount) before the case is closed. Managers or the case owner. */
         post: operations["postExceptionsIdResolve"];
         delete?: never;
         options?: never;
@@ -2793,7 +2793,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /expiry-alerts/{id}/write-off */
+        /** Write expired stock off the ledger in one transaction (idempotent per alert and ledger version). Main Admin only; the quantity may not exceed what is on hand. */
         post: operations["postExpiryAlertsIdWriteOff"];
         delete?: never;
         options?: never;
@@ -4549,6 +4549,117 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
             field?: components["schemas"]["CustomFieldDefinition"];
+        };
+        ExceptionCase: {
+            id: string;
+            /** @enum {string} */
+            type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+            /** @enum {string} */
+            status: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
+            /**
+             * @description Set from the value at risk when the case is opened.
+             * @enum {string}
+             */
+            priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+            title: string;
+            description?: string | null;
+            itemId?: string | null;
+            lotId?: string | null;
+            locationId?: string | null;
+            branchId?: string | null;
+            quantity?: number | null;
+            /** @description Money; a JSON number (Decimal on the server). */
+            valueAtRisk?: number | null;
+            sourceDocument?: string | null;
+            sourceLineId?: string | null;
+            ownerId?: string | null;
+            reportedById: string;
+            /** Format: date-time */
+            dueAt?: string | null;
+            /** @enum {string|null} */
+            disposition?: "RESTOCK" | "VENDOR_RETURN" | "MARKDOWN" | "DESTROY" | "REWORK" | "WRITE_OFF" | "ACCEPT" | "RECOUNT" | "ESCALATE" | "NONE" | null;
+            resolutionNotes?: string | null;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            /** Format: date-time */
+            closedAt?: string | null;
+            companyId: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            item?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            } | null;
+            lot?: {
+                id?: string;
+                lotNo?: string;
+                /** Format: date-time */
+                expiryDate?: string | null;
+            } | null;
+            location?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            } | null;
+            owner?: {
+                id?: string;
+                name?: string;
+                email?: string;
+            } | null;
+            reportedBy?: {
+                id?: string;
+                name?: string;
+                email?: string;
+            } | null;
+        };
+        ExpiryAlert: {
+            id: string;
+            itemId: string;
+            lotId: string;
+            locationId: string;
+            quantity: number;
+            /** Format: date-time */
+            expiryDate?: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "ACKNOWLEDGED" | "RESOLVED" | "RESOLVED_BY_WRITE_OFF";
+            /** Format: date-time */
+            acknowledgedAt?: string | null;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            companyId: string;
+        };
+        LiveExpiryAlert: {
+            /** @description Stable hash of item, lot and location; not a stored row. */
+            id: string;
+            itemId: string;
+            lotId: string;
+            locationId: string;
+            quantity: number;
+            /** Format: date-time */
+            expiryDate?: string;
+            /** @description Negative once expired. */
+            daysUntilExpiry: number;
+            status?: string;
+            recommendedAction?: string;
+            /**
+             * @description EXPIRED < 0 days, CRITICAL <= 7, WARNING <= 30, otherwise UPCOMING.
+             * @enum {string}
+             */
+            severity: "EXPIRED" | "CRITICAL" | "WARNING" | "UPCOMING";
+            item?: {
+                code?: string;
+                name?: string;
+            };
+            lot?: {
+                lotNo?: string;
+                status?: string;
+            };
         };
     };
     responses: never;
@@ -8452,30 +8563,33 @@ export interface operations {
     };
     getExceptions: {
         parameters: {
-            query?: never;
+            query?: {
+                locationId?: string;
+                status?: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
+                type?: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+                mine?: "true" | "false";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        cases?: components["schemas"]["ExceptionCase"][];
+                        summary?: {
+                            open?: number;
+                            overdue?: number;
+                            critical?: number;
+                        };
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -8484,19 +8598,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -8507,102 +8616,114 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+                    title: string;
+                    description?: string;
+                    itemId?: string;
+                    lotId?: string;
+                    locationId?: string;
+                    branchId?: string;
+                    quantity?: number;
+                    sourceDocument?: string;
+                    sourceLineId?: string;
+                    ownerId?: string;
+                    dueHours?: number;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        case?: components["schemas"]["ExceptionCase"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Unknown type or missing title. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Item, lot or owner not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Exception Inbox is not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
     getExpiryAlerts: {
         parameters: {
-            query?: never;
+            query: {
+                locationId: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        alerts?: components["schemas"]["LiveExpiryAlert"][];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13490,52 +13611,57 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    ownerId?: string | null;
+                    /** @enum {string} */
+                    priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+                    /** Format: date-time */
+                    dueAt?: string | null;
+                    /** @enum {string} */
+                    status?: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        case?: components["schemas"]["ExceptionCase"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid priority or status, or nothing to update. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Neither a manager nor the case's owner. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Case not found, or the new owner is not in this company. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13548,52 +13674,53 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    status: "ACKNOWLEDGED" | "RESOLVED";
+                    reason?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        alert?: components["schemas"]["ExpiryAlert"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid status, or a RESOLVED status without a reason. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Alert not found (also for another company's alert). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14603,52 +14730,62 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    disposition: "RESTOCK" | "VENDOR_RETURN" | "MARKDOWN" | "DESTROY" | "REWORK" | "WRITE_OFF" | "ACCEPT" | "RECOUNT" | "ESCALATE" | "NONE";
+                    resolutionNotes?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        case?: components["schemas"]["ExceptionCase"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Unknown disposition. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Neither a manager nor the case's owner. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Exception case not found (also for another company's case). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The case is already closed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14661,52 +14798,69 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    reason: string;
+                    /** @description Defaults to the alert's quantity. */
+                    quantity?: number;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Written off. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        result?: {
+                            alertId?: string;
+                            movementId?: string;
+                            quantity?: number;
+                            beforeBalance?: number;
+                            afterBalance?: number;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Reason too short, or the quantity exceeds current lot stock. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Alert not found (also for another company's alert). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The alert was already resolved or processed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
