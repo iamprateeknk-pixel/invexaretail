@@ -10,7 +10,7 @@ import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
-import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
@@ -396,20 +396,24 @@ export async function persistOpeningStockImport(
 ): Promise<StockImportCommitResult> {
   const companyId = options?.companyId || 'default-company';
   const rows = aggregateOpeningStock(preview.validRows);
-  const locationMap = new Map(locations.map((row) => [row.name.trim().toLowerCase(), row]));
-  const itemCodeMap = new Map(items.map((row) => [row.code.trim().toLowerCase(), row]));
-  const itemNameMap = new Map(items.map((row) => [`${(row.category ?? '').trim().toLowerCase()}|${row.name.trim().toLowerCase()}`, row]));
+  // Only this company's own locations and items can be matched. Matching the process-wide lists let one company's
+  // file rewrite another company's item master and set stock at another company's branch.
+  const ownLocations = locationsForCompany(companyId, locations);
+  const ownItems = itemsForCompany(companyId, items);
+  const locationMap = new Map(ownLocations.map((row) => [row.name.trim().toLowerCase(), row]));
+  const itemCodeMap = new Map(ownItems.map((row) => [row.code.trim().toLowerCase(), row]));
+  const itemNameMap = new Map(ownItems.map((row) => [`${(row.category ?? '').trim().toLowerCase()}|${row.name.trim().toLowerCase()}`, row]));
   const newLocations: LocationRecord[] = [];
   const newItems: ItemRecord[] = [];
   const touchedItems = new Map<string, ItemRecord>();
   const newLots: ItemRecord['lots'] = [];
-  const lotMap = new Map(items.flatMap((item) => item.lots.map((lot) => [`${item.id}|${lot.lotNo.trim().toLowerCase()}`, lot] as const)));
+  const lotMap = new Map(ownItems.flatMap((item) => item.lots.map((lot) => [`${item.id}|${lot.lotNo.trim().toLowerCase()}`, lot] as const)));
   const prepared = rows.map((row) => {
     const locationKey = row.locationName!.trim().toLowerCase();
     let location = locationMap.get(locationKey);
     if (!location) {
       const normalizedLocation = row.locationName!.toLowerCase().replace(/[^a-z0-9]+/g, '');
-      location = { id: importId('loc-erp', locationKey), name: row.locationName!, type: normalizedLocation === 'hobasni' || normalizedLocation === 'basni' ? 'warehouse' : 'store' };
+      location = { id: importId('loc-erp', scopedImportKey(companyId, locationKey)), name: row.locationName!, type: normalizedLocation === 'hobasni' || normalizedLocation === 'basni' ? 'warehouse' : 'store' };
       locationMap.set(locationKey, location);
       newLocations.push(location);
     }
@@ -417,7 +421,7 @@ export async function persistOpeningStockImport(
     const nameKey = `${(row.category ?? '').trim().toLowerCase()}|${row.itemName.trim().toLowerCase()}`;
     let item = itemCodeMap.get(row.code.toLowerCase()) ?? itemNameMap.get(nameKey);
     if (!item) {
-      item = { id: importId('item-erp', row.code), code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit, lots: [] };
+      item = { id: importId('item-erp', scopedImportKey(companyId, row.code)), code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit, lots: [] };
       itemCodeMap.set(row.code.toLowerCase(), item);
       itemNameMap.set(nameKey, item);
       newItems.push(item);
