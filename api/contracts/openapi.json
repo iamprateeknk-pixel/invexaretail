@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.21.0",
+    "version": "2026.22.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -1854,6 +1854,317 @@
               "store",
               "warehouse"
             ]
+          }
+        }
+      },
+      "OrderLine": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "requestedQty",
+          "fulfilledQty"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedQty": {
+            "type": "number"
+          },
+          "fulfilledQty": {
+            "type": "number"
+          },
+          "fulfillmentLocationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "lot": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "lotNo": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "required": [
+          "id",
+          "channel",
+          "status",
+          "fulfillmentLocationId",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "externalReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "PENDING, RESERVED, BACKORDERED, FULFILLED, CANCELLED or EXPIRED; shipping and returns are tracked on their own records."
+          },
+          "fulfillmentLocationId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "reservedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reservationExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "fulfilledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "cancelledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expiredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "estimatedDispatchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "estimatedDeliveryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLine"
+            }
+          },
+          "fulfillmentLocation": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "PackSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "status",
+          "packedById",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IN_PROGRESS",
+              "SEALED"
+            ]
+          },
+          "cartonCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "weightKg": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lengthCm": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "widthCm": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "heightCm": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "packedById": {
+            "type": "string"
+          },
+          "sealedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
+      },
+      "PackVerification": {
+        "type": "object",
+        "required": [
+          "lines",
+          "readyToSeal"
+        ],
+        "properties": {
+          "readyToSeal": {
+            "type": "boolean",
+            "description": "True only when every line is MATCHED exactly and there is at least one line."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "itemId",
+                "requestedQty",
+                "scannedQty",
+                "status"
+              ],
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "lotId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "requestedQty": {
+                  "type": "number"
+                },
+                "scannedQty": {
+                  "type": "number"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "MATCHED",
+                    "SHORT",
+                    "OVER",
+                    "UNEXPECTED"
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -8191,34 +8502,59 @@
     "/orders": {
       "get": {
         "operationId": "getOrders",
-        "summary": "GET /orders",
+        "summary": "The caller's company orders, newest first (max 200). Expired reservations are released and backorders retried before listing. Non-admins are limited to their assigned locations.",
         "tags": [
-          "orders"
+          "Orders"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8229,92 +8565,176 @@
       },
       "post": {
         "operationId": "postOrders",
-        "summary": "POST /orders",
+        "summary": "Create an order and reserve stock. With no fulfillmentLocationId the order is routed across every active location of the company. A repeat of the same channel + externalReference returns the original (200, duplicate true). Admin only.",
         "tags": [
-          "orders"
+          "Orders"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "lines"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "fulfillmentLocationId": {
+                    "type": "string"
+                  },
+                  "externalReference": {
+                    "type": "string"
+                  },
+                  "customerName": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemId",
+                        "quantity"
+                      ],
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "minRslPercent": {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 100
+                        }
+                      }
+                    }
+                  },
+                  "allowBackorder": {
+                    "type": "boolean"
+                  },
+                  "allowSplit": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "reservationTtlMinutes": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "customerLatitude": {
+                    "type": "number"
+                  },
+                  "customerLongitude": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "The order already existed (same channel and externalReference).",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "order": {
+                      "$ref": "#/components/schemas/Order"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created and reserved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order": {
+                      "$ref": "#/components/schemas/Order"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "channel and at least one positive-quantity line are required, or the order could not be created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "Stock shortage: the reservation could not be made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "shortages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/orders/{id}/pack": {
       "get": {
         "operationId": "getOrdersIdPack",
-        "summary": "GET /orders/{id}/pack",
+        "summary": "The order's latest pack session and its verification (both null when none exists). Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Order packing"
         ],
         "parameters": [
           {
@@ -8324,6 +8744,65 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/PackSession"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "verification": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/PackVerification"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -13474,40 +13953,9 @@
     "/orders/{id}/cancel": {
       "post": {
         "operationId": "postOrdersIdCancel",
-        "summary": "POST /orders/{id}/cancel",
+        "summary": "Cancel an order and release its reservation. Admin only.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Orders"
         ],
         "parameters": [
           {
@@ -13519,57 +13967,66 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not in a state that can be cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/fulfill": {
       "post": {
         "operationId": "postOrdersIdFulfill",
-        "summary": "POST /orders/{id}/fulfill",
+        "summary": "Mark a reserved order fulfilled and consume its reservation. Admin only.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Orders"
         ],
         "parameters": [
           {
@@ -13581,57 +14038,66 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not in a state that can be fulfilled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/pack/scan": {
       "post": {
         "operationId": "postOrdersIdPackScan",
-        "summary": "POST /orders/{id}/pack/scan",
+        "summary": "Record scanned units against the open pack session. Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Order packing"
         ],
         "parameters": [
           {
@@ -13644,56 +14110,104 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "itemId"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 1
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/PackSession"
+                    },
+                    "verification": {
+                      "$ref": "#/components/schemas/PackVerification"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "itemId and a positive quantity are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No pack session is in progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/pack/seal": {
       "post": {
         "operationId": "postOrdersIdPackSeal",
-        "summary": "POST /orders/{id}/pack/seal",
+        "summary": "Seal the pack session. Refused until every order line is scanned exactly. Optional carton count, weight and dimensions are stored. Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Order packing"
         ],
         "parameters": [
           {
@@ -13706,56 +14220,103 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "cartonCount": {
+                    "type": "integer"
+                  },
+                  "weightKg": {
+                    "type": "number"
+                  },
+                  "lengthCm": {
+                    "type": "number"
+                  },
+                  "widthCm": {
+                    "type": "number"
+                  },
+                  "heightCm": {
+                    "type": "number"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "200": {
+            "description": "Sealed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/PackSession"
+                    },
+                    "verification": {
+                      "$ref": "#/components/schemas/PackVerification"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No session in progress, or the scan does not match the order yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "verification": {
+                      "$ref": "#/components/schemas/PackVerification"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/pack/start": {
       "post": {
         "operationId": "postOrdersIdPackStart",
-        "summary": "POST /orders/{id}/pack/start",
+        "summary": "Open a pack session for an order, or return the one already in progress. Admin or Warehouse picker.",
         "tags": [
-          "orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Order packing"
         ],
         "parameters": [
           {
@@ -13767,18 +14328,51 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "201": {
+            "description": "The pack session and what has been scanned so far.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/PackSession"
+                    },
+                    "verification": {
+                      "$ref": "#/components/schemas/PackVerification"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/orders/{id}/retry-backorder": {
