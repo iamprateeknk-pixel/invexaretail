@@ -560,6 +560,59 @@ export class ControlPlane {
     return true;
   }
 
+  /**
+   * Operational tenants (Postgres User/Location/CompanyProfile rows) are not
+   * created through the control plane, so they must be mirrored into the
+   * registry or the Control Plane company list never shows them.
+   */
+  syncOperationalCompany(input: {
+    id: string;
+    name: string;
+    admin: { id: string; email: string; name: string; passwordHash: string } | null;
+  }): boolean {
+    const existing = this.companies.get(input.id);
+    if (existing) {
+      if (input.name && existing.name !== input.name) {
+        existing.name = input.name;
+        return true;
+      }
+      return false;
+    }
+    const createdAt = nowIso();
+    const planId = this.plans.has('pro') ? 'pro' : [...this.plans.keys()][0];
+    const plan = this.plans.get(planId)!;
+    this.companies.set(input.id, {
+      id: input.id,
+      tenantId: this.tenantId,
+      name: input.name || input.id,
+      status: 'active',
+      planId,
+      primaryAdminId: input.admin?.id ?? null,
+      createdAt,
+    });
+    if (input.admin && !this.companyUsers.has(input.admin.id)) {
+      this.companyUsers.set(input.admin.id, {
+        id: input.admin.id,
+        companyId: input.id,
+        email: input.admin.email.toLowerCase(),
+        name: input.admin.name,
+        role: 'ADMIN',
+        status: 'active',
+        passwordHash: input.admin.passwordHash,
+        isPrimaryAdmin: true,
+        createdAt,
+      });
+    }
+    this.entitlements.set(input.id, { ...plan.modules });
+    this.usage.set(input.id, { users: input.admin ? 1 : 0, company_admins: input.admin ? 1 : 0, api_requests: 0 });
+    const published = this.blankConfig(input.id, input.admin?.id ?? 'system', 1, 'published');
+    published.publishedAt = createdAt;
+    this.published.set(input.id, published);
+    this.versions.set(input.id, [published]);
+    if (!this.billing.has(input.id)) this.billing.set(input.id, { subscription: 'active', cycle: 'monthly', amount: 0 });
+    return true;
+  }
+
   private createSeedCompany(input: {
     id: string;
     name: string;
