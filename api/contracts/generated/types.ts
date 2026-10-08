@@ -1118,7 +1118,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /cycle-counts/{locationId} */
+        /** The ABC cycle-count plan for a location: which items are due by class and cadence (company-specific days), ranked by usage value, with recently sold and recently discrepant items flagged. Admin, Admin user and Branch manager. */
         get: operations["getCycleCountsLocationId"];
         put?: never;
         post?: never;
@@ -1256,7 +1256,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /imports/batches */
+        /** Import batches of the caller's company, newest first. Admin, Admin user, Branch manager and Auditor. */
         get: operations["getImportsBatches"];
         put?: never;
         post?: never;
@@ -1273,7 +1273,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /imports/history */
+        /** Daily stock movements imported at locations the caller's company owns, newest first (max 500). Admin and Admin user. */
         get: operations["getImportsHistory"];
         put?: never;
         post?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /imports/{batchToken} */
+        /** The preview payload of a batch of the caller's company. Admin, Admin user and Auditor. */
         get: operations["getImportsBatchToken"];
         put?: never;
         post?: never;
@@ -1307,7 +1307,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /imports/{batchToken}/errors */
+        /** The rejected rows of a batch as CSV (default) or JSON {batchToken, csv}. */
         get: operations["getImportsBatchTokenErrors"];
         put?: never;
         post?: never;
@@ -2759,7 +2759,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /cycle-counts/{locationId}/assign */
+        /** Assign the due cycle-count items (optionally limited to ABC classes or chosen items) to a Store user or Warehouse picker. */
         post: operations["postCycleCountsLocationIdAssign"];
         delete?: never;
         options?: never;
@@ -2827,7 +2827,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /import/items */
+        /** Create or update items by code from a Code + Name file, in the caller's own company only (a code another company uses never matches). Admin and Admin user. */
         post: operations["postImportItems"];
         delete?: never;
         options?: never;
@@ -2844,7 +2844,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/opening-stock/commit */
+        /** Post an opening-stock file. A branch/item/lot file needs mode=replace-current; the balances set by the file are journalled. Admin and Admin user. */
         post: operations["postImportsOpeningStockCommit"];
         delete?: never;
         options?: never;
@@ -2861,7 +2861,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/opening-stock/preview */
+        /** Preview an opening-stock file (branch, item, lot, closing stock) without posting. Matches only the caller's own items and branches. Admin and Admin user. */
         post: operations["postImportsOpeningStockPreview"];
         delete?: never;
         options?: never;
@@ -2878,7 +2878,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/purchases/commit */
+        /** Post a daily ERP purchase file into the H.O. warehouse. */
         post: operations["postImportsPurchasesCommit"];
         delete?: never;
         options?: never;
@@ -2895,7 +2895,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/purchases/preview */
+        /** Preview a daily ERP purchase file; goods are received only into the caller's own H.O. warehouse. */
         post: operations["postImportsPurchasesPreview"];
         delete?: never;
         options?: never;
@@ -2912,7 +2912,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/sales/commit */
+        /** Post a daily ERP sales file, posting each row once (a repeated row is skipped). */
         post: operations["postImportsSalesCommit"];
         delete?: never;
         options?: never;
@@ -2929,7 +2929,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/sales/preview */
+        /** Preview a daily ERP sales file (sales out of a branch, returns back in). Items and branches are the caller's own only. */
         post: operations["postImportsSalesPreview"];
         delete?: never;
         options?: never;
@@ -2946,7 +2946,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/{batchId}/reverse */
+        /** Reverse a POSTED import with equal-and-opposite adjustments (the original rows are never edited; reversing twice is safe). Main Admin only. */
         post: operations["postImportsBatchIdReverse"];
         delete?: never;
         options?: never;
@@ -2963,7 +2963,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/{batchToken}/abandon */
+        /** Abandon a preview so the file can be uploaded again. Only the importer or the Main Admin. */
         post: operations["postImportsBatchTokenAbandon"];
         delete?: never;
         options?: never;
@@ -2980,7 +2980,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /imports/{batchToken}/commit */
+        /** Post a previewed batch. Serialised per batch: a double-click or retry gets 409 instead of posting stock twice. Admin and Admin user. */
         post: operations["postImportsBatchTokenCommit"];
         delete?: never;
         options?: never;
@@ -3439,7 +3439,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-adjustments/import/commit */
+        /** Apply a bulk stock-update file. SET mode replaces balances; ADD/REMOVE post idempotent movements per file hash. All rows must be valid. */
         post: operations["postStockAdjustmentsImportCommit"];
         delete?: never;
         options?: never;
@@ -3456,7 +3456,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-adjustments/import/preview */
+        /** Preview a bulk stock-update file (branch, item, lot, quantity) in SET/ADD/REMOVE mode with each row's current and resulting quantity. Items and branches are the caller's own only. */
         post: operations["postStockAdjustmentsImportPreview"];
         delete?: never;
         options?: never;
@@ -3473,7 +3473,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-adjustments/manual */
+        /** Set, add or remove stock for one item/lot at one location, with a mandatory reason, as an auditable journalled movement. Admin and Admin user. */
         post: operations["postStockAdjustmentsManual"];
         delete?: never;
         options?: never;
@@ -3524,7 +3524,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-counts/{countId}/reconciliation/ack */
+        /** Resolve a late-movement reconciliation flag on a count with a note (the recomputed figures stay on the count). Admin, Admin user and Branch manager. */
         post: operations["postStockCountsCountIdReconciliationAck"];
         delete?: never;
         options?: never;
@@ -3541,7 +3541,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-takes/bulk-assign */
+        /** Assign many in-stock items at a location to a Store user or Warehouse picker for counting; zero-stock and inactive items are skipped and reported. */
         post: operations["postStockTakesBulkAssign"];
         delete?: never;
         options?: never;
@@ -3558,7 +3558,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-takes/import/preview */
+        /** Preview a stock-take list (Item Code / Item Name) for a location; items with no stock there are excluded. */
         post: operations["postStockTakesImportPreview"];
         delete?: never;
         options?: never;
@@ -3575,7 +3575,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /stock-takes/preview-by-filters */
+        /** Items with stock at a location matching category, sub-category, brand and search filters. The filter choices come from the caller's own items only. Admin, Admin user and Branch manager. */
         post: operations["postStockTakesPreviewByFilters"];
         delete?: never;
         options?: never;
@@ -3973,31 +3973,23 @@ export interface components {
                 onHand?: number;
             };
         };
-        /** @description Week 11's staged import lifecycle state machine row. */
         ImportBatch: {
-            id?: string;
-            /** @enum {string} */
-            type?: "PURCHASE" | "SALES" | "SALES_RETURN" | "OPENING_STOCK";
-            /** @enum {string} */
-            status?: "DRAFT" | "VALIDATED" | "QUEUED_FOR_COMMIT" | "COMMITTING" | "COMMITTED" | "PARTIALLY_COMMITTED" | "FAILED" | "REVERSING" | "REVERSED";
+            /** @description The batch token. */
+            id: string;
+            /** @description OPENING_STOCK, SALES, PURCHASE, ADJUSTMENT_SET/ADD/REMOVE, or a reversal. */
+            type: string;
+            /** @description PREVIEWED, VALIDATED, POSTED, FAILED, ... */
+            status: string;
             fileName?: string;
-            sourceFormat?: string;
-            fileHash?: string;
+            importedById?: string;
             totalRows?: number;
             validRows?: number;
             invalidRows?: number;
-            /** @description Highest row number committed so far - a crash/restart resumes past this, never before it. */
-            checkpointRowNumber?: number;
-            /** @enum {string} */
-            commitPolicy?: "ALL_OR_NOTHING" | "PARTIAL_SUCCESS";
-            companyId?: string;
-            importedById?: string;
-            /** Format: date-time */
-            reversedAt?: string | null;
+            duplicateRows?: number;
+            /** @description True while the batch is POSTED and is not itself a reversal. */
+            reversible?: boolean;
             /** Format: date-time */
             createdAt?: string;
-            /** Format: date-time */
-            updatedAt?: string;
         };
         /** @description One staged row before validation - already-parsed JSON, not a raw CSV/file upload (see docs/week11-import-staging-commit-reverse.md's 'Not done'). */
         ImportRawRow: {
@@ -5144,6 +5136,27 @@ export interface components {
             varianceValue?: number;
             /** @description 100 minus the variance value as a share of counted book value; null when nothing costed was counted. */
             valueAccuracyPercent?: number | null;
+        };
+        ImportPreview: {
+            sheetName?: string;
+            headerRow?: number;
+            totalRows?: number;
+            validRows?: number;
+            invalidRows?: number;
+            duplicateRows?: number;
+            batchToken?: string;
+            status?: string;
+            branches?: string[];
+            mapping?: {
+                [key: string]: unknown;
+            };
+            errors?: {
+                rowNumber?: number;
+                message?: string;
+            }[];
+            sample?: {
+                [key: string]: unknown;
+            }[];
         };
     };
     responses: never;
@@ -8820,44 +8833,36 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        plan?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -9331,51 +9336,43 @@ export interface operations {
     };
     getImportsBatches: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        batches?: components["schemas"]["ImportBatch"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Import history access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description Import history is unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -9388,44 +9385,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        movements?: {
+                            [key: string]: unknown;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -9440,7 +9420,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9451,39 +9431,31 @@ export interface operations {
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Import access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Import batch not found (also for another company's batch). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
     getImportsBatchTokenErrors: {
         parameters: {
-            query?: never;
+            query?: {
+                format?: "csv" | "json";
+            };
             header?: never;
             path: {
                 batchToken: string;
@@ -9492,44 +9464,36 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description A CSV attachment, or JSON when format=json. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
+                    "text/csv": string;
                     "application/json": {
-                        [key: string]: unknown;
+                        batchToken?: string;
+                        csv?: string;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Import access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Import batch not found (also for another company's batch). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14976,16 +14940,18 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    storeUserId: string;
+                    classes?: ("A" | "B" | "C")[];
+                    itemIds?: string[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Assigned. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14995,33 +14961,32 @@ export interface operations {
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid user, classes, or an item that is not on the plan. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -15231,52 +15196,50 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Imported. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        imported?: {
+                            [key: string]: unknown;
+                        }[];
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description No file, not an items file (opening-stock files use Preview and Confirm), or the import failed. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can import data. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -15287,52 +15250,52 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    /** @enum {string} */
+                    mode?: "replace-current";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Posted. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        result?: {
+                            [key: string]: unknown;
+                        };
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description No valid rows, replace-current not confirmed, or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can commit imports. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -15343,52 +15306,64 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Staged as a preview batch; nothing is posted yet. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        batchToken?: string;
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description No file, an unsupported file type (.xlsx, .xls, .csv only), or a file that could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can preview imports. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description The same file was already imported: the existing batch is returned. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        batchToken?: string;
+                        status?: string;
+                        committedRows?: number;
+                        preview?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
             };
         };
     };
@@ -15399,52 +15374,49 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    purchaseTime?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Posted. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        batchId?: string;
+                        committedRows?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid or unmapped rows, or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -15455,52 +15427,65 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    purchaseTime?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Staged as a preview batch; nothing is posted yet. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        batchToken?: string;
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description The file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description The same file was already imported: the existing batch is returned. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        batchToken?: string;
+                        status?: string;
+                        committedRows?: number;
+                        preview?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
             };
         };
     };
@@ -15511,52 +15496,48 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Posted. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        batchId?: string;
+                        committedRows?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid or unmapped rows, or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -15567,52 +15548,64 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Staged as a preview batch; nothing is posted yet. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        batchToken?: string;
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description The file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description The same file was already imported: the existing batch is returned. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        batchToken?: string;
+                        status?: string;
+                        committedRows?: number;
+                        preview?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
             };
         };
     };
@@ -15625,52 +15618,63 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    reason?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Reversed (or already reversed). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        duplicate?: boolean;
+                        reversalBatchId?: string;
+                        reversedMovements?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description The reversal failed. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin can reverse a posted import. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Import batch not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Already reversed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -15683,52 +15687,48 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Abandoned. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        batchToken?: string;
+                        /** @enum {string} */
+                        status?: "FAILED";
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an admin, or not the importer / Main Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Import batch not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The batch is not in a state that can be abandoned. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -15741,52 +15741,66 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /**
+                     * @description Required to confirm an opening-stock replace.
+                     * @enum {string}
+                     */
+                    mode?: "replace-current";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Posted. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        batchToken?: string;
+                        committedRows?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Nothing valid to post, or the commit failed. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access is required to commit imports. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Import batch not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Already committed, being committed by another request, or not in a committable state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17311,52 +17325,53 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    /**
+                     * @description SET assigns the closing balance; ADD/REMOVE are relative and cannot make stock negative.
+                     * @enum {string}
+                     */
+                    mode?: "SET" | "ADD" | "REMOVE";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Applied. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        batchId?: string;
+                        committedRows?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid rows, an invalid mode, or no file. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access is required for stock updates. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17367,52 +17382,69 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    /**
+                     * @description SET assigns the closing balance; ADD/REMOVE are relative and cannot make stock negative.
+                     * @enum {string}
+                     */
+                    mode?: "SET" | "ADD" | "REMOVE";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Staged as a preview batch; nothing is posted yet. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        batchToken?: string;
+                        preview?: components["schemas"]["ImportPreview"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid mode or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access is required for stock updates. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description The same file was already imported: the existing batch is returned. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        batchToken?: string;
+                        status?: string;
+                        committedRows?: number;
+                        preview?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
             };
         };
     };
@@ -17423,52 +17455,57 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /**
+                     * @description SET assigns the closing balance; ADD/REMOVE are relative and cannot make stock negative.
+                     * @enum {string}
+                     */
+                    mode: "SET" | "ADD" | "REMOVE";
+                    itemId: string;
+                    locationId: string;
+                    lotNo?: string;
+                    quantity: number;
+                    reason: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Applied (or already applied). */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        itemId?: string;
+                        lotId?: string;
+                        locationId?: string;
+                        previousQty?: number;
+                        qtyDelta?: number;
+                        resultingQty?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid mode, item, location, reason or quantity. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin access is required for stock updates. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17639,52 +17676,61 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    note: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Resolved. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        count?: components["schemas"]["StockCount"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A resolution note is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Count not found (also for another company's count). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The count has no open reconciliation flag. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17695,52 +17741,56 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    locationId: string;
+                    storeUserId: string;
+                    itemIds: string[];
+                    /** Format: date-time */
+                    countDate?: string;
+                    /** Format: date-time */
+                    dueDate?: string;
+                    /** @enum {string} */
+                    priority?: "LOW" | "NORMAL" | "HIGH";
+                    instructions?: string;
+                    filterSnapshot?: {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Assigned. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        assignments?: components["schemas"]["CountAssignment"][];
+                        excludedZeroStock?: string[];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Missing fields, an invalid user, date or priority. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17751,52 +17801,57 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    locationId?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        preview?: {
+                            items?: {
+                                [key: string]: unknown;
+                            }[];
+                            validRows?: number;
+                            invalidRows?: number;
+                            errors?: {
+                                rowNumber?: number;
+                                message?: string;
+                            }[];
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description File and locationId are required, or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17807,52 +17862,58 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    locationId: string;
+                    /** @default all */
+                    category?: string;
+                    /** @default all */
+                    subcategory?: string;
+                    /** @default all */
+                    company?: string;
+                    search?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        items?: {
+                            [key: string]: unknown;
+                        }[];
+                        matchingCount?: number;
+                        excludedZeroStock?: number;
+                        filters?: {
+                            categories?: string[];
+                            subcategories?: string[];
+                            companies?: string[];
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
