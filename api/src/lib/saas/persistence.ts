@@ -92,3 +92,30 @@ export async function flushControlPlanePersist(): Promise<void> {
   }
   if (persistInFlight) await persistInFlight;
 }
+
+/**
+ * Makes the platform company list include every company that actually operates in the database: the union of
+ * CompanyProfile rows and the distinct companyId on users. Idempotent and read-only on operational tables.
+ * The workspace profile with id `default` belongs to `default-company`.
+ */
+export async function syncOperationalCompanies(): Promise<number> {
+  if (!databaseEnabled()) return 0;
+  const { prisma } = await import('../db.js');
+  const [profiles, userGroups, admins] = await Promise.all([
+    prisma.companyProfile.findMany({ select: { id: true, name: true } }),
+    prisma.user.groupBy({ by: ['companyId'] }),
+    prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true, companyId: true }, orderBy: { createdAt: 'asc' } }),
+  ]);
+  const canonical = (id: string) => (id === 'default' ? 'default-company' : id);
+  const names = new Map(profiles.map((profile) => [canonical(profile.id), profile.name]));
+  const adminOf = new Map<string, string>();
+  for (const admin of admins) if (!adminOf.has(admin.companyId)) adminOf.set(admin.companyId, admin.id);
+  const ids = new Set<string>([...names.keys(), ...userGroups.map((group) => group.companyId)]);
+  let changed = 0;
+  for (const id of ids) {
+    if (controlPlane.registerOperationalCompany({ id, name: names.get(id) ?? '', primaryAdminId: adminOf.get(id) ?? null })) changed += 1;
+  }
+  if (changed) scheduleControlPlanePersist();
+  return changed;
+}
+
