@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.37.0",
+    "version": "2026.38.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -4965,26 +4965,34 @@
             ]
           },
           "dueAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "conditionOut": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "conditionIn": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "checkedOutAt": {
             "type": "string",
             "format": "date-time"
           },
           "returnedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "createdById": {
             "type": "string"
@@ -5025,11 +5033,13 @@
             "type": "string"
           },
           "mentions": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
-            },
-            "nullable": true
+            }
           },
           "createdAt": {
             "type": "string",
@@ -5054,12 +5064,16 @@
             "type": "string"
           },
           "userId": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "role": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "title": {
             "type": "string"
@@ -5071,9 +5085,11 @@
             "type": "string"
           },
           "readAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "createdAt": {
             "type": "string",
@@ -5081,6 +5097,290 @@
           },
           "companyId": {
             "type": "string"
+          }
+        }
+      },
+      "ExpiryBoardLot": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "lotId",
+          "lotNo",
+          "locationId",
+          "quantity",
+          "horizon"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "itemCode": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "subcategory": {
+            "type": "string"
+          },
+          "company": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "lotNo": {
+            "type": "string"
+          },
+          "lotStatus": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "expiryDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "daysUntilExpiry": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "EXPIRED",
+              "CRITICAL",
+              "WARNING",
+              "UPCOMING",
+              "DATED",
+              "MISSING"
+            ]
+          },
+          "recommendedAction": {
+            "type": "string"
+          },
+          "purchaseValue": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "saleValue": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "ExpiryBoard": {
+        "type": "object",
+        "required": [
+          "lots",
+          "summary",
+          "categories"
+        ],
+        "properties": {
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExpiryBoardLot"
+            }
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "expiredLots": {
+                "type": "number"
+              },
+              "expiredQty": {
+                "type": "number"
+              },
+              "expiredValue": {
+                "type": "number"
+              },
+              "criticalLots": {
+                "type": "number"
+              },
+              "criticalQty": {
+                "type": "number"
+              },
+              "warningLots": {
+                "type": "number"
+              },
+              "warningQty": {
+                "type": "number"
+              },
+              "upcomingLots": {
+                "type": "number"
+              },
+              "upcomingQty": {
+                "type": "number"
+              },
+              "datedLots": {
+                "type": "number"
+              },
+              "missingLots": {
+                "type": "number"
+              },
+              "missingQty": {
+                "type": "number"
+              },
+              "atRiskLots": {
+                "type": "number"
+              },
+              "atRiskQty": {
+                "type": "number"
+              },
+              "atRiskValue": {
+                "type": "number"
+              },
+              "datedOnHandLots": {
+                "type": "number"
+              }
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ExpiryWriteOffResult": {
+        "type": "object",
+        "required": [
+          "alertId",
+          "movementId",
+          "quantity",
+          "beforeBalance",
+          "afterBalance"
+        ],
+        "properties": {
+          "alertId": {
+            "type": "string"
+          },
+          "movementId": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "beforeBalance": {
+            "type": "number"
+          },
+          "afterBalance": {
+            "type": "number"
+          }
+        }
+      },
+      "SerialTraceStep": {
+        "type": "object",
+        "required": [
+          "at",
+          "event"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event": {
+            "type": "string"
+          },
+          "fromLocationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "toLocationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MarketplaceConnector": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "platform",
+          "channel",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "AMAZON",
+              "FLIPKART",
+              "WEBSITE",
+              "CUSTOM"
+            ]
+          },
+          "channel": {
+            "type": "string"
+          },
+          "webhookSecret": {
+            "type": "string",
+            "description": "Returned in full only when the connector is created."
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastIngestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       }
@@ -9786,72 +10086,100 @@
     "/connectors": {
       "get": {
         "operationId": "getConnectors",
-        "summary": "GET /connectors",
+        "summary": "List the company's marketplace connectors (Admin).",
         "tags": [
           "connectors"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "connectors"
+                  ],
+                  "properties": {
+                    "connectors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketplaceConnector"
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "parameters": []
       },
       "post": {
         "operationId": "postConnectors",
-        "summary": "POST /connectors",
+        "summary": "Create a marketplace connector (Admin). The webhook secret is generated if not supplied and is shown once.",
         "tags": [
           "connectors"
         ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "connector"
+                  ],
+                  "properties": {
+                    "connector": {
+                      "$ref": "#/components/schemas/MarketplaceConnector"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "name and a valid platform are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9860,17 +10188,41 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "name",
+                  "platform"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "AMAZON",
+                      "FLIPKART",
+                      "WEBSITE",
+                      "CUSTOM"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string"
+                  },
+                  "webhookSecret": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/count-assignments": {
@@ -10703,39 +11055,66 @@
     "/expiry-board": {
       "get": {
         "operationId": "getExpiryBoard",
-        "summary": "GET /expiry-board",
+        "summary": "Lots on hand at a location grouped by expiry horizon, with totals and at-risk value.",
         "tags": [
           "expiry-board"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "board"
+                  ],
+                  "properties": {
+                    "board": {
+                      "$ref": "#/components/schemas/ExpiryBoard"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "No access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ]
       }
@@ -16657,34 +17036,48 @@
     "/serials/{serial}": {
       "get": {
         "operationId": "getSerialsSerial",
-        "summary": "GET /serials/{serial}",
+        "summary": "A serial number with its movement history as a recall trace.",
         "tags": [
           "serials"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "serial",
+                    "trace"
+                  ],
+                  "properties": {
+                    "serial": {
+                      "$ref": "#/components/schemas/SerialNumber"
+                    },
+                    "trace": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SerialTraceStep"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Serial was not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18592,34 +18985,61 @@
     "/lots/{id}/expiry": {
       "patch": {
         "operationId": "patchLotsIdExpiry",
-        "summary": "PATCH /lots/{id}/expiry",
+        "summary": "Set or clear a lot's expiry date (Admin). null or an empty value clears it.",
         "tags": [
           "lots"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "lot"
+                  ],
+                  "properties": {
+                    "lot": {
+                      "$ref": "#/components/schemas/Lot"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Lot not found (also for another company's lot).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18638,12 +19058,20 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "expiryDate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  }
+                }
               }
             }
           }
@@ -18653,34 +19081,61 @@
     "/lots/{id}/manufactured": {
       "patch": {
         "operationId": "patchLotsIdManufactured",
-        "summary": "PATCH /lots/{id}/manufactured",
+        "summary": "Set or clear a lot's manufacturing date; it must be before the expiry date and not in the future.",
         "tags": [
           "lots"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "lot"
+                  ],
+                  "properties": {
+                    "lot": {
+                      "$ref": "#/components/schemas/Lot"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid date, in the future, or not before the expiry date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed (Admin, Branch Manager or Warehouse Picker).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Lot not found (also for another company's lot).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18699,12 +19154,20 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "manufacturedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  }
+                }
               }
             }
           }
@@ -18714,34 +19177,61 @@
     "/lots/{id}/status": {
       "patch": {
         "operationId": "patchLotsIdStatus",
-        "summary": "PATCH /lots/{id}/status",
+        "summary": "Change a lot's sale status (Admin); audited.",
         "tags": [
           "lots"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "lot"
+                  ],
+                  "properties": {
+                    "lot": {
+                      "$ref": "#/components/schemas/Lot"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid lot status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Lot not found (also for another company's lot).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18760,12 +19250,25 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "AVAILABLE",
+                      "EXPIRED",
+                      "BLOCKED",
+                      "QUARANTINE"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -19619,34 +20122,162 @@
     "/connectors/{id}/ingest": {
       "post": {
         "operationId": "postConnectorsIdIngest",
-        "summary": "POST /connectors/{id}/ingest",
+        "summary": "Push one marketplace order, or {orders:[...]}, through a connector. Re-delivered orders are acknowledged as duplicates, never created twice.",
         "tags": [
           "connectors"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Nothing new: every order was already delivered.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "orders",
+                    "duplicates",
+                    "errors"
+                  ],
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "duplicates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "reference": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
+          "201": {
+            "description": "At least one order was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "orders",
+                    "duplicates",
+                    "errors"
+                  ],
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "duplicates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "reference": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin, or connectors are not on the plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Connector not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No order was created and none was a duplicate (see errors).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "orders",
+                    "duplicates",
+                    "errors"
+                  ],
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "duplicates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "reference": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -19665,12 +20296,22 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "additionalProperties": true,
+                "description": "A platform order payload, or { orders: [payload, ...] }.",
+                "properties": {
+                  "orders": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
               }
             }
           }
@@ -20023,34 +20664,76 @@
     "/expiry-write-off": {
       "post": {
         "operationId": "postExpiryWriteOff",
-        "summary": "POST /expiry-write-off",
+        "summary": "Write expired stock off a lot (Main Admin only). Posts a negative EXPIRY_WRITE_OFF movement; quantity defaults to the whole lot.",
         "tags": [
           "expiry-write-off"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "success",
+                    "result"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "result": {
+                      "$ref": "#/components/schemas/ExpiryWriteOffResult"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Missing ids, reason shorter than 5 characters, or quantity above lot stock.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not the Main Admin, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Lot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The expiry alert was already processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -20059,17 +20742,42 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "itemId",
+                  "lotId",
+                  "locationId",
+                  "reason"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 5
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/import/items": {
@@ -23005,34 +23713,61 @@
     "/serials/{serial}/move": {
       "post": {
         "operationId": "postSerialsSerialMove",
-        "summary": "POST /serials/{serial}/move",
+        "summary": "Move a serial to a new status/location; illegal status transitions are rejected.",
         "tags": [
           "serials"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "serial"
+                  ],
+                  "properties": {
+                    "serial": {
+                      "$ref": "#/components/schemas/SerialNumber"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "No access to the destination location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Serial was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23051,12 +23786,49 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "toStatus",
+                  "movementType"
+                ],
+                "properties": {
+                  "toStatus": {
+                    "type": "string",
+                    "enum": [
+                      "IN_STOCK",
+                      "RESERVED",
+                      "SOLD",
+                      "RETURNED",
+                      "DAMAGED",
+                      "LOST"
+                    ]
+                  },
+                  "movementType": {
+                    "type": "string",
+                    "enum": [
+                      "RECEIVE",
+                      "TRANSFER",
+                      "PICK",
+                      "PACK",
+                      "SALE",
+                      "RETURN",
+                      "ADJUSTMENT"
+                    ]
+                  },
+                  "toLocationId": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "returnState": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -24678,34 +25450,45 @@
     "/webhook-deliveries/retry-due": {
       "post": {
         "operationId": "postWebhookDeliveriesRetryDue",
-        "summary": "POST /webhook-deliveries/retry-due",
+        "summary": "Retry this company's webhook deliveries that are due (Admin).",
         "tags": [
           "webhook-deliveries"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "retried",
+                    "delivered"
+                  ],
+                  "properties": {
+                    "retried": {
+                      "type": "integer"
+                    },
+                    "delivered": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24713,18 +25496,8 @@
             "bearerAuth": []
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/catalog/items/{itemId}/custom-fields/{fieldId}": {
