@@ -820,11 +820,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** DELETE /transfers/{transferId} */
+        /** Delete an editable transfer request before packing starts. Its requester (for Store users) or a transfer manager. */
         delete: operations["deleteTransfersTransferId"];
         options?: never;
         head?: never;
-        /** PATCH /transfers/{transferId} */
+        /** Edit an editable transfer request (DRAFT, SUBMITTED or REQUESTED) before packing starts: locations, lines, carton count, notes. Its requester (for Store users) or a transfer manager. Expired or quarantined lots are refused while expiry blocking is on. */
         patch: operations["patchTransfersTransferId"];
         trace?: never;
     };
@@ -2695,7 +2695,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /transfers/{transferId}/status */
+        /** Move a transfer to another status. The move must be legal for the caller's role; dispatch needs packing completed if it was started; reaching a terminal state releases the request-time reservation. */
         patch: operations["patchTransfersTransferIdStatus"];
         trace?: never;
     };
@@ -3592,7 +3592,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /transfers/import/commit */
+        /** Create a transfer from a transfer file and release it to the pickers (PENDING_PICK) with its lot allocations. Refuses when any row is unmapped or short of stock. Admin and Admin user. */
         post: operations["postTransfersImportCommit"];
         delete?: never;
         options?: never;
@@ -3609,7 +3609,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /transfers/import/preview */
+        /** Preview a transfer file: map each row to an item, allocate lots (FEFO/FIFO per the company workflow), and report unmapped or insufficient-stock rows. Nothing is saved. Admin and Admin user. */
         post: operations["postTransfersImportPreview"];
         delete?: never;
         options?: never;
@@ -3626,7 +3626,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /transfers/{transferId}/confirm */
+        /** Confirm transfer-out: deduct the accepted pick quantities lot by lot from the source and release the reservation. Passes the PO-style approval gate (a transfer above the configured value needs an approver). Only from READY_FOR_ADMIN or PARTIAL. Admin and Admin user. */
         post: operations["postTransfersTransferIdConfirm"];
         delete?: never;
         options?: never;
@@ -3828,6 +3828,10 @@ export interface components {
             itemId: string;
             lotId: string;
             quantity: number;
+            receivedQty?: number;
+            damagedQty?: number;
+            shortageQty?: number;
+            excessQty?: number;
         };
         TransferCreateRequest: {
             sourceLocationId: string;
@@ -4833,6 +4837,38 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+        };
+        TransferRecord: {
+            id: string;
+            sourceLocationId: string;
+            destinationLocationId: string;
+            requestedBy?: string;
+            role?: string;
+            /** @enum {string} */
+            status: "SUBMITTED" | "DRAFT" | "PENDING_PICK" | "REQUESTED" | "PICKING" | "PARTIAL" | "PICKED" | "READY_FOR_ADMIN" | "CONFIRMED" | "IN_TRANSIT" | "DISPATCHED" | "PARTIALLY_RECEIVED" | "PARTIAL_RECEIVED" | "RECEIVED" | "CLOSED" | "REJECTED" | "CANCELLED";
+            lines: components["schemas"]["TransferLine"][];
+            cartonCount?: number;
+            notes?: string;
+            photos?: string[];
+            packing?: {
+                /** Format: date-time */
+                completedAt?: string;
+                completedById?: string;
+                cartonCount?: number;
+            };
+            dispatch?: {
+                /** Format: date-time */
+                dispatchedAt?: string;
+                dispatchedById?: string;
+                carrier?: string;
+                awb?: string;
+                vehicleNo?: string;
+                /** Format: date-time */
+                expectedArrivalAt?: string;
+            };
+            /** Format: date-time */
+            createdAt?: string;
+            companyId?: string;
         };
     };
     responses: never;
@@ -7058,44 +7094,53 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Deleted. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        transferId?: string;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description The transfer could not be deleted. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Transfer not found (also for another company's transfer). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Packing has started, so the transfer cannot be deleted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7108,52 +7153,65 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    sourceLocationId: string;
+                    destinationLocationId: string;
+                    lines: components["schemas"]["TransferLine"][];
+                    cartonCount?: number;
+                    notes?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Edited. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        transfer?: components["schemas"]["TransferRecord"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid request, an inactive item, or a lot that does not belong to its item. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Transfer not found (also for another company's transfer). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Packing has started, or an expired/quarantined lot is blocked. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14523,52 +14581,62 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    status: "SUBMITTED" | "DRAFT" | "PENDING_PICK" | "REQUESTED" | "PICKING" | "PARTIAL" | "PICKED" | "READY_FOR_ADMIN" | "CONFIRMED" | "IN_TRANSIT" | "DISPATCHED" | "PARTIALLY_RECEIVED" | "PARTIAL_RECEIVED" | "RECEIVED" | "CLOSED" | "REJECTED" | "CANCELLED";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Moved. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        transfer?: components["schemas"]["TransferRecord"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid transfer status. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied, or the status change is not allowed for this role or from the current status. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Transfer not found (also for another company's transfer). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Packing was started; complete it before dispatching. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17649,52 +17717,59 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    sourceLocationId: string;
+                    destinationLocationId: string;
+                    /**
+                     * @default true
+                     * @enum {string}
+                     */
+                    mergeDuplicates?: "true" | "false";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        transfer?: components["schemas"]["TransferRecord"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Missing input, identical source and destination, or rows that need fixing. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        errors?: {
+                            [key: string]: unknown;
+                        }[];
+                    };
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can import transfers. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17705,52 +17780,70 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description .xlsx, .xls or .csv
+                     */
+                    file: string;
+                    sourceLocationId: string;
+                    destinationLocationId: string;
+                    /**
+                     * @default true
+                     * @enum {string}
+                     */
+                    mergeDuplicates?: "true" | "false";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Preview. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        preview?: {
+                            sheetName?: string;
+                            headerRow?: number;
+                            totalRows?: number;
+                            validRows?: number;
+                            invalidRows?: number;
+                            duplicateRows?: number;
+                            mapping?: {
+                                [key: string]: unknown;
+                            };
+                            rows?: {
+                                [key: string]: unknown;
+                            }[];
+                            errors?: {
+                                rowNumber?: number;
+                                message?: string;
+                            }[];
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description File, source or destination missing, or the file could not be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can import transfers. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -17763,52 +17856,59 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Confirmed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        message?: string;
+                        transfer?: components["schemas"]["TransferRecord"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Not ready for admin review, no accepted pick quantities, or the deduction failed. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can confirm transfer-out. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Transfer not found (also for another company's transfer). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Blocked pending approval. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        message?: string;
+                        approvalRequestId?: string;
+                        requiredApproverRole?: string;
+                    };
+                };
             };
         };
     };
