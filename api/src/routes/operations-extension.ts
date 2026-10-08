@@ -2313,6 +2313,18 @@ router.post('/qc-inspections', async (req, res) => {
     }
   }
   if (!Object.keys(results).length) return res.status(400).json({ message: 'At least one checklist result is required.' });
+  // The inspection is stored under the caller's company but GET /qc-inspections joins its template and lot. Both must belong
+  // to the caller's company (another company's id looks like a missing one). A database that is not reachable is not a
+  // reason to refuse: only a query that ran and found nothing rejects.
+  const qcCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  if (req.body.templateId) {
+    const found = await prisma.qcChecklistTemplate.findFirst({ where: { id: String(req.body.templateId), createdBy: { companyId: qcCompanyId } }, select: { id: true } }).then((row) => ({ ran: true, row }), () => ({ ran: false, row: null }));
+    if (found.ran && !found.row) return res.status(404).json({ message: 'QC checklist template not found.' });
+  }
+  if (req.body.lotId) {
+    const found = await prisma.lot.findFirst({ where: { id: String(req.body.lotId), item: { companyId: qcCompanyId } }, select: { id: true } }).then((row) => ({ ran: true, row }), () => ({ ran: false, row: null }));
+    if (found.ran && !found.row) return res.status(404).json({ message: 'Lot not found.' });
+  }
   try {
     let itemCategory: string | null = null;
     if (req.body.itemId) {
