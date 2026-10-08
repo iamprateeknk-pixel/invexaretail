@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.25.0",
+    "version": "2026.27.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -2990,6 +2990,318 @@
             }
           }
         }
+      },
+      "JobLine": {
+        "type": "object",
+        "required": [
+          "id",
+          "jobId",
+          "itemId",
+          "plannedQty"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "plannedQty": {
+            "type": "integer"
+          },
+          "issuedQty": {
+            "type": "integer"
+          },
+          "usedQty": {
+            "type": "integer"
+          },
+          "returnedQty": {
+            "type": "integer"
+          },
+          "damagedQty": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "name",
+          "locationId",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "RECONCILING",
+              "CLOSED",
+              "CANCELLED"
+            ]
+          },
+          "dueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobLine"
+            }
+          }
+        }
+      },
+      "BlindCount": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "lotId",
+          "locationId",
+          "physicalQuantity"
+        ],
+        "description": "What a Store user or Warehouse picker sees: never the book quantity or the variance, so the count stays blind.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "physicalQuantity": {
+            "type": "number"
+          }
+        }
+      },
+      "StockCount": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "lotId",
+          "locationId",
+          "physicalQuantity",
+          "bookQty",
+          "variance"
+        ],
+        "description": "The full count that reviewers (Admin, Admin user, Branch manager, Auditor) see.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "physicalQuantity": {
+            "type": "number"
+          },
+          "bookQty": {
+            "type": "number"
+          },
+          "variance": {
+            "type": "number",
+            "description": "physicalQuantity - bookQty."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "scan",
+              "manual",
+              "weight"
+            ]
+          },
+          "submittedBy": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING_REVIEW",
+              "APPROVED",
+              "REJECTED",
+              "RECOUNT"
+            ]
+          },
+          "reviewedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "parentCountId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set on a recount: the first count it repeats."
+          },
+          "varianceMovementId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ledger movement posted when the count was approved."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CountAssignment": {
+        "type": "object",
+        "required": [
+          "id",
+          "locationId",
+          "itemId",
+          "assignedToId",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "assignedToId": {
+            "type": "string"
+          },
+          "assignedById": {
+            "type": "string"
+          },
+          "countDate": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "NORMAL",
+              "HIGH"
+            ]
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ASSIGNED",
+              "SUBMITTED",
+              "CANCELLED"
+            ]
+          },
+          "countId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentCountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "campaignId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       }
     }
   },
@@ -5238,34 +5550,106 @@
     "/count-assignments/bulk": {
       "delete": {
         "operationId": "deleteCountAssignmentsBulk",
-        "summary": "DELETE /count-assignments/bulk",
+        "summary": "Delete several count tasks in one call; all or nothing. Admin and Admin user.",
         "tags": [
-          "count-assignments"
+          "Count assignments"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "assignmentIds"
+                ],
+                "properties": {
+                  "assignmentIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Deleted.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "deletedCount": {
+                      "type": "integer"
+                    },
+                    "assignmentIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "preservedCountIds": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "No task selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "This user cannot count or assign at that location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "One or more tasks were not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "missingIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5278,40 +5662,9 @@
     "/count-assignments/{assignmentId}": {
       "delete": {
         "operationId": "deleteCountAssignmentsAssignmentId",
-        "summary": "DELETE /count-assignments/{assignmentId}",
+        "summary": "Delete one count task. Any count it produced is kept. Admin and Admin user.",
         "tags": [
-          "count-assignments"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Count assignments"
         ],
         "parameters": [
           {
@@ -5322,44 +5675,64 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "patch": {
-        "operationId": "patchCountAssignmentsAssignmentId",
-        "summary": "PATCH /count-assignments/{assignmentId}",
-        "tags": [
-          "count-assignments"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Deleted.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "assignmentId": {
+                      "type": "string"
+                    },
+                    "preservedCountId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "This user cannot count or assign at that location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Assignment not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "patch": {
+        "operationId": "patchCountAssignmentsAssignmentId",
+        "summary": "Reassign, reschedule, re-prioritise or cancel an assignment. Submitted work is immutable for Branch managers (an Admin can change its metadata) and can never be reopened.",
+        "tags": [
+          "Count assignments"
         ],
         "parameters": [
           {
@@ -5372,16 +5745,112 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "assignedToId": {
+                    "type": "string"
+                  },
+                  "countDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "dueDate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "LOW",
+                      "NORMAL",
+                      "HIGH"
+                    ]
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ASSIGNED",
+                      "SUBMITTED",
+                      "CANCELLED"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "assignment": {
+                      "$ref": "#/components/schemas/CountAssignment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assignee, date, priority or status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This user cannot count or assign at that location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Assignment not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Submitted work cannot be changed or reopened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/items/{itemId}/photos/{photoId}": {
@@ -7104,53 +7573,107 @@
       },
       "post": {
         "operationId": "postCountAssignments",
-        "summary": "POST /count-assignments",
+        "summary": "Assign items to a Store user or Warehouse picker for counting at a location. Admin, Admin user and Branch manager (with access to the location).",
         "tags": [
-          "count-assignments"
+          "Count assignments"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "locationId",
+                  "storeUserId",
+                  "itemIds"
+                ],
+                "properties": {
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "storeUserId": {
+                    "type": "string"
+                  },
+                  "itemIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "countDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "LOW",
+                      "NORMAL",
+                      "HIGH"
+                    ]
+                  },
+                  "instructions": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created, one assignment per item.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "assignments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CountAssignment"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Missing fields, an unknown or inactive item, an invalid date or priority, or the user is not a Store user assigned to that location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "This user cannot count or assign at that location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/count-assignments/mine": {
@@ -9007,34 +9530,51 @@
     "/jobs": {
       "get": {
         "operationId": "getJobs",
-        "summary": "GET /jobs",
+        "summary": "The caller's company jobs with their lines, newest first. Admins and auditors see every location; others only their assigned ones.",
         "tags": [
-          "jobs"
+          "Jobs"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Job"
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9045,53 +9585,92 @@
       },
       "post": {
         "operationId": "postJobs",
-        "summary": "POST /jobs",
+        "summary": "Create a draft job (a project that consumes inventory) at a location of the caller's company. Admin only.",
         "tags": [
-          "jobs"
+          "Jobs"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "locationId"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "dueAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Name or location missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location not found (also for another company's location).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/locations": {
@@ -13223,40 +13802,9 @@
     "/jobs/{id}/status": {
       "patch": {
         "operationId": "patchJobsIdStatus",
-        "summary": "PATCH /jobs/{id}/status",
+        "summary": "Set the job status. Admin only.",
         "tags": [
-          "jobs"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Jobs"
         ],
         "parameters": [
           {
@@ -13269,55 +13817,90 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "DRAFT",
+                      "ACTIVE",
+                      "RECONCILING",
+                      "CLOSED",
+                      "CANCELLED"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
-      }
-    },
-    "/jobs/{jobId}/lines/{lineId}": {
-      "patch": {
-        "operationId": "patchJobsJobIdLinesLineId",
-        "summary": "PATCH /jobs/{jobId}/lines/{lineId}",
-        "tags": [
-          "jobs"
-        ],
-        "x-contract-level": "path-only",
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid job status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Job not found (also for another company's job).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/jobs/{jobId}/lines/{lineId}": {
+      "patch": {
+        "operationId": "patchJobsJobIdLinesLineId",
+        "summary": "Record issued, used, returned or damaged quantities on a line of this job (negative values are clamped to 0). Admin or Warehouse picker.",
+        "tags": [
+          "Jobs"
         ],
         "parameters": [
           {
@@ -13338,16 +13921,75 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "issuedQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "usedQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "returnedQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "damagedQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "line": {
+                      "$ref": "#/components/schemas/JobLine"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job or line not found (the line must belong to this job).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/lots/{id}/expiry": {
@@ -13904,40 +14546,9 @@
     "/stock-counts/{countId}/review": {
       "patch": {
         "operationId": "patchStockCountsCountIdReview",
-        "summary": "PATCH /stock-counts/{countId}/review",
+        "summary": "Approve, reject or request a recount. Approval posts the variance to the ledger exactly once. Optional enforcement requires a recount when variance is out of tolerance and that a recount is done by a different person. Admin, Admin user and Branch manager.",
         "tags": [
-          "stock-counts"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Stock counts"
         ],
         "parameters": [
           {
@@ -13950,16 +14561,102 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "APPROVED",
+                      "REJECTED",
+                      "RECOUNT"
+                    ]
+                  },
+                  "reviewReason": {
+                    "type": "string"
+                  },
+                  "reasonCode": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "Reviewed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "$ref": "#/components/schemas/StockCount"
+                    },
+                    "recountAssignment": {
+                      "$ref": "#/components/schemas/CountAssignment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status or reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or location not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Count not found (also for another company's count).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already reviewed, outside tolerance (code RECOUNT_REQUIRED) or not independent (code RECOUNT_NOT_INDEPENDENT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/tolerance-rules/{id}": {
@@ -15213,40 +15910,9 @@
     "/jobs/{id}/consume": {
       "post": {
         "operationId": "postJobsIdConsume",
-        "summary": "POST /jobs/{id}/consume",
+        "summary": "Consume stock against a job line using the company's allocation strategy (FEFO/FIFO) in one transaction. A caller-supplied requestId (body) or X-Mutation-Id (header) is required so a retry can never consume twice; a replay returns the original result with duplicate true. Admin or Warehouse picker.",
         "tags": [
-          "jobs"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Jobs"
         ],
         "parameters": [
           {
@@ -15256,59 +15922,143 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "X-Mutation-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alternative to requestId in the body."
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "lineId",
+                  "quantity"
+                ],
+                "properties": {
+                  "lineId": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "200": {
+            "description": "Consumed (or replayed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    },
+                    "line": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/JobLine"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "allocations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lotId": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "lineId and a positive quantity are required, or the idempotency key is missing (code IDEMPOTENCY_KEY_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found (also for another company's job).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Negative stock is blocked, or the job cannot take this consumption.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/jobs/{id}/lines": {
       "post": {
         "operationId": "postJobsIdLines",
-        "summary": "POST /jobs/{id}/lines",
+        "summary": "Add a planned item line to a job. The item must belong to the caller's company. Admin only.",
         "tags": [
-          "jobs"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Jobs"
         ],
         "parameters": [
           {
@@ -15321,17 +16071,80 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "itemId",
+                  "plannedQty"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "plannedQty": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "line": {
+                      "$ref": "#/components/schemas/JobLine"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Item and a positive whole planned quantity are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job or item not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/locations/{locationId}/bin-transfers": {
@@ -16982,105 +17795,307 @@
     "/stock-counts": {
       "post": {
         "operationId": "postStockCounts",
-        "summary": "POST /stock-counts",
+        "summary": "Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A repeat requestId returns the original (200, duplicate true). Whole units unless the item is weight/decimal.",
         "tags": [
-          "stock-counts"
+          "Stock counts"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "itemId",
+                  "locationId",
+                  "physicalQuantity"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "lotNo": {
+                    "type": "string",
+                    "description": "Defaults to the item's first lot."
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "physicalQuantity": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "scan",
+                      "manual",
+                      "weight"
+                    ]
+                  },
+                  "requestId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Duplicate of an earlier submission with the same requestId.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/StockCount"
+                        },
+                        {
+                          "$ref": "#/components/schemas/BlindCount"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/StockCount"
+                        },
+                        {
+                          "$ref": "#/components/schemas/BlindCount"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid payload, unknown or inactive item or lot, fractional quantity for a whole-unit item, or no stock to count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "No access to the location, or the item is not assigned to this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "This lot is already submitted and waiting for review.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/stock-counts/weight": {
       "post": {
         "operationId": "postStockCountsWeight",
-        "summary": "POST /stock-counts/weight",
+        "summary": "Submit one decimal total for a weight-counted item; the server spreads it over the item's lots in FEFO/FIFO order and creates a count per lot, all or nothing. Store users get only the number of lots, never the split.",
         "tags": [
-          "stock-counts"
+          "Stock counts"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "itemId",
+                  "locationId",
+                  "totalQuantity"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "totalQuantity": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "requestId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Duplicate of an earlier submission.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "lots": {
+                      "type": "integer"
+                    },
+                    "counts": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/components/schemas/StockCount"
+                          },
+                          {
+                            "$ref": "#/components/schemas/BlindCount"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "lots": {
+                      "type": "integer",
+                      "description": "Store users only."
+                    },
+                    "counts": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/components/schemas/StockCount"
+                          },
+                          {
+                            "$ref": "#/components/schemas/BlindCount"
+                          }
+                        ]
+                      }
+                    },
+                    "allocation": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lotId": {
+                            "type": "string"
+                          },
+                          "lotNo": {
+                            "type": "string"
+                          },
+                          "bookQty": {
+                            "type": "number"
+                          },
+                          "physicalQuantity": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "totalVariance": {
+                      "type": "number"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid quantity, or the item is not counted by weight.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "No access to the location, or the item is not assigned to this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "Already submitted, or already being saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/stock-counts/{countId}/reconciliation/ack": {
