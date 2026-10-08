@@ -64,3 +64,32 @@ integration("GET /pick-waves without a location returns only the caller's own co
     assert.ok(idsForB.includes(b.waveId) && !idsForB.includes(a.waveId));
   });
 });
+
+integration("PATCH /pick-waves/:id: assigning the wave to another company's user resolves 404 and leaves it unassigned; an own user works", async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const patch = async (token: string, waveId: string, body: unknown) => {
+    // Reuse the same app wiring as the list test through a one-off server.
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v1', extractToken, enforceOperationalCompanyScope);
+    app.use('/api/v1', extractToken, requireAuth, coreRouter);
+    const server = app.listen(0);
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('failed to bind test server');
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/pick-waves/${waveId}`, {
+        method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      return { status: response.status, body: (await response.json().catch(() => ({}))) as any };
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+  const cross = await patch(a.token, a.waveId, { assignedToId: b.userId });
+  assert.equal(cross.status, 404, "another company's user must look like a missing one");
+  assert.equal((await prisma.pickWave.findUniqueOrThrow({ where: { id: a.waveId } })).assignedToId, null, 'the wave was not assigned');
+  const own = await patch(a.token, a.waveId, { assignedToId: a.userId });
+  assert.equal(own.status, 200, JSON.stringify(own.body));
+});
