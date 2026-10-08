@@ -3367,14 +3367,17 @@ router.post('/stock-takes/preview-by-filters', (req: Request, res: Response) => 
   const ledger = listStockLedgerForLocation(locationId);
   const quantityByItem = new Map<string, number>();
   for (const row of ledger) quantityByItem.set(row.itemId, (quantityByItem.get(row.itemId) ?? 0) + row.onHand);
-  const all = listItems().filter((item) =>
+  // The filter choices and the zero-stock count come from the caller's own company's items only; the process-wide list
+  // put other companies' category, sub-category and brand names into the response.
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  const all = ownItems.filter((item) =>
     (category === 'all' || item.category === category)
     && (subcategory === 'all' || item.subcategory === subcategory)
     && (company === 'all' || item.company === company)
     && (!search || `${item.code} ${item.name}`.toLowerCase().includes(String(search).toLowerCase())),
   );
   const items = all.filter((item) => (quantityByItem.get(item.id) ?? 0) > 0).map((item) => ({ ...item, availableStock: quantityByItem.get(item.id) ?? 0 }));
-  return res.json({ items, matchingCount: items.length, excludedZeroStock: all.length - items.length, filters: { categories: [...new Set(listItems().map((item) => item.category).filter(Boolean))], subcategories: [...new Set(listItems().map((item) => item.subcategory).filter(Boolean))], companies: [...new Set(listItems().map((item) => item.company).filter(Boolean))] } });
+  return res.json({ items, matchingCount: items.length, excludedZeroStock: all.length - items.length, filters: { categories: [...new Set(ownItems.map((item) => item.category).filter(Boolean))], subcategories: [...new Set(ownItems.map((item) => item.subcategory).filter(Boolean))], companies: [...new Set(ownItems.map((item) => item.company).filter(Boolean))] } });
 });
 
 router.post('/stock-takes/import/preview', upload.single('file'), async (req: Request, res: Response) => {
