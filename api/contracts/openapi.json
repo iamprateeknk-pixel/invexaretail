@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.35.0",
+    "version": "2026.36.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -4784,6 +4784,150 @@
             }
           }
         }
+      },
+      "Lot": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "lotNo"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotNo": {
+            "type": "string"
+          },
+          "expiryDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "AVAILABLE",
+              "EXPIRED",
+              "BLOCKED",
+              "QUARANTINE"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Item": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "lots"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Unique within the company (and not across companies)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "subcategory": {
+            "type": "string"
+          },
+          "company": {
+            "type": "string",
+            "description": "The brand / manufacturer, not the tenant."
+          },
+          "unit": {
+            "type": "string"
+          },
+          "countMethod": {
+            "type": "string",
+            "enum": [
+              "LOT_SCAN",
+              "ITEM_WEIGHT"
+            ]
+          },
+          "pickMethod": {
+            "type": "string",
+            "enum": [
+              "LOT_SCAN",
+              "ITEM_QTY_FIFO"
+            ]
+          },
+          "allocationStrategy": {
+            "type": "string",
+            "enum": [
+              "FIFO",
+              "FEFO"
+            ]
+          },
+          "lotRequired": {
+            "type": "boolean"
+          },
+          "expiryRequired": {
+            "type": "boolean"
+          },
+          "decimalQuantity": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "ARCHIVED"
+            ]
+          },
+          "barcode": {
+            "type": "string"
+          },
+          "hsn": {
+            "type": "string"
+          },
+          "gstRate": {
+            "type": "number"
+          },
+          "mrp": {
+            "type": "number"
+          },
+          "leadTimeDays": {
+            "type": "integer"
+          },
+          "shelfLifeDays": {
+            "type": "integer"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Lot"
+            }
+          }
+        }
       }
     }
   },
@@ -8366,34 +8510,66 @@
     "/audit": {
       "get": {
         "operationId": "getAudit",
-        "summary": "GET /audit",
+        "summary": "The audit trail events made by users of the caller's own company (events carry no company; they belong to the company of the actor). Admin, Admin user, Branch manager and Auditor.",
         "tags": [
-          "audit"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "actorId": {
+                            "type": "string"
+                          },
+                          "actorRole": {
+                            "type": "string"
+                          },
+                          "action": {
+                            "type": "string"
+                          },
+                          "entityType": {
+                            "type": "string"
+                          },
+                          "entityId": {
+                            "type": "string"
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Audit access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9425,34 +9601,38 @@
     "/count-assignments": {
       "get": {
         "operationId": "getCountAssignments",
-        "summary": "GET /count-assignments",
+        "summary": "ASSIGNED count tasks at locations the caller may manage. Admin, Admin user and Branch manager.",
         "tags": [
-          "count-assignments"
+          "Counts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "assignments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CountAssignment"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only admins and branch managers can view count assignments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9569,34 +9749,53 @@
     "/count-assignments/mine": {
       "get": {
         "operationId": "getCountAssignmentsMine",
-        "summary": "GET /count-assignments/mine",
+        "summary": "The caller's own count tasks with item name and code. Store users and Warehouse pickers.",
         "tags": [
-          "count-assignments"
+          "Counts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "assignments": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/CountAssignment"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "itemName": {
+                                "type": "string"
+                              },
+                              "itemCode": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only assigned count workers have a count task list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9609,34 +9808,54 @@
     "/counts": {
       "get": {
         "operationId": "getCounts",
-        "summary": "GET /counts",
+        "summary": "Stock counts the caller may see. Store users and Warehouse pickers see only their own, blind (no book quantity or variance). Reviewers also get the variance and a tolerance recommendation for counts awaiting review.",
         "tags": [
-          "counts"
+          "Counts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "counts": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/components/schemas/BlindCount"
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/StockCount"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "toleranceRecommendation": {
+                                    "type": [
+                                      "object",
+                                      "null"
+                                    ],
+                                    "additionalProperties": true
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -9711,34 +9930,28 @@
     "/dashboard": {
       "get": {
         "operationId": "getDashboard",
-        "summary": "GET /dashboard",
+        "summary": "Headline KPIs for the locations the caller may see: pending counts, transfer requests, expired and near-expiry lots, count completion, transfer SLA and stock accuracy.",
         "tags": [
-          "dashboard"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "dashboard": {
+                      "$ref": "#/components/schemas/DashboardSummary"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -10255,34 +10468,62 @@
     "/expiry-dashboard": {
       "get": {
         "operationId": "getExpiryDashboard",
-        "summary": "GET /expiry-dashboard",
+        "summary": "Expired and expiring lots (this month, next month) with stock, for the caller's company: one location, or all of them for roles that may. filter narrows to expired, this-month or next-month.",
         "tags": [
-          "expiry-dashboard"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A location id, or all."
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "expired",
+                "this-month",
+                "next-month"
+              ],
+              "default": "all"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "dashboard": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "All-location data needs Admin, Branch manager or Auditor; or the location is not accessible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10295,40 +10536,9 @@
     "/export/{type}": {
       "get": {
         "operationId": "getExportType",
-        "summary": "GET /export/{type}",
+        "summary": "Export the caller's company stock, counts or transfers as CSV. Admin and Admin user.",
         "tags": [
-          "export"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Overview"
         ],
         "parameters": [
           {
@@ -10336,8 +10546,50 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "stock",
+                "counts",
+                "transfers"
+              ]
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A CSV attachment.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Export type must be stock, counts or transfers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only admins can export data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -10594,34 +10846,64 @@
     "/industries": {
       "get": {
         "operationId": "getIndustries",
-        "summary": "GET /industries",
+        "summary": "The industry packs a company can choose (workflow defaults, hidden pages and dashboard KPIs).",
         "tags": [
-          "industries"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "industries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "allocationStrategy": {
+                            "type": "string",
+                            "enum": [
+                              "FIFO",
+                              "FEFO"
+                            ]
+                          },
+                          "expiryBlocking": {
+                            "type": "boolean"
+                          },
+                          "hide": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "dashboardKpis": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -10684,34 +10966,57 @@
     "/items": {
       "get": {
         "operationId": "getItems",
-        "summary": "GET /items",
+        "summary": "The caller's company item master with lots. Operational users only see ACTIVE items; admins may ask for ARCHIVED or all.",
         "tags": [
-          "items"
+          "Items"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "INACTIVE",
+                "ARCHIVED",
+                "all"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Item"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid status filter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -10722,53 +11027,153 @@
       },
       "post": {
         "operationId": "postItems",
-        "summary": "POST /items",
+        "summary": "Create an item. The code, barcode and aliases must be unique within the caller's company; a conflict names the company's own item, never another company's. Admin and Admin user.",
         "tags": [
-          "items"
+          "Items"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "name"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "subcategory": {
+                    "type": "string"
+                  },
+                  "company": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "type": "string"
+                  },
+                  "countMethod": {
+                    "type": "string",
+                    "enum": [
+                      "LOT_SCAN",
+                      "ITEM_WEIGHT"
+                    ]
+                  },
+                  "pickMethod": {
+                    "type": "string",
+                    "enum": [
+                      "LOT_SCAN",
+                      "ITEM_QTY_FIFO"
+                    ]
+                  },
+                  "allocationStrategy": {
+                    "type": "string",
+                    "enum": [
+                      "FIFO",
+                      "FEFO"
+                    ]
+                  },
+                  "lotRequired": {
+                    "type": "boolean"
+                  },
+                  "expiryRequired": {
+                    "type": "boolean"
+                  },
+                  "decimalQuantity": {
+                    "type": "boolean"
+                  },
+                  "barcode": {
+                    "type": "string"
+                  },
+                  "hsn": {
+                    "type": "string"
+                  },
+                  "gstRate": {
+                    "type": "number"
+                  },
+                  "mrp": {
+                    "type": "number"
+                  },
+                  "leadTimeDays": {
+                    "type": "integer"
+                  },
+                  "shelfLifeDays": {
+                    "type": "integer"
+                  },
+                  "aliases": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "item": {
+                      "$ref": "#/components/schemas/Item"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Item code and name are required, or a field is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Only admins can create items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "The code, barcode or alias is already used by another of the company's items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/items/{itemId}/forecast": {
@@ -12139,34 +12544,29 @@
     "/mobile/home": {
       "get": {
         "operationId": "getMobileHome",
-        "summary": "GET /mobile/home",
+        "summary": "The role's mobile home layout (destinations and default tab).",
         "tags": [
-          "mobile"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "home": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -12179,34 +12579,150 @@
     "/mobile/work": {
       "get": {
         "operationId": "getMobileWork",
-        "summary": "GET /mobile/work",
+        "summary": "The one call a phone needs for its Work tab: the user's open count tasks (only items with counted-in stock, only the lots worth counting, no quantities, so a blind count stays blind) and the transfers waiting to be received at their branch.",
         "tags": [
-          "mobile"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "countTasks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "assignmentId": {
+                            "type": "string"
+                          },
+                          "locationId": {
+                            "type": "string"
+                          },
+                          "countDate": {
+                            "type": "string"
+                          },
+                          "dueDate": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "priority": {
+                            "type": "string"
+                          },
+                          "instructions": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "campaignId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "recount": {
+                            "type": "boolean"
+                          },
+                          "item": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "barcode": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "unit": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "countMethod": {
+                                "type": "string"
+                              },
+                              "decimalQuantity": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "lots": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "lotNo": {
+                                  "type": "string"
+                                },
+                                "expiryDate": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "receiveTasks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "transferId": {
+                            "type": "string"
+                          },
+                          "sourceLocationId": {
+                            "type": "string"
+                          },
+                          "destinationLocationId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "lineCount": {
+                            "type": "integer"
+                          },
+                          "cartonCount": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -12865,34 +13381,44 @@
     "/permissions/catalog": {
       "get": {
         "operationId": "getPermissionsCatalog",
-        "summary": "GET /permissions/catalog",
+        "summary": "The modules and actions a permission override can grant or deny. Main Admin only.",
         "tags": [
-          "permissions"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "modules": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only Main Admin can view the permission catalog.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -15409,34 +15935,32 @@
     "/runtime/config": {
       "get": {
         "operationId": "getRuntimeConfig",
-        "summary": "GET /runtime/config",
+        "summary": "The runtime configuration the control plane publishes for the caller's company and role (modules, fields, limits).",
         "tags": [
-          "runtime"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "runtime": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -15907,40 +16431,9 @@
     "/stock/{locationId}": {
       "get": {
         "operationId": "getStockLocationId",
-        "summary": "GET /stock/{locationId}",
+        "summary": "Stock at a location. Store users and Warehouse pickers get a blind view (physical quantity only, zero-stock lots hidden); managers also get book quantity, variance, reserved and available quantity.",
         "tags": [
-          "stock"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Counts"
         ],
         "parameters": [
           {
@@ -15950,6 +16443,83 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "locationId": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "itemId",
+                          "locationId"
+                        ],
+                        "properties": {
+                          "itemId": {
+                            "type": "string"
+                          },
+                          "lotId": {
+                            "type": "string"
+                          },
+                          "locationId": {
+                            "type": "string"
+                          },
+                          "physicalQuantity": {
+                            "type": "number"
+                          },
+                          "bookQuantity": {
+                            "type": "number"
+                          },
+                          "variance": {
+                            "type": "number"
+                          },
+                          "stockValue": {
+                            "type": "number"
+                          },
+                          "quarantineQuantity": {
+                            "type": "number"
+                          },
+                          "damagedQuantity": {
+                            "type": "number"
+                          },
+                          "reservedQuantity": {
+                            "type": "number"
+                          },
+                          "availableQuantity": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Location access denied for this role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -16234,34 +16804,53 @@
     "/sync-status": {
       "get": {
         "operationId": "getSyncStatus",
-        "summary": "GET /sync-status",
+        "summary": "How far each of the caller's company's locations is synced with the ERP for sales and purchases.",
         "tags": [
-          "sync-status"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "locations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "locationId": {
+                            "type": "string"
+                          },
+                          "locationName": {
+                            "type": "string"
+                          },
+                          "salesSyncedThrough": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "purchaseSyncedThrough": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -16831,34 +17420,59 @@
     "/workspace/profile": {
       "get": {
         "operationId": "getWorkspaceProfile",
-        "summary": "GET /workspace/profile",
+        "summary": "The caller's own company name, industry pack, hidden pages and active workflow. Never another company's.",
         "tags": [
-          "workspace"
+          "Overview"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "industry": {
+                      "type": "string"
+                    },
+                    "industryKey": {
+                      "type": "string"
+                    },
+                    "pack": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "workflow": {
+                      "type": "object",
+                      "properties": {
+                        "allocationStrategy": {
+                          "type": "string",
+                          "enum": [
+                            "FIFO",
+                            "FEFO"
+                          ]
+                        },
+                        "expiryBlocking": {
+                          "type": "boolean"
+                        },
+                        "fefoEnforced": {
+                          "type": "boolean"
+                        },
+                        "industryKey": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -23995,40 +24609,9 @@
     "/items/{itemId}": {
       "put": {
         "operationId": "putItemsItemId",
-        "summary": "PUT /items/{itemId}",
+        "summary": "Update an item (the version increments). A code, barcode or alias another of the company's items uses is refused. Admin and Admin user.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Items"
         ],
         "parameters": [
           {
@@ -24041,55 +24624,159 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "subcategory": {
+                    "type": "string"
+                  },
+                  "company": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "type": "string"
+                  },
+                  "countMethod": {
+                    "type": "string",
+                    "enum": [
+                      "LOT_SCAN",
+                      "ITEM_WEIGHT"
+                    ]
+                  },
+                  "pickMethod": {
+                    "type": "string",
+                    "enum": [
+                      "LOT_SCAN",
+                      "ITEM_QTY_FIFO"
+                    ]
+                  },
+                  "allocationStrategy": {
+                    "type": "string",
+                    "enum": [
+                      "FIFO",
+                      "FEFO"
+                    ]
+                  },
+                  "lotRequired": {
+                    "type": "boolean"
+                  },
+                  "expiryRequired": {
+                    "type": "boolean"
+                  },
+                  "decimalQuantity": {
+                    "type": "boolean"
+                  },
+                  "barcode": {
+                    "type": "string"
+                  },
+                  "hsn": {
+                    "type": "string"
+                  },
+                  "gstRate": {
+                    "type": "number"
+                  },
+                  "mrp": {
+                    "type": "number"
+                  },
+                  "leadTimeDays": {
+                    "type": "integer"
+                  },
+                  "shelfLifeDays": {
+                    "type": "integer"
+                  },
+                  "aliases": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             }
           }
-        }
-      }
-    },
-    "/items/{itemId}/lots/{lotId}": {
-      "put": {
-        "operationId": "putItemsItemIdLotsLotId",
-        "summary": "PUT /items/{itemId}/lots/{lotId}",
-        "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/Item"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "A required field is empty or a field is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Admin access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another of the company's items already uses this code, barcode or alias.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/items/{itemId}/lots/{lotId}": {
+      "put": {
+        "operationId": "putItemsItemIdLotsLotId",
+        "summary": "Rename a lot, change its expiry date or merge attributes. The lot code must be unique within the item. Admin and Admin user.",
+        "tags": [
+          "Items"
         ],
         "parameters": [
           {
@@ -24110,16 +24797,96 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "lotNo": {
+                    "type": "string"
+                  },
+                  "expiryDate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/Item"
+                    },
+                    "lot": {
+                      "$ref": "#/components/schemas/Lot"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Lot code required, or an invalid expiry date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item lot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This item already has the same lot code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/reorder-rules/{itemId}": {
