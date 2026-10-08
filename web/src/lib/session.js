@@ -7,6 +7,8 @@ export const AUTH_SESSION_PATHS = [
   '/api/v1/auth/send-otp',
   '/api/v1/auth/verify-otp',
   '/api/v1/auth/2fa/verify-login',
+  '/api/v1/auth/passkeys/login/options',
+  '/api/v1/auth/passkeys/login/verify',
   '/control/v1/auth/login',
 ];
 

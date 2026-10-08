@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Toaster } from '@/components/ui/sonner';
+import { passkeysSupported } from '../../lib/passkeys';
 
 export function LoginCard({
   loginEmail,
@@ -28,6 +29,8 @@ export function LoginCard({
   setTwoFactorCode,
   onVerifyTwoFactor,
   onCancelTwoFactor,
+  onPasskeySignIn,
+  passkeysAvailable = passkeysSupported(),
 }) {
   const [method, setMethod] = useState('password');
 
@@ -194,6 +197,14 @@ export function LoginCard({
               </form>
             </TabsContent>
           </Tabs>
+          {onPasskeySignIn && passkeysAvailable && (
+            <div className="mt-4 grid gap-2 border-t pt-4">
+              <Button type="button" variant="outline" className="w-full" disabled={authLoading} onClick={onPasskeySignIn}>
+                Sign in with a passkey
+              </Button>
+              <p className="text-center text-xs text-muted-foreground">Use your fingerprint, face or screen lock. Type your email above first to use a specific account.</p>
+            </div>
+          )}
           <p className="mt-4 text-center text-xs text-muted-foreground">
             Accounts are created by your administrator in Admin Portal.
           </p>
