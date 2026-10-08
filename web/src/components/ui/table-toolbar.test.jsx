@@ -82,3 +82,22 @@ test('Export CSV is a real button, disabled with no rows, and shows how many row
   rerender(React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state: DEFAULT_TABLE_STATE, onChange: () => {}, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), exportCsv: { ...exportCsv, rows: [] } }));
   assert.equal(screen.getByRole('button', { name: 'Export CSV' }).disabled, true);
 });
+
+test('team views are listed, apply like a personal view, and only an Admin sees Share and Remove', () => {
+  let latest;
+  const teamViews = (canShare) => ({ views: [{ id: 'v1', name: 'Overdue first', state: { ...DEFAULT_TABLE_STATE, q: 'late' } }], canShare, share: () => Promise.resolve(), remove: () => Promise.resolve() });
+  function TeamHarness({ team }) {
+    const [state, setState] = React.useState(DEFAULT_TABLE_STATE);
+    latest = state;
+    return React.createElement(TableToolbar, { tableId: 't', userId: 'u1', state, onChange: setState, defaults: DEFAULT_TABLE_STATE, storage: memoryStorage(), teamViews: team });
+  }
+  render(React.createElement(TeamHarness, { team: teamViews(false) }));
+  fireEvent.click(screen.getByRole('button', { name: /Overdue first/ }));
+  assert.equal(latest.q, 'late');
+  assert.equal(screen.queryByLabelText('Share with team'), null);
+  assert.equal(screen.queryByRole('button', { name: 'Remove team view Overdue first' }), null);
+  cleanup();
+  render(React.createElement(TeamHarness, { team: teamViews(true) }));
+  assert.ok(screen.getByLabelText('Share with team'));
+  assert.ok(screen.getByRole('button', { name: 'Remove team view Overdue first' }));
+});

@@ -1,13 +1,17 @@
 import { useId, useState } from 'react';
 import { DENSITIES, deleteView, hiddenColumnIds, loadSavedViews, saveView, toggleColumn } from '../../lib/table-state.js';
 import { downloadCsv, toCsv } from '../../lib/csv.js';
+import { useTeamViews } from '../../hooks/useTeamViews.js';
 
 // One toolbar for every operational list: search, density and per-user saved views.
 // Controlled: the page owns `state`; saved views live in storage (presentation only).
-export function TableToolbar({ tableId, userId, state, onChange, defaults, searchLabel = 'Search', showDensity = true, columns, exportCsv, storage = globalThis.localStorage }) {
+export function TableToolbar({ tableId, userId, state, onChange, defaults, searchLabel = 'Search', showDensity = true, columns, exportCsv, storage = globalThis.localStorage, teamViews: injectedTeamViews }) {
   const searchId = useId();
   const [views, setViews] = useState(() => loadSavedViews(storage, userId, tableId, defaults));
   const [name, setName] = useState('');
+  const [shareWithTeam, setShareWithTeam] = useState(false);
+  const fetchedTeamViews = useTeamViews(tableId, defaults);
+  const team = injectedTeamViews === undefined ? fetchedTeamViews : injectedTeamViews;
 
   const apply = (patch) => onChange({ ...state, ...patch, page: 1 });
   const hidden = hiddenColumnIds(state);
@@ -55,8 +59,24 @@ export function TableToolbar({ tableId, userId, state, onChange, defaults, searc
           <label htmlFor={`${searchId}-name`} className="text-xs text-muted-foreground">Save view as</label>
           <input id={`${searchId}-name`} value={name} onChange={(event) => setName(event.target.value)} className="h-8 w-36 rounded-md border bg-background px-2 text-sm" />
         </div>
+        {team?.canShare && (
+          <label className="flex h-8 items-center gap-1 text-xs">
+            <input type="checkbox" checked={shareWithTeam} onChange={(event) => setShareWithTeam(event.target.checked)} />
+            Share with team
+          </label>
+        )}
         <button type="button" onClick={save} disabled={!name.trim()} className="h-8 rounded-md border px-2 text-xs disabled:opacity-50">Save</button>
       </div>
+      {team?.views?.length > 0 && (
+        <ul aria-label="Team views" className="flex flex-wrap gap-1">
+          {team.views.map((view) => (
+            <li key={view.id} className="flex items-center rounded-md border border-primary/40 text-xs">
+              <button type="button" onClick={() => onChange({ ...view.state, page: 1 })} className="px-2 py-1">{view.name} <span className="text-muted-foreground">(team)</span></button>
+              {team.canShare && <button type="button" aria-label={`Remove team view ${view.name}`} onClick={() => team.remove(view.id)} className="px-1.5 py-1 text-muted-foreground">×</button>}
+            </li>
+          ))}
+        </ul>
+      )}
       {views.length > 0 && (
         <ul aria-label="Saved views" className="flex flex-wrap gap-1">
           {views.map((view) => (

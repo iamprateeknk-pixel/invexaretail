@@ -365,3 +365,22 @@ test('Workspace.jsx defers section pages to workspace page modules', () => {
   assert.match(alerts, /Notification inbox/);
   assert.match(integrations, /Create outbound webhook|WebhookIntegrations/);
 });
+
+test('every role gets at most 8 primary destinations and nothing it may open is lost', async () => {
+  const { NAVIGATION, MAX_PRIMARY_NAV, PRIMARY_NAV_BY_ROLE, splitNavigation, visibleNavigationGroups } = await import('./workspace.js');
+  const ids = (list) => list.flatMap((group) => group.items.map((item) => item.id));
+  for (const role of ['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER', 'AUDITOR']) {
+    const groups = visibleNavigationGroups(NAVIGATION, { role });
+    const { primary, more } = splitNavigation(groups, role);
+    assert.ok(ids(primary).length >= 1 && ids(primary).length <= MAX_PRIMARY_NAV, `${role} primary count ${ids(primary).length}`);
+    assert.deepEqual([...ids(primary), ...ids(more)].sort(), ids(groups).sort(), `${role}: primary + more is exactly what the role may open`);
+    assert.equal(new Set([...ids(primary), ...ids(more)]).size, ids(groups).length, `${role}: no item appears twice`);
+  }
+  // A configured primary id the role cannot open (for example hidden by entitlements) is simply skipped.
+  const hidden = visibleNavigationGroups(NAVIGATION, { role: 'STORE_USER', hiddenModules: new Set(['counts']) });
+  assert.ok(!ids(splitNavigation(hidden, 'STORE_USER').primary).includes('counts'));
+  assert.ok(Object.values(PRIMARY_NAV_BY_ROLE).every((list) => list.length <= MAX_PRIMARY_NAV));
+  // An unknown role keeps the first MAX_PRIMARY_NAV items rather than the whole wall.
+  const unknown = splitNavigation(visibleNavigationGroups(NAVIGATION, { role: 'ADMIN' }), 'SOMETHING_NEW');
+  assert.equal(ids(unknown.primary).length, MAX_PRIMARY_NAV);
+});

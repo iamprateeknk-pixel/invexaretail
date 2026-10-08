@@ -63,7 +63,7 @@ export function OpsMetricCard({ label, value, helper, icon: Icon = CircleDot, to
         </div>
       </div>
       {(helper || trend) && (
-        <div className="mt-3 flex items-center justify-between gap-2 text-xs opacity-70">
+        <div className="mt-3 flex items-center justify-between gap-2 text-xs">
           <span className="truncate">{helper}</span>
           {trend && <span className="shrink-0 font-semibold">{trend}</span>}
         </div>
@@ -145,7 +145,7 @@ export function OpsWorkflowStepper({ steps = [] }) {
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{step.label}</p>
-              {step.caption && <p className="truncate text-[11px] opacity-70">{step.caption}</p>}
+              {step.caption && <p className="truncate text-[11px]">{step.caption}</p>}
             </div>
           </div>
         </div>

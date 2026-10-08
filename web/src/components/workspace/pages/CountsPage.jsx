@@ -119,7 +119,7 @@ export function CountsPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-2 shadow-sm">
         <Tabs value={countStatusFilter} onValueChange={setCountStatusFilter}>
-          <TabsList><TabsTrigger value="all">All</TabsTrigger><TabsTrigger value="pending">Pending</TabsTrigger><TabsTrigger value="overdue">Overdue</TabsTrigger><TabsTrigger value="approved">Approved</TabsTrigger></TabsList>
+          <TabsList><TabsTrigger aria-controls={undefined} value="all">All</TabsTrigger><TabsTrigger aria-controls={undefined} value="pending">Pending</TabsTrigger><TabsTrigger aria-controls={undefined} value="overdue">Overdue</TabsTrigger><TabsTrigger aria-controls={undefined} value="approved">Approved</TabsTrigger></TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
           {selectedTaskIds.length > 0 && <span className="px-2 text-sm font-medium" aria-live="polite">{selectedTaskIds.length} selected</span>}

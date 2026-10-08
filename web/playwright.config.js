@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   use: {
+    channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
     baseURL: 'http://127.0.0.1:4173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
