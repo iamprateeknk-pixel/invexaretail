@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.33.0",
+    "version": "2026.34.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -4725,6 +4725,36 @@
             }
           }
         }
+      },
+      "CountAccuracySummary": {
+        "type": "object",
+        "properties": {
+          "counts": {
+            "type": "integer"
+          },
+          "withinTolerance": {
+            "type": "integer"
+          },
+          "accuracyPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "costedCounts": {
+            "type": "integer"
+          },
+          "varianceValue": {
+            "type": "number"
+          },
+          "valueAccuracyPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "100 minus the variance value as a share of counted book value; null when nothing costed was counted."
+          }
+        }
       }
     }
   },
@@ -8661,34 +8691,36 @@
     "/command-center": {
       "get": {
         "operationId": "getCommandCenter",
-        "summary": "GET /command-center",
+        "summary": "The operations command center: live exceptions, overdue counts and transfers, sync freshness and database-backed extras for the locations the caller may see. Admin, Branch manager and Auditor.",
         "tags": [
-          "command-center"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "commandCenter": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14304,34 +14336,131 @@
     "/reports/audit-export": {
       "get": {
         "operationId": "getReportsAuditExport",
-        "summary": "GET /reports/audit-export",
+        "summary": "The audit trail of the caller's company, newest first (max 50,000 rows), filtered by actor, action, entity and period. CSV by default; format=json returns the events. Admin, Admin user and Auditor.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "End of the period (inclusive day)."
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IANA zone for the period; defaults to the company timezone."
+          },
+          {
+            "name": "actorId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "default": "csv"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "A CSV attachment, or JSON when format=json.",
             "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid period or timezone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "The audit export requires Admin or Auditor access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14344,34 +14473,103 @@
     "/reports/count-accuracy": {
       "get": {
         "operationId": "getReportsCountAccuracy",
-        "summary": "GET /reports/count-accuracy",
+        "summary": "Count accuracy in a period grouped by branch, user or category.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "End of the period (inclusive day)."
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IANA zone for the period; defaults to the company timezone."
+          },
+          {
+            "name": "groupBy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "branch",
+                "user",
+                "category"
+              ],
+              "default": "branch"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "groupBy": {
+                      "type": "string",
+                      "enum": [
+                        "branch",
+                        "user",
+                        "category"
+                      ]
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid period or timezone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14384,34 +14582,90 @@
     "/reports/count-accuracy-breakdown": {
       "get": {
         "operationId": "getReportsCountAccuracyBreakdown",
-        "summary": "GET /reports/count-accuracy-breakdown",
+        "summary": "Count accuracy over the last N days against the default tolerance, with a per-ABC-class breakdown (a blended 95% can hide a poor A class). Admin, Branch manager and Auditor.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 90
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/CountAccuracySummary"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "tolerance": {
+                          "type": "object",
+                          "properties": {
+                            "minUnits": {
+                              "type": "number"
+                            },
+                            "percent": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "byClass": {
+                          "type": "object",
+                          "properties": {
+                            "A": {
+                              "$ref": "#/components/schemas/CountAccuracySummary"
+                            },
+                            "B": {
+                              "$ref": "#/components/schemas/CountAccuracySummary"
+                            },
+                            "C": {
+                              "$ref": "#/components/schemas/CountAccuracySummary"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "501": {
+            "description": "This report requires a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14424,34 +14678,84 @@
     "/reports/count-variance-reasons": {
       "get": {
         "operationId": "getReportsCountVarianceReasons",
-        "summary": "GET /reports/count-variance-reasons",
+        "summary": "Approved count variances over the last N days grouped by reason code, worst absolute impact first; uncoded ones are UNCODED.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 90
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "days": {
+                      "type": "integer"
+                    },
+                    "reasons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "reasonCode",
+                          "counts",
+                          "absoluteUnits",
+                          "netUnits"
+                        ],
+                        "properties": {
+                          "reasonCode": {
+                            "type": "string"
+                          },
+                          "counts": {
+                            "type": "integer"
+                          },
+                          "absoluteUnits": {
+                            "type": "number"
+                          },
+                          "netUnits": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "501": {
+            "description": "This report requires a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14464,34 +14768,72 @@
     "/reports/in-transit": {
       "get": {
         "operationId": "getReportsInTransit",
-        "summary": "GET /reports/in-transit",
+        "summary": "Stock currently in transit across the caller's company, by item with the locations it sits at. Admin, Branch manager and Auditor.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "totalInTransit": {
+                      "type": "number"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "itemId": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "totalInTransit": {
+                            "type": "number"
+                          },
+                          "locations": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "locationId": {
+                                  "type": "string"
+                                },
+                                "locationName": {
+                                  "type": "string"
+                                },
+                                "inTransit": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14504,34 +14846,197 @@
     "/reports/inventory-health": {
       "get": {
         "operationId": "getReportsInventoryHealth",
-        "summary": "GET /reports/inventory-health",
+        "summary": "Inventory valuation and health: value on hand, turns, days of inventory, GMROI, ageing buckets, dead and slow stock and service level, for the company or one location. Stock with no recorded cost is reported as unvalued, never priced. Admin, Branch manager and Auditor.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 90
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "valuation": {
+                      "type": "object",
+                      "properties": {
+                        "totalValue": {
+                          "type": "number"
+                        },
+                        "valuedUnits": {
+                          "type": "number"
+                        },
+                        "unvaluedUnits": {
+                          "type": "number"
+                        },
+                        "byCategory": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "category": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "number"
+                              },
+                              "units": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "turns": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "daysOfInventory": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "gmroi": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "unitsSoldUnpriced": {
+                      "type": "number"
+                    },
+                    "ageing": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "bucket": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "number"
+                          },
+                          "units": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "deadStock": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "value": {
+                          "type": "number"
+                        },
+                        "units": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "slowStock": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "value": {
+                          "type": "number"
+                        },
+                        "units": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "service": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "locationId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location not found (also for another company's location).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This report requires a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14544,34 +15049,78 @@
     "/reports/transfer-cycle": {
       "get": {
         "operationId": "getReportsTransferCycle",
-        "summary": "GET /reports/transfer-cycle",
+        "summary": "Transfer cycle times (request to receipt) for the caller's company in a period, from the audit trail. Admin, Branch manager and Auditor.",
         "tags": [
-          "reports"
+          "Reports"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "End of the period (inclusive day)."
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IANA zone for the period; defaults to the company timezone."
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "report": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid period or timezone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role not allowed for this report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14584,40 +15133,9 @@
     "/reports/variance/{locationId}": {
       "get": {
         "operationId": "getReportsVarianceLocationId",
-        "summary": "GET /reports/variance/{locationId}",
+        "summary": "Latest count per lot at a location: book vs physical, variance and MATCH/OVERAGE/SHORTAGE. Admin, Branch manager and Auditor with access to the location.",
         "tags": [
-          "reports"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Reports"
         ],
         "parameters": [
           {
@@ -14627,6 +15145,101 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "report": {
+                      "type": "object",
+                      "properties": {
+                        "locationId": {
+                          "type": "string"
+                        },
+                        "totalItems": {
+                          "type": "integer"
+                        },
+                        "matchingItems": {
+                          "type": "integer"
+                        },
+                        "overageItems": {
+                          "type": "integer"
+                        },
+                        "shortageItems": {
+                          "type": "integer"
+                        },
+                        "totalBookQuantity": {
+                          "type": "number"
+                        },
+                        "totalPhysicalQuantity": {
+                          "type": "number"
+                        },
+                        "totalVariance": {
+                          "type": "number"
+                        },
+                        "overallVariancePercent": {
+                          "type": "number"
+                        },
+                        "details": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "itemId": {
+                                "type": "string"
+                              },
+                              "itemName": {
+                                "type": "string"
+                              },
+                              "bookQuantity": {
+                                "type": "number"
+                              },
+                              "physicalQuantity": {
+                                "type": "number"
+                              },
+                              "variance": {
+                                "type": "number"
+                              },
+                              "variancePercent": {
+                                "type": "number"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "MATCH",
+                                  "OVERAGE",
+                                  "SHORTAGE"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -14634,40 +15247,9 @@
     "/reports/{locationId}": {
       "get": {
         "operationId": "getReportsLocationId",
-        "summary": "GET /reports/{locationId}",
+        "summary": "Summary report for a location (counts and transfers). Admin, Branch manager and Auditor with access to the location.",
         "tags": [
-          "reports"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Reports"
         ],
         "parameters": [
           {
@@ -14677,6 +15259,39 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "report": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }

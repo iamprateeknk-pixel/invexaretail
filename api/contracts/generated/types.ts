@@ -959,7 +959,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /command-center */
+        /** The operations command center: live exceptions, overdue counts and transfers, sync freshness and database-backed extras for the locations the caller may see. Admin, Branch manager and Auditor. */
         get: operations["getCommandCenter"];
         put?: never;
         post?: never;
@@ -1935,7 +1935,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/audit-export */
+        /** The audit trail of the caller's company, newest first (max 50,000 rows), filtered by actor, action, entity and period. CSV by default; format=json returns the events. Admin, Admin user and Auditor. */
         get: operations["getReportsAuditExport"];
         put?: never;
         post?: never;
@@ -1952,7 +1952,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/count-accuracy */
+        /** Count accuracy in a period grouped by branch, user or category. */
         get: operations["getReportsCountAccuracy"];
         put?: never;
         post?: never;
@@ -1969,7 +1969,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/count-accuracy-breakdown */
+        /** Count accuracy over the last N days against the default tolerance, with a per-ABC-class breakdown (a blended 95% can hide a poor A class). Admin, Branch manager and Auditor. */
         get: operations["getReportsCountAccuracyBreakdown"];
         put?: never;
         post?: never;
@@ -1986,7 +1986,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/count-variance-reasons */
+        /** Approved count variances over the last N days grouped by reason code, worst absolute impact first; uncoded ones are UNCODED. */
         get: operations["getReportsCountVarianceReasons"];
         put?: never;
         post?: never;
@@ -2003,7 +2003,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/in-transit */
+        /** Stock currently in transit across the caller's company, by item with the locations it sits at. Admin, Branch manager and Auditor. */
         get: operations["getReportsInTransit"];
         put?: never;
         post?: never;
@@ -2020,7 +2020,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/inventory-health */
+        /** Inventory valuation and health: value on hand, turns, days of inventory, GMROI, ageing buckets, dead and slow stock and service level, for the company or one location. Stock with no recorded cost is reported as unvalued, never priced. Admin, Branch manager and Auditor. */
         get: operations["getReportsInventoryHealth"];
         put?: never;
         post?: never;
@@ -2037,7 +2037,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/transfer-cycle */
+        /** Transfer cycle times (request to receipt) for the caller's company in a period, from the audit trail. Admin, Branch manager and Auditor. */
         get: operations["getReportsTransferCycle"];
         put?: never;
         post?: never;
@@ -2054,7 +2054,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/variance/{locationId} */
+        /** Latest count per lot at a location: book vs physical, variance and MATCH/OVERAGE/SHORTAGE. Admin, Branch manager and Auditor with access to the location. */
         get: operations["getReportsVarianceLocationId"];
         put?: never;
         post?: never;
@@ -2071,7 +2071,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reports/{locationId} */
+        /** Summary report for a location (counts and transfers). Admin, Branch manager and Auditor with access to the location. */
         get: operations["getReportsLocationId"];
         put?: never;
         post?: never;
@@ -5136,6 +5136,15 @@ export interface components {
                 name?: string;
             };
         };
+        CountAccuracySummary: {
+            counts?: number;
+            withinTolerance?: number;
+            accuracyPercent?: number | null;
+            costedCounts?: number;
+            varianceValue?: number;
+            /** @description 100 minus the variance value as a share of counted book value; null when nothing costed was counted. */
+            valueAccuracyPercent?: number | null;
+        };
     };
     responses: never;
     parameters: {
@@ -8069,44 +8078,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        commandCenter?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -12141,201 +12133,209 @@ export interface operations {
     };
     getReportsAuditExport: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone. */
+                from?: string;
+                /** @description End of the period (inclusive day). */
+                to?: string;
+                /** @description IANA zone for the period; defaults to the company timezone. */
+                timezone?: string;
+                actorId?: string;
+                action?: string;
+                entityType?: string;
+                entityId?: string;
+                format?: "csv" | "json";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description A CSV attachment, or JSON when format=json. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
+                    "text/csv": string;
                     "application/json": {
-                        [key: string]: unknown;
+                        count?: number;
+                        events?: {
+                            [key: string]: unknown;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid period or timezone. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description The audit export requires Admin or Auditor access. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
     getReportsCountAccuracy: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone. */
+                from?: string;
+                /** @description End of the period (inclusive day). */
+                to?: string;
+                /** @description IANA zone for the period; defaults to the company timezone. */
+                timezone?: string;
+                groupBy?: "branch" | "user" | "category";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        /** @enum {string} */
+                        groupBy?: "branch" | "user" | "category";
+                        timezone?: string;
+                        rows?: {
+                            [key: string]: unknown;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid period or timezone. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
     getReportsCountAccuracyBreakdown: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
+                    "application/json": components["schemas"]["CountAccuracySummary"] & {
+                        days?: number;
+                        tolerance?: {
+                            minUnits?: number;
+                            percent?: number;
+                        };
+                        byClass?: {
+                            A?: components["schemas"]["CountAccuracySummary"];
+                            B?: components["schemas"]["CountAccuracySummary"];
+                            C?: components["schemas"]["CountAccuracySummary"];
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description This report requires a connected database. */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
     getReportsCountVarianceReasons: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        days?: number;
+                        reasons?: {
+                            reasonCode: string;
+                            counts: number;
+                            absoluteUnits: number;
+                            netUnits: number;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description This report requires a connected database. */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -12348,144 +12348,176 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        totalInTransit?: number;
+                        items?: {
+                            itemId?: string;
+                            code?: string;
+                            name?: string;
+                            totalInTransit?: number;
+                            locations?: {
+                                locationId?: string;
+                                locationName?: string;
+                                inTransit?: number;
+                            }[];
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
     getReportsInventoryHealth: {
         parameters: {
-            query?: never;
+            query?: {
+                locationId?: string;
+                days?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        windowDays?: number;
+                        valuation?: {
+                            totalValue?: number;
+                            valuedUnits?: number;
+                            unvaluedUnits?: number;
+                            byCategory?: {
+                                category?: string;
+                                value?: number;
+                                units?: number;
+                            }[];
+                        };
+                        turns?: number | null;
+                        daysOfInventory?: number | null;
+                        gmroi?: number | null;
+                        unitsSoldUnpriced?: number;
+                        ageing?: {
+                            bucket?: string;
+                            value?: number;
+                            units?: number;
+                        }[];
+                        items?: {
+                            [key: string]: unknown;
+                        }[];
+                        deadStock?: {
+                            items?: number;
+                            value?: number;
+                            units?: number;
+                        };
+                        slowStock?: {
+                            items?: number;
+                            value?: number;
+                            units?: number;
+                        };
+                        service?: {
+                            [key: string]: unknown;
+                        };
+                        locationId?: string | null;
+                        truncated?: boolean;
+                        note?: string | null;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found (also for another company's location). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description This report requires a connected database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
     getReportsTransferCycle: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Start of the period, a calendar day (YYYY-MM-DD) read in the report timezone. */
+                from?: string;
+                /** @description End of the period (inclusive day). */
+                to?: string;
+                /** @description IANA zone for the period; defaults to the company timezone. */
+                timezone?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        timezone?: string;
+                        report?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid period or timezone. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed for this report. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -12500,44 +12532,45 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        report?: {
+                            locationId?: string;
+                            totalItems?: number;
+                            matchingItems?: number;
+                            overageItems?: number;
+                            shortageItems?: number;
+                            totalBookQuantity?: number;
+                            totalPhysicalQuantity?: number;
+                            totalVariance?: number;
+                            overallVariancePercent?: number;
+                            details?: {
+                                itemId?: string;
+                                itemName?: string;
+                                bookQuantity?: number;
+                                physicalQuantity?: number;
+                                variance?: number;
+                                variancePercent?: number;
+                                /** @enum {string} */
+                                status?: "MATCH" | "OVERAGE" | "SHORTAGE";
+                            }[];
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -12552,44 +12585,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        report?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
