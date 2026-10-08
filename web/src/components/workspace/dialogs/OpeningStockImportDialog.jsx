@@ -1,5 +1,5 @@
 import { FileDropZone } from '../../imports/FileDropZone';
-import { downloadCsvTemplate, OPENING_STOCK_TEMPLATE } from '../../../lib/import-templates';
+import { downloadOpeningStockTemplate } from '../../../lib/import-templates';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Download } from 'lucide-react';
 export function OpeningStockImportDialog() {
   const {
     downloadImportErrors, importFile, importItems, importPreview, modalOpen, setImportFile, setImportPreview,
-    setModalOpen, submitLoading,
+    setModalOpen, submitLoading, authToken,
   } = useWorkspace();
   return (
     <Dialog open={modalOpen === 'import'} onOpenChange={(open) => { if (!open) { setModalOpen(null); setImportFile(null); setImportPreview(null); } }}>
@@ -25,7 +25,7 @@ export function OpeningStockImportDialog() {
               <Label>Select Excel or CSV file</Label>
               <FileDropZone file={importFile} onFile={(file) => { setImportFile(file); setImportPreview(null); }} />
               <div className="flex justify-end">
-                <Button type="button" variant="ghost" size="sm" onClick={() => downloadCsvTemplate('invexa-opening-stock-template.csv', OPENING_STOCK_TEMPLATE)}>
+                <Button type="button" variant="ghost" size="sm" onClick={() => downloadOpeningStockTemplate(authToken)}>
                   <Download className="size-4" />Download template
                 </Button>
               </div>

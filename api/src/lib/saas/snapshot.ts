@@ -17,6 +17,7 @@ import type {
   SyncMutation,
   WorkflowDefinition,
 } from './control-plane.js';
+import type { ImportProfile } from '../import-profile.js';
 
 export const CONTROL_PLANE_SNAPSHOT_VERSION = 1;
 export const CONTROL_PLANE_STATE_ID = 'saas-v1';
@@ -55,6 +56,7 @@ export type ControlPlaneSnapshot = {
   connectors: Array<[string, { id: string; companyId: string; type: string; status: 'healthy' | 'degraded' | 'down' }]>;
   billing: Array<[string, { subscription: 'trial' | 'active' | 'past_due'; cycle: string; amount: number; stripeCustomerId?: string }]>;
   invoices: BillingInvoice[];
+  importProfiles?: Array<[string, ImportProfile]>;
   outbox: ControlPlane['outbox'];
 };
 
@@ -88,6 +90,7 @@ export function serializeControlPlane(plane: ControlPlane): ControlPlaneSnapshot
     connectors: [...plane.connectors.entries()].map(([key, value]) => [key, clone(value)]),
     billing: [...plane.billing.entries()].map(([key, value]) => [key, clone(value)]),
     invoices: [...plane.invoices.values()].map((invoice) => clone(invoice)),
+    importProfiles: [...plane.importProfiles.entries()].map(([key, value]) => [key, clone(value)]),
     outbox: clone(plane.outbox.slice(-200)),
   };
 }
@@ -125,6 +128,7 @@ export function applyControlPlaneSnapshot(plane: ControlPlane, snapshot: Control
   plane.connectors = new Map((snapshot.connectors ?? []).map(([key, value]) => [key, clone(value)]));
   plane.billing = new Map((snapshot.billing ?? []).map(([key, value]) => [key, clone(value)]));
   plane.invoices = new Map((snapshot.invoices ?? []).map((invoice) => [invoice.id, clone(invoice)]));
+  plane.importProfiles = new Map((snapshot.importProfiles ?? []).map(([key, value]) => [key, clone(value)]));
   plane.outbox = clone(snapshot.outbox ?? []);
 }
 

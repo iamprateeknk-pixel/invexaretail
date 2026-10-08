@@ -6,6 +6,7 @@ import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeChecko
 import * as enterprise from '../lib/enterprise-repository.js';
 import { persistEnterpriseUser } from '../lib/persistence.js';
 import { validateEmail } from '../lib/otp-auth.js';
+import { defaultImportProfile, ImportProfileError, importTemplateCsv, normalizeImportProfile } from '../lib/import-profile.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 
 function sendError(res: Response, error: unknown): void {
@@ -484,6 +485,51 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 });
 
 studioRouter.use(requireLockedCompany);
+
+// Import columns: order, names, required flags, extra header aliases and custom columns.
+studioRouter.get('/import-profile', (req: Request, res: Response) => {
+  const companyId = scopedCompany(req);
+  const saved = controlPlane.importProfiles.get(companyId);
+  res.json({
+    success: true,
+    profile: saved ?? defaultImportProfile(),
+    isDefault: !saved,
+    templateCsv: importTemplateCsv(saved),
+  });
+});
+
+studioRouter.put('/import-profile', (req: Request, res: Response) => {
+  try {
+    const companyId = scopedCompany(req);
+    const profile = normalizeImportProfile(req.body);
+    controlPlane.importProfiles.set(companyId, profile);
+    controlPlane.auditEvent({
+      actorUserId: requireScope(req).actorId,
+      actorType: 'platform',
+      tenantId: controlPlane.tenantId,
+      companyId,
+      sessionId: requireScope(req).companySessionId,
+      action: 'IMPORT_PROFILE_UPDATED',
+      entityType: 'import_profile',
+      entityId: profile.importType,
+      before: null,
+      after: { columns: profile.fields.filter((field) => field.enabled).map((field) => field.label) },
+    });
+    res.json({ success: true, profile, isDefault: false, templateCsv: importTemplateCsv(profile) });
+  } catch (error) {
+    if (error instanceof ImportProfileError) {
+      res.status(400).json({ success: false, error: error.message, code: 'INVALID_IMPORT_PROFILE' });
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
+studioRouter.delete('/import-profile', (req: Request, res: Response) => {
+  const companyId = scopedCompany(req);
+  controlPlane.importProfiles.delete(companyId);
+  res.json({ success: true, profile: defaultImportProfile(), isDefault: true, templateCsv: importTemplateCsv(undefined) });
+});
 
 studioRouter.get('/draft', (req: Request, res: Response) => {
   res.json({ success: true, draft: controlPlane.ensureDraft(requireScope(req)), diff: controlPlane.diff(scopedCompany(req)) });

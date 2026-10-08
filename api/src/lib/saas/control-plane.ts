@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword, verifyPassword } from '../otp-auth.js';
 import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
+import type { ImportProfile } from '../import-profile.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
@@ -443,6 +444,7 @@ export class ControlPlane {
   apiKeys = new Map<string, { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' }>();
   webhooks = new Map<string, ControlPlaneWebhook>();
   connectors = new Map<string, { id: string; companyId: string; type: string; status: 'healthy' | 'degraded' | 'down' }>();
+  importProfiles = new Map<string, ImportProfile>();
   billing = new Map<string, { subscription: 'trial' | 'active' | 'past_due'; cycle: string; amount: number; stripeCustomerId?: string }>();
   invoices = new Map<string, BillingInvoice>();
   outbox: Array<{ id: string; event: string; payload: unknown; createdAt: string }> = [];

@@ -30,6 +30,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
 import { clearControlSession, exchangeSessionHandoff, handoffCodeFromHash, controlRequest, readControlSession, writeControlSession } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
+import { ImportColumnsEditor } from './ImportColumnsEditor';
 
 function stripeSessionFromLocation() {
   const hash = String(globalThis.location?.hash ?? '');
@@ -611,6 +612,7 @@ export function ControlPlaneApp() {
           <Tabs defaultValue="columns">
             <TabsList>
               <TabsTrigger value="columns">Stock columns</TabsTrigger>
+              <TabsTrigger value="import-columns">Import columns</TabsTrigger>
               <TabsTrigger value="fields">Fields</TabsTrigger>
               <TabsTrigger value="rules">Rules</TabsTrigger>
               <TabsTrigger value="reports">Reports</TabsTrigger>
@@ -618,6 +620,9 @@ export function ControlPlaneApp() {
               <TabsTrigger value="mobile-policy">Mobile policy</TabsTrigger>
               <TabsTrigger value="preview">Preview / publish</TabsTrigger>
             </TabsList>
+            <TabsContent value="import-columns" className="grid gap-4">
+              <ImportColumnsEditor controlToken={controlToken} />
+            </TabsContent>
             <TabsContent value="columns" className="grid gap-4">
               <Card>
                 <CardHeader><CardTitle className="text-base">Add custom stock column</CardTitle></CardHeader>
