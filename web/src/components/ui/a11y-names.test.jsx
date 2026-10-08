@@ -41,3 +41,16 @@ test('a Select trigger takes the label next to it, never one from a wider contai
   assert.ok(screen.getByRole('combobox', { name: 'Supplier' }), 'named by the directly adjacent label');
   assert.ok(screen.getByRole('combobox', { name: 'Location' }), 'with no adjacent label it falls back to its placeholder, not to a distant label');
 });
+
+test('a Select trigger whose label mounts after it still gets named (observer, not a one-off check)', async () => {
+  const { container } = render(React.createElement('div', { 'data-testid': 'group' },
+    React.createElement(Select, null, React.createElement(SelectTrigger, null, React.createElement(SelectValue, null)), React.createElement(SelectContent, null, React.createElement(SelectItem, { value: 'a' }, 'A')))));
+  const group = container.querySelector('[data-testid="group"]');
+  // Nothing to name it from yet: no label, no placeholder, no value.
+  assert.equal(screen.getByRole('combobox').getAttribute('aria-label'), null);
+  const label = document.createElement('label');
+  label.textContent = 'Late label';
+  group.insertBefore(label, group.firstChild);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(screen.getByRole('combobox', { name: 'Late label' }));
+});
