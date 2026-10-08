@@ -39,3 +39,16 @@ test('grocery pack matches Invexa item/lot model: FEFO, expiry, seed categories'
   assert.equal(workflow.allocationStrategy, 'FEFO');
   assert.equal(workflow.expiryBlocking, true);
 });
+
+test('the active workflow is per company: changing one company leaves every other company untouched', async () => {
+  const { getActiveWorkflow, setActiveWorkflow } = await import('./industry-packs.js');
+  const defaultBefore = getActiveWorkflow();
+  const neutralBefore = getActiveWorkflow('company-never-configured');
+  setActiveWorkflow({ allocationStrategy: 'FIFO', expiryBlocking: false, fefoEnforced: false, industryKey: 'grocery' }, 'company-b');
+  assert.equal(getActiveWorkflow('company-b').allocationStrategy, 'FIFO');
+  assert.deepEqual(getActiveWorkflow(), defaultBefore, "the default company's workflow did not move");
+  assert.deepEqual(getActiveWorkflow('company-never-configured'), neutralBefore, 'an unconfigured company is not given company B\'s workflow');
+  // Restore: the default company's workflow is also what an absent argument means.
+  setActiveWorkflow(defaultBefore);
+  assert.deepEqual(getActiveWorkflow(), defaultBefore);
+});
