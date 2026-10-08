@@ -786,7 +786,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** DELETE /saved-reports/{id} */
+        /** Delete a saved report. Its owner or an Admin only. */
         delete: operations["deleteSavedReportsId"];
         options?: never;
         head?: never;
@@ -836,10 +836,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** PUT /users/{userId} */
+        /** Change a user's name, role, locations or password. A password change ends all of that person's sessions. You cannot move your own role away from Admin. Another company's user resolves 404. Admin only. */
         put: operations["putUsersUserId"];
         post?: never;
-        /** DELETE /users/{userId} */
+        /** Permanently delete a user. Not yourself, and not a user who already has counts, transfers or assignments on record. Another company's user resolves 404. Main Admin only. */
         delete: operations["deleteUsersUserId"];
         options?: never;
         head?: never;
@@ -994,9 +994,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /company */
+        /** The caller's own company profile. Admin and Admin user. */
         get: operations["getCompany"];
-        /** PUT /company */
+        /** Update the caller's own company profile (and apply its industry pack: default tags and custom fields). Never touches another company. Admin and Admin user. */
         put: operations["putCompany"];
         post?: never;
         delete?: never;
@@ -1012,9 +1012,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /company/cycle-count-cadence */
+        /** Days between required counts for each ABC class, and the defaults (7/30/90). */
         get: operations["getCompanyCycleCountCadence"];
-        /** PUT /company/cycle-count-cadence */
+        /** Override the cadence for one or more ABC classes; null clears a class back to its default. Admin and Admin user. */
         put: operations["putCompanyCycleCountCadence"];
         post?: never;
         delete?: never;
@@ -1030,9 +1030,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /company/timezone */
+        /** The company's business timezone (null means the process default) and the one currently in effect. */
         get: operations["getCompanyTimezone"];
-        /** PUT /company/timezone */
+        /** Set the company timezone (an IANA name), or null to use the default. Admin and Admin user. */
         put: operations["putCompanyTimezone"];
         post?: never;
         delete?: never;
@@ -2105,7 +2105,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /saas/plans */
+        /** The available subscription plans. */
         get: operations["getSaasPlans"];
         put?: never;
         post?: never;
@@ -2122,7 +2122,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /saas/tenants */
+        /** Every tenant and the plan catalogue. Platform operator only. */
         get: operations["getSaasTenants"];
         put?: never;
         post?: never;
@@ -2139,10 +2139,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /saved-reports */
+        /** Saved reports the caller owns plus those shared in their company. */
         get: operations["getSavedReports"];
         put?: never;
-        /** POST /saved-reports */
+        /** Save a report definition. isShared is honoured for Admin and Admin-user roles only. A non-admin may only save for a location they are assigned to. */
         post: operations["postSavedReports"];
         delete?: never;
         options?: never;
@@ -2330,10 +2330,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /users */
+        /** The caller's company users. Branch managers see only the Store users and Warehouse pickers of locations they manage. Admin, Admin user and Branch manager. */
         get: operations["getUsers"];
         put?: never;
-        /** POST /users */
+        /** Create a user in the caller's company. The password must meet the policy and not be a publicly known default. An Admin user cannot create Admin or Admin-user accounts. Admin only. */
         post: operations["postUsers"];
         delete?: never;
         options?: never;
@@ -2348,9 +2348,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /users/{userId}/permissions */
+        /** A user's permission overrides. Main Admin only. */
         get: operations["getUsersUserIdPermissions"];
-        /** PUT /users/{userId}/permissions */
+        /** Replace all of a user's permission overrides. Not your own, and not another Main Admin's. Main Admin only. */
         put: operations["putUsersUserIdPermissions"];
         post?: never;
         delete?: never;
@@ -3388,7 +3388,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /saas/onboard */
+        /** Provision a new tenant with its first Admin account. The temporary password must meet the policy and not be publicly known. Platform operator only. */
         post: operations["postSaasOnboard"];
         delete?: never;
         options?: never;
@@ -3660,7 +3660,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /users/{userId}/permissions/copy-from/{sourceUserId} */
+        /** Give a user exactly the same permission overrides as another user of the same company (their base role is unchanged). Main Admin only. */
         post: operations["postUsersUserIdPermissionsCopyFromSourceUserId"];
         delete?: never;
         options?: never;
@@ -4747,6 +4747,92 @@ export interface components {
             campaignId?: string | null;
             /** Format: date-time */
             createdAt?: string;
+        };
+        UserSummary: {
+            id: string;
+            name: string;
+            /** Format: email */
+            email: string;
+            /** @enum {string} */
+            role: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+            assignedLocationIds: string[];
+        };
+        UserPermission: {
+            userId?: string;
+            permissionId?: string;
+            allowed?: boolean;
+            /** @description An explicit deny wins over an allow. */
+            denied?: boolean;
+            /** @description A location id when the grant is limited to one location. */
+            scopeId?: string | null;
+            /** @enum {string|null} */
+            scopeType?: "LOCATION" | null;
+            reason?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            permission?: {
+                module?: string;
+                action?: string;
+                description?: string | null;
+            };
+        };
+        /** @description A company's own profile. Every company has its own; one company's Admin never reads or changes another's. */
+        CompanyProfile: {
+            name: string;
+            email?: string | null;
+            phone?: string | null;
+            industry?: string | null;
+            industryKey?: string | null;
+            address?: string | null;
+        };
+        SaasPlan: {
+            code: string;
+            name: string;
+            description?: string;
+            maxUsers?: number;
+            maxLocations?: number;
+            modules?: string[];
+            active?: boolean;
+        };
+        Tenant: {
+            id: string;
+            name: string;
+            slug: string;
+            /** @enum {string} */
+            status: "TRIAL" | "ACTIVE" | "SUSPENDED";
+            planCode: string;
+            adminEmail?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        TenantSubscription: {
+            id?: string;
+            tenantId?: string;
+            planCode?: string;
+            /** @enum {string} */
+            status?: "TRIAL" | "ACTIVE" | "PAST_DUE" | "CANCELLED";
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        SavedReport: {
+            id: string;
+            ownerId: string;
+            companyId: string;
+            name: string;
+            /** @enum {string} */
+            reportType: "inventory" | "low-stock" | "moves" | "variance" | "expiry" | "activity";
+            locationId?: string | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Visible to the whole company. Only an Admin can set this. */
+            isShared: boolean;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
         };
     };
     responses: never;
@@ -6896,44 +6982,30 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Invalid request. */
-            400: {
+            /** @description Deleted. */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not the owner and not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Not found (also for another company's report). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7094,52 +7166,55 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name?: string;
+                    /** @enum {string} */
+                    role?: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+                    assignedLocationIds?: string[];
+                    password?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        user?: components["schemas"]["UserSummary"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid field, or an attempt to change your own role. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller, or an Admin user promoting to an admin role. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description User not found (also for another company's user). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7154,44 +7229,43 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Deleted. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Deleting yourself, or the user has records on file. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin may do this. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description User not found (also for another company's user). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7839,44 +7913,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        company?: components["schemas"]["CompanyProfile"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -7887,52 +7942,63 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name: string;
+                    email?: string;
+                    phone?: string;
+                    industry?: string;
+                    industryKey?: string;
+                    address?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        company?: components["schemas"]["CompanyProfile"];
+                        pack?: {
+                            [key: string]: unknown;
+                        };
+                        applied?: {
+                            createdTags?: number;
+                            createdFields?: number;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Company name shorter than 2 characters. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description The profile could not be saved. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7945,40 +8011,28 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        cadenceDays?: {
+                            A?: number;
+                            B?: number;
+                            C?: number;
+                        };
+                        defaultCadenceDays?: {
+                            A?: number;
+                            B?: number;
+                            C?: number;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7993,52 +8047,57 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    A?: number | null;
+                    B?: number | null;
+                    C?: number | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        cadenceDays?: {
+                            A?: number;
+                            B?: number;
+                            C?: number;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description None of A, B, C given, or an invalid day count. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Company profile not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -8051,40 +8110,20 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        timezone?: string | null;
+                        effective?: string;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8099,52 +8138,52 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @example Asia/Kolkata */
+                    timezone: string | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        timezone?: string | null;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description timezone is required, or is not a valid IANA name. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Company profile not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -12388,40 +12427,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        plans?: components["schemas"]["SaasPlan"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12438,44 +12456,26 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tenants?: components["schemas"]["Tenant"][];
+                        entitlements?: components["schemas"]["SaasPlan"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the platform operator (the Admin of the platform's own company) can manage tenants. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -12488,44 +12488,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        savedReports?: components["schemas"]["SavedReport"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role may not use reporting. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -12536,52 +12517,49 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name: string;
+                    /** @enum {string} */
+                    reportType: "inventory" | "low-stock" | "moves" | "variance" | "expiry" | "activity";
+                    locationId?: string;
+                    config?: {
+                        [key: string]: unknown;
+                    };
+                    isShared?: boolean;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        savedReport?: components["schemas"]["SavedReport"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A name and a supported report type are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13206,51 +13184,34 @@ export interface operations {
     };
     getUsers: {
         parameters: {
-            query?: never;
+            query?: {
+                role?: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        users?: components["schemas"]["UserSummary"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins and branch managers can list users. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13261,52 +13222,66 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name: string;
+                    /** Format: email */
+                    email: string;
+                    password: string;
+                    /** @enum {string} */
+                    role: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+                    assignedLocationIds?: string[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        user?: components["schemas"]["UserSummary"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid name, email, password (policy or publicly known), role or location. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller, or an Admin user creating an admin-level account. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description A user with this email already exists. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The user could not be saved. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13321,44 +13296,34 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        permissions?: components["schemas"]["UserPermission"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin may do this. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description User not found (also for another company's user). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13371,52 +13336,60 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    permissions: {
+                        module: string;
+                        action: string;
+                        allowed?: boolean;
+                        denied?: boolean;
+                        scopeId?: string;
+                        reason?: string;
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Replaced. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        userId?: string;
+                        permissionCount?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Too many entries, an unknown module or action, your own account, or another Main Admin. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin may do this. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description User not found (also for another company's user). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16934,52 +16907,70 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    companyName: string;
+                    adminName: string;
+                    /** Format: email */
+                    adminEmail: string;
+                    /** @default starter */
+                    planCode?: string;
+                    password: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Provisioned. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tenant?: components["schemas"]["Tenant"];
+                        subscription?: components["schemas"]["TenantSubscription"];
+                        company?: {
+                            [key: string]: unknown;
+                        };
+                        user?: {
+                            id?: string;
+                            email?: string;
+                            role?: string;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid input, a weak or publicly known password, or an unknown plan. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the platform operator (the Admin of the platform's own company) can manage tenants. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description An account with that admin email already exists. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        tenant?: components["schemas"]["Tenant"];
+                        subscription?: components["schemas"]["TenantSubscription"];
+                    };
+                };
             };
         };
     };
@@ -17889,52 +17880,56 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Copied. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        userId?: string;
+                        permissionCount?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Your own account, the same user, or another Main Admin. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only the Main Admin may do this. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description User not found (also for another company's user). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Permission overrides need a connected database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
