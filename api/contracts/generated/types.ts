@@ -1724,10 +1724,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /pick-waves */
+        /** The caller's company pick waves (open and in-progress unless a status is given), newest first, max 100. Pickers see only their assigned locations. Admin, Admin user and Warehouse picker. */
         get: operations["getPickWaves"];
         put?: never;
-        /** POST /pick-waves */
+        /** Group at least two transfers from the same source location into one pick wave. Every transfer must be pickable from that location. Admin only. */
         post: operations["postPickWaves"];
         delete?: never;
         options?: never;
@@ -1742,14 +1742,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /pick-waves/{id} */
+        /** A wave with its member transfers and the combined remaining pick lines, merged by item and lot but keeping a per-destination breakdown, in walk order by bin. Admin, Admin user and Warehouse picker. */
         get: operations["getPickWavesId"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /pick-waves/{id} */
+        /** Assign a wave (Admin only; the assignee must be a user of the caller's company) or move it along OPEN, IN_PROGRESS, COMPLETED, CANCELLED. An admin or the wave's assignee. */
         patch: operations["patchPickWavesId"];
         trace?: never;
     };
@@ -1760,10 +1760,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /picker-tasks */
+        /** Transfers waiting to be picked (REQUESTED, PENDING_PICK, PICKING, PARTIAL) at the caller's locations, as picker tasks. Admin, Admin user and Warehouse picker. */
         get: operations["getPickerTasks"];
         put?: never;
-        /** POST /picker-tasks */
+        /** Build a picker task description for a transfer (it is returned, not stored). Admin and Admin user. */
         post: operations["postPickerTasks"];
         delete?: never;
         options?: never;
@@ -3218,7 +3218,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /pick-waves/{id}/scan */
+        /** Check a scanned bin against the guided walk order of the wave. A wrong bin returns the bin that was expected next. */
         post: operations["postPickWavesIdScan"];
         delete?: never;
         options?: never;
@@ -3235,7 +3235,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /picker-tasks/complete */
+        /** Mark a transfer as picked (status PICKED). Warehouse picker only, for a transfer at one of their locations. */
         post: operations["postPickerTasksComplete"];
         delete?: never;
         options?: never;
@@ -4869,6 +4869,35 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
             companyId?: string;
+        };
+        PickWave: {
+            id: string;
+            locationId: string;
+            /** @enum {string} */
+            status: "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+            transferIds: string[];
+            assignedToId?: string | null;
+            createdById?: string;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            location?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            };
+            assignedTo?: {
+                id?: string;
+                name?: string;
+            } | null;
+        };
+        PickLine: {
+            itemId: string;
+            lotId: string;
+            quantity: number;
         };
     };
     responses: never;
@@ -10981,51 +11010,35 @@ export interface operations {
     };
     getPickWaves: {
         parameters: {
-            query?: never;
+            query?: {
+                locationId?: string;
+                status?: "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        waves?: components["schemas"]["PickWave"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -11036,52 +11049,70 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    locationId: string;
+                    transferIds: string[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        wave?: components["schemas"]["PickWave"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A location and at least two transfers are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description One or more transfers were not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description A transfer is not pickable from this location right now. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Pick waves are not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11096,44 +11127,57 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        wave?: components["schemas"]["PickWave"];
+                        transfers?: {
+                            id?: string;
+                            status?: string;
+                            destinationLocationId?: string;
+                        }[];
+                        lines?: {
+                            itemId: string;
+                            itemCode?: string;
+                            itemName?: string;
+                            unit?: string;
+                            lotId: string;
+                            lotNo?: string;
+                            expiryDate?: string | null;
+                            totalRemainingQty: number;
+                            destinations?: {
+                                transferId?: string;
+                                destinationLocationId?: string;
+                                remainingQty?: number;
+                            }[];
+                            binCode?: string | null;
+                            /** @description Sort key for the walk through the warehouse. */
+                            sequenceKey?: string;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Pick wave not found (also for another company's wave). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11146,52 +11190,53 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    assignedToId?: string | null;
+                    /** @enum {string} */
+                    status?: "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        wave?: components["schemas"]["PickWave"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid status, or nothing to update. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an admin and not the assignee. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Wave or assignee not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11204,44 +11249,31 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tasks?: {
+                            transferId?: string;
+                            locationId?: string;
+                            lines?: components["schemas"]["PickLine"][];
+                            /** @enum {string} */
+                            status?: "ASSIGNED";
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Picker task access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -11252,52 +11284,54 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    transferId: string;
+                    locationId: string;
+                    lines: components["schemas"]["PickLine"][];
+                    /** @description Defaults to the caller. */
+                    assignedPickerId?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Built. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        task?: {
+                            transferId?: string;
+                            locationId?: string;
+                            lines?: components["schemas"]["PickLine"][];
+                            assignedPickerId?: string;
+                            role?: string;
+                            status?: string;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Transfer, location or lines missing. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Only admins can assign picker tasks. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -16402,52 +16436,63 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    scannedBinCode: string;
+                    /** @default 0 */
+                    scannedIndex?: number;
+                    /** @description Only used when the server runs without a database. */
+                    walkOrder?: string[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Correct bin. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        ok?: boolean;
+                        nextBin?: string | null;
+                        walkOrder?: string[];
+                        scannedIndex?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Wrong bin. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        code?: string;
+                        expected?: string | null;
+                        walkOrder?: string[];
+                    };
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Pick wave not found (also for another company's wave). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16458,52 +16503,52 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    transferId: string;
+                    pickedQty: number;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Picked. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
+                        result?: {
+                            transferId?: string;
+                            pickerId?: string;
+                            role?: string;
+                            /** @enum {string} */
+                            status?: "PICKED";
+                            pickedQty?: number;
+                        };
+                        transfer?: components["schemas"]["TransferRecord"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A positive picked quantity is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not a Warehouse picker, or the transfer is outside the picker's scope (also for another company's transfer). */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
