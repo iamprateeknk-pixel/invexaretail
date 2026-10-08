@@ -1393,7 +1393,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /items/{itemId}/periodic-review-policy */
+        /** Periodic-review (R,S) policy derived from the item's own demand, with a 90-day simulation. Read-only (Admin). */
         get: operations["getItemsItemIdPeriodicReviewPolicy"];
         put?: never;
         post?: never;
@@ -1813,7 +1813,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /purchase-orders/plan */
+        /** Plan what to buy for a location from its reorder rules, stock, open orders, transfers in transit and demand; grouped by supplier (Admin). */
         get: operations["getPurchaseOrdersPlan"];
         put?: never;
         post?: never;
@@ -1918,7 +1918,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /reorder-rules/suggestions */
+        /** Suggested reorder min/target per item from sales history, excluding "OK" and recently dismissed suggestions (Admin). */
         get: operations["getReorderRulesSuggestions"];
         put?: never;
         post?: never;
@@ -2261,7 +2261,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /suppliers/{id}/score */
+        /** Vendor scorecard: fill rate, on-time delivery, lead time, short/excess receipts and QC reject rate, plus price variance per item. */
         get: operations["getSuppliersIdScore"];
         put?: never;
         post?: never;
@@ -2627,7 +2627,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /returns/{id}/refund */
+        /** Record the finance refund decision, separately from the stock disposition (Admin). */
         patch: operations["patchReturnsIdRefund"];
         trace?: never;
     };
@@ -2644,7 +2644,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /returns/{id}/status */
+        /** Advance a return: APPROVE, REJECT, RECEIVE (decides every line first, then posts stock) or CLOSE. */
         patch: operations["patchReturnsIdStatus"];
         trace?: never;
     };
@@ -3286,7 +3286,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /purchase-orders/plan/draft */
+        /** Create one DRAFT purchase order per supplier group from a purchase plan (Admin). */
         post: operations["postPurchaseOrdersPlanDraft"];
         delete?: never;
         options?: never;
@@ -3303,7 +3303,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /purchase-orders/{id}/receive */
+        /** Receive goods against an approved purchase order (Admin). Retry-safe: the same requestId returns the first result instead of posting twice. */
         post: operations["postPurchaseOrdersIdReceive"];
         delete?: never;
         options?: never;
@@ -3337,7 +3337,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /reorder-rules/suggestions/{itemId}/accept */
+        /** Accept a suggestion: recomputed server-side (client numbers are never trusted) and saved as the item's reorder rule (Admin). */
         post: operations["postReorderRulesSuggestionsItemIdAccept"];
         delete?: never;
         options?: never;
@@ -3371,7 +3371,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /returns/{id}/lines/{lineId}/disposition */
+        /** Decide a held (quarantined) line of a received return: restock (after a passing QC where QC applies), scrap, or send back to the vendor. */
         post: operations["postReturnsIdLinesLineIdDisposition"];
         delete?: never;
         options?: never;
@@ -4928,6 +4928,12 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
             lines?: components["schemas"]["ReturnLine"][];
+            /** @description REFUNDED or DENIED once finance has decided; null until then. */
+            refundStatus?: string | null;
+            refundNote?: string | null;
+            /** Format: date-time */
+            refundedAt?: string | null;
+            refundedById?: string | null;
         };
         Bin: {
             id: string;
@@ -5319,6 +5325,49 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             lastIngestedAt?: string | null;
+        };
+        ReorderSuggestion: {
+            itemId: string;
+            code?: string;
+            demandPattern: string;
+            averageDailyDemand: number;
+            safetyStock: number;
+            suggestedMin: number;
+            suggestedTarget: number;
+            currentMin?: number | null;
+            currentTarget?: number | null;
+            /** @enum {string} */
+            change: "NEW" | "INCREASE" | "DECREASE" | "OK";
+            decimal?: boolean;
+        };
+        VendorScore: {
+            ordersConsidered: number;
+            fillRatePercent: number;
+            onTimeDeliveryPercent: number;
+            averageLeadTimeDays: number | null;
+            shortReceiptCount: number;
+            excessReceiptCount: number;
+            qualityRejectRatePercent: number | null;
+        };
+        /** @description One planned purchase line; the planner adds cover, shortfall and cost figures alongside these. */
+        PurchasePlanSuggestion: {
+            itemId: string;
+            code?: string;
+            name?: string;
+            supplierId?: string | null;
+            quantity?: number;
+            unitCost?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        PostedReceiptStock: {
+            itemId: string;
+            lotId: string;
+            lotNo: string;
+            quantity: number;
+            quarantined: number;
+            beforeBalance: number;
+            afterBalance: number;
         };
     };
     responses: never;
@@ -9800,7 +9849,14 @@ export interface operations {
     };
     getItemsItemIdPeriodicReviewPolicy: {
         parameters: {
-            query?: never;
+            query: {
+                locationId: string;
+                windowDays?: number;
+                leadTimeDays?: number;
+                servicePercent?: number;
+                reviewPeriodDays?: number;
+                leadTimeStdDevDays?: number;
+            };
             header?: never;
             path: {
                 itemId: string;
@@ -9809,23 +9865,40 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        itemId: string;
+                        code?: string;
+                        name?: string;
+                        locationId: string;
+                        onHand: number;
+                        windowDays?: number;
+                        sampleDays?: number;
+                        averageDailyDemand?: number;
+                        /** @description reviewPeriodDays, leadTimeDays, reorderPoint, orderUpToLevel and the safety stock behind them. */
+                        policy: {
+                            [key: string]: unknown;
+                        };
+                        /** @description 90-day projection of stock under the policy. */
+                        simulation: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId missing or servicePercent out of range. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -9834,19 +9907,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Item or location not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Needs a connected database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11629,30 +11715,49 @@ export interface operations {
     };
     getPurchaseOrdersPlan: {
         parameters: {
-            query?: never;
+            query: {
+                locationId: string;
+                windowDays?: number;
+                orderingCost?: number;
+                holdingRatePercent?: number;
+                budget?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        locationId: string;
+                        windowDays: number;
+                        note?: string;
+                        suggestions: components["schemas"]["PurchasePlanSuggestion"][];
+                        groups: {
+                            supplierId?: string | null;
+                            supplierName?: string;
+                            lines?: components["schemas"]["PurchasePlanSuggestion"][];
+                        }[];
+                        skipped: {
+                            [key: string]: unknown;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -11661,19 +11766,23 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -12041,30 +12150,40 @@ export interface operations {
     };
     getReorderRulesSuggestions: {
         parameters: {
-            query?: never;
+            query: {
+                locationId: string;
+                windowDays?: number;
+                leadTimeDays?: number;
+                servicePercent?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        windowDays?: number;
+                        leadTimeDays?: number;
+                        servicePercent?: number;
+                        suggestions: components["schemas"]["ReorderSuggestion"][];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId missing or servicePercent out of range. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -12073,19 +12192,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Needs a connected database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13097,23 +13229,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        supplier: components["schemas"]["Supplier"];
+                        score: components["schemas"]["VendorScore"];
+                        priceVarianceByItem?: {
+                            [key: string]: {
+                                [key: string]: unknown;
+                            };
+                        };
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -13122,19 +13253,23 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Supplier not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14407,31 +14542,35 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    status: "REFUNDED" | "DENIED";
+                    note?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        returnRequest: components["schemas"]["ReturnRequest"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Refund status must be REFUNDED or DENIED. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -14440,19 +14579,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Return request not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Goods have not been received yet. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14465,31 +14617,38 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    action: "APPROVE" | "REJECT" | "RECEIVE" | "CLOSE";
+                    /** @description RECEIVE only: requested disposition per return line id. */
+                    dispositions?: {
+                        [key: string]: "RESTOCK" | "SCRAP" | "RETURN_TO_VENDOR";
+                    };
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        returnRequest: components["schemas"]["ReturnRequest"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A line cannot be received as requested (the body also carries lineId). */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -14498,19 +14657,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Return request not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The action is not allowed in the return's current status, or lines are still undecided on CLOSE. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16785,31 +16957,41 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    locationId: string;
+                    groups: {
+                        supplierId: string;
+                        lines: {
+                            itemId: string;
+                            quantity: number;
+                            unitCost?: number;
+                        }[];
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Drafts created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        purchaseOrders: components["schemas"]["PurchaseOrder"][];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description No location or groups, a group without a supplier, or an invalid line. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -16818,19 +17000,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Supplier not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The supplier cannot receive new orders. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16843,31 +17038,52 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    requestId: string;
+                    lines: {
+                        lineId: string;
+                        receivedQty?: number;
+                        damagedQty?: number;
+                        excessQty?: number;
+                        lotNo?: string | null;
+                        expiryDate?: string | null;
+                    }[];
+                    /** @description Inspection verdicts supplied with the receipt when none are recorded yet. */
+                    qcInspections?: {
+                        itemId?: string;
+                        lineId?: string;
+                        results?: {
+                            [key: string]: unknown;
+                        };
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        purchaseOrder: components["schemas"]["PurchaseOrder"];
+                        postedStock: components["schemas"]["PostedReceiptStock"][];
+                        /** @description true when this requestId was already processed; the original result is returned and nothing is posted again. */
+                        duplicate?: boolean;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Missing requestId, an invalid line, a lot or expiry rule broken, or a QC checklist missing (code QC_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -16876,19 +17092,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Purchase order not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Order not receivable in its status, or the requestId belongs to another order. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16975,31 +17204,39 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    locationId: string;
+                    /** @default 60 */
+                    windowDays?: number;
+                    /** @default 7 */
+                    leadTimeDays?: number;
+                    /** @default 95 */
+                    servicePercent?: number;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule: components["schemas"]["ReorderRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description locationId missing, servicePercent out of range, or the suggested quantities are invalid for the item. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -17008,19 +17245,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Location not found, or no demand history for this item. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Needs a connected database. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17090,31 +17340,34 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    disposition: "RESTOCK" | "SCRAP" | "RETURN_TO_VENDOR";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        returnRequest: components["schemas"]["ReturnRequest"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid disposition. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -17123,19 +17376,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Return or line not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Return not received, line already dispositioned, still held for QC, or the quarantined quantity is missing. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };

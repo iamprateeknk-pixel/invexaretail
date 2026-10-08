@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.38.0",
+    "version": "2026.39.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -3954,6 +3954,32 @@
             "items": {
               "$ref": "#/components/schemas/ReturnLine"
             }
+          },
+          "refundStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "REFUNDED or DENIED once finance has decided; null until then."
+          },
+          "refundNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refundedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "refundedById": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -5381,6 +5407,175 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "ReorderSuggestion": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "demandPattern",
+          "averageDailyDemand",
+          "safetyStock",
+          "suggestedMin",
+          "suggestedTarget",
+          "change"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "demandPattern": {
+            "type": "string"
+          },
+          "averageDailyDemand": {
+            "type": "number"
+          },
+          "safetyStock": {
+            "type": "number"
+          },
+          "suggestedMin": {
+            "type": "number"
+          },
+          "suggestedTarget": {
+            "type": "number"
+          },
+          "currentMin": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currentTarget": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "NEW",
+              "INCREASE",
+              "DECREASE",
+              "OK"
+            ]
+          },
+          "decimal": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VendorScore": {
+        "type": "object",
+        "required": [
+          "ordersConsidered",
+          "fillRatePercent",
+          "onTimeDeliveryPercent",
+          "averageLeadTimeDays",
+          "shortReceiptCount",
+          "excessReceiptCount",
+          "qualityRejectRatePercent"
+        ],
+        "properties": {
+          "ordersConsidered": {
+            "type": "integer"
+          },
+          "fillRatePercent": {
+            "type": "number"
+          },
+          "onTimeDeliveryPercent": {
+            "type": "number"
+          },
+          "averageLeadTimeDays": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "shortReceiptCount": {
+            "type": "integer"
+          },
+          "excessReceiptCount": {
+            "type": "integer"
+          },
+          "qualityRejectRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "PurchasePlanSuggestion": {
+        "type": "object",
+        "required": [
+          "itemId"
+        ],
+        "additionalProperties": true,
+        "description": "One planned purchase line; the planner adds cover, shortfall and cost figures alongside these.",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "supplierId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "unitCost": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "PostedReceiptStock": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "lotId",
+          "lotNo",
+          "quantity",
+          "quarantined",
+          "beforeBalance",
+          "afterBalance"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "lotNo": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "quarantined": {
+            "type": "number"
+          },
+          "beforeBalance": {
+            "type": "number"
+          },
+          "afterBalance": {
+            "type": "number"
           }
         }
       }
@@ -11883,34 +12078,106 @@
     "/items/{itemId}/periodic-review-policy": {
       "get": {
         "operationId": "getItemsItemIdPeriodicReviewPolicy",
-        "summary": "GET /items/{itemId}/periodic-review-policy",
+        "summary": "Periodic-review (R,S) policy derived from the item's own demand, with a 90-day simulation. Read-only (Admin).",
         "tags": [
           "items"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "itemId",
+                    "locationId",
+                    "onHand",
+                    "policy",
+                    "simulation"
+                  ],
+                  "properties": {
+                    "itemId": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "locationId": {
+                      "type": "string"
+                    },
+                    "onHand": {
+                      "type": "number"
+                    },
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "sampleDays": {
+                      "type": "integer"
+                    },
+                    "averageDailyDemand": {
+                      "type": "number"
+                    },
+                    "policy": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "reviewPeriodDays, leadTimeDays, reorderPoint, orderUpToLevel and the safety stock behind them."
+                    },
+                    "simulation": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "90-day projection of stock under the policy."
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId missing or servicePercent out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item or location not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Needs a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11925,6 +12192,67 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "windowDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 60
+            }
+          },
+          {
+            "name": "leadTimeDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 7
+            }
+          },
+          {
+            "name": "servicePercent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 50,
+              "maximum": 99.99,
+              "default": 95
+            }
+          },
+          {
+            "name": "reviewPeriodDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 90,
+              "default": 7
+            }
+          },
+          {
+            "name": "leadTimeStdDevDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0
             }
           }
         ]
@@ -14931,39 +15259,162 @@
     "/purchase-orders/plan": {
       "get": {
         "operationId": "getPurchaseOrdersPlan",
-        "summary": "GET /purchase-orders/plan",
+        "summary": "Plan what to buy for a location from its reorder rules, stock, open orders, transfers in transit and demand; grouped by supplier (Admin).",
         "tags": [
           "purchase-orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "locationId",
+                    "windowDays",
+                    "suggestions",
+                    "groups",
+                    "skipped"
+                  ],
+                  "properties": {
+                    "locationId": {
+                      "type": "string"
+                    },
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "note": {
+                      "type": "string"
+                    },
+                    "suggestions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PurchasePlanSuggestion"
+                      }
+                    },
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "supplierId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "supplierName": {
+                            "type": "string"
+                          },
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/PurchasePlanSuggestion"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "windowDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 180,
+              "default": 30
+            }
+          },
+          {
+            "name": "orderingCost",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Opt-in EOQ: cost of placing one order."
+            }
+          },
+          {
+            "name": "holdingRatePercent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Opt-in EOQ: yearly holding cost as a percent of unit cost."
+            }
+          },
+          {
+            "name": "budget",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0
+            }
           }
         ]
       }
@@ -15587,39 +16038,130 @@
     "/reorder-rules/suggestions": {
       "get": {
         "operationId": "getReorderRulesSuggestions",
-        "summary": "GET /reorder-rules/suggestions",
+        "summary": "Suggested reorder min/target per item from sales history, excluding \"OK\" and recently dismissed suggestions (Admin).",
         "tags": [
           "reorder-rules"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "suggestions"
+                  ],
+                  "properties": {
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "leadTimeDays": {
+                      "type": "number"
+                    },
+                    "servicePercent": {
+                      "type": "number"
+                    },
+                    "suggestions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReorderSuggestion"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId missing or servicePercent out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Needs a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "windowDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 60
+            }
+          },
+          {
+            "name": "leadTimeDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 7
+            }
+          },
+          {
+            "name": "servicePercent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 50,
+              "maximum": 99.99,
+              "default": 95
+            }
           }
         ]
       }
@@ -17423,34 +17965,62 @@
     "/suppliers/{id}/score": {
       "get": {
         "operationId": "getSuppliersIdScore",
-        "summary": "GET /suppliers/{id}/score",
+        "summary": "Vendor scorecard: fill rate, on-time delivery, lead time, short/excess receipts and QC reject rate, plus price variance per item.",
         "tags": [
           "suppliers"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "supplier",
+                    "score"
+                  ],
+                  "properties": {
+                    "supplier": {
+                      "$ref": "#/components/schemas/Supplier"
+                    },
+                    "score": {
+                      "$ref": "#/components/schemas/VendorScore"
+                    },
+                    "priceVarianceByItem": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Supplier not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -19562,34 +20132,71 @@
     "/returns/{id}/refund": {
       "patch": {
         "operationId": "patchReturnsIdRefund",
-        "summary": "PATCH /returns/{id}/refund",
+        "summary": "Record the finance refund decision, separately from the stock disposition (Admin).",
         "tags": [
           "returns"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "returnRequest"
+                  ],
+                  "properties": {
+                    "returnRequest": {
+                      "$ref": "#/components/schemas/ReturnRequest"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Refund status must be REFUNDED or DENIED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Return request not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Goods have not been received yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -19608,12 +20215,27 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "REFUNDED",
+                      "DENIED"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                }
               }
             }
           }
@@ -19623,34 +20245,71 @@
     "/returns/{id}/status": {
       "patch": {
         "operationId": "patchReturnsIdStatus",
-        "summary": "PATCH /returns/{id}/status",
+        "summary": "Advance a return: APPROVE, REJECT, RECEIVE (decides every line first, then posts stock) or CLOSE.",
         "tags": [
           "returns"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "returnRequest"
+                  ],
+                  "properties": {
+                    "returnRequest": {
+                      "$ref": "#/components/schemas/ReturnRequest"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "A line cannot be received as requested (the body also carries lineId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Return request not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action is not allowed in the return's current status, or lines are still undecided on CLOSE.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -19669,12 +20328,37 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "APPROVE",
+                      "REJECT",
+                      "RECEIVE",
+                      "CLOSE"
+                    ]
+                  },
+                  "dispositions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "enum": [
+                        "RESTOCK",
+                        "SCRAP",
+                        "RETURN_TO_VENDOR"
+                      ]
+                    },
+                    "description": "RECEIVE only: requested disposition per return line id."
+                  }
+                }
               }
             }
           }
@@ -23167,34 +23851,74 @@
     "/purchase-orders/plan/draft": {
       "post": {
         "operationId": "postPurchaseOrdersPlanDraft",
-        "summary": "POST /purchase-orders/plan/draft",
+        "summary": "Create one DRAFT purchase order per supplier group from a purchase plan (Admin).",
         "tags": [
           "purchase-orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Drafts created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "purchaseOrders"
+                  ],
+                  "properties": {
+                    "purchaseOrders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PurchaseOrder"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "No location or groups, a group without a supplier, or an invalid line.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Supplier not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The supplier cannot receive new orders.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23203,50 +23927,147 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "locationId",
+                  "groups"
+                ],
+                "properties": {
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "supplierId",
+                        "lines"
+                      ],
+                      "properties": {
+                        "supplierId": {
+                          "type": "string"
+                        },
+                        "lines": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "itemId",
+                              "quantity"
+                            ],
+                            "properties": {
+                              "itemId": {
+                                "type": "string"
+                              },
+                              "quantity": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              "unitCost": {
+                                "type": "number",
+                                "minimum": 0
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/purchase-orders/{id}/receive": {
       "post": {
         "operationId": "postPurchaseOrdersIdReceive",
-        "summary": "POST /purchase-orders/{id}/receive",
+        "summary": "Receive goods against an approved purchase order (Admin). Retry-safe: the same requestId returns the first result instead of posting twice.",
         "tags": [
           "purchase-orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "purchaseOrder",
+                    "postedStock"
+                  ],
+                  "properties": {
+                    "purchaseOrder": {
+                      "$ref": "#/components/schemas/PurchaseOrder"
+                    },
+                    "postedStock": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PostedReceiptStock"
+                      }
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "description": "true when this requestId was already processed; the original result is returned and nothing is posted again."
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Missing requestId, an invalid line, a lot or expiry rule broken, or a QC checklist missing (code QC_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Purchase order not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Order not receivable in its status, or the requestId belongs to another order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23265,12 +24086,76 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "requestId",
+                  "lines"
+                ],
+                "properties": {
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 191
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "lineId"
+                      ],
+                      "properties": {
+                        "lineId": {
+                          "type": "string"
+                        },
+                        "receivedQty": {
+                          "type": "number"
+                        },
+                        "damagedQty": {
+                          "type": "number"
+                        },
+                        "excessQty": {
+                          "type": "number"
+                        },
+                        "lotNo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "expiryDate": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "qcInspections": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "lineId": {
+                          "type": "string"
+                        },
+                        "results": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    },
+                    "description": "Inspection verdicts supplied with the receipt when none are recorded yet."
+                  }
+                }
               }
             }
           }
@@ -23400,34 +24285,71 @@
     "/reorder-rules/suggestions/{itemId}/accept": {
       "post": {
         "operationId": "postReorderRulesSuggestionsItemIdAccept",
-        "summary": "POST /reorder-rules/suggestions/{itemId}/accept",
+        "summary": "Accept a suggestion: recomputed server-side (client numbers are never trusted) and saved as the item's reorder rule (Admin).",
         "tags": [
           "reorder-rules"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "rule"
+                  ],
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ReorderRule"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId missing, servicePercent out of range, or the suggested quantities are invalid for the item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location not found, or no demand history for this item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Needs a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23446,12 +24368,36 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "locationId"
+                ],
+                "properties": {
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "windowDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 60
+                  },
+                  "leadTimeDays": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 7
+                  },
+                  "servicePercent": {
+                    "type": "number",
+                    "minimum": 50,
+                    "maximum": 99.99,
+                    "default": 95
+                  }
+                }
               }
             }
           }
@@ -23514,34 +24460,71 @@
     "/returns/{id}/lines/{lineId}/disposition": {
       "post": {
         "operationId": "postReturnsIdLinesLineIdDisposition",
-        "summary": "POST /returns/{id}/lines/{lineId}/disposition",
+        "summary": "Decide a held (quarantined) line of a received return: restock (after a passing QC where QC applies), scrap, or send back to the vendor.",
         "tags": [
           "returns"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "returnRequest"
+                  ],
+                  "properties": {
+                    "returnRequest": {
+                      "$ref": "#/components/schemas/ReturnRequest"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid disposition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Return or line not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Return not received, line already dispositioned, still held for QC, or the quarantined quantity is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23568,12 +24551,24 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "disposition"
+                ],
+                "properties": {
+                  "disposition": {
+                    "type": "string",
+                    "enum": [
+                      "RESTOCK",
+                      "SCRAP",
+                      "RETURN_TO_VENDOR"
+                    ]
+                  }
+                }
               }
             }
           }
