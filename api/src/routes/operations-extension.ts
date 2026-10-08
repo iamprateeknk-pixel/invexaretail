@@ -1300,7 +1300,9 @@ router.get('/putaway-tasks', async (req, res) => {
       ? {}
       : { locationId: { in: req.user!.locationIds ?? [] } };
   const tasks = await prisma.putawayTask.findMany({
-    where: { ...scope, ...(status ? { status } : { status: 'PENDING' }) },
+    // A putaway task has no company column; it belongs to the company that owns its location. With no locationId an Admin's
+    // scope is {} and this query used to return every company's tasks (item, lot and location names included).
+    where: { ...scope, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...(status ? { status } : { status: 'PENDING' }) },
     include: {
       item: { select: { id: true, code: true, name: true } },
       lot: { select: { id: true, lotNo: true, expiryDate: true } },
