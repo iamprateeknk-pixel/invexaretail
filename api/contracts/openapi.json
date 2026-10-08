@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.18.0",
+    "version": "2026.19.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified."
   },
   "servers": [
@@ -1433,6 +1433,180 @@
                 }
               }
             }
+          }
+        }
+      },
+      "SavedView": {
+        "type": "object",
+        "required": [
+          "id",
+          "ownerId",
+          "name",
+          "entityType",
+          "filter",
+          "isShared",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "entityType": {
+            "type": "string",
+            "description": "ITEM for item smart folders, or TABLE:<tableId> for a web list-page view."
+          },
+          "filter": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "isShared": {
+            "type": "boolean",
+            "description": "Visible to everyone in the company. Only an Admin can set this."
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Supplier": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contactName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leadTimeDays": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "moq": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "paymentTerms": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "ACTIVE suppliers can be ordered from."
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PriceBreak": {
+        "type": "object",
+        "required": [
+          "minQty",
+          "unitCost"
+        ],
+        "properties": {
+          "minQty": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unitCost": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Money, 4 decimal places on the server."
+          }
+        }
+      },
+      "ReorderRule": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "locationId",
+          "minQty",
+          "targetQty"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "minQty": {
+            "type": "number"
+          },
+          "targetQty": {
+            "type": "number"
+          },
+          "orderMultiple": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Case pack: suggested order quantities round up to a multiple of this."
+          },
+          "companyId": {
+            "type": "string"
           }
         }
       }
@@ -4105,40 +4279,9 @@
     "/saved-views/{id}": {
       "delete": {
         "operationId": "deleteSavedViewsId",
-        "summary": "DELETE /saved-views/{id}",
+        "summary": "Delete a saved view. Owner or Admin only.",
         "tags": [
           "saved-views"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
         ],
         "parameters": [
           {
@@ -4148,6 +4291,36 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "403": {
+            "description": "Not the owner and not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (also for another company's id).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -8485,34 +8658,58 @@
     "/reorder-rules": {
       "get": {
         "operationId": "getReorderRules",
-        "summary": "GET /reorder-rules",
+        "summary": "Reorder rules for one location.",
         "tags": [
-          "reorder-rules"
+          "Reorder rules"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReorderRule"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "locationId is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Location outside the caller's access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9155,34 +9352,41 @@
     "/saved-views": {
       "get": {
         "operationId": "getSavedViews",
-        "summary": "GET /saved-views",
+        "summary": "Saved views the caller owns plus those shared in their company. entityType narrows to one table (TABLE:<id>) or item smart folders.",
         "tags": [
           "saved-views"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "entityType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "savedViews": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SavedView"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -9193,92 +9397,83 @@
       },
       "post": {
         "operationId": "postSavedViews",
-        "summary": "POST /saved-views",
+        "summary": "Create a saved view. isShared is honoured for Admin and Admin-user roles only; other roles get a private view.",
         "tags": [
           "saved-views"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "entityType": {
+                    "type": "string",
+                    "default": "ITEM"
+                  },
+                  "filter": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "isShared": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "savedView": {
+                      "$ref": "#/components/schemas/SavedView"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Name shorter than 2 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/saved-views/{id}/items": {
       "get": {
         "operationId": "getSavedViewsIdItems",
-        "summary": "GET /saved-views/{id}/items",
+        "summary": "Items matching a saved view, re-evaluated against the live catalog on every call.",
         "tags": [
           "saved-views"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
         ],
         "parameters": [
           {
@@ -9288,6 +9483,55 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "savedView": {
+                      "$ref": "#/components/schemas/SavedView"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A private view of someone else.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (also for another company's id).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -9395,34 +9639,31 @@
     "/suppliers": {
       "get": {
         "operationId": "getSuppliers",
-        "summary": "GET /suppliers",
+        "summary": "The caller's company suppliers, name ascending.",
         "tags": [
-          "suppliers"
+          "Suppliers"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "suppliers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Supplier"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -9433,92 +9674,126 @@
       },
       "post": {
         "operationId": "postSuppliers",
-        "summary": "POST /suppliers",
+        "summary": "Create a supplier. Admin only.",
         "tags": [
-          "suppliers"
+          "Suppliers"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "contactName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "leadTimeDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "moq": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "paymentTerms": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "categories": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "supplier": {
+                      "$ref": "#/components/schemas/Supplier"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid supplier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/suppliers/{id}/price-breaks": {
       "get": {
         "operationId": "getSuppliersIdPriceBreaks",
-        "summary": "GET /suppliers/{id}/price-breaks",
+        "summary": "A supplier's quantity price ladder, per item.",
         "tags": [
-          "suppliers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Suppliers"
         ],
         "parameters": [
           {
@@ -9528,6 +9803,62 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "priceBreaks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "itemId": {
+                            "type": "string"
+                          },
+                          "minQty": {
+                            "type": "number"
+                          },
+                          "unitCost": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role may not view reporting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (also for another company's id).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -14767,40 +15098,9 @@
     "/reorder-rules/{itemId}": {
       "put": {
         "operationId": "putReorderRulesItemId",
-        "summary": "PUT /reorder-rules/{itemId}",
+        "summary": "Create or replace the reorder rule for an item at a location. Admin only.",
         "tags": [
-          "reorder-rules"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Reorder rules"
         ],
         "parameters": [
           {
@@ -14813,55 +15113,100 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "locationId",
+                  "minQty",
+                  "targetQty"
+                ],
+                "properties": {
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "minQty": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "targetQty": {
+                    "type": "number",
+                    "description": "Not below minQty."
+                  },
+                  "orderMultiple": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "exclusiveMinimum": 0
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ReorderRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid quantities or orderMultiple.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Location not found in this company.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/suppliers/{id}": {
       "put": {
         "operationId": "putSuppliersId",
-        "summary": "PUT /suppliers/{id}",
+        "summary": "Update supplier fields. Admin only; at least one field is required.",
         "tags": [
-          "suppliers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Suppliers"
         ],
         "parameters": [
           {
@@ -14874,55 +15219,128 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "contactName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "leadTimeDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "moq": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "paymentTerms": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "categories": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
-        }
-      }
-    },
-    "/suppliers/{id}/price-breaks/{itemId}": {
-      "put": {
-        "operationId": "putSuppliersIdPriceBreaksItemId",
-        "summary": "PUT /suppliers/{id}/price-breaks/{itemId}",
-        "tags": [
-          "suppliers"
-        ],
-        "x-contract-level": "path-only",
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "supplier": {
+                      "$ref": "#/components/schemas/Supplier"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Nothing to update, or invalid value.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Not found (also for another company's id).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/suppliers/{id}/price-breaks/{itemId}": {
+      "put": {
+        "operationId": "putSuppliersIdPriceBreaksItemId",
+        "summary": "Replace the whole ladder for one supplier and item. Quantities must be distinct and a larger quantity must cost less. Admin only.",
+        "tags": [
+          "Suppliers"
         ],
         "parameters": [
           {
@@ -14943,16 +15361,81 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "breaks"
+                ],
+                "properties": {
+                  "breaks": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PriceBreak"
+                    }
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "priceBreaks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceBreak"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Non-positive, duplicate or non-decreasing-cost break.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Supplier or item not found in this company.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     }
   }
