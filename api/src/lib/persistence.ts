@@ -9,7 +9,7 @@ import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
-import { hydrateActiveWorkflow } from './industry-packs.js';
+import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
@@ -1103,6 +1103,8 @@ export async function hydrateCompanyProfile(): Promise<void> {
       industryKey: (other as { industryKey?: string | null }).industryKey ?? undefined,
       address: other.address ?? undefined,
     });
+    const otherKey = (other as { industryKey?: string | null }).industryKey ?? other.industry;
+    if (otherKey) setActiveWorkflow(workflowFromPack(getIndustryPack(otherKey)), other.id);
   }
 }
 

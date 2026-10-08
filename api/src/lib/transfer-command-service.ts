@@ -73,7 +73,7 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
   const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
   if (inactiveTransferItem) throw new TransferValidationError(inactiveTransferItem);
 
-  const workflow = getActiveWorkflow();
+  const workflow = getActiveWorkflow(context.companyId);
   if (workflow.expiryBlocking) {
     const expired = validated.lines.filter((line) => {
       const item = listItems().find((entry) => entry.id === line.itemId);
