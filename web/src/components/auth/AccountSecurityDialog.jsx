@@ -1,5 +1,6 @@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TwoFactorPanel } from './TwoFactorPanel'
+import { PasskeyPanel } from './PasskeyPanel'
 
 // Account security for the signed-in person, reachable from the account menu
 // for every role (the two-factor API works for all roles).
@@ -9,8 +10,9 @@ export function AccountSecurityDialog({ open, onOpenChange, authToken }) {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Account security</DialogTitle>
-          <DialogDescription>Protect your sign-in with a code from an authenticator app.</DialogDescription>
+          <DialogDescription>Protect your sign-in with a passkey or a code from an authenticator app.</DialogDescription>
         </DialogHeader>
+        {open && <PasskeyPanel authToken={authToken} />}
         {open && <TwoFactorPanel authToken={authToken} />}
       </DialogContent>
     </Dialog>

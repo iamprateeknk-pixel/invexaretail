@@ -12,7 +12,13 @@ import { fileURLToPath } from 'node:url';
 
 const TRANSFORM_LOADERS = { '.jsx': 'jsx', '.tsx': 'tsx', '.ts': 'ts' };
 
+// Vite turns an imported image into a URL string; component tests only need a string there.
+const ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.webp', '.gif'];
+
 export async function load(url, context, nextLoad) {
+  if (ASSET_EXTENSIONS.some((candidate) => url.split('?')[0].endsWith(candidate))) {
+    return { format: 'module', source: 'export default "test-asset";', shortCircuit: true };
+  }
   const ext = Object.keys(TRANSFORM_LOADERS).find((candidate) => url.endsWith(candidate));
   if (ext) {
     const source = await readFile(new URL(url), 'utf8');

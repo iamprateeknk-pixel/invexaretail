@@ -67,6 +67,7 @@ function AppShell() {
     twoFactorCode,
     setTwoFactorCode,
     handleVerifyTwoFactor,
+    handlePasskeySignIn,
     cancelTwoFactor,
   } = useWorkspace();
 
@@ -91,6 +92,7 @@ function AppShell() {
         twoFactorCode={twoFactorCode}
         setTwoFactorCode={setTwoFactorCode}
         onVerifyTwoFactor={handleVerifyTwoFactor}
+        onPasskeySignIn={() => handlePasskeySignIn()}
         onCancelTwoFactor={cancelTwoFactor}
       />
     );

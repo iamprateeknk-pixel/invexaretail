@@ -8,6 +8,7 @@ import {
   writePersistedSession,
 } from '../lib/session';
 import { purgeLegacyOfflineQueue } from '../offlineStore';
+import { browserWebAuthn, passkeyErrorMessage } from '../lib/passkeys';
 import { isTwoFactorChallenge, normalizeTwoFactorCode } from '../lib/two-factor';
 import { WEB_HANDOFF_EXCHANGE_PATH, handoffCodeFromHash, urlWithoutHandoff } from '../lib/web-handoff';
 import { useEffect, useState } from 'react';
@@ -146,6 +147,24 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
       await establishSession(login);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'That code was not accepted.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  // Sign in with a passkey: the server issues a one-time challenge, the authenticator signs it, the server verifies.
+  // An email (if typed) narrows the prompt to that account's keys; empty is the open "choose a passkey" prompt.
+  async function handlePasskeySignIn(webauthn = browserWebAuthn) {
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const email = normalizedLoginEmail();
+      const begin = await apiRequest('/api/v1/auth/passkeys/login/options', { method: 'POST', body: JSON.stringify(email ? { email } : {}) });
+      const response = await webauthn.startAuthentication({ optionsJSON: begin.options });
+      const login = await apiRequest('/api/v1/auth/passkeys/login/verify', { method: 'POST', body: JSON.stringify({ challengeToken: begin.challengeToken, response }) });
+      await establishSession(login);
+    } catch (error) {
+      setAuthError(passkeyErrorMessage(error, 'Passkey sign-in failed.'));
     } finally {
       setAuthLoading(false);
     }
@@ -296,6 +315,7 @@ export function useWorkspaceAuth({ loadAppData, onLogout, setLoading, addNotific
     twoFactorCode,
     setTwoFactorCode,
     handleVerifyTwoFactor,
+    handlePasskeySignIn,
     cancelTwoFactor,
     handleLogout,
   };
