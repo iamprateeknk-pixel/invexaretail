@@ -156,6 +156,7 @@ model CompanyProfile {
 
 model User {
   totp UserTotp?
+  passkeys PasskeyCredential[]
   id                 String   @id @default(cuid())
   name               String
   email              String   @unique
@@ -2523,4 +2524,22 @@ model ReconciliationRun {
   createdAt        DateTime @default(now())
 
   @@index([companyId, startedAt])
+}
+
+// Passkeys (WebAuthn): one row per registered authenticator. `credentialId` is the base64url id the browser
+// presents at sign-in; `publicKey` is the COSE key (public material, not a secret). `counter` is the signature
+// counter, checked on every assertion so a cloned authenticator is noticed.
+model PasskeyCredential {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      Int       @default(0)
+  transports   String    @default("[]") @db.Text
+  deviceName   String?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+
+  @@index([userId])
 }

@@ -31,7 +31,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | C | Lint covers all tenant models | done | `scripts/architecture-lint.mjs` widened, baseline regenerated |
 | D Auth | Non-enumerating OTP, password policy, session revoke on disable/change | done | `otp-privacy.http.test.ts`, `admin-user-security.http.test.ts` |
 | D | TOTP two-factor with backup codes and lockout | done | `UserTotp`/`AuthLockout`, `/auth/2fa/*` |
-| D | Passkeys / WebAuthn | open | Not started |
+| D | Passkeys / WebAuthn | partial | Server side done: `lib/passkeys.ts` (via `@simplewebauthn/server`, no custom crypto), `lib/passkey-store.ts` + migration `20261201090000_passkey_credentials`, six `/auth/passkeys*` endpoints in the OpenAPI contract. A passkey sign-in (possession + user verification) issues a session directly; ceremony tokens are single use; the signature counter must advance (conditional update, so concurrent assertions cannot both win); wrong origin/RP/challenge refused. 7 HTTP tests run a software authenticator that builds real attestation/assertion bytes. Not done: the web sign-in/enrol UI, and a check with a real browser/device authenticator. `passkey-store.postgres.test.ts` written but not run (no local Postgres). Needs `WEBAUTHN_RP_ID` + `WEBAUTHN_ORIGINS` set to turn on. |
 | D | Control Plane session handoff | partial | One-time 60 s code instead of the session in the URL (`lib/saas/session-handoff.ts`, `/control/v1/sessions/handoff[/exchange]`, 7 tests); web control session now in sessionStorage, admin-panel clears its copy. True HttpOnly cookie not possible across the two origins; handoff store is in-memory (single API replica) |
 | E Realtime/perf | Event-first polling with safety poll | done | `lib/poll-policy.js` + test |
 | E | Exactly-once mutation replay (`X-Mutation-Id`) | done | `lib/mutation-idempotency.ts` unit + Postgres tests |
@@ -51,7 +51,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure. Local equivalents done: restore case of the migration matrix and a rollback rehearsal (older release on the newer schema) - see `release-candidate-evidence.md` |
 | J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
-| K API contract | OpenAPI v2026.40.0: every operation served (264) is listed; 264 fully specified, 0 path-only | done | Ratchet test keeps both numbers from dropping at 100% |
+| K API contract | OpenAPI v2026.41.0: every operation served (270) is listed; 270 fully specified, 0 path-only | done | Ratchet test keeps both numbers from dropping at 100% |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 
 ## What still blocks a GO

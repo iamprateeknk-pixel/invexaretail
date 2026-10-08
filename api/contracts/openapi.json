@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.40.0",
+    "version": "2026.41.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -5765,6 +5765,74 @@
           },
           "notes": {
             "type": "string"
+          }
+        }
+      },
+      "AuthError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code, e.g. PASSKEYS_NOT_CONFIGURED."
+          }
+        }
+      },
+      "Passkey": {
+        "type": "object",
+        "required": [
+          "id",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "PasskeyCeremony": {
+        "type": "object",
+        "required": [
+          "options",
+          "challengeToken"
+        ],
+        "properties": {
+          "options": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "WebAuthn PublicKeyCredential{Creation,Request}Options JSON, passed to navigator.credentials.create()/get()."
+          },
+          "challengeToken": {
+            "type": "string",
+            "description": "Signed, single-use, 5-minute token that carries the server challenge; send it back with the authenticator response."
           }
         }
       }
@@ -28495,6 +28563,407 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/auth/passkeys": {
+      "get": {
+        "operationId": "listPasskeys",
+        "summary": "The signed-in user's registered passkeys (never the key material) and whether passkeys are configured.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "configured",
+                    "passkeys"
+                  ],
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "passkeys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Passkey"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          }
+        }
+      }
+    },
+    "/auth/passkeys/register/options": {
+      "post": {
+        "operationId": "passkeyRegisterOptions",
+        "summary": "Start registering a passkey for the signed-in user. Existing keys are excluded so one authenticator is not enrolled twice.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCeremony"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          },
+          "500": {
+            "description": "Could not start registration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Passkeys are not configured on this server (WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS unset).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkeys/register/verify": {
+      "post": {
+        "operationId": "passkeyRegisterVerify",
+        "summary": "Finish registration: verify the authenticator response (origin, relying party, challenge, user verification) and store the public key.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "challengeToken",
+                  "response"
+                ],
+                "properties": {
+                  "challengeToken": {
+                    "type": "string"
+                  },
+                  "response": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "RegistrationResponseJSON from navigator.credentials.create()."
+                  },
+                  "deviceName": {
+                    "type": "string",
+                    "maxLength": 80
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "passkey"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "passkey": {
+                      "$ref": "#/components/schemas/Passkey"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Expired, reused or mismatched ceremony token, or the response did not verify (PASSKEY_CEREMONY_INVALID / PASSKEY_REGISTRATION_FAILED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          },
+          "409": {
+            "description": "This credential is already registered (PASSKEY_ALREADY_REGISTERED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Passkeys are not configured on this server (WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS unset).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkeys/{id}": {
+      "delete": {
+        "operationId": "deletePasskey",
+        "summary": "Remove one of the signed-in user's passkeys.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          },
+          "404": {
+            "description": "Passkey not found (also for another user's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkeys/login/options": {
+      "post": {
+        "operationId": "passkeyLoginOptions",
+        "summary": "Start a passkey sign-in. With an email the prompt is limited to that account's keys; without one (or with an unknown one) it is an open discoverable-credential prompt, so account existence is not revealed.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCeremony"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Could not start sign-in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Passkeys are not configured on this server (WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS unset).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkeys/login/verify": {
+      "post": {
+        "operationId": "passkeyLoginVerify",
+        "summary": "Finish a passkey sign-in. A verified passkey (possession + user verification) issues a session directly; the signature counter must move forward and the ceremony token is single use.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "challengeToken",
+                  "response"
+                ],
+                "properties": {
+                  "challengeToken": {
+                    "type": "string"
+                  },
+                  "response": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "AuthenticationResponseJSON from navigator.credentials.get()."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Any failure (bad/replayed ceremony, unknown key, inactive user, bad signature, wrong origin or relying party, counter not ahead): PASSKEY_LOGIN_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The company is suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Passkeys are not configured on this server (WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS unset).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

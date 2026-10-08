@@ -32,6 +32,7 @@ API and worker (never commit values; set in the platform's secret store):
 | `SEED_PASSWORD` | only when seeding | Must not be the repository default. |
 | `ALLOWED_ORIGINS` | yes | Exact web origins. |
 | `TOTP_ENCRYPTION_KEY` | to offer 2FA | 32 bytes, base64. Unset = 2FA reported "not configured". |
+| `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS` | to offer passkeys | RP ID is the web app's registrable domain (e.g. `app.example.com`); origins is a comma list of exact web origins (`https://app.example.com`). Unset = passkeys reported "not configured" (503). Optional `WEBAUTHN_RP_NAME`. |
 | `API_RATE_LIMIT_PER_MINUTE` | optional | Per-IP limit, default 240. Raise for a branch behind one NAT. |
 | `RUN_SCHEDULERS` | API: `false` | Schedulers belong to the worker. |
 | `RECONCILE_INTERVAL_HOURS` | worker, default 24 | Nightly stock reconciliation. |
