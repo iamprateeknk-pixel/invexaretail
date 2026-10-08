@@ -1517,7 +1517,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /locations/{locationId}/bin-stock */
+        /** Stock held per bin at a location (rows with stock only, max 500). */
         get: operations["getLocationsLocationIdBinStock"];
         put?: never;
         post?: never;
@@ -1534,10 +1534,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /locations/{locationId}/bins */
+        /** The bins of a location, by code. */
         get: operations["getLocationsLocationIdBins"];
         put?: never;
-        /** POST /locations/{locationId}/bins */
+        /** Create a bin at a location; the code is unique within the location. Admin only. */
         post: operations["postLocationsLocationIdBins"];
         delete?: never;
         options?: never;
@@ -1552,7 +1552,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /locations/{locationId}/pick-face-replenishment */
+        /** Suggested moves from reserve bins into pick faces that have fallen below their minimum. Stock in blocked, quarantined or expired lots is never suggested. */
         get: operations["getLocationsLocationIdPickFaceReplenishment"];
         put?: never;
         post?: never;
@@ -1848,7 +1848,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /putaway-tasks */
+        /** Putaway tasks (PENDING unless a status is given) of the caller's company, oldest first, max 300, with item, lot, location and bins. Pickers see only their assigned locations. */
         get: operations["getPutawayTasks"];
         put?: never;
         post?: never;
@@ -2423,7 +2423,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /bins/{id} */
+        /** Edit a bin's layout, capacity, class, status or pick-face limits. Another company's bin resolves 404. Admin only. */
         patch: operations["patchBinsId"];
         trace?: never;
     };
@@ -3048,7 +3048,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /locations/{locationId}/bin-transfers */
+        /** Move stock between two bins of one location by scanned bin codes (both must be ACTIVE bins of the location; the quantity must be positive). */
         post: operations["postLocationsLocationIdBinTransfers"];
         delete?: never;
         options?: never;
@@ -3320,7 +3320,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /putaway-tasks/{id}/confirm */
+        /** Confirm where goods were put away. A Warehouse picker (or requireScan) must scan the bin; a bin other than the suggested one needs an override. Moves the stock from the staging bin into the chosen bin. */
         post: operations["postPutawayTasksIdConfirm"];
         delete?: never;
         options?: never;
@@ -4936,6 +4936,89 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
             lines?: components["schemas"]["ReturnLine"][];
+        };
+        Bin: {
+            id: string;
+            locationId: string;
+            /** @description Unique within the location; compared case-insensitively when scanned. */
+            code: string;
+            zone?: string | null;
+            aisle?: string | null;
+            rack?: string | null;
+            shelf?: string | null;
+            capacity?: number | null;
+            /** @description Matched against the item category when suggesting a putaway bin. */
+            storageClass?: string | null;
+            /** @enum {string} */
+            status: "ACTIVE" | "INACTIVE";
+            isPickFace?: boolean;
+            pickFaceMin?: number | null;
+            pickFaceMax?: number | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        BinStockRow: {
+            id?: string;
+            itemId: string;
+            lotId?: string | null;
+            locationId: string;
+            /** @description A bin id, or the staging bin before putaway. */
+            binId: string;
+            onHand: number;
+            item?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            };
+            location?: {
+                id?: string;
+                name?: string;
+            };
+        };
+        PutawayTask: {
+            id: string;
+            itemId: string;
+            lotId?: string | null;
+            locationId: string;
+            quantity: number;
+            suggestedBinId?: string | null;
+            confirmedBinId?: string | null;
+            /** @enum {string} */
+            status: "PENDING" | "CONFIRMED" | "CANCELLED";
+            sourceDocument?: string | null;
+            assignedToId?: string | null;
+            /** Format: date-time */
+            confirmedAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            item?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            };
+            lot?: {
+                id?: string;
+                lotNo?: string;
+                /** Format: date-time */
+                expiryDate?: string | null;
+            } | null;
+            location?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            };
+            suggestedBin?: {
+                id?: string;
+                code?: string;
+                zone?: string | null;
+                aisle?: string | null;
+                rack?: string | null;
+                shelf?: string | null;
+            } | null;
+            confirmedBin?: {
+                id?: string;
+                code?: string;
+            } | null;
         };
     };
     responses: never;
@@ -10259,44 +10342,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        bins?: components["schemas"]["BinStockRow"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -10311,44 +10375,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        bins?: components["schemas"]["Bin"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -10361,52 +10406,60 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    code: string;
+                    zone?: string;
+                    aisle?: string;
+                    rack?: string;
+                    shelf?: string;
+                    capacity?: number;
+                    storageClass?: string;
+                    isPickFace?: boolean;
+                    pickFaceMin?: number;
+                    pickFaceMax?: number;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        bin?: components["schemas"]["Bin"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Bin code is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description A bin with this code already exists at this location. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -10421,44 +10474,33 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        suggestions?: {
+                            itemId: string;
+                            lotId?: string;
+                            fromBinId: string;
+                            fromBinCode?: string;
+                            toBinId: string;
+                            toBinCode?: string;
+                            quantity: number;
+                        }[];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -11683,30 +11725,26 @@ export interface operations {
     };
     getPutawayTasks: {
         parameters: {
-            query?: never;
+            query?: {
+                locationId?: string;
+                status?: "PENDING" | "CONFIRMED" | "CANCELLED";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tasks?: components["schemas"]["PutawayTask"][];
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -11715,19 +11753,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13689,52 +13722,52 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    zone?: string | null;
+                    aisle?: string | null;
+                    rack?: string | null;
+                    shelf?: string | null;
+                    storageClass?: string | null;
+                    /** @enum {string} */
+                    status?: "ACTIVE" | "INACTIVE";
+                    capacity?: number | null;
+                    isPickFace?: boolean;
+                    pickFaceMin?: number | null;
+                    pickFaceMax?: number | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        bin?: components["schemas"]["Bin"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Bin not found (also for another company's bin). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -15899,52 +15932,67 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    itemId: string;
+                    lotId?: string;
+                    fromBinCode: string;
+                    toBinCode: string;
+                    quantity: number;
+                    reference?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Moved. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        movement?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid move (missing item, same bin, unknown scan or non-positive quantity). */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Bin not found at this location. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The source bin does not hold enough stock. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16774,52 +16822,68 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    scannedBinCode?: string;
+                    binId?: string;
+                    binCode?: string;
+                    requireScan?: boolean;
+                    allowOverride?: boolean;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Confirmed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        task?: components["schemas"]["PutawayTask"];
+                        bin?: {
+                            id?: string;
+                            code?: string;
+                        };
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A bin must be selected, the scan does not match, the bin is not at this location, or an override is required (code WRONG_BIN). */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Putaway task not found (also for another company's task). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description This putaway task is already resolved. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
