@@ -44,7 +44,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | J Deployment/DR | Canonical runbook, CODEOWNERS, PR template | done | `docs/PRODUCTION_RUNBOOK.md`; restore drill 95 tables / 77 rows identical |
 | J | Managed-database restore drill, staging canary | open | Needs real infrastructure. Local equivalents done: restore case of the migration matrix and a rollback rehearsal (older release on the newer schema) - see `release-candidate-evidence.md` |
 | J | Remove committed `api/dist` | done | Untracked and ignored; Docker and `postinstall` build it from source; CI step fails if it is tracked again |
-| K API contract | OpenAPI v2026.39.0: every operation served (264) is listed; 252 fully specified, 12 path-only | partial | Ratchet test keeps both numbers from dropping. Turning path-only entries into full request/response schemas is ongoing |
+| K API contract | OpenAPI v2026.40.0: every operation served (264) is listed; 264 fully specified, 0 path-only | partial | Ratchet test keeps both numbers from dropping. Turning path-only entries into full request/response schemas is ongoing |
 | L Readiness | Release scorecard updated | done | `release-scorecard.md` |
 
 ## What still blocks a GO

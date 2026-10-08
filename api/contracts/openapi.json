@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.39.0",
+    "version": "2026.40.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -5576,6 +5576,195 @@
           },
           "afterBalance": {
             "type": "number"
+          }
+        }
+      },
+      "LegacyErrorField": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "PickerTransferLine": {
+        "type": "object",
+        "required": [
+          "lineId",
+          "itemId",
+          "lotId",
+          "requestedQty",
+          "pickedQty",
+          "remainingQty"
+        ],
+        "properties": {
+          "lineId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "itemCode": {
+            "type": "string"
+          },
+          "itemBarcode": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "pickMethod": {
+            "type": "string",
+            "description": "LOT_SCAN, or a pooled (weight) pick where the server chooses the lots."
+          },
+          "lotStatus": {
+            "type": "string"
+          },
+          "requestedQty": {
+            "type": "number"
+          },
+          "pickedQty": {
+            "type": "number"
+          },
+          "remainingQty": {
+            "type": "number"
+          },
+          "lotId": {
+            "type": "string"
+          },
+          "lotNo": {
+            "type": "string"
+          },
+          "expiryDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lotAvailable": {
+            "type": "number"
+          }
+        }
+      },
+      "PickSlip": {
+        "type": "object",
+        "required": [
+          "id",
+          "pickerId",
+          "lines"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "pickerId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "lotId": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "inputMethod": {
+                  "type": "string"
+                },
+                "allocated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "lotId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ReceiptSummary": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "transferId"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receivedBy": {
+            "type": "string"
+          },
+          "receivedQty": {
+            "type": "number"
+          },
+          "damagedQty": {
+            "type": "number"
+          },
+          "shortageQty": {
+            "type": "number"
+          },
+          "excessQty": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
           }
         }
       }
@@ -11765,34 +11954,87 @@
     "/intelligence/{locationId}": {
       "get": {
         "operationId": "getIntelligenceLocationId",
-        "summary": "GET /intelligence/{locationId}",
+        "summary": "The Action Center for a location: executive summary, replenishment recommendations, count anomalies, lot blocks, expiry actions and overstock (Admin/Auditor). Dismissed items are hidden for 24 hours.",
         "tags": [
           "intelligence"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "intelligence"
+                  ],
+                  "properties": {
+                    "intelligence": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "generatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "executiveSummary": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "recommendations": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "anomalies": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "lotBlocks": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "expiryActions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "overstock": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role is not Admin or Auditor, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12028,34 +12270,121 @@
     "/items/{itemId}/forecast": {
       "get": {
         "operationId": "getItemsItemIdForecast",
-        "summary": "GET /items/{itemId}/forecast",
+        "summary": "Demand forecast and reorder suggestion for one item at one location: net sales, demand pattern, expiry actions and overstock.",
         "tags": [
           "items"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "itemId",
+                    "locationId",
+                    "windowDays",
+                    "forecastMethod"
+                  ],
+                  "properties": {
+                    "itemId": {
+                      "type": "string"
+                    },
+                    "locationId": {
+                      "type": "string"
+                    },
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "leadTimeDays": {
+                      "type": "number"
+                    },
+                    "servicePercent": {
+                      "type": "number"
+                    },
+                    "demand": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "demandPattern": {
+                      "type": "string"
+                    },
+                    "variabilityClass": {
+                      "type": "string"
+                    },
+                    "forecastMethod": {
+                      "type": "string",
+                      "enum": [
+                        "CROSTON_SBA",
+                        "MOVING_AVERAGE"
+                      ]
+                    },
+                    "stockoutDaysExcluded": {
+                      "type": "integer"
+                    },
+                    "onHand": {
+                      "type": "number"
+                    },
+                    "onOrder": {
+                      "type": "number"
+                    },
+                    "suggestion": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "null when no reorder rule or demand applies."
+                    },
+                    "expiryActions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "overstock": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "locationId missing or servicePercent out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "No access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "501": {
+            "description": "Needs a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12070,6 +12399,45 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "windowDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            }
+          },
+          {
+            "name": "leadTimeDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 7
+            }
+          },
+          {
+            "name": "servicePercent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 50,
+              "maximum": 99.99,
+              "default": 95
             }
           }
         ]
@@ -13758,41 +14126,205 @@
     "/ops/metrics": {
       "get": {
         "operationId": "getOpsMetrics",
-        "summary": "GET /ops/metrics",
+        "summary": "Operational metrics for admins: request RED metrics, live sync clients, stuck transfers, process, database, reconciliation freshness and the outbox SLO.",
         "tags": [
           "ops"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "generatedAt",
+                    "api",
+                    "sync",
+                    "process",
+                    "database"
+                  ],
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "api": {
+                      "type": "object",
+                      "properties": {
+                        "uptimeSeconds": {
+                          "type": "integer"
+                        },
+                        "totalRequests": {
+                          "type": "integer"
+                        },
+                        "serverErrors": {
+                          "type": "integer"
+                        },
+                        "slowThresholdMs": {
+                          "type": "number"
+                        },
+                        "slowRoutes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "slowest": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "failing": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "busiest": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        }
+                      }
+                    },
+                    "sync": {
+                      "type": "object",
+                      "properties": {
+                        "liveClients": {
+                          "type": "integer"
+                        },
+                        "lastEventId": {
+                          "type": [
+                            "string",
+                            "integer",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "warehouse": {
+                      "type": "object",
+                      "properties": {
+                        "stuckTransfers": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "process": {
+                      "type": "object",
+                      "properties": {
+                        "rssMb": {
+                          "type": "integer"
+                        },
+                        "heapUsedMb": {
+                          "type": "integer"
+                        },
+                        "node": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "database": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": [
+                        "connected"
+                      ],
+                      "properties": {
+                        "connected": {
+                          "type": "boolean"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "reconciliation": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Freshness of the in-memory snapshot; stale = 3 failed refreshes or no success for 3 intervals."
+                    },
+                    "stockReconciliation": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "description": "Latest journal-vs-balance reconciliation; checked=false when none has run, breached=true when it found drift."
+                        }
+                      ]
+                    },
+                    "outbox": {
+                      "type": "object",
+                      "properties": {
+                        "pending": {
+                          "type": "integer"
+                        },
+                        "poison": {
+                          "type": "integer"
+                        },
+                        "oldestPendingAgeSeconds": {
+                          "type": "number"
+                        },
+                        "slo": {
+                          "type": "object",
+                          "required": [
+                            "breached"
+                          ],
+                          "properties": {
+                            "lagBreachSeconds": {
+                              "type": "number"
+                            },
+                            "poisonBreachCount": {
+                              "type": "integer"
+                            },
+                            "breached": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "parameters": []
       }
     },
     "/orders": {
@@ -15001,34 +15533,73 @@
     "/picker/transfers/{transferId}": {
       "get": {
         "operationId": "getPickerTransfersTransferId",
-        "summary": "GET /picker/transfers/{transferId}",
+        "summary": "A transfer as the warehouse picker sees it: each line with barcode, lot, how much is picked and what is left, plus the saved pick slips.",
         "tags": [
           "picker"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "transfer",
+                    "pickSlips"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/TransferRecord"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "lines": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/PickerTransferLine"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "pickSlips": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PickSlip"
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role is not Admin or Warehouse Picker, or no access to the source location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer was not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18245,34 +18816,44 @@
     "/transfers/{transferId}/export.xls": {
       "get": {
         "operationId": "getTransfersTransferIdExportXls",
-        "summary": "GET /transfers/{transferId}/export.xls",
+        "summary": "Download the pick report (requested vs picked per line, lot, expiry, exceptions) as an Excel XML workbook.",
         "tags": [
           "transfers"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "The workbook.",
             "content": {
-              "application/json": {
+              "application/vnd.ms-excel": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role is not Admin, Branch Manager or Auditor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer was not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -20708,34 +21289,71 @@
     "/auth/setup-biometric": {
       "post": {
         "operationId": "postAuthSetupBiometric",
-        "summary": "POST /auth/setup-biometric",
+        "summary": "LEGACY, off in production: enrol a PIN / face / fingerprint hash for the signed-in user. Superseded by device biometric unlock.",
         "tags": [
           "auth"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "success",
+                    "enabledMethods"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "enabledMethods": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid biometric method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
+          "500": {
+            "description": "Setup failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "501": {
+            "description": "Server-side mock biometrics are disabled (always in production unless ENABLE_LEGACY_BIOMETRIC=true). Use the device biometric unlock.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -20744,63 +21362,142 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "pin",
+                      "face",
+                      "fingerprint"
+                    ]
+                  },
+                  "pin": {
+                    "type": "string"
+                  },
+                  "faceData": {
+                    "type": "string"
+                  },
+                  "fingerprintData": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/auth/verify-biometric": {
       "post": {
         "operationId": "postAuthVerifyBiometric",
-        "summary": "POST /auth/verify-biometric",
+        "summary": "LEGACY, off in production: sign in with a previously enrolled PIN / face / fingerprint. Superseded by password login plus device unlock.",
         "tags": [
           "auth"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/AuthSession"
+                    }
+                  ]
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Invalid email or method, or this biometric is not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           },
           "401": {
-            "description": "No or invalid credentials."
+            "description": "Unknown or inactive user, or the credential did not match.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
+          "500": {
+            "description": "Verification failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "501": {
+            "description": "Server-side mock biometrics are disabled (always in production unless ENABLE_LEGACY_BIOMETRIC=true). Use the device biometric unlock.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorField"
+                }
+              }
+            }
           }
         },
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "email",
+                  "method"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "pin",
+                      "face",
+                      "fingerprint"
+                    ]
+                  },
+                  "pin": {
+                    "type": "string"
+                  },
+                  "faceData": {
+                    "type": "string"
+                  },
+                  "fingerprintData": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "parameters": []
       }
     },
     "/connectors/{id}/ingest": {
@@ -22389,34 +23086,100 @@
     "/intelligence/{locationId}/dismiss": {
       "post": {
         "operationId": "postIntelligenceLocationIdDismiss",
-        "summary": "POST /intelligence/{locationId}/dismiss",
+        "summary": "Dismiss an Action Center recommendation with an audit trail; it resurfaces after 24 hours if still valid.",
         "tags": [
           "intelligence"
         ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Dismissed.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "dismissal"
+                  ],
+                  "properties": {
+                    "dismissal": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "locationId",
+                        "itemId",
+                        "type"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "locationId": {
+                          "type": "string"
+                        },
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        },
+                        "countId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "dismissedById": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "type, itemId (and countId for ANOMALY) are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role is not Admin or Auditor, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "503": {
+            "description": "Dismissals are not available on this database yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -22435,12 +23198,38 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "type",
+                  "itemId"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "ANOMALY",
+                      "REPLENISHMENT",
+                      "LOT_BLOCK",
+                      "EXPIRY",
+                      "OVERSTOCK",
+                      "REORDER_SUGGESTION"
+                    ]
+                  },
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "countId": {
+                    "type": "string",
+                    "description": "Required for ANOMALY."
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -23727,34 +24516,87 @@
     "/picker/transfers/{transferId}/allocation-preview": {
       "post": {
         "operationId": "postPickerTransfersTransferIdAllocationPreview",
-        "summary": "POST /picker/transfers/{transferId}/allocation-preview",
+        "summary": "Preview which lots a weight (pooled) pick would take, FEFO/FIFO, before it is confirmed.",
         "tags": [
           "picker"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "itemId",
+                    "requested",
+                    "remaining",
+                    "allocations",
+                    "shortfall"
+                  ],
+                  "properties": {
+                    "itemId": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    },
+                    "requested": {
+                      "type": "number"
+                    },
+                    "remaining": {
+                      "type": "number"
+                    },
+                    "strategy": {
+                      "type": "string"
+                    },
+                    "allocations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lotId": {
+                            "type": "string"
+                          },
+                          "lotNo": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "shortfall": {
+                      "type": "number"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Not a pooled-pick item, not part of the transfer, or more than is still to be picked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer not found for the caller, wrong role, or no access to the source location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23773,12 +24615,24 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "itemId",
+                  "quantity"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
               }
             }
           }
@@ -23789,34 +24643,87 @@
     "/picker/transfers/{transferId}/pick-slips": {
       "post": {
         "operationId": "postPickerTransfersTransferIdPickSlips",
-        "summary": "POST /picker/transfers/{transferId}/pick-slips",
+        "summary": "Save what the picker picked (and any exceptions). Retry-safe by requestId.",
         "tags": [
           "picker"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "This requestId was already saved; the original slip is returned.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "duplicate",
+                    "pickSlip"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "pickSlip": {
+                      "$ref": "#/components/schemas/PickSlip"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Pick slip saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "pickSlip",
+                    "transfer"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "pickSlip": {
+                      "$ref": "#/components/schemas/PickSlip"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Nothing picked, a line over the requested quantity, or the transfer is not in a pickable status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23835,12 +24742,73 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "requestId": {
+                    "type": "string",
+                    "maxLength": 191,
+                    "description": "Retry key: the same id from the same picker returns the saved slip."
+                  },
+                  "startedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "finished": {
+                    "type": "boolean",
+                    "description": "true moves the transfer to READY_FOR_ADMIN."
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemId",
+                        "quantity"
+                      ],
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "lotId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number"
+                        },
+                        "inputMethod": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "exceptions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "lotId": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number"
+                        },
+                        "note": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -24408,34 +25376,106 @@
     "/replenishment-actions/transfer": {
       "post": {
         "operationId": "postReplenishmentActionsTransfer",
-        "summary": "POST /replenishment-actions/transfer",
+        "summary": "Turn a replenishment recommendation into a REQUESTED transfer, lots chosen FEFO and stock reserved (Admin). Retry-safe by requestId.",
         "tags": [
           "replenishment-actions"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "This requestId already produced a transfer; it is returned.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "success",
+                    "duplicate",
+                    "transfer"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Transfer created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "transfer"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Missing requestId, same or missing locations, non-positive quantity, or reservation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin, or no access to a location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source stock changed; the quantity is no longer available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24444,17 +25484,44 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "requestId",
+                  "sourceLocationId",
+                  "destinationLocationId",
+                  "itemId",
+                  "quantity"
+                ],
+                "properties": {
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 191
+                  },
+                  "sourceLocationId": {
+                    "type": "string"
+                  },
+                  "destinationLocationId": {
+                    "type": "string"
+                  },
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/returns/{id}/lines/{lineId}/disposition": {
@@ -26288,34 +27355,82 @@
     "/transfers/{transferId}/receive": {
       "post": {
         "operationId": "postTransfersTransferIdReceive",
-        "summary": "POST /transfers/{transferId}/receive",
+        "summary": "Receive a dispatched transfer at its destination (Admin or destination store user). Retry-safe by requestId.",
         "tags": [
           "transfers"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "success",
+                    "transfer",
+                    "receipt"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    },
+                    "receipt": {
+                      "$ref": "#/components/schemas/ReceiptSummary"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Missing requestId, wrong status, a multi-lot transfer without per-line receipts, a QC gate (code QC_REQUIRED), or a quantity problem.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role cannot receive, or not the destination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "requestId belongs to another transfer, or this receipt is still being processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -26334,12 +27449,91 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "requestId"
+                ],
+                "properties": {
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 191,
+                    "description": "Retry key; a repeat returns the recorded receipt with duplicate=true."
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemId",
+                        "lotId",
+                        "receivedQty"
+                      ],
+                      "properties": {
+                        "lineId": {
+                          "type": "string"
+                        },
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "lotId": {
+                          "type": "string"
+                        },
+                        "receivedQty": {
+                          "type": "number"
+                        },
+                        "damagedQty": {
+                          "type": "number"
+                        },
+                        "shortageQty": {
+                          "type": "number"
+                        },
+                        "excessQty": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "receivedQty": {
+                    "type": "number",
+                    "description": "Single-line transfers only: use these four instead of lines."
+                  },
+                  "damagedQty": {
+                    "type": "number"
+                  },
+                  "shortageQty": {
+                    "type": "number"
+                  },
+                  "excessQty": {
+                    "type": "number"
+                  },
+                  "qcInspections": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "lineId": {
+                          "type": "string"
+                        },
+                        "results": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
