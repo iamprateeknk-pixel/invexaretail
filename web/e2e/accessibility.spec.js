@@ -28,13 +28,15 @@ test('the main operational pages have no serious or critical accessibility viola
   await signIn(page, 'ADMIN');
   for (const section of SECTIONS) {
     await page.evaluate((target) => { window.location.hash = `#/${target}`; }, section);
-    await page.waitForTimeout(400);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(600); // let effects that name controls run before the scan
     await scan(page, section);
   }
 });
 
 test('the Store user landing page has no serious or critical accessibility violations', async ({ page }) => {
   await signIn(page, 'STORE_USER');
-  await page.waitForTimeout(400);
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(600);
   await scan(page, 'store-user landing');
 });
