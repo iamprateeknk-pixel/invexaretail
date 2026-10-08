@@ -2069,7 +2069,14 @@ router.patch('/pick-waves/:id', async (req: Request, res: Response) => {
   if (!isAdmin && !isAssignee) return res.status(403).json({ message: 'You do not have access to this pick wave.' });
 
   const data: Record<string, unknown> = {};
-  if (isAdmin && req.body.assignedToId !== undefined) data.assignedToId = req.body.assignedToId || null;
+  if (isAdmin && req.body.assignedToId !== undefined) {
+    // The assignee is joined into GET /pick-waves, so it must be a user of the caller's own company.
+    if (req.body.assignedToId) {
+      const assignee = await prisma.user.findFirst({ where: { id: String(req.body.assignedToId), companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true } }).catch(() => null);
+      if (!assignee) return res.status(404).json({ message: 'Assignee was not found.' });
+    }
+    data.assignedToId = req.body.assignedToId || null;
+  }
   if (req.body.status !== undefined) {
     const validStatuses = ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
     if (!validStatuses.includes(req.body.status)) return res.status(400).json({ message: 'Invalid status.' });
