@@ -109,6 +109,15 @@ export function deleteView(storage, userId, tableId, viewId, defaults = DEFAULT_
   return next;
 }
 
+/** Server rows (SavedView) -> the same {id,name,state} shape as personal views; state is re-validated like stored data. */
+export function toTeamViews(rows, defaults = DEFAULT_TABLE_STATE) {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((row) => row && row.isShared !== false && typeof row.id === 'string' && typeof row.name === 'string' && row.name.trim())
+    .slice(0, MAX_VIEWS)
+    .map((row) => ({ id: row.id, name: row.name.trim().slice(0, 60), ownerId: row.ownerId, state: parseTableQuery(serializeTableQuery(row.filter ?? {}, defaults), defaults) }));
+}
+
 // ---- client-side search -------------------------------------------------------------------
 
 /** Rows whose searchable text (from `getFields(row)`) contains every word of the query. */

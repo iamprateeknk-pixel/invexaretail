@@ -143,3 +143,18 @@ test('hiddenColumnCss targets the right cells, honouring a leading checkbox colu
   assert.equal(css, '.tv-x th:nth-child(3),.tv-x td:nth-child(3){display:none}');
   assert.equal(hiddenColumnCss('tv-x', ['item'], new Set()), '');
 });
+
+test('toTeamViews keeps shared server rows, re-validates their state and drops malformed ones', async () => {
+  const { toTeamViews } = await import('./table-state.js');
+  const views = toTeamViews([
+    { id: 'a', name: '  Overdue  ', ownerId: 'u1', isShared: true, filter: { q: 'late', density: 'compact', page: 9, evil: 'x' } },
+    { id: 'b', name: '', isShared: true, filter: {} },
+    { id: 'c', name: 'Private', isShared: false, filter: {} },
+    null,
+  ]);
+  assert.deepEqual(views.map((view) => view.name), ['Overdue']);
+  assert.equal(views[0].state.q, 'late');
+  assert.equal(views[0].state.density, 'compact');
+  assert.equal(views[0].state.evil, undefined);
+  assert.deepEqual(toTeamViews(undefined), []);
+});
