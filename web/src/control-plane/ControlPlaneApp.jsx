@@ -228,6 +228,26 @@ export function ControlPlaneApp() {
     }
   }
 
+  // The company list used to be whatever the LOGIN response carried, saved in the session and never asked
+  // for again: a platform session that was already signed in kept showing a stale list (a company registered
+  // since then never appeared) until the operator signed out and in. Ask the server whenever the company
+  // picker is what is on screen.
+  useEffect(() => {
+    if (!platformToken || controlToken) return undefined;
+    let cancelled = false;
+    controlRequest('/control/v1/companies', { token: platformToken })
+      .then((result) => {
+        if (cancelled || !Array.isArray(result?.companies)) return;
+        setCompanies(result.companies);
+        const current = readControlSession();
+        if (current?.platformToken) writeControlSession({ ...current, companies: result.companies });
+      })
+      .catch(() => {
+        // Keep the list we already have; the picker still works with what login returned.
+      });
+    return () => { cancelled = true; };
+  }, [platformToken, controlToken]);
+
   useEffect(() => {
     if (!controlToken) return;
     refreshLocked().catch((caught) => setError(caught.message));
