@@ -1,8 +1,13 @@
+import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
+import { nameFromSiblingLabel } from '@/lib/a11y-name'
 
 function Input({ className, type, ...props }) {
+  const ref = useRef(null)
+  useEffect(() => { nameFromSiblingLabel(ref.current) })
   return (
     <input
+      ref={ref}
       type={type}
       data-slot="input"
       className={cn(

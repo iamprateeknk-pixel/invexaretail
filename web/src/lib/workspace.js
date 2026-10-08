@@ -185,6 +185,34 @@ export function visibleNavigationGroups(navigation, { role, hiddenModules = new 
     .filter((group) => group.items.length > 0);
 }
 
+// Plan Area F 9.3: "5-8 primary destinations for normal users; expandable secondary groups for power
+// users - no 25-item wall of modules". Each role's daily destinations stay in the rail; everything else
+// the role may open is one click away under "More" (and always reachable from the command palette).
+// This only orders and groups what permissions already allow - it never grants or hides access.
+export const PRIMARY_NAV_BY_ROLE = {
+  STORE_USER: ['dashboard', 'counts', 'inventory', 'item-search', 'transfers', 'expiry', 'exceptions', 'alerts'],
+  WAREHOUSE_PICKER: ['dashboard', 'picking', 'putaway', 'transfers', 'counts', 'inventory', 'exceptions', 'alerts'],
+  BRANCH_MANAGER: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'approvals', 'reports', 'exceptions'],
+  ADMIN: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'reports', 'exceptions'],
+  ADMIN_USER: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'reports', 'exceptions'],
+  AUDITOR: ['dashboard', 'reports', 'inventory', 'exceptions', 'approvals', 'command-center', 'alerts'],
+};
+export const MAX_PRIMARY_NAV = 8;
+
+/**
+ * Splits already-permitted navigation groups into the role's primary rail and a "More" remainder.
+ * Every item lands in exactly one of the two; an unknown role keeps the first MAX_PRIMARY_NAV items.
+ */
+export function splitNavigation(groups, role) {
+  const wanted = PRIMARY_NAV_BY_ROLE[role];
+  const allIds = groups.flatMap((group) => group.items.map((item) => item.id));
+  const primaryIds = new Set(wanted ? wanted.filter((id) => allIds.includes(id)) : allIds.slice(0, MAX_PRIMARY_NAV));
+  const pick = (include) => groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => primaryIds.has(item.id) === include) }))
+    .filter((group) => group.items.length > 0);
+  return { primary: pick(true), more: pick(false) };
+}
+
 export const PAGE_META = {
   dashboard: ['Operations overview', 'Live work, stock risk and performance across your locations.'],
   inventory: ['Items and stock', 'Search current stock, inspect lots and open item-level details.'],

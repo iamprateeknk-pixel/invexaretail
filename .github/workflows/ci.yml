@@ -204,6 +204,9 @@ jobs:
       - name: Build web
         run: npm run build
 
+      - name: Bundle size budget
+        run: npm run budget
+
       - name: Install browser for Week 9-10 E2E gate
         run: npx playwright install --with-deps chromium
 

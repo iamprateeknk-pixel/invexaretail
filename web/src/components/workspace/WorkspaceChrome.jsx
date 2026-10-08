@@ -1,4 +1,4 @@
-import { NAVIGATION, ROLE_LABELS, visibleNavigationGroups } from '../../lib/workspace';
+import { NAVIGATION, ROLE_LABELS, splitNavigation, visibleNavigationGroups } from '../../lib/workspace';
 import { useWorkspace } from './WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,7 @@ import {
   Bell,
   ChevronRight,
   Menu,
+  MoreHorizontal,
   Moon,
   PackageOpen,
   PanelLeftClose,
@@ -34,44 +35,68 @@ import {
   Warehouse,
 } from 'lucide-react';
 
+function NavGroups({ groups, sidebarCompact, activeSection, navigateTo }) {
+  return groups.map((group) => (
+    <div key={group.label} className="space-y-1">
+      {!sidebarCompact && (
+        <p className="px-3 pb-1 text-[10px] font-bold tracking-[0.18em] text-muted-foreground uppercase">
+          {group.label}
+        </p>
+      )}
+      {group.items.map((item) => {
+        const Icon = item.icon;
+        const active = activeSection === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            title={sidebarCompact ? item.label : undefined}
+            aria-label={sidebarCompact ? item.label : undefined}
+            aria-current={active ? 'page' : undefined}
+            onClick={() => navigateTo(item.id)}
+            className={`group flex h-10 w-full items-center rounded-lg px-3 text-sm font-medium transition-all ${sidebarCompact ? 'justify-center' : 'gap-3'} ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
+          >
+            <Icon className="size-4 shrink-0" aria-hidden="true" />
+            {!sidebarCompact && <span className="truncate">{item.label}</span>}
+            {!sidebarCompact && item.badge && (
+              <span className={`ml-auto rounded px-1.5 py-0.5 text-[9px] font-bold ${active ? 'bg-primary-foreground/15' : 'bg-muted text-muted-foreground'}`}>
+                {item.badge}
+              </span>
+            )}
+            {!sidebarCompact && !item.badge && (
+              <ChevronRight className={`ml-auto size-3 opacity-0 transition-opacity ${active ? 'opacity-70' : 'group-hover:opacity-60'}`} />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  ));
+}
+
 function WorkspaceNavigation({ role, hiddenModules, sidebarCompact, activeSection, navigateTo }) {
-  const groups = visibleNavigationGroups(NAVIGATION, { role, hiddenModules });
+  const { primary, more } = splitNavigation(visibleNavigationGroups(NAVIGATION, { role, hiddenModules }), role);
+  const moreCount = more.reduce((total, group) => total + group.items.length, 0);
+  const activeInMore = more.some((group) => group.items.some((item) => item.id === activeSection));
 
   return (
     <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4" aria-label="Primary navigation">
-      {groups.map((group) => (
-        <div key={group.label} className="space-y-1">
-          {!sidebarCompact && (
-            <p className="px-3 pb-1 text-[10px] font-bold tracking-[0.18em] text-muted-foreground/70 uppercase">
-              {group.label}
-            </p>
-          )}
-          {group.items.map((item) => {
-            const Icon = item.icon;
-            const active = activeSection === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                title={sidebarCompact ? item.label : undefined}
-                onClick={() => navigateTo(item.id)}
-                className={`group flex h-10 w-full items-center rounded-lg px-3 text-sm font-medium transition-all ${sidebarCompact ? 'justify-center' : 'gap-3'} ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
-              >
-                <Icon className="size-4 shrink-0" aria-hidden="true" />
-                {!sidebarCompact && <span className="truncate">{item.label}</span>}
-                {!sidebarCompact && item.badge && (
-                  <span className={`ml-auto rounded px-1.5 py-0.5 text-[9px] font-bold ${active ? 'bg-primary-foreground/15' : 'bg-muted text-muted-foreground'}`}>
-                    {item.badge}
-                  </span>
-                )}
-                {!sidebarCompact && !item.badge && (
-                  <ChevronRight className={`ml-auto size-3 opacity-0 transition-opacity ${active ? 'opacity-70' : 'group-hover:opacity-60'}`} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+      <NavGroups groups={primary} sidebarCompact={sidebarCompact} activeSection={activeSection} navigateTo={navigateTo} />
+      {moreCount > 0 && (
+        // Native <details>: keyboard and screen-reader operable with no extra code. It is open while the
+        // current page lives inside it, so the active item is never hidden.
+        <details key={activeInMore ? 'open' : 'closed'} open={activeInMore} className="space-y-1">
+          <summary
+            className={`flex h-10 cursor-pointer list-none items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground ${sidebarCompact ? 'justify-center' : 'gap-3'}`}
+            aria-label={`More pages (${moreCount})`}
+          >
+            <MoreHorizontal className="size-4 shrink-0" aria-hidden="true" />
+            {!sidebarCompact && <span>More ({moreCount})</span>}
+          </summary>
+          <div className="space-y-4 pt-2">
+            <NavGroups groups={more} sidebarCompact={sidebarCompact} activeSection={activeSection} navigateTo={navigateTo} />
+          </div>
+        </details>
+      )}
     </nav>
   );
 }

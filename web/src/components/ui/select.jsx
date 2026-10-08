@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { hasAccessibleName, siblingLabelText } from '@/lib/a11y-name'
 
 function Select({ ...props }) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
@@ -15,9 +17,23 @@ function SelectValue({ ...props }) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
+/** A name for a trigger nobody labelled: the label right next to it, else the placeholder or value it shows. */
+export function deriveTriggerName(trigger) {
+  return siblingLabelText(trigger) || trigger.querySelector('[data-slot="select-value"]')?.textContent.trim() || ''
+}
+
 function SelectTrigger({ className, size = 'default', children, ...props }) {
+  const ref = useRef(null)
+  const named = Boolean(props['aria-label'] || props['aria-labelledby'])
+  useEffect(() => {
+    const trigger = ref.current
+    if (!trigger || named || hasAccessibleName(trigger)) return
+    const name = deriveTriggerName(trigger)
+    if (name) trigger.setAttribute('aria-label', name)
+  })
   return (
     <SelectPrimitive.Trigger
+      ref={ref}
       data-slot="select-trigger"
       data-size={size}
       className={cn(
