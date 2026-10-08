@@ -531,6 +531,35 @@ export class ControlPlane {
     this.billing.set('company-jaipur', { subscription: 'trial', cycle: 'monthly', amount: 0 });
   }
 
+  /**
+   * Companies are born in two places: the control plane (create company) and operational data (a CompanyProfile
+   * or users already carrying a companyId - seeded, imported or created before the control plane tracked them).
+   * The platform list only knew the first group, so an operating company could be invisible to the super admin.
+   * This adds the missing one with the default plan and keeps the display name equal to the workspace name.
+   * Returns true when something changed (so the caller can persist).
+   */
+  registerOperationalCompany(input: { id: string; name: string; primaryAdminId?: string | null }): boolean {
+    const name = input.name.trim() || input.id;
+    const existing = this.companies.get(input.id);
+    if (existing) {
+      if (input.name.trim() && existing.name !== name) {
+        existing.name = name;
+        return true;
+      }
+      return false;
+    }
+    this.companies.set(input.id, {
+      id: input.id,
+      tenantId: this.tenantId,
+      name,
+      status: 'active',
+      planId: 'pro',
+      primaryAdminId: input.primaryAdminId ?? null,
+      createdAt: nowIso(),
+    });
+    return true;
+  }
+
   private createSeedCompany(input: {
     id: string;
     name: string;

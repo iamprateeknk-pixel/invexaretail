@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { ControlPlaneError, controlPlane, type ScopeContext } from '../lib/saas/control-plane.js';
-import { scheduleControlPlanePersist } from '../lib/saas/persistence.js';
+import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
@@ -92,8 +92,9 @@ controlRouter.use(persistOnSuccess);
 studioRouter.use(persistOnSuccess);
 syncRouter.use(persistOnSuccess);
 
-controlRouter.post('/auth/login', (req: Request, res: Response) => {
+controlRouter.post('/auth/login', async (req: Request, res: Response) => {
   try {
+    await syncOperationalCompanies().catch(() => 0);
     const email = String(req.body?.email ?? '').trim().toLowerCase();
     const password = String(req.body?.password ?? '');
     res.json({ success: true, ...controlPlane.platformLogin(email, password) });
@@ -106,7 +107,8 @@ controlRouter.get('/plans', requirePlatform, (_req: Request, res: Response) => {
   res.json({ success: true, plans: controlPlane.listPlans() });
 });
 
-controlRouter.get('/companies', requirePlatform, (_req: Request, res: Response) => {
+controlRouter.get('/companies', requirePlatform, async (_req: Request, res: Response) => {
+  await syncOperationalCompanies().catch(() => 0);
   res.json({
     success: true,
     companies: [...controlPlane.companies.values()].map((company) => controlPlane.publicCompany(company)),

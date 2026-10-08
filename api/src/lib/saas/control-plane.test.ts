@@ -395,3 +395,21 @@ test('platform onboarding creates a company with a one-time admin password', () 
     (error: unknown) => error instanceof ControlPlaneError && error.code === 'EMAIL_IN_USE' && error.status === 409,
   );
 });
+
+test('an operational company the control plane never created is registered, selectable, and idempotent', () => {
+  const plane = new ControlPlane();
+  assert.equal(plane.companies.has('company-kota'), false);
+  assert.equal(plane.registerOperationalCompany({ id: 'company-kota', name: 'Kota Fresh Mart', primaryAdminId: 'user-kota' }), true);
+  assert.equal(plane.registerOperationalCompany({ id: 'company-kota', name: 'Kota Fresh Mart' }), false, 'a second registration changes nothing');
+  const login = plane.platformLogin('superadmin@invexa.local', plane.seedPassword);
+  assert.ok(login.companies.some((company) => company.id === 'company-kota' && company.name === 'Kota Fresh Mart'));
+  assert.doesNotThrow(() => plane.selectCompany(login.user.id, 'company-kota'));
+});
+
+test('the display name follows the workspace name for a company the control plane already knew', () => {
+  const plane = new ControlPlane();
+  assert.equal(plane.companies.get('default-company')?.name, 'Invexa Demo Grocery');
+  assert.equal(plane.registerOperationalCompany({ id: 'default-company', name: 'My Real Store' }), true);
+  assert.equal(plane.companies.get('default-company')?.name, 'My Real Store');
+  assert.equal(plane.registerOperationalCompany({ id: 'default-company', name: '' }), false, 'a blank profile name never erases the existing name');
+});
