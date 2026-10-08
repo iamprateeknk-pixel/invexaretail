@@ -1795,10 +1795,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /purchase-orders */
+        /** The caller's company purchase orders, newest first, with supplier and lines. Cursor-paginated: pass the last page's nextCursor. */
         get: operations["getPurchaseOrders"];
         put?: never;
-        /** POST /purchase-orders */
+        /** Create a draft purchase order. The supplier must be ACTIVE and every item must exist and be ACTIVE in the caller's company. When expectedAt is omitted it defaults to today plus the supplier lead time. Admin only. */
         post: operations["postPurchaseOrders"];
         delete?: never;
         options?: never;
@@ -1830,10 +1830,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /purchase-orders/{id}/invoices */
+        /** A purchase order's supplier invoices with their lines, newest first. Reporting roles only. */
         get: operations["getPurchaseOrdersIdInvoices"];
         put?: never;
-        /** POST /purchase-orders/{id}/invoices */
+        /** Record a supplier invoice and three-way match it against the order and what was received. A clean match is MATCHED, otherwise EXCEPTION with the lines that failed. Admin only. */
         post: operations["postPurchaseOrdersIdInvoices"];
         delete?: never;
         options?: never;
@@ -2593,7 +2593,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /purchase-orders/{id}/status */
+        /** Move a purchase order along its lifecycle (DRAFT, SUBMITTED, APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED, CLOSED, CANCELLED). Illegal moves are refused; APPROVED also passes the value/branch approval policy gate. Admin only. */
         patch: operations["patchPurchaseOrdersIdStatus"];
         trace?: never;
     };
@@ -4428,6 +4428,89 @@ export interface components {
                 scannedQty: number;
                 /** @enum {string} */
                 status: "MATCHED" | "SHORT" | "OVER" | "UNEXPECTED";
+            }[];
+        };
+        PurchaseOrderLine: {
+            id: string;
+            purchaseOrderId?: string;
+            itemId: string;
+            quantity: number;
+            receivedQty: number;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            unitCost: number;
+            item?: {
+                [key: string]: unknown;
+            };
+        };
+        PurchaseOrder: {
+            id: string;
+            number: string;
+            supplierId: string;
+            locationId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "SUBMITTED" | "APPROVED" | "SENT" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CLOSED" | "CANCELLED";
+            createdById?: string;
+            companyId: string;
+            /** Format: date-time */
+            expectedAt?: string | null;
+            notes?: string | null;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            totalAmount: number;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            freightCost?: number;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            customsCost?: number;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            insuranceCost?: number;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            handlingCost?: number;
+            /** @enum {string} */
+            landedCostMethod?: "VALUE" | "WEIGHT" | "QUANTITY";
+            /** Format: date-time */
+            approvedAt?: string | null;
+            approvedById?: string | null;
+            /** Format: date-time */
+            sentAt?: string | null;
+            /** Format: date-time */
+            closedAt?: string | null;
+            closeNote?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            supplier?: components["schemas"]["Supplier"];
+            lines?: components["schemas"]["PurchaseOrderLine"][];
+        };
+        ThreeWayMatchResult: {
+            /** @description True when no line has an exception. */
+            matched: boolean;
+            lines: {
+                itemId: string;
+                orderedQty: number;
+                receivedQty: number;
+                invoicedQty: number;
+                poUnitCost: number;
+                invoicedUnitCost?: number | null;
+                exceptions: ("UNKNOWN_ITEM" | "OVER_INVOICED_QTY" | "PRICE_VARIANCE")[];
+            }[];
+        };
+        SupplierInvoice: {
+            id: string;
+            purchaseOrderId: string;
+            invoiceNumber: string;
+            /** Format: date-time */
+            invoiceDate?: string | null;
+            /** @description Money; always a JSON number (Decimal on the server). */
+            totalAmount: number;
+            /** @description MATCHED when the three-way match is clean, otherwise EXCEPTION (later states are set by finance workflow). */
+            status: string;
+            matchResult?: components["schemas"]["ThreeWayMatchResult"];
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            lines?: {
+                itemId?: string;
+                invoicedQty?: number;
+                /** @description Money; always a JSON number (Decimal on the server). */
+                unitCost?: number;
             }[];
         };
     };
@@ -10970,47 +11053,30 @@ export interface operations {
     };
     getPurchaseOrders: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        purchaseOrders?: components["schemas"]["PurchaseOrder"][];
+                        nextCursor?: string | null;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11025,52 +11091,78 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    supplierId: string;
+                    locationId: string;
+                    /** Format: date-time */
+                    expectedAt?: string;
+                    notes?: string;
+                    lines: {
+                        itemId: string;
+                        quantity: number;
+                        unitCost?: number;
+                    }[];
+                    freightCost?: number;
+                    customsCost?: number;
+                    insuranceCost?: number;
+                    handlingCost?: number;
+                    /**
+                     * @default VALUE
+                     * @enum {string}
+                     */
+                    landedCostMethod?: "VALUE" | "WEIGHT" | "QUANTITY";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        purchaseOrder?: components["schemas"]["PurchaseOrder"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Missing supplier, destination or lines; a non-positive quantity; or an unknown/inactive item. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Supplier not found (also for another company's supplier). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The supplier is not ACTIVE and cannot receive new purchase orders. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11135,44 +11227,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        invoices?: components["schemas"]["SupplierInvoice"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role may not view reporting. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -11185,52 +11258,61 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    invoiceNumber: string;
+                    /** Format: date-time */
+                    invoiceDate?: string;
+                    /** @description Price tolerance; defaults to 2. */
+                    tolerancePercent?: number;
+                    lines: {
+                        itemId: string;
+                        invoicedQty: number;
+                        unitCost: number;
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Recorded. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        invoice?: components["schemas"]["SupplierInvoice"];
+                        matchResult?: components["schemas"]["ThreeWayMatchResult"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invoice number and at least one valid line are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Purchase order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13889,52 +13971,66 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @enum {string} */
+                    status: "DRAFT" | "SUBMITTED" | "APPROVED" | "SENT" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CLOSED" | "CANCELLED";
+                    note?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        purchaseOrder?: components["schemas"]["PurchaseOrder"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid status. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Purchase order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The move is not allowed, or approval is blocked pending an approver. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        message?: string;
+                        approvalRequestId?: string;
+                        requiredApproverRole?: string;
+                    };
+                };
             };
         };
     };

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.22.0",
+    "version": "2026.23.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -2162,6 +2162,298 @@
                     "OVER",
                     "UNEXPECTED"
                   ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "PurchaseOrderLine": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "quantity",
+          "receivedQty",
+          "unitCost"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purchaseOrderId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "receivedQty": {
+            "type": "number"
+          },
+          "unitCost": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "item": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "PurchaseOrder": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "supplierId",
+          "locationId",
+          "status",
+          "totalAmount",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string"
+          },
+          "supplierId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "SUBMITTED",
+              "APPROVED",
+              "SENT",
+              "PARTIALLY_RECEIVED",
+              "RECEIVED",
+              "CLOSED",
+              "CANCELLED"
+            ]
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "expectedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalAmount": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "freightCost": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "customsCost": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "insuranceCost": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "handlingCost": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "landedCostMethod": {
+            "type": "string",
+            "enum": [
+              "VALUE",
+              "WEIGHT",
+              "QUANTITY"
+            ]
+          },
+          "approvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "approvedById": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sentAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closeNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supplier": {
+            "$ref": "#/components/schemas/Supplier"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PurchaseOrderLine"
+            }
+          }
+        }
+      },
+      "ThreeWayMatchResult": {
+        "type": "object",
+        "required": [
+          "lines",
+          "matched"
+        ],
+        "properties": {
+          "matched": {
+            "type": "boolean",
+            "description": "True when no line has an exception."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "itemId",
+                "orderedQty",
+                "receivedQty",
+                "invoicedQty",
+                "poUnitCost",
+                "exceptions"
+              ],
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "orderedQty": {
+                  "type": "number"
+                },
+                "receivedQty": {
+                  "type": "number"
+                },
+                "invoicedQty": {
+                  "type": "number"
+                },
+                "poUnitCost": {
+                  "type": "number"
+                },
+                "invoicedUnitCost": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "exceptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "UNKNOWN_ITEM",
+                      "OVER_INVOICED_QTY",
+                      "PRICE_VARIANCE"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "SupplierInvoice": {
+        "type": "object",
+        "required": [
+          "id",
+          "purchaseOrderId",
+          "invoiceNumber",
+          "status",
+          "totalAmount"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purchaseOrderId": {
+            "type": "string"
+          },
+          "invoiceNumber": {
+            "type": "string"
+          },
+          "invoiceDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "totalAmount": {
+            "type": "number",
+            "description": "Money; always a JSON number (Decimal on the server)."
+          },
+          "status": {
+            "type": "string",
+            "description": "MATCHED when the three-way match is clean, otherwise EXCEPTION (later states are set by finance workflow)."
+          },
+          "matchResult": {
+            "$ref": "#/components/schemas/ThreeWayMatchResult"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemId": {
+                  "type": "string"
+                },
+                "invoicedQty": {
+                  "type": "number"
+                },
+                "unitCost": {
+                  "type": "number",
+                  "description": "Money; always a JSON number (Decimal on the server)."
                 }
               }
             }
@@ -9349,34 +9641,58 @@
     "/purchase-orders": {
       "get": {
         "operationId": "getPurchaseOrders",
-        "summary": "GET /purchase-orders",
+        "summary": "The caller's company purchase orders, newest first, with supplier and lines. Cursor-paginated: pass the last page's nextCursor.",
         "tags": [
-          "purchase-orders"
+          "Purchase orders"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "purchaseOrders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PurchaseOrder"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -9387,53 +9703,147 @@
       },
       "post": {
         "operationId": "postPurchaseOrders",
-        "summary": "POST /purchase-orders",
+        "summary": "Create a draft purchase order. The supplier must be ACTIVE and every item must exist and be ACTIVE in the caller's company. When expectedAt is omitted it defaults to today plus the supplier lead time. Admin only.",
         "tags": [
-          "purchase-orders"
+          "Purchase orders"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "supplierId",
+                  "locationId",
+                  "lines"
+                ],
+                "properties": {
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "expectedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemId",
+                        "quantity"
+                      ],
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "unitCost": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "freightCost": {
+                    "type": "number"
+                  },
+                  "customsCost": {
+                    "type": "number"
+                  },
+                  "insuranceCost": {
+                    "type": "number"
+                  },
+                  "handlingCost": {
+                    "type": "number"
+                  },
+                  "landedCostMethod": {
+                    "type": "string",
+                    "enum": [
+                      "VALUE",
+                      "WEIGHT",
+                      "QUANTITY"
+                    ],
+                    "default": "VALUE"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "purchaseOrder": {
+                      "$ref": "#/components/schemas/PurchaseOrder"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Missing supplier, destination or lines; a non-positive quantity; or an unknown/inactive item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Supplier not found (also for another company's supplier).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The supplier is not ACTIVE and cannot receive new purchase orders.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/purchase-orders/plan": {
@@ -9479,40 +9889,9 @@
     "/purchase-orders/{id}/invoices": {
       "get": {
         "operationId": "getPurchaseOrdersIdInvoices",
-        "summary": "GET /purchase-orders/{id}/invoices",
+        "summary": "A purchase order's supplier invoices with their lines, newest first. Reporting roles only.",
         "tags": [
-          "purchase-orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Purchase orders"
         ],
         "parameters": [
           {
@@ -9523,44 +9902,48 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "post": {
-        "operationId": "postPurchaseOrdersIdInvoices",
-        "summary": "POST /purchase-orders/{id}/invoices",
-        "tags": [
-          "purchase-orders"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "invoices": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SupplierInvoice"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role may not view reporting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "post": {
+        "operationId": "postPurchaseOrdersIdInvoices",
+        "summary": "Record a supplier invoice and three-way match it against the order and what was received. A clean match is MATCHED, otherwise EXCEPTION with the lines that failed. Admin only.",
+        "tags": [
+          "Purchase orders"
         ],
         "parameters": [
           {
@@ -9573,17 +9956,112 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "invoiceNumber",
+                  "lines"
+                ],
+                "properties": {
+                  "invoiceNumber": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "invoiceDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "tolerancePercent": {
+                    "type": "number",
+                    "description": "Price tolerance; defaults to 2."
+                  },
+                  "lines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemId",
+                        "invoicedQty",
+                        "unitCost"
+                      ],
+                      "properties": {
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "invoicedQty": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "unitCost": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invoice": {
+                      "$ref": "#/components/schemas/SupplierInvoice"
+                    },
+                    "matchResult": {
+                      "$ref": "#/components/schemas/ThreeWayMatchResult"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invoice number and at least one valid line are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/putaway-tasks": {
@@ -12226,40 +12704,9 @@
     "/purchase-orders/{id}/status": {
       "patch": {
         "operationId": "patchPurchaseOrdersIdStatus",
-        "summary": "PATCH /purchase-orders/{id}/status",
+        "summary": "Move a purchase order along its lifecycle (DRAFT, SUBMITTED, APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED, CLOSED, CANCELLED). Illegal moves are refused; APPROVED also passes the value/branch approval policy gate. Admin only.",
         "tags": [
-          "purchase-orders"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Purchase orders"
         ],
         "parameters": [
           {
@@ -12272,16 +12719,110 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "DRAFT",
+                      "SUBMITTED",
+                      "APPROVED",
+                      "SENT",
+                      "PARTIALLY_RECEIVED",
+                      "RECEIVED",
+                      "CLOSED",
+                      "CANCELLED"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "purchaseOrder": {
+                      "$ref": "#/components/schemas/PurchaseOrder"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase order not found (also for another company's order).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The move is not allowed, or approval is blocked pending an approver.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "approvalRequestId": {
+                      "type": "string"
+                    },
+                    "requiredApproverRole": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/qc-templates/{id}": {
