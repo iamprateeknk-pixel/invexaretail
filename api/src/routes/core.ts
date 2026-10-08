@@ -774,7 +774,10 @@ router.post('/items', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+  // Codes, barcodes and aliases are unique per company (the database enforces (companyId, code)). Checking the process-wide
+  // list refused a code another company uses and put that company's item code and name in the 409 message.
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  const claimConflict = findIdentityConflict(ownItems, '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
   if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
     const item = createInventoryItem({
@@ -810,7 +813,8 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   const nextCode = typeof req.body.code === 'string' ? req.body.code.trim() : item.code;
   const nextName = typeof req.body.name === 'string' ? req.body.name.trim() : item.name;
   if (!nextCode || !nextName) return res.status(400).json({ message: 'Item Code and Item Name are required.' });
-  if (listItems().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  if (ownItems.some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
   let operationalMeta: ItemOperationalMeta;
@@ -821,7 +825,7 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), item.id, {
+  const claimConflict = findIdentityConflict(ownItems, item.id, {
     code: nextCode !== item.code ? nextCode : undefined,
     barcode: masterFields.barcode,
     aliases: masterFields.aliases,
@@ -2999,16 +3003,17 @@ router.get('/sync-status', (req: Request, res: Response) => {
 // Warehouse transfer import, lot-aware picker sessions and bulk stock take
 // ---------------------------------------------------------------------------
 
-function exactItemMatch(itemCode?: string, itemName?: string) {
+function exactItemMatch(itemCode: string | undefined, itemName: string | undefined, companyId: string) {
   // Code, barcode or ERP alias when a code is given (never falling back to
-  // the name); otherwise a unique name or alias.
-  return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
+  // the name); otherwise a unique name or alias. Only the caller's own company's items are candidates: an upload
+  // must never resolve to (and then plan stock moves for) an item that belongs to another company.
+  return resolveItemByIdentity(itemsForCompany(companyId, listItems()), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
 function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
   const sourceLedger = listStockLedgerForLocation(sourceLocationId);
-  const destination = listLocations().find((location) => location.id === destinationLocationId);
+  const destination = locationsForCompany(companyId, listLocations()).find((location) => location.id === destinationLocationId);
   const rows = mergeDuplicates
     ? [...preview.validRows.reduce((map, row) => {
         const key = (row.itemCode || row.itemName || '').trim().toLowerCase();
@@ -3024,7 +3029,7 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
       errors.push({ rowNumber: row.rowNumber, message: `Destination Store ${row.destinationStore} does not match selected destination ${destination.name}.` });
       continue;
     }
-    const item = exactItemMatch(row.itemCode, row.itemName);
+    const item = exactItemMatch(row.itemCode, row.itemName, companyId);
     if (!item) {
       errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
       continue;
@@ -3406,7 +3411,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
       const code = codeIndex >= 0 ? String(rows[index][codeIndex] ?? '').trim() : '';
       const name = nameIndex >= 0 ? String(rows[index][nameIndex] ?? '').trim() : '';
       if (!code && !name) continue;
-      const item = exactItemMatch(code || undefined, name || undefined);
+      const item = exactItemMatch(code || undefined, name || undefined, req.companyId ?? DEFAULT_COMPANY_ID);
       if (!item) { errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` }); continue; }
       if (!isOperationalItem(item)) { errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) }); continue; }
       if (seen.has(item.id)) continue; seen.add(item.id);
