@@ -212,6 +212,7 @@ import type { DailyMovementRecord, LotRecord } from '../lib/repository.js';
 import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
+import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
 
 const router = Router();
 
@@ -393,9 +394,10 @@ router.get('/users', (req: Request, res: Response) => {
   });
 });
 
-router.get('/locations', (req: Request, res: Response) => {
+// Database-first slice 1: read through the scoped location repository (Postgres in database mode).
+router.get('/locations', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  const visible = listLocations().filter((location) => canAccessLocation(context, location.id));
+  const visible = (await listLocationsForCompany(tenantContext(req))).filter((location) => canAccessLocation(context, location.id));
 
   return res.json({ locations: visible, activeLocationId: visible[0]?.id ?? null });
 });
