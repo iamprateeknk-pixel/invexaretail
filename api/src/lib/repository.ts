@@ -157,8 +157,12 @@ export type CompanyProfileRecord = {
   address?: string;
 };
 
-// Single-tenant: one profile for the whole deployment, not one per company.
+// The default company's profile (the platform's own company, and what a single-company deployment uses).
+// Every other company has its own profile in `otherCompanyProfiles`: this used to be ONE profile for the whole
+// process, so the Admin of any company read it, and could overwrite it, for every company.
 export const companyProfile: CompanyProfileRecord = { name: 'InvexaRetail', industry: 'Grocery', industryKey: 'grocery' };
+const otherCompanyProfiles = new Map<string, CompanyProfileRecord>();
+const DEFAULT_PROFILE_COMPANY = 'default-company';
 
 export function getCompanyProfile(): CompanyProfileRecord {
   return { ...companyProfile };
@@ -167,6 +171,20 @@ export function getCompanyProfile(): CompanyProfileRecord {
 export function setCompanyProfile(update: CompanyProfileRecord): CompanyProfileRecord {
   Object.assign(companyProfile, update);
   return { ...companyProfile };
+}
+
+/** A company's own profile, or undefined when it has none yet (never another company's). */
+export function findCompanyProfile(companyId: string): CompanyProfileRecord | undefined {
+  if (companyId === DEFAULT_PROFILE_COMPANY) return { ...companyProfile };
+  const own = otherCompanyProfiles.get(companyId);
+  return own ? { ...own } : undefined;
+}
+
+/** Replaces one company's profile; no other company is touched. */
+export function saveCompanyProfile(companyId: string, profile: CompanyProfileRecord): CompanyProfileRecord {
+  if (companyId === DEFAULT_PROFILE_COMPANY) return setCompanyProfile(profile);
+  otherCompanyProfiles.set(companyId, { ...profile });
+  return { ...profile };
 }
 
 export const locations: LocationRecord[] = [...seedLocations];
