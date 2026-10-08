@@ -90,3 +90,9 @@ Run each file on its own, as CI does: running them together against one database
   repository function + a Postgres parity test against the hydrated snapshot.
 - Next (single-entity, one or two reads each): `/items` (needs the web poll changed to page), `/counts`,
   `/count-assignments`, `/imports/history`.
+- **Finding for the `/counts` slice (not yet done).** The snapshot's hydration (`lib/persistence.ts`) stamps every
+  persisted count with `role: 'STORE_USER'` because the role of the submitter is not stored on `StockCount`; and the
+  blind-count branch of `GET /counts` returns that field. A database-first read has to either reproduce that
+  placeholder (parity, but knowingly wrong) or join the submitter's real role from `User` (correct, but a visible
+  change to clients). That is a product decision for the slice owner, which is why `/counts` was not converted
+  mechanically. Expect the same kind of decision wherever hydration fills a field the database does not hold.
