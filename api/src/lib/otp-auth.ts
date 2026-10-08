@@ -239,3 +239,26 @@ export function checkOtpRateLimit(email: string): boolean {
 export function resetOtpRateLimit(email: string): void {
   otpAttempts.delete(email);
 }
+
+// Passkey (WebAuthn) ceremonies: the server-chosen challenge travels inside a short-lived signed token so the
+// ceremony needs no server-side state. tokenType 'passkey' means verifyJWT(token, 'access') rejects it.
+export const PASSKEY_CEREMONY_TTL_SECONDS = 5 * 60;
+
+export function signPasskeyCeremony(claims: { purpose: 'register' | 'login'; challenge: string; userId?: string }): string {
+  return jwt.sign({ ...claims, tokenType: 'passkey', jti: crypto.randomBytes(8).toString('hex') }, getJwtSecret(), {
+    algorithm: 'HS256', expiresIn: PASSKEY_CEREMONY_TTL_SECONDS,
+  });
+}
+
+export function verifyPasskeyCeremony(token: string, purpose: 'register' | 'login'): { challenge: string; userId?: string; jti: string } | null {
+  try {
+    const payload = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as {
+      tokenType?: unknown; purpose?: unknown; challenge?: unknown; userId?: unknown; jti?: unknown;
+    };
+    if (payload.tokenType !== 'passkey' || payload.purpose !== purpose) return null;
+    if (typeof payload.challenge !== 'string' || typeof payload.jti !== 'string') return null;
+    return { challenge: payload.challenge, userId: typeof payload.userId === 'string' ? payload.userId : undefined, jti: payload.jti };
+  } catch {
+    return null;
+  }
+}

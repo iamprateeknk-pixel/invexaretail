@@ -36,6 +36,9 @@ import { isAllowedOrigin } from '../lib/cors-origins.js';
 import { clearFailures, lockState, registerFailure, type LockState } from '../lib/login-lockout.js';
 import { beginEnrollment, confirmEnrollment, disableTwoFactor, isTwoFactorEnabled, twoFactorStatus, verifySecondFactor } from '../lib/two-factor-store.js';
 import { otpauthUri, totpIsConfigured } from '../lib/totp.js';
+import { addPasskey, deletePasskey, findPasskeyByCredentialId, listPasskeys, recordPasskeyUse, type PasskeyRecord } from '../lib/passkey-store.js';
+import { authenticationOptions, passkeyConfig, registrationOptions, verifyAuthentication, verifyRegistration } from '../lib/passkeys.js';
+import { PASSKEY_CEREMONY_TTL_SECONDS, signPasskeyCeremony, verifyPasskeyCeremony } from '../lib/otp-auth.js';
 import * as repo from '../lib/enterprise-repository.js';
 import { isCompanySuspended, rejectSuspendedCompany } from '../lib/saas/company-access.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
@@ -637,6 +640,121 @@ router.post('/logout-all', extractToken, requireAuth, async (req: Request, res: 
   await revokeAllSessionsForUser(req.user!.id);
   clearRefreshCookie(res);
   res.json({ success: true });
+});
+
+// ============================================
+// PASSKEYS (WebAuthn) - optional, per user. A passkey sign-in is itself a verified-possession + user-verification
+// factor, so it issues a session directly (no TOTP step). Verification is done by @simplewebauthn/server.
+// ============================================
+
+// A ceremony token is single use: a replay of the same token (same jti) inside its 5-minute life is refused. This set
+// is per process; across replicas the authenticator's signature counter (checked on every sign-in) is the backstop.
+const usedCeremonies = new Map<string, number>();
+function consumeCeremony(jti: string): boolean {
+  const now = Date.now();
+  for (const [key, expiresAt] of usedCeremonies) if (expiresAt <= now) usedCeremonies.delete(key);
+  if (usedCeremonies.has(jti)) return false;
+  usedCeremonies.set(jti, now + (PASSKEY_CEREMONY_TTL_SECONDS + 5) * 1000);
+  return true;
+}
+
+const passkeysNotConfigured = (res: Response) => res.status(503).json({ error: 'Passkeys are not configured on this server.', code: 'PASSKEYS_NOT_CONFIGURED' });
+const passkeyDto = (row: PasskeyRecord) => ({ id: row.id, deviceName: row.deviceName, transports: row.transports, createdAt: row.createdAt, lastUsedAt: row.lastUsedAt });
+
+router.get('/passkeys', extractToken, requireAuth, async (req: Request, res: Response) => {
+  return res.json({ configured: passkeyConfig() !== null, passkeys: (await listPasskeys(req.user!.id)).map(passkeyDto) });
+});
+
+router.post('/passkeys/register/options', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  const config = passkeyConfig();
+  if (!config) return passkeysNotConfigured(res);
+  try {
+    const options = await registrationOptions(config, { id: req.user!.id, email: req.user!.email, name: req.user!.name }, await listPasskeys(req.user!.id));
+    return res.json({ options, challengeToken: signPasskeyCeremony({ purpose: 'register', challenge: options.challenge, userId: req.user!.id }) });
+  } catch (error) {
+    console.error('Passkey registration options error:', error);
+    return res.status(500).json({ error: 'Could not start passkey registration' });
+  }
+});
+
+router.post('/passkeys/register/verify', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  const config = passkeyConfig();
+  if (!config) return passkeysNotConfigured(res);
+  const ceremony = typeof req.body?.challengeToken === 'string' ? verifyPasskeyCeremony(req.body.challengeToken, 'register') : null;
+  if (!ceremony || ceremony.userId !== req.user!.id || !req.body?.response || !consumeCeremony(ceremony.jti)) {
+    return res.status(400).json({ error: 'This passkey registration expired or is not valid. Start again.', code: 'PASSKEY_CEREMONY_INVALID' });
+  }
+  try {
+    const verification = await verifyRegistration(config, req.body.response, ceremony.challenge);
+    if (!verification.verified || !verification.registrationInfo) {
+      return res.status(400).json({ error: 'The passkey could not be verified.', code: 'PASSKEY_REGISTRATION_FAILED' });
+    }
+    const { credential } = verification.registrationInfo;
+    const deviceName = typeof req.body.deviceName === 'string' ? req.body.deviceName.trim().slice(0, 80) || null : null;
+    const saved = await addPasskey({
+      userId: req.user!.id, credentialId: credential.id, publicKey: credential.publicKey, counter: credential.counter,
+      transports: credential.transports ?? [], deviceName,
+    });
+    if (!saved) return res.status(409).json({ error: 'This passkey is already registered.', code: 'PASSKEY_ALREADY_REGISTERED' });
+    repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'PASSKEY_REGISTERED', entityType: 'USER', entityId: req.user!.id });
+    return res.status(201).json({ success: true, passkey: passkeyDto(saved) });
+  } catch (error) {
+    // simplewebauthn throws for a wrong challenge/origin/rpID or a malformed response: that is the caller's fault.
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'The passkey could not be verified.', code: 'PASSKEY_REGISTRATION_FAILED' });
+  }
+});
+
+router.delete('/passkeys/:id', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  if (!(await deletePasskey(req.user!.id, String(req.params.id)))) return res.status(404).json({ error: 'Passkey not found.' });
+  repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'PASSKEY_REMOVED', entityType: 'USER', entityId: req.user!.id });
+  return res.json({ success: true });
+});
+
+router.post('/passkeys/login/options', loginLimiter, async (req: Request, res: Response) => {
+  const config = passkeyConfig();
+  if (!config) return passkeysNotConfigured(res);
+  try {
+    // With an email the prompt is limited to that account's keys; an unknown email gets the same shape as a known one
+    // with no keys (an open, discoverable-credential prompt), so this does not reveal which emails exist.
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const user = email && validateEmail(email) ? repo.findUserByEmail(email) : undefined;
+    const options = await authenticationOptions(config, user ? await listPasskeys(user.id) : []);
+    return res.json({ options, challengeToken: signPasskeyCeremony({ purpose: 'login', challenge: options.challenge }) });
+  } catch (error) {
+    console.error('Passkey login options error:', error);
+    return res.status(500).json({ error: 'Could not start passkey sign-in' });
+  }
+});
+
+router.post('/passkeys/login/verify', loginLimiter, async (req: Request, res: Response) => {
+  const config = passkeyConfig();
+  if (!config) return passkeysNotConfigured(res);
+  const invalid = () => res.status(401).json({ error: 'Passkey sign-in failed. Start again.', code: 'PASSKEY_LOGIN_FAILED' });
+  try {
+    const ceremony = typeof req.body?.challengeToken === 'string' ? verifyPasskeyCeremony(req.body.challengeToken, 'login') : null;
+    const response = req.body?.response;
+    if (!ceremony || !response || typeof response.id !== 'string' || !consumeCeremony(ceremony.jti)) return invalid();
+
+    const passkey = await findPasskeyByCredentialId(response.id);
+    const user = passkey ? repo.findUserById(passkey.userId) : undefined;
+    if (!passkey || !user || user.status !== 'active') return invalid();
+    if (rejectSuspendedCompany(user.companyId, res)) return;
+
+    const verification = await verifyAuthentication(config, response, ceremony.challenge, passkey);
+    if (!verification.verified) return invalid();
+    if (!(await recordPasskeyUse(passkey, verification.authenticationInfo.newCounter))) {
+      repo.logAuditAction({ companyId: user.companyId, userId: user.id, userName: user.name, action: 'PASSKEY_COUNTER_REJECTED', entityType: 'USER', entityId: user.id });
+      return invalid();
+    }
+
+    repo.updateUserLastLogin(user.id);
+    const tokens = await issueSessionTokens(req, res, user);
+    repo.logAuditAction({ companyId: user.companyId, userId: user.id, userName: user.name, action: 'PASSKEY_LOGIN', entityType: 'USER', entityId: user.id });
+    return res.json({ success: true, user: publicUser(user), ...tokens });
+  } catch {
+    // A wrong challenge, origin, rpID, signature or a malformed response all land here: one generic answer.
+    return invalid();
+  }
 });
 
 // ============================================
