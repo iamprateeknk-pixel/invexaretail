@@ -2993,16 +2993,17 @@ router.get('/sync-status', (req: Request, res: Response) => {
 // Warehouse transfer import, lot-aware picker sessions and bulk stock take
 // ---------------------------------------------------------------------------
 
-function exactItemMatch(itemCode?: string, itemName?: string) {
+function exactItemMatch(itemCode: string | undefined, itemName: string | undefined, companyId: string) {
   // Code, barcode or ERP alias when a code is given (never falling back to
-  // the name); otherwise a unique name or alias.
-  return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
+  // the name); otherwise a unique name or alias. Only the caller's own company's items are candidates: an upload
+  // must never resolve to (and then plan stock moves for) an item that belongs to another company.
+  return resolveItemByIdentity(itemsForCompany(companyId, listItems()), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
 function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
   const sourceLedger = listStockLedgerForLocation(sourceLocationId);
-  const destination = listLocations().find((location) => location.id === destinationLocationId);
+  const destination = locationsForCompany(companyId, listLocations()).find((location) => location.id === destinationLocationId);
   const rows = mergeDuplicates
     ? [...preview.validRows.reduce((map, row) => {
         const key = (row.itemCode || row.itemName || '').trim().toLowerCase();
@@ -3018,7 +3019,7 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
       errors.push({ rowNumber: row.rowNumber, message: `Destination Store ${row.destinationStore} does not match selected destination ${destination.name}.` });
       continue;
     }
-    const item = exactItemMatch(row.itemCode, row.itemName);
+    const item = exactItemMatch(row.itemCode, row.itemName, companyId);
     if (!item) {
       errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
       continue;
@@ -3400,7 +3401,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
       const code = codeIndex >= 0 ? String(rows[index][codeIndex] ?? '').trim() : '';
       const name = nameIndex >= 0 ? String(rows[index][nameIndex] ?? '').trim() : '';
       if (!code && !name) continue;
-      const item = exactItemMatch(code || undefined, name || undefined);
+      const item = exactItemMatch(code || undefined, name || undefined, req.companyId ?? DEFAULT_COMPANY_ID);
       if (!item) { errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` }); continue; }
       if (!isOperationalItem(item)) { errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) }); continue; }
       if (seen.has(item.id)) continue; seen.add(item.id);
