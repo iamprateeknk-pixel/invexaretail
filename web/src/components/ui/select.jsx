@@ -27,9 +27,22 @@ function SelectTrigger({ className, size = 'default', children, ...props }) {
   const named = Boolean(props['aria-label'] || props['aria-labelledby'])
   useEffect(() => {
     const trigger = ref.current
-    if (!trigger || named || hasAccessibleName(trigger)) return
-    const name = deriveTriggerName(trigger)
-    if (name) trigger.setAttribute('aria-label', name)
+    if (!trigger || named) return undefined
+    // Radix fills the placeholder/value text and a sibling label can mount AFTER this effect first runs, so a one-off
+    // check can leave the trigger nameless (axe: button-name) on a slow render. Name it now, and keep watching
+    // the trigger and its container until it has a name.
+    let observer
+    const apply = () => {
+      if (hasAccessibleName(trigger)) return true
+      const name = deriveTriggerName(trigger)
+      if (name) trigger.setAttribute('aria-label', name)
+      return Boolean(name)
+    }
+    if (apply()) return undefined
+    observer = new MutationObserver(() => { if (apply()) observer.disconnect() })
+    observer.observe(trigger, { childList: true, characterData: true, subtree: true })
+    if (trigger.parentElement) observer.observe(trigger.parentElement, { childList: true })
+    return () => observer.disconnect()
   })
   return (
     <SelectPrimitive.Trigger
