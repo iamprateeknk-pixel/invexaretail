@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.32.0",
+    "version": "2026.33.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -4304,6 +4304,427 @@
             }
           }
         }
+      },
+      "ApprovalRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "triggerType",
+          "valueThreshold",
+          "requiredApproverRole"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "triggerType": {
+            "type": "string",
+            "description": "What the rule gates, for example PO_APPROVE or TRANSFER_CONFIRM."
+          },
+          "valueThreshold": {
+            "type": "number",
+            "description": "Money; a JSON number. At or above it, the action needs an approver."
+          },
+          "requiredApproverRole": {
+            "type": "string",
+            "enum": [
+              "ADMIN",
+              "ADMIN_USER",
+              "BRANCH_MANAGER",
+              "STORE_USER",
+              "WAREHOUSE_PICKER",
+              "AUDITOR"
+            ]
+          },
+          "branchId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Limits the rule to one branch of the caller's company; null means company-wide."
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "branch": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ToleranceRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "valueThreshold": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "percentThreshold": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "branch": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "createdBy": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "EvidenceRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "triggerType"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "triggerType": {
+            "type": "string",
+            "description": "For example DAMAGED_RECEIPT."
+          },
+          "quantityThreshold": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "valueThreshold": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "branch": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "createdBy": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "QcChecklistTemplate": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "checks"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Matched against the item category."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "label"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "QcInspection": {
+        "type": "object",
+        "required": [
+          "id",
+          "results"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "templateId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "itemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lotId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceDocument": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For example a PO number or a return request id."
+          },
+          "sourceLineId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "PASS",
+                "FAIL",
+                "NA"
+              ]
+            }
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inspectedById": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "template": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "item": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "lot": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "lotNo": {
+                "type": "string"
+              }
+            }
+          },
+          "inspectedBy": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -7641,34 +8062,38 @@
     "/approval-rules": {
       "get": {
         "operationId": "getApprovalRules",
-        "summary": "GET /approval-rules",
+        "summary": "The caller's company approval rules, newest first. Admin, Admin user and Branch manager.",
         "tags": [
-          "approval-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ApprovalRule"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Admin or Branch manager access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7679,53 +8104,114 @@
       },
       "post": {
         "operationId": "postApprovalRules",
-        "summary": "POST /approval-rules",
+        "summary": "Create a value-threshold rule: an action of that trigger type at or above the value needs an approver of the given role. The branch, when given, must belong to the caller's company. Admin only.",
         "tags": [
-          "approval-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "label",
+                  "triggerType",
+                  "valueThreshold",
+                  "requiredApproverRole"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "triggerType": {
+                    "type": "string"
+                  },
+                  "valueThreshold": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "requiredApproverRole": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ADMIN_USER",
+                      "BRANCH_MANAGER",
+                      "STORE_USER",
+                      "WAREHOUSE_PICKER",
+                      "AUDITOR"
+                    ]
+                  },
+                  "branchId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ApprovalRule"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "label, triggerType, a positive valueThreshold and requiredApproverRole are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Branch not found (also for another company's branch).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Approval rules are not available on this database yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/asset-checkouts": {
@@ -9192,34 +9678,38 @@
     "/evidence-rules": {
       "get": {
         "operationId": "getEvidenceRules",
-        "summary": "GET /evidence-rules",
+        "summary": "The caller's company evidence rules (when a photo is mandatory), newest first. Admin, Admin user and Branch manager.",
         "tags": [
-          "evidence-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EvidenceRule"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Admin or Branch manager access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9230,53 +9720,106 @@
       },
       "post": {
         "operationId": "postEvidenceRules",
-        "summary": "POST /evidence-rules",
+        "summary": "Create an evidence rule: for the trigger, at or above a quantity and/or value, a photo is required. Admin only.",
         "tags": [
-          "evidence-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "label",
+                  "triggerType"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "triggerType": {
+                    "type": "string"
+                  },
+                  "quantityThreshold": {
+                    "type": "number"
+                  },
+                  "valueThreshold": {
+                    "type": "number"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "branchId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/EvidenceRule"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "label, triggerType and at least one threshold are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Branch not found (also for another company's branch).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Evidence rules are not available on this database yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/exceptions": {
@@ -13353,34 +13896,49 @@
     "/qc-inspections": {
       "get": {
         "operationId": "getQcInspections",
-        "summary": "GET /qc-inspections",
+        "summary": "The caller's company QC inspections, newest first (max 200), optionally for one source document or line.",
         "tags": [
-          "qc-inspections"
+          "Quality control"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "sourceDocument",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceLineId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "inspections": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/QcInspection"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -13391,86 +13949,157 @@
       },
       "post": {
         "operationId": "postQcInspections",
-        "summary": "POST /qc-inspections",
+        "summary": "Record a QC inspection. At least one check result is required. The template and lot must belong to the caller's company. A failing result also opens an exception case and sends the goods to quarantine.",
         "tags": [
-          "qc-inspections"
+          "Quality control"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "results"
+                ],
+                "properties": {
+                  "templateId": {
+                    "type": "string"
+                  },
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "sourceDocument": {
+                    "type": "string"
+                  },
+                  "sourceLineId": {
+                    "type": "string"
+                  },
+                  "results": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "additionalProperties": {
+                      "type": "string",
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "NA"
+                      ]
+                    }
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Recorded.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "inspection": {
+                      "$ref": "#/components/schemas/QcInspection"
+                    },
+                    "exceptionCase": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/ExceptionCase"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "At least one checklist result is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Template or lot not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "QC inspections are not available on this database yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/qc-templates": {
       "get": {
         "operationId": "getQcTemplates",
-        "summary": "GET /qc-templates",
+        "summary": "The caller's company QC checklist templates, newest first. Admin, Admin user and Branch manager.",
         "tags": [
-          "qc-templates"
+          "Quality control"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "templates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/QcChecklistTemplate"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Admin or Branch manager access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -13481,53 +14110,91 @@
       },
       "post": {
         "operationId": "postQcTemplates",
-        "summary": "POST /qc-templates",
+        "summary": "Create a QC checklist template (seal, packaging, weight, expiry-window checks). Without checks the default set is used. Admin only.",
         "tags": [
-          "qc-templates"
+          "Quality control"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "label"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "key",
+                        "label"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "template": {
+                      "$ref": "#/components/schemas/QcChecklistTemplate"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "A label and at least one check are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/reorder-rules": {
@@ -14882,34 +15549,38 @@
     "/tolerance-rules": {
       "get": {
         "operationId": "getToleranceRules",
-        "summary": "GET /tolerance-rules",
+        "summary": "The caller's company count-variance tolerance rules, newest first. Admin, Admin user and Branch manager.",
         "tags": [
-          "tolerance-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ToleranceRule"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Admin or Branch manager access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14920,53 +15591,102 @@
       },
       "post": {
         "operationId": "postToleranceRules",
-        "summary": "POST /tolerance-rules",
+        "summary": "Create a tolerance rule by value and/or percent (at least one), optionally per category and branch. Admin only.",
         "tags": [
-          "tolerance-rules"
+          "Approval and control rules"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "label"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "valueThreshold": {
+                    "type": "number"
+                  },
+                  "percentThreshold": {
+                    "type": "number"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "branchId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ToleranceRule"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "label and at least one of valueThreshold/percentThreshold are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Branch not found (also for another company's branch).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tolerance rules are not available on this database yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/transfers/{transferId}/export.xls": {
@@ -15426,40 +16146,9 @@
     "/approval-rules/{id}": {
       "patch": {
         "operationId": "patchApprovalRulesId",
-        "summary": "PATCH /approval-rules/{id}",
+        "summary": "Edit or deactivate a rule. Another company's rule resolves 404. Admin only.",
         "tags": [
-          "approval-rules"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Approval and control rules"
         ],
         "parameters": [
           {
@@ -15472,16 +16161,85 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "branchId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "valueThreshold": {
+                    "type": "number"
+                  },
+                  "requiredApproverRole": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ADMIN_USER",
+                      "BRANCH_MANAGER",
+                      "STORE_USER",
+                      "WAREHOUSE_PICKER",
+                      "AUDITOR"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ApprovalRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Rule or branch not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/asset-checkouts/{id}/return": {
@@ -15679,40 +16437,9 @@
     "/evidence-rules/{id}": {
       "patch": {
         "operationId": "patchEvidenceRulesId",
-        "summary": "PATCH /evidence-rules/{id}",
+        "summary": "Edit or deactivate an evidence rule. Admin only.",
         "tags": [
-          "evidence-rules"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Approval and control rules"
         ],
         "parameters": [
           {
@@ -15725,16 +16452,89 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "branchId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "quantityThreshold": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "valueThreshold": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/EvidenceRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Rule or branch not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/exceptions/{id}": {
@@ -16514,40 +17314,9 @@
     "/qc-templates/{id}": {
       "patch": {
         "operationId": "patchQcTemplatesId",
-        "summary": "PATCH /qc-templates/{id}",
+        "summary": "Edit or deactivate a QC template. Another company's template resolves 404. Admin only.",
         "tags": [
-          "qc-templates"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Quality control"
         ],
         "parameters": [
           {
@@ -16560,16 +17329,89 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "key",
+                        "label"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "template": {
+                      "$ref": "#/components/schemas/QcChecklistTemplate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "QC checklist template not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/returns/{id}/refund": {
@@ -16813,40 +17655,9 @@
     "/tolerance-rules/{id}": {
       "patch": {
         "operationId": "patchToleranceRulesId",
-        "summary": "PATCH /tolerance-rules/{id}",
+        "summary": "Edit or deactivate a tolerance rule. Admin only.",
         "tags": [
-          "tolerance-rules"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Approval and control rules"
         ],
         "parameters": [
           {
@@ -16859,16 +17670,89 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "branchId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "valueThreshold": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "percentThreshold": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rule": {
+                      "$ref": "#/components/schemas/ToleranceRule"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Rule or branch not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/transfers/{transferId}/status": {

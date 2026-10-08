@@ -853,10 +853,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /approval-rules */
+        /** The caller's company approval rules, newest first. Admin, Admin user and Branch manager. */
         get: operations["getApprovalRules"];
         put?: never;
-        /** POST /approval-rules */
+        /** Create a value-threshold rule: an action of that trigger type at or above the value needs an approver of the given role. The branch, when given, must belong to the caller's company. Admin only. */
         post: operations["postApprovalRules"];
         delete?: never;
         options?: never;
@@ -1152,10 +1152,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /evidence-rules */
+        /** The caller's company evidence rules (when a photo is mandatory), newest first. Admin, Admin user and Branch manager. */
         get: operations["getEvidenceRules"];
         put?: never;
-        /** POST /evidence-rules */
+        /** Create an evidence rule: for the trigger, at or above a quantity and/or value, a photo is required. Admin only. */
         post: operations["postEvidenceRules"];
         delete?: never;
         options?: never;
@@ -1865,10 +1865,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /qc-inspections */
+        /** The caller's company QC inspections, newest first (max 200), optionally for one source document or line. */
         get: operations["getQcInspections"];
         put?: never;
-        /** POST /qc-inspections */
+        /** Record a QC inspection. At least one check result is required. The template and lot must belong to the caller's company. A failing result also opens an exception case and sends the goods to quarantine. */
         post: operations["postQcInspections"];
         delete?: never;
         options?: never;
@@ -1883,10 +1883,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /qc-templates */
+        /** The caller's company QC checklist templates, newest first. Admin, Admin user and Branch manager. */
         get: operations["getQcTemplates"];
         put?: never;
-        /** POST /qc-templates */
+        /** Create a QC checklist template (seal, packaging, weight, expiry-window checks). Without checks the default set is used. Admin only. */
         post: operations["postQcTemplates"];
         delete?: never;
         options?: never;
@@ -2295,10 +2295,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /tolerance-rules */
+        /** The caller's company count-variance tolerance rules, newest first. Admin, Admin user and Branch manager. */
         get: operations["getToleranceRules"];
         put?: never;
-        /** POST /tolerance-rules */
+        /** Create a tolerance rule by value and/or percent (at least one), optionally per category and branch. Admin only. */
         post: operations["postToleranceRules"];
         delete?: never;
         options?: never;
@@ -2389,7 +2389,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /approval-rules/{id} */
+        /** Edit or deactivate a rule. Another company's rule resolves 404. Admin only. */
         patch: operations["patchApprovalRulesId"];
         trace?: never;
     };
@@ -2440,7 +2440,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /evidence-rules/{id} */
+        /** Edit or deactivate an evidence rule. Admin only. */
         patch: operations["patchEvidenceRulesId"];
         trace?: never;
     };
@@ -2610,7 +2610,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /qc-templates/{id} */
+        /** Edit or deactivate a QC template. Another company's template resolves 404. Admin only. */
         patch: operations["patchQcTemplatesId"];
         trace?: never;
     };
@@ -2678,7 +2678,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /tolerance-rules/{id} */
+        /** Edit or deactivate a tolerance rule. Admin only. */
         patch: operations["patchToleranceRulesId"];
         trace?: never;
     };
@@ -5019,6 +5019,122 @@ export interface components {
                 id?: string;
                 code?: string;
             } | null;
+        };
+        ApprovalRule: {
+            id: string;
+            label: string;
+            /** @description What the rule gates, for example PO_APPROVE or TRANSFER_CONFIRM. */
+            triggerType: string;
+            /** @description Money; a JSON number. At or above it, the action needs an approver. */
+            valueThreshold: number;
+            /** @enum {string} */
+            requiredApproverRole: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+            /** @description Limits the rule to one branch of the caller's company; null means company-wide. */
+            branchId?: string | null;
+            active?: boolean;
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            branch?: {
+                id?: string;
+                name?: string;
+            } | null;
+        };
+        ToleranceRule: {
+            id: string;
+            label: string;
+            valueThreshold?: number | null;
+            percentThreshold?: number | null;
+            category?: string | null;
+            branchId?: string | null;
+            active?: boolean;
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            branch?: {
+                id?: string;
+                name?: string;
+            } | null;
+            createdBy?: {
+                id?: string;
+                name?: string;
+            };
+        };
+        EvidenceRule: {
+            id: string;
+            label: string;
+            /** @description For example DAMAGED_RECEIPT. */
+            triggerType: string;
+            quantityThreshold?: number | null;
+            valueThreshold?: number | null;
+            category?: string | null;
+            branchId?: string | null;
+            active?: boolean;
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            branch?: {
+                id?: string;
+                name?: string;
+            } | null;
+            createdBy?: {
+                id?: string;
+                name?: string;
+            };
+        };
+        QcChecklistTemplate: {
+            id: string;
+            label: string;
+            /** @description Matched against the item category. */
+            category?: string | null;
+            checks: {
+                key: string;
+                label: string;
+            }[];
+            active?: boolean;
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            createdBy?: {
+                id?: string;
+                name?: string;
+            };
+        };
+        QcInspection: {
+            id: string;
+            templateId?: string | null;
+            itemId?: string | null;
+            lotId?: string | null;
+            locationId?: string | null;
+            branchId?: string | null;
+            /** @description For example a PO number or a return request id. */
+            sourceDocument?: string | null;
+            sourceLineId?: string | null;
+            results: {
+                [key: string]: "PASS" | "FAIL" | "NA";
+            };
+            verdict?: string;
+            notes?: string | null;
+            inspectedById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            template?: {
+                id?: string;
+                label?: string;
+            } | null;
+            item?: {
+                id?: string;
+                code?: string;
+                name?: string;
+            } | null;
+            lot?: {
+                id?: string;
+                lotNo?: string;
+            } | null;
+            inspectedBy?: {
+                id?: string;
+                name?: string;
+            };
         };
     };
     responses: never;
@@ -7486,44 +7602,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rules?: components["schemas"]["ApprovalRule"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin or Branch manager access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -7534,52 +7631,65 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    label: string;
+                    triggerType: string;
+                    valueThreshold: number;
+                    /** @enum {string} */
+                    requiredApproverRole: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
+                    branchId?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["ApprovalRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description label, triggerType, a positive valueThreshold and requiredApproverRole are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Branch not found (also for another company's branch). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Approval rules are not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -8818,44 +8928,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rules?: components["schemas"]["EvidenceRule"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin or Branch manager access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -8866,52 +8957,65 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    label: string;
+                    triggerType: string;
+                    quantityThreshold?: number;
+                    valueThreshold?: number;
+                    category?: string;
+                    branchId?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["EvidenceRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description label, triggerType and at least one threshold are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Branch not found (also for another company's branch). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Evidence rules are not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11766,47 +11870,29 @@ export interface operations {
     };
     getQcInspections: {
         parameters: {
-            query?: never;
+            query?: {
+                sourceDocument?: string;
+                sourceLineId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        inspections?: components["schemas"]["QcInspection"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11821,52 +11907,61 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    templateId?: string;
+                    itemId?: string;
+                    lotId?: string;
+                    locationId?: string;
+                    sourceDocument?: string;
+                    sourceLineId?: string;
+                    results: {
+                        [key: string]: "PASS" | "FAIL" | "NA";
+                    };
+                    notes?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Recorded. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        inspection?: components["schemas"]["QcInspection"];
+                        exceptionCase?: components["schemas"]["ExceptionCase"] | null;
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description At least one checklist result is required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
+            /** @description Template or lot not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description QC inspections are not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -11879,44 +11974,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        templates?: components["schemas"]["QcChecklistTemplate"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin or Branch manager access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -11927,52 +12003,47 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    label: string;
+                    category?: string;
+                    checks?: {
+                        key: string;
+                        label: string;
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        template?: components["schemas"]["QcChecklistTemplate"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description A label and at least one check are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13187,44 +13258,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rules?: components["schemas"]["ToleranceRule"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Admin or Branch manager access required. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -13235,52 +13287,64 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    label: string;
+                    valueThreshold?: number;
+                    percentThreshold?: number;
+                    category?: string;
+                    branchId?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["ToleranceRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description label and at least one of valueThreshold/percentThreshold are required. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Branch not found (also for another company's branch). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Tolerance rules are not available on this database yet. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13606,52 +13670,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    active?: boolean;
+                    label?: string;
+                    branchId?: string | null;
+                    valueThreshold?: number;
+                    /** @enum {string} */
+                    requiredApproverRole?: "ADMIN" | "ADMIN_USER" | "BRANCH_MANAGER" | "STORE_USER" | "WAREHOUSE_PICKER" | "AUDITOR";
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["ApprovalRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Rule or branch not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -13780,52 +13839,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    active?: boolean;
+                    label?: string;
+                    category?: string | null;
+                    branchId?: string | null;
+                    quantityThreshold?: number | null;
+                    valueThreshold?: number | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["EvidenceRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Rule or branch not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14374,52 +14428,48 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    active?: boolean;
+                    label?: string;
+                    category?: string | null;
+                    checks?: {
+                        key: string;
+                        label: string;
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        template?: components["schemas"]["QcChecklistTemplate"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description QC checklist template not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14619,52 +14669,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    active?: boolean;
+                    label?: string;
+                    category?: string | null;
+                    branchId?: string | null;
+                    valueThreshold?: number | null;
+                    percentThreshold?: number | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        rule?: components["schemas"]["ToleranceRule"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Rule or branch not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
