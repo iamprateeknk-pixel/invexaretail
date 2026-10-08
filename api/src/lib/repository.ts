@@ -315,8 +315,10 @@ export function createItemRecord(input: { code: string; name: string; category?:
   return { ...item, lots: [...item.lots] };
 }
 
-export function upsertItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string }): { item: ItemRecord; created: boolean } {
-  const existing = items.find((item) => item.code.trim().toLowerCase() === input.code.trim().toLowerCase());
+export function upsertItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string }, isOwned?: (item: ItemRecord) => boolean): { item: ItemRecord; created: boolean } {
+  // `isOwned` limits the match to the caller's own items: matching by code across the whole process let one company's import
+  // overwrite another company's item with the same code.
+  const existing = items.find((item) => item.code.trim().toLowerCase() === input.code.trim().toLowerCase() && (!isOwned || isOwned(item)));
   if (existing) {
     existing.name = input.name;
     existing.category = input.category;

@@ -23,8 +23,10 @@ import { revokeAllSessionsForUser } from '../lib/session-store.js';
 import {
   DEFAULT_COMPANY_ID,
   DEFAULT_TENANT_ID,
+  companyOwnsItem,
   companyOwnsLocation,
   itemsForCompany,
+  scopedImportKey,
   locationsForCompany,
   registerItemCompany,
   registerLocationCompany,
@@ -772,7 +774,10 @@ router.post('/items', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+  // Codes, barcodes and aliases are unique per company (the database enforces (companyId, code)). Checking the process-wide
+  // list refused a code another company uses and put that company's item code and name in the 409 message.
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  const claimConflict = findIdentityConflict(ownItems, '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
   if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
     const item = createInventoryItem({
@@ -808,7 +813,8 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   const nextCode = typeof req.body.code === 'string' ? req.body.code.trim() : item.code;
   const nextName = typeof req.body.name === 'string' ? req.body.name.trim() : item.name;
   if (!nextCode || !nextName) return res.status(400).json({ message: 'Item Code and Item Name are required.' });
-  if (listItems().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  if (ownItems.some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
   let operationalMeta: ItemOperationalMeta;
@@ -819,7 +825,7 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), item.id, {
+  const claimConflict = findIdentityConflict(ownItems, item.id, {
     code: nextCode !== item.code ? nextCode : undefined,
     barcode: masterFields.barcode,
     aliases: masterFields.aliases,
@@ -2199,11 +2205,12 @@ function stockUpdateDelta(mode: StockUpdateMode, quantity: number, current: numb
   return delta;
 }
 
-export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMode) {
+export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMode, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
   const prepared: Array<{ row: StockImportPreview['validRows'][number]; item: ReturnType<typeof listItems>[number]; location: LocationRecord; lotId: string; lotNo: string; expiryDate?: string | null; isNewLot: boolean; isNewItem: boolean; isNewLocation: boolean; currentQty: number; qtyDelta: number; resultingQty: number }> = [];
-  const existingItems = listItems();
-  const existingLocations = listLocations();
+  // The company's own items and locations only: a file must never match, and then adjust, another company's.
+  const existingItems = itemsForCompany(companyId, listItems());
+  const existingLocations = locationsForCompany(companyId, listLocations());
   const plannedItems = new Map<string, ReturnType<typeof listItems>[number]>();
   const plannedLocations = new Map<string, LocationRecord>();
   const newItemIds = new Set<string>();
@@ -2218,7 +2225,7 @@ export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMo
     let isNewItem = false;
     if (!item && mode === 'SET') {
       item = {
-        id: stockImportId('item-erp', row.code),
+        id: stockImportId('item-erp', scopedImportKey(companyId, row.code)),
         code: row.code,
         name: row.itemName,
         category: row.category,
@@ -2240,7 +2247,7 @@ export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMo
     if (!location && mode === 'SET' && row.locationName) {
       const normalizedLocation = row.locationName.toLowerCase().replace(/[^a-z0-9]+/g, '');
       location = {
-        id: stockImportId('loc-erp', locationKey),
+        id: stockImportId('loc-erp', scopedImportKey(companyId, locationKey)),
         name: row.locationName,
         type: normalizedLocation === 'hobasni' || normalizedLocation === 'basni' ? 'warehouse' : 'store',
       };
@@ -2505,8 +2512,7 @@ router.post('/imports/opening-stock/commit', upload.single('file'), async (req: 
     let updated = 0;
     const imported = [];
     for (const row of preview.validRows) {
-      const result = upsertItemRecord({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit });
-      await persistItem(result.item);
+      const result = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, req.companyId ?? DEFAULT_COMPANY_ID);
       imported.push(result.item);
       if (result.created) created += 1;
       else updated += 1;
@@ -2566,7 +2572,7 @@ router.post('/stock-adjustments/import/preview', upload.single('file'), async (r
     const fileHash = computeFileHash(req.file!.buffer);
     const existing = await findDuplicateBatch({ companyId: req.companyId ?? DEFAULT_COMPANY_ID, type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
     if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
-    const plan = planStockUpdate(preview, mode);
+    const plan = planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
     const staged = stageStockAdjustment(preview, plan, mode);
     const batch = await createPreviewBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -2594,7 +2600,7 @@ router.post('/stock-adjustments/import/commit', upload.single('file'), async (re
   try {
     const mode = validatedStockUpdateMode(req.body.mode);
     const preview = await readUploadedStockFile(req);
-    const plan = planStockUpdate(preview, mode);
+    const plan = planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid rows before confirming.', preview: stockUpdatePreviewResponse(preview, plan) });
     if (mode === 'SET') {
       const result = await persistOpeningStockImport(preview, req.file.originalname, req.user!.id, { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
@@ -2614,6 +2620,16 @@ router.post('/stock-adjustments/import/commit', upload.single('file'), async (re
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit stock update.' }); }
 });
 
+// An item import creates or updates items BY CODE. Both the lookup and the new item belong to the caller's company: the
+// process-wide lookup let one company's file overwrite another company's item with the same code, and a new item was
+// stored under the default company because persistItem was called without one.
+async function upsertCompanyItem(input: Parameters<typeof upsertItemRecord>[0], companyId: string) {
+  const result = upsertItemRecord(input, (item) => companyOwnsItem(companyId, item.id));
+  if (result.created) registerItemCompany(result.item.id, companyId);
+  await persistItem(result.item, companyId);
+  return result;
+}
+
 router.post('/import/items', upload.single('file'), async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins can import data.' });
@@ -2629,8 +2645,7 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
     }
     const imported = [];
     for (const row of preview.validRows) {
-      const { item } = upsertItemRecord({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit });
-      await persistItem(item);
+      const { item } = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, req.companyId ?? DEFAULT_COMPANY_ID);
       imported.push(item);
     }
     return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview) });
@@ -2646,14 +2661,14 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
 const normalName = (input: string) => input.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 const isOperationalAdmin = (role: string) => role === 'ADMIN' || role === 'ADMIN_USER';
 
-function configuredPurchaseWarehouse() {
-  const warehouses = listLocations().filter((location) => location.type === 'warehouse');
+function configuredPurchaseWarehouse(companyId: string = DEFAULT_COMPANY_ID) {
+  const warehouses = locationsForCompany(companyId, listLocations()).filter((location) => location.type === 'warehouse');
   const basni = warehouses.find((location) => /basni|hobasni|ho/.test(normalName(location.name)));
   return basni ?? (warehouses.length === 1 ? warehouses[0] : undefined);
 }
 
-function dailyItem(row: DailyStockRow) {
-  const catalog = listItems();
+function dailyItem(row: DailyStockRow, companyId: string = DEFAULT_COMPANY_ID) {
+  const catalog = itemsForCompany(companyId, listItems());
   const code = row.itemCode ? catalog.find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
   if (code) return code;
   // ERP alias / barcode mapping (blueprint v4 §10); a row with a code never falls back to its name.
@@ -2667,14 +2682,14 @@ function inactiveImportMessage(item: { code: string; status?: string }): string 
   return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 
-function planDailyImport(preview: DailyImportPreview, importedBy: string) {
-  const errors = [...preview.errors]; const warehouse = configuredPurchaseWarehouse(); const prepared: Array<{ row: DailyStockRow; item: ReturnType<typeof listItems>[number]; locationId: string; lotId: string; qtyDelta: number; newLot?: ReturnType<typeof ensureLotRecord> }> = [];
+function planDailyImport(preview: DailyImportPreview, importedBy: string, companyId: string = DEFAULT_COMPANY_ID) {
+  const errors = [...preview.errors]; const warehouse = configuredPurchaseWarehouse(companyId); const prepared: Array<{ row: DailyStockRow; item: ReturnType<typeof listItems>[number]; locationId: string; lotId: string; qtyDelta: number; newLot?: ReturnType<typeof ensureLotRecord> }> = [];
   if (preview.importType === 'PURCHASE' && !warehouse) errors.push({ rowNumber: 0, message: 'Set exactly one warehouse as H.O. Basni before importing purchases.' });
   for (const row of preview.validRows) {
-    const item = dailyItem(row);
+    const item = dailyItem(row, companyId);
     if (!item) { errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Unknown or ambiguous Item Name: ${row.itemName}` }); continue; }
     if (!isOperationalItem(item)) { errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) }); continue; }
-    const location = preview.importType === 'PURCHASE' ? warehouse : matchImportLocation(row.locationName, listLocations());
+    const location = preview.importType === 'PURCHASE' ? warehouse : matchImportLocation(row.locationName, locationsForCompany(companyId, listLocations()));
     if (!location) { errors.push({ rowNumber: row.rowNumber, message: `Unknown ${preview.importType === 'PURCHASE' ? 'H.O. Basni warehouse' : 'sales branch'}: ${row.locationName}` }); continue; }
     if (preview.importType === 'PURCHASE' && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
     let lot = row.lotNo ? item.lots.find((entry) => normalName(entry.lotNo) === normalName(row.lotNo!)) : undefined;
@@ -2803,8 +2818,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       let updated = 0;
       const imported = [];
       for (const row of preview.validRows) {
-        const result = upsertItemRecord({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit });
-        await persistItem(result.item);
+        const result = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, companyId);
         imported.push(result.item);
         if (result.created) created += 1;
         else updated += 1;
@@ -2902,7 +2916,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse();
+    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID);
     const fileHash = computeFileHash(req.file.buffer);
     const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') });
     const existing = await findDuplicateBatch({
@@ -2914,7 +2928,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
       sourceDateTo: preview.transactionTo ?? null,
     });
     if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
-    const plan = planDailyImport(preview, req.user!.id);
+    const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
     const staged = stageDailyImport(preview, plan);
     const batch = await createPreviewBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -2959,7 +2973,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse(); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }); const plan = planDailyImport(preview, req.user!.id);
+    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', errors: plan.errors.slice(0, 100) });
     const batchId = `imp-${importType.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
@@ -2989,16 +3003,17 @@ router.get('/sync-status', (req: Request, res: Response) => {
 // Warehouse transfer import, lot-aware picker sessions and bulk stock take
 // ---------------------------------------------------------------------------
 
-function exactItemMatch(itemCode?: string, itemName?: string) {
+function exactItemMatch(itemCode: string | undefined, itemName: string | undefined, companyId: string) {
   // Code, barcode or ERP alias when a code is given (never falling back to
-  // the name); otherwise a unique name or alias.
-  return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
+  // the name); otherwise a unique name or alias. Only the caller's own company's items are candidates: an upload
+  // must never resolve to (and then plan stock moves for) an item that belongs to another company.
+  return resolveItemByIdentity(itemsForCompany(companyId, listItems()), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
 function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
   const sourceLedger = listStockLedgerForLocation(sourceLocationId);
-  const destination = listLocations().find((location) => location.id === destinationLocationId);
+  const destination = locationsForCompany(companyId, listLocations()).find((location) => location.id === destinationLocationId);
   const rows = mergeDuplicates
     ? [...preview.validRows.reduce((map, row) => {
         const key = (row.itemCode || row.itemName || '').trim().toLowerCase();
@@ -3014,7 +3029,7 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
       errors.push({ rowNumber: row.rowNumber, message: `Destination Store ${row.destinationStore} does not match selected destination ${destination.name}.` });
       continue;
     }
-    const item = exactItemMatch(row.itemCode, row.itemName);
+    const item = exactItemMatch(row.itemCode, row.itemName, companyId);
     if (!item) {
       errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Item Name is unknown or ambiguous: ${row.itemName}` });
       continue;
@@ -3399,7 +3414,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
       const code = codeIndex >= 0 ? String(rows[index][codeIndex] ?? '').trim() : '';
       const name = nameIndex >= 0 ? String(rows[index][nameIndex] ?? '').trim() : '';
       if (!code && !name) continue;
-      const item = exactItemMatch(code || undefined, name || undefined);
+      const item = exactItemMatch(code || undefined, name || undefined, req.companyId ?? DEFAULT_COMPANY_ID);
       if (!item) { errors.push({ rowNumber: index + 1, message: code ? `Unknown Item Code: ${code}` : `Unknown or ambiguous Item Name: ${name}` }); continue; }
       if (!isOperationalItem(item)) { errors.push({ rowNumber: index + 1, message: inactiveImportMessage(item) }); continue; }
       if (seen.has(item.id)) continue; seen.add(item.id);
