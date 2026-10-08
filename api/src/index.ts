@@ -415,6 +415,13 @@ const hydrateRepository = async () => {
     console.warn('Company profile could not be hydrated; continuing with the default profile.', error instanceof Error ? error.message : error);
   }
   try {
+    const { syncOperationalCompaniesIntoControlPlane } = await import('./lib/saas/persistence.js');
+    const synced = await syncOperationalCompaniesIntoControlPlane();
+    if (synced > 0) console.log(`✅ ${synced} operational company record(s) synced into the control plane`);
+  } catch (error) {
+    console.warn('Operational companies could not be synced into the control plane.', error instanceof Error ? error.message : error);
+  }
+  try {
     replaceAuditEvents(await hydrateAuditFromDatabase());
   } catch (error) {
     console.warn('Audit history could not be hydrated; continuing without historical audit entries.', error instanceof Error ? error.message : error);

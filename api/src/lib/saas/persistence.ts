@@ -71,6 +71,40 @@ export async function hydrateControlPlaneFromStore(): Promise<'skipped' | 'seede
   }
 }
 
+// Mirrors operational tenants (User.companyId rows) and the company profile
+// name into the control-plane registry. Run after both are hydrated.
+export async function syncOperationalCompaniesIntoControlPlane(): Promise<number> {
+  if (!databaseEnabled()) return 0;
+  const { prisma } = await import('../db.js');
+  const { DEFAULT_COMPANY_ID } = await import('./tenant-scope.js');
+  const profile = await prisma.companyProfile.findUnique({ where: { id: 'default' } });
+  const users = await prisma.user.findMany({
+    select: { id: true, name: true, email: true, role: true, passwordHash: true, companyId: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const byCompany = new Map<string, typeof users>();
+  for (const user of users) {
+    const companyId = user.companyId || DEFAULT_COMPANY_ID;
+    byCompany.set(companyId, [...(byCompany.get(companyId) ?? []), user]);
+  }
+  if (!byCompany.has(DEFAULT_COMPANY_ID)) byCompany.set(DEFAULT_COMPANY_ID, []);
+  let changed = 0;
+  for (const [companyId, rows] of byCompany) {
+    const admin = rows.find((row) => String(row.role).toUpperCase().includes('ADMIN')) ?? null;
+    const name = companyId === DEFAULT_COMPANY_ID && profile?.name ? profile.name : '';
+    const touched = controlPlane.syncOperationalCompany({
+      id: companyId,
+      name,
+      admin: admin
+        ? { id: admin.id, email: admin.email, name: admin.name, passwordHash: admin.passwordHash }
+        : null,
+    });
+    if (touched) changed += 1;
+  }
+  if (changed > 0) await saveControlPlaneSnapshot();
+  return changed;
+}
+
 export function scheduleControlPlanePersist(): void {
   if (!databaseEnabled()) return;
   if (persistTimer) clearTimeout(persistTimer);
