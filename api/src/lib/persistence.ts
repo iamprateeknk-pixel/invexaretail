@@ -4,12 +4,12 @@ import bcrypt from 'bcryptjs';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import type { CompanyProfileRecord, CountAssignmentRecord, CountRecord, ItemRecord, LocationRecord, TransferRecord, UserRecord } from './repository.js';
 import type { AuditEvent } from './audit.js';
-import { transferCartons, companyProfile, counts, countAssignments, dailyMovements, items, locations, setCompanyProfile, stockLedger, syncCheckpoints, transfers, users } from './repository.js';
+import { transferCartons, companyProfile, counts, countAssignments, dailyMovements, items, locations, saveCompanyProfile, setCompanyProfile, stockLedger, syncCheckpoints, transfers, users } from './repository.js';
 import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
-import { hydrateActiveWorkflow } from './industry-packs.js';
+import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
@@ -1091,15 +1091,35 @@ export async function hydrateCompanyProfile(): Promise<void> {
     });
     await hydrateActiveWorkflow((row as { industryKey?: string | null }).industryKey ?? row.industry);
   }
+  // Every other company's own profile row (id = company id). 'default-company' is the default company, whose
+  // profile is the 'default' row above, so a row with that id is not read as a separate profile.
+  const others = await prisma.companyProfile.findMany({ where: { id: { notIn: ['default', DEFAULT_COMPANY_ID] } } });
+  for (const other of others) {
+    saveCompanyProfile(other.id, {
+      name: other.name,
+      email: other.email ?? undefined,
+      phone: other.phone ?? undefined,
+      industry: other.industry ?? undefined,
+      industryKey: (other as { industryKey?: string | null }).industryKey ?? undefined,
+      address: other.address ?? undefined,
+    });
+    const otherKey = (other as { industryKey?: string | null }).industryKey ?? other.industry;
+    if (otherKey) setActiveWorkflow(workflowFromPack(getIndustryPack(otherKey)), other.id);
+  }
 }
 
-export async function persistCompanyProfile(profile: CompanyProfileRecord): Promise<void> {
+// The default company's profile lives in the row with id 'default' (kept for existing databases); every other
+// company's profile is the CompanyProfile row whose id is its company id.
+const profileRowId = (companyId: string) => (companyId === DEFAULT_COMPANY_ID ? 'default' : companyId);
+
+export async function persistCompanyProfile(profile: CompanyProfileRecord, companyId: string = DEFAULT_COMPANY_ID): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
+  const id = profileRowId(companyId);
   await prisma.companyProfile.upsert({
-    where: { id: 'default' },
+    where: { id },
     update: { name: profile.name, email: profile.email, phone: profile.phone, industry: profile.industry, industryKey: profile.industryKey, address: profile.address },
-    create: { id: 'default', name: profile.name, email: profile.email, phone: profile.phone, industry: profile.industry, industryKey: profile.industryKey, address: profile.address },
+    create: { id, name: profile.name, email: profile.email, phone: profile.phone, industry: profile.industry, industryKey: profile.industryKey, address: profile.address },
   });
 }
 

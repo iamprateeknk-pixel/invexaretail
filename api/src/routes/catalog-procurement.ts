@@ -123,7 +123,7 @@ router.put('/catalog/items/:itemId/custom-fields/:fieldId', async (req, res) => 
   if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
   const field = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.fieldId, companyId: catalogCompany(req) } });
   if (!field) return res.status(404).json({ message: 'Custom field was not found.' });
-  const pack = getIndustryPack(getActiveWorkflow().industryKey);
+  const pack = getIndustryPack(getActiveWorkflow(catalogCompany(req)).industryKey);
   if (value.trim() && isSerialFieldName(field.name, pack)) {
     const duplicate = await prisma.customFieldValue.findFirst({
       where: { fieldId: field.id, value: value.trim(), NOT: { itemId: req.params.itemId } },

@@ -88,7 +88,7 @@ import {
   findPendingCountForLot,
   findStockLedgerEntry,
   findUserById,
-  getCompanyProfile,
+  findCompanyProfile,
   listCountAssignments,
   listCountAssignmentsFor,
   listCounts,
@@ -108,7 +108,7 @@ import {
   listUsers,
   locations,
   markAssignmentSubmitted,
-  setCompanyProfile,
+  saveCompanyProfile,
   updateCountReview,
   updateCountAssignment,
   updateTransferStatus,
@@ -426,11 +426,17 @@ router.get('/industries', (_req: Request, res: Response) => {
   });
 });
 
+// The caller's own company profile. A company that has none yet gets a neutral one named after it - never the
+// default company's (the old single global profile leaked the platform company's name and industry to every tenant).
+function companyProfileFor(companyId: string) {
+  return findCompanyProfile(companyId) ?? { name: controlPlane.companies.get(companyId)?.name ?? companyId, industry: 'Grocery', industryKey: 'grocery' };
+}
+
 router.get('/workspace/profile', (req: Request, res: Response) => {
-  const company = getCompanyProfile();
+  const companyId = req.companyId || DEFAULT_COMPANY_ID;
+  const company = companyProfileFor(companyId);
   const pack = getIndustryPack(company.industryKey ?? company.industry);
   const view = toWorkspacePackView(pack);
-  const companyId = req.companyId || DEFAULT_COMPANY_ID;
   return res.json({
     name: company.name,
     industry: company.industry ?? pack.label,
@@ -439,7 +445,7 @@ router.get('/workspace/profile', (req: Request, res: Response) => {
       ...view,
       hide: [...new Set([...view.hide, ...hiddenNavigationForCompany(companyId)])],
     },
-    workflow: getActiveWorkflow(),
+    workflow: getActiveWorkflow(companyId),
   });
 });
 
@@ -451,7 +457,7 @@ router.get('/runtime/config', (req: Request, res: Response) => {
 
 router.get('/company', (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
-  const company = getCompanyProfile();
+  const company = companyProfileFor(req.companyId ?? DEFAULT_COMPANY_ID);
   const pack = getIndustryPack(company.industryKey ?? company.industry);
   return res.json({ company: { ...company, industryKey: pack.key, industry: company.industry ?? pack.label } });
 });
@@ -464,10 +470,11 @@ router.put('/company', async (req: Request, res: Response) => {
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     return res.status(400).json({ message: 'Company name must be at least 2 characters.' });
   }
-  const current = getCompanyProfile();
+  const profileCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const current = companyProfileFor(profileCompanyId);
   const nextKey = resolveIndustryKey(industryKey ?? current.industryKey ?? industry ?? current.industry);
   const pack = getIndustryPack(nextKey);
-  const profile = setCompanyProfile({
+  const profile = saveCompanyProfile(profileCompanyId, {
     name: name.trim(),
     email: email?.trim() || undefined,
     phone: phone?.trim() || undefined,
@@ -477,8 +484,8 @@ router.put('/company', async (req: Request, res: Response) => {
   });
 
   try {
-    await persistCompanyProfile(profile);
-    const applied = await applyIndustryPack(nextKey, req.companyId ?? DEFAULT_COMPANY_ID);
+    await persistCompanyProfile(profile, profileCompanyId);
+    const applied = await applyIndustryPack(nextKey, profileCompanyId);
     return res.json({
       company: profile,
       pack: toWorkspacePackView(pack),
@@ -1766,7 +1773,7 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
     if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
     const invalidLot = validated.lines.find((line) => !listItems().find((item) => item.id === line.itemId)?.lots.some((lot) => lot.id === line.lotId));
     if (invalidLot) return res.status(400).json({ message: 'Each transfer lot must belong to its selected item.' });
-    if (getActiveWorkflow().expiryBlocking) {
+    if (getActiveWorkflow(req.companyId ?? DEFAULT_COMPANY_ID).expiryBlocking) {
       const blocked = validated.lines.find((line) => {
         const lot = listItems().find((item) => item.id === line.itemId)?.lots.find((entry) => entry.id === line.lotId);
         return lot && ((lot.status && lot.status !== 'AVAILABLE') || Boolean(lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now()));
@@ -1827,7 +1834,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     available: sourceStock.find((row) => row.itemId === itemId && row.lotId === lot.id)?.onHand ?? 0,
     status: (lot as any).status ?? 'AVAILABLE',
   }));
-  const allocation = allocateLots(lots, quantity, getActiveWorkflow().allocationStrategy);
+  const allocation = allocateLots(lots, quantity, getActiveWorkflow(req.companyId ?? DEFAULT_COMPANY_ID).allocationStrategy);
   if (allocation.shortage > 1e-8) return res.status(409).json({ message: `Source stock changed; ${allocation.shortage} units are no longer available.` });
 
   const transfer: TransferRecord = {
@@ -2981,7 +2988,7 @@ function exactItemMatch(itemCode?: string, itemName?: string) {
   return resolveItemByIdentity(listItems(), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
-function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean) {
+function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
   const sourceLedger = listStockLedgerForLocation(sourceLocationId);
   const destination = listLocations().find((location) => location.id === destinationLocationId);
@@ -3016,7 +3023,7 @@ function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImpo
       available: sourceLedger.find((entry) => entry.itemId === item.id && entry.lotId === lot.id)?.onHand ?? 0,
       status: lot.status ?? 'AVAILABLE',
     }));
-    const workflow = getActiveWorkflow();
+    const workflow = getActiveWorkflow(companyId);
     if (workflow.expiryBlocking && lots.every((lot) => lot.status !== 'AVAILABLE' || (lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now()))) {
       errors.push({ rowNumber: row.rowNumber, message: `${item.code} has no allocatable lots while expiry blocking is on.` });
       continue;
@@ -3036,7 +3043,7 @@ router.post('/transfers/import/preview', upload.single('file'), async (req: Requ
   if (!req.file || !req.body.sourceLocationId || !req.body.destinationLocationId) return res.status(400).json({ message: 'File, source and destination are required.' });
   try {
     const preview = await parseTransferImport(req.file.buffer, req.file.originalname);
-    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false');
+    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
     return res.json({ preview: {
       sheetName: preview.sheetName, headerRow: preview.headerRow, totalRows: preview.totalRows,
       validRows: plan.mapped.length, invalidRows: plan.errors.length, duplicateRows: preview.duplicateRows,
@@ -3054,7 +3061,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
   if (req.body.sourceLocationId === req.body.destinationLocationId) return res.status(400).json({ message: 'Source and destination must differ.' });
   try {
     const preview = await parseTransferImport(req.file.buffer, req.file.originalname);
-    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false');
+    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.mapped.length) return res.status(400).json({ message: 'Fix all unmapped or insufficient-stock rows before confirming.', errors: plan.errors.slice(0, 100) });
     const transfer: TransferRecord = {
       id: `transfer-${Math.random().toString(36).slice(2, 10)}`,

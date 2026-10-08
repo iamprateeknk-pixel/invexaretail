@@ -287,7 +287,7 @@ router.post('/jobs/:id/consume', async (req, res) => {
       quantity,
       lotId: typeof req.body.lotId === 'string' ? req.body.lotId : undefined,
       requestId,
-      strategy: getActiveWorkflow().allocationStrategy,
+      strategy: getActiveWorkflow(req.companyId ?? DEFAULT_COMPANY_ID).allocationStrategy,
       canAccessLocation: (locationId) => canAccessLocation(req, locationId),
     });
     // The in-memory stock view is only a read cache: keep it in step for the screens that read it,

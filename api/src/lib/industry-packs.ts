@@ -128,13 +128,22 @@ export function toWorkspacePackView(pack: IndustryPack): WorkspacePackView {
   };
 }
 
-export function getActiveWorkflow(): ActiveWorkflow {
-  return { ...activeWorkflow };
+// The workflow (allocation strategy FEFO/FIFO, expiry blocking) is per company. It used to be one process-wide
+// value, so the Admin of any company who changed their industry changed how stock is allocated and blocked for
+// every company. A company that has not configured one gets the neutral default, never another company's.
+const DEFAULT_WORKFLOW_COMPANY = 'default-company';
+const workflowsByCompany = new Map<string, ActiveWorkflow>();
+const NEUTRAL_WORKFLOW: ActiveWorkflow = workflowFromPack(INDUSTRY_PACKS.grocery);
+
+export function getActiveWorkflow(companyId: string = DEFAULT_WORKFLOW_COMPANY): ActiveWorkflow {
+  if (companyId === DEFAULT_WORKFLOW_COMPANY) return { ...activeWorkflow };
+  return { ...(workflowsByCompany.get(companyId) ?? NEUTRAL_WORKFLOW) };
 }
 
-export function setActiveWorkflow(update: ActiveWorkflow): ActiveWorkflow {
-  activeWorkflow = { ...update };
-  return getActiveWorkflow();
+export function setActiveWorkflow(update: ActiveWorkflow, companyId: string = DEFAULT_WORKFLOW_COMPANY): ActiveWorkflow {
+  if (companyId === DEFAULT_WORKFLOW_COMPANY) activeWorkflow = { ...update };
+  else workflowsByCompany.set(companyId, { ...update });
+  return getActiveWorkflow(companyId);
 }
 
 export function workflowFromPack(pack: IndustryPack): ActiveWorkflow {
@@ -159,7 +168,7 @@ export function isSerialFieldName(fieldName: string, pack = getIndustryPack(acti
 
 export async function applyIndustryPack(industryKey: IndustryKey, companyId: string = 'default-company'): Promise<{ createdTags: number; createdFields: number }> {
   const pack = getIndustryPack(industryKey);
-  setActiveWorkflow(workflowFromPack(pack));
+  setActiveWorkflow(workflowFromPack(pack), companyId);
   if (!databaseEnabled) return { createdTags: 0, createdFields: 0 };
 
   const [existingTags, existingFields] = await Promise.all([
