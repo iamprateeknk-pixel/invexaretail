@@ -6,7 +6,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | Area | Item | Status | Evidence / remainder |
 |---|---|---|---|
 | A Architecture | Snapshot reconciled off the request path | done | `lib/repository-reconciler.ts` + test; `/ops/metrics` `reconciliation` |
-| A | Database-first reads, drop in-memory snapshot | open | Large refactor; snapshot is now background-reconciled, not removed |
+| A | Database-first reads, drop in-memory snapshot | open | Large refactor, deliberately not started in code: survey, slice order and the local Postgres recipe are in `docs/db-first-reads-plan.md`. Needs a memory-vs-Postgres parity helper first |
 | A | Remaining `core.ts` Transfer routes extracted | done | `docs/route-ownership-matrix.md` |
 | B Stock integrity | Canonical posting, job consumption in one transaction | done | `lib/job-consumption-service.ts` + 8 Postgres tests |
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |
