@@ -636,12 +636,20 @@ router.post('/users', async (req: Request, res: Response) => {
   return res.status(201).json({ user: { id, name: record.name, email: normalizedEmail, role: record.role, assignedLocationIds: locationIds } });
 });
 
+// A user belongs to exactly one company. These two routes look the user up in the process-wide user list by
+// id, so without this check an admin of company A could rewrite the role or password of (or delete) a user of
+// company B whose id they know. Another company's user must look exactly like a missing one (404, never 403).
+function userBelongsToCaller(req: Request, userId: string): boolean {
+  const owner = enterpriseRepo.findUserById(userId)?.companyId ?? DEFAULT_COMPANY_ID;
+  return owner === (req.companyId ?? DEFAULT_COMPANY_ID);
+}
+
 router.put('/users/:userId', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   const userId = firstParam(req.params.userId);
   const record = users.find((user) => user.id === userId);
   const enhanced = enterpriseRepo.findUserById(userId);
-  if (!record || !enhanced) {
+  if (!record || !enhanced || !userBelongsToCaller(req, userId)) {
     return res.status(404).json({ message: 'User not found.' });
   }
 
@@ -708,7 +716,7 @@ router.delete('/users/:userId', async (req: Request, res: Response) => {
   }
 
   const index = users.findIndex((user) => user.id === userId);
-  if (index === -1) {
+  if (index === -1 || !userBelongsToCaller(req, userId)) {
     return res.status(404).json({ message: 'User not found.' });
   }
 
