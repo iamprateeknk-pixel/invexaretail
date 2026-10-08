@@ -1672,10 +1672,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /orders/{id}/returns */
+        /** An order's return requests with their lines, newest first. Admin or Warehouse picker. */
         get: operations["getOrdersIdReturns"];
         put?: never;
-        /** POST /orders/{id}/returns */
+        /** Open a return (RMA) for lines of an order. Quantities may not exceed what was fulfilled less what was already returned. Admin or Warehouse picker. */
         post: operations["postOrdersIdReturns"];
         delete?: never;
         options?: never;
@@ -1690,7 +1690,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /orders/{id}/shipment */
+        /** The order's latest shipment and its live tracking (both null when none was booked; tracking is null when the carrier cannot be reached). Admin or Warehouse picker. */
         get: operations["getOrdersIdShipment"];
         put?: never;
         post?: never;
@@ -3065,7 +3065,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /orders/expire-reservations */
+        /** Release the company's reservations that have passed their expiry (also done lazily whenever orders are listed). Admin only. */
         post: operations["postOrdersExpireReservations"];
         delete?: never;
         options?: never;
@@ -3082,7 +3082,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /orders/retry-backorders */
+        /** Try to fill every BACKORDERED order of the company from current stock (also done lazily when orders are listed). Admin only. */
         post: operations["postOrdersRetryBackorders"];
         delete?: never;
         options?: never;
@@ -3184,7 +3184,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /orders/{id}/retry-backorder */
+        /** Try to fill one backordered order from current stock. Admin only. */
         post: operations["postOrdersIdRetryBackorder"];
         delete?: never;
         options?: never;
@@ -3201,7 +3201,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /orders/{id}/ship */
+        /** Book a shipment with a carrier for an order whose pack session is sealed. provider defaults to the local adapter. Admin or Warehouse picker. */
         post: operations["postOrdersIdShip"];
         delete?: never;
         options?: never;
@@ -3422,7 +3422,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /shipments/{awb}/cancel */
+        /** Cancel a shipment with the carrier by its AWB number and mark it CANCELLED. Admin or Warehouse picker. */
         post: operations["postShipmentsAwbCancel"];
         delete?: never;
         options?: never;
@@ -4898,6 +4898,44 @@ export interface components {
             itemId: string;
             lotId: string;
             quantity: number;
+        };
+        Shipment: {
+            id: string;
+            orderId: string;
+            packSessionId?: string;
+            carrierProvider: string;
+            /** @description The carrier's air waybill number. */
+            awbNumber: string;
+            serviceCode?: string | null;
+            labelUrl?: string | null;
+            manifestId?: string | null;
+            weightKg?: number | null;
+            /** @description CANCELLED once cancelled with the carrier. */
+            status: string;
+            createdById?: string;
+            companyId: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        ReturnLine: {
+            id?: string;
+            returnRequestId?: string;
+            orderLineId: string;
+            itemId: string;
+            quantity: number;
+            /** @description Set at inspection; only a RESTOCK disposition ever puts stock back on the ledger. */
+            disposition?: string | null;
+        };
+        ReturnRequest: {
+            id: string;
+            orderId: string;
+            status: string;
+            reason?: string | null;
+            createdById?: string;
+            companyId: string;
+            /** Format: date-time */
+            createdAt?: string;
+            lines?: components["schemas"]["ReturnLine"][];
         };
     };
     responses: never;
@@ -10807,44 +10845,34 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        returnRequests?: components["schemas"]["ReturnRequest"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed (Admin or Warehouse picker), or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -10857,52 +10885,60 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    reason?: string;
+                    lines: {
+                        orderLineId: string;
+                        quantity: number;
+                    }[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Opened. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        returnRequest?: components["schemas"]["ReturnRequest"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid return lines. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": {
+                        message?: string;
+                        errors?: {
+                            [key: string]: unknown;
+                        }[];
+                    };
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed (Admin or Warehouse picker), or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -10917,44 +10953,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        shipment?: components["schemas"]["Shipment"] | null;
+                        tracking?: {
+                            [key: string]: unknown;
+                        } | null;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed (Admin or Warehouse picker), or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -15926,52 +15955,27 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        expiredCount?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -15982,52 +15986,27 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        filledCount?: number;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -16320,52 +16299,36 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        order?: components["schemas"]["Order"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -16378,52 +16341,72 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @default local */
+                    provider?: string;
+                    originPincode?: string;
+                    destinationPincode?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Booked. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        shipment?: components["schemas"]["Shipment"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Unknown carrier provider. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed (Admin or Warehouse picker), or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Order not found (also for another company's order). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Seal a pack session before shipping this order. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The carrier could not book the shipment. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17154,52 +17137,45 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description Cancelled. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        shipment?: components["schemas"]["Shipment"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Role not allowed (Admin or Warehouse picker), or location access denied. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Shipment not found (also for another company's shipment). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The carrier refused or the shipment cannot be cancelled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
