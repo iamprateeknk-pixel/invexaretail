@@ -125,6 +125,19 @@ function requireAdmin(req: Request, res: Response): boolean {
   return true;
 }
 
+// Listing every tenant and provisioning a new one (with its first Admin) are platform-operator actions, not
+// something any company's admin may do: an admin of company B could otherwise read the whole tenant list and
+// mint companies and Admin accounts. The operator is the Admin of the platform's own (default) company; the
+// separate Control Plane is where super admins work.
+function requirePlatformOperator(req: Request, res: Response): boolean {
+  const isOperator = req.user!.role === 'ADMIN' && (req.companyId ?? DEFAULT_COMPANY_ID) === DEFAULT_COMPANY_ID;
+  if (!isOperator) {
+    res.status(403).json({ message: 'Only the platform operator can manage tenants.' });
+    return false;
+  }
+  return true;
+}
+
 router.get('/asset-checkouts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
@@ -2566,12 +2579,12 @@ router.get('/saas/plans', async (_req, res) => {
 });
 
 router.get('/saas/tenants', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requirePlatformOperator(req, res)) return;
   return res.json({ tenants: listTenants(), entitlements: SAAS_PLANS });
 });
 
 router.post('/saas/onboard', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requirePlatformOperator(req, res)) return;
   try {
     const companyName = String(req.body.companyName ?? '').trim();
     const adminName = String(req.body.adminName ?? '').trim();
