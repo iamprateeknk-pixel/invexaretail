@@ -871,10 +871,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /asset-checkouts */
+        /** List the company's asset checkouts, newest first; optionally for one location. */
         get: operations["getAssetCheckouts"];
         put?: never;
-        /** POST /asset-checkouts */
+        /** Check an item out to a named person (Admin). Item and location must belong to the caller's company. */
         post: operations["postAssetCheckouts"];
         delete?: never;
         options?: never;
@@ -976,10 +976,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /comments/{entityType}/{entityId} */
+        /** List the comment thread on a record, oldest first. */
         get: operations["getCommentsEntityTypeEntityId"];
         put?: never;
-        /** POST /comments/{entityType}/{entityId} */
+        /** Add a comment; @handles in the text are stored as mentions. */
         post: operations["postCommentsEntityTypeEntityId"];
         delete?: never;
         options?: never;
@@ -1603,7 +1603,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /notification-inbox */
+        /** The caller's latest 100 notifications: addressed to them, to their role, or company-wide. */
         get: operations["getNotificationInbox"];
         put?: never;
         post?: never;
@@ -2406,7 +2406,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /asset-checkouts/{id}/return */
+        /** Mark a checked-out asset as returned. */
         patch: operations["patchAssetCheckoutsIdReturn"];
         trace?: never;
     };
@@ -2576,7 +2576,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /notification-inbox/{id}/read */
+        /** Mark one of the caller's notifications as read. */
         patch: operations["patchNotificationInboxIdRead"];
         trace?: never;
     };
@@ -5201,6 +5201,50 @@ export interface components {
             version?: number;
             lots: components["schemas"]["Lot"][];
         };
+        AssetCheckout: {
+            id: string;
+            itemId: string;
+            locationId: string;
+            assigneeName: string;
+            quantity: number;
+            /** @enum {string} */
+            status: "CHECKED_OUT" | "RETURNED";
+            /** Format: date-time */
+            dueAt?: string | null;
+            conditionOut?: string | null;
+            conditionIn?: string | null;
+            /** Format: date-time */
+            checkedOutAt: string;
+            /** Format: date-time */
+            returnedAt?: string | null;
+            createdById?: string;
+            companyId?: string;
+        };
+        ContextComment: {
+            id: string;
+            entityType: string;
+            entityId: string;
+            authorId: string;
+            authorName: string;
+            body: string;
+            mentions?: string[] | null;
+            /** Format: date-time */
+            createdAt: string;
+            companyId?: string;
+        };
+        UserNotification: {
+            id: string;
+            userId?: string | null;
+            role?: string | null;
+            title: string;
+            body: string;
+            type: string;
+            /** Format: date-time */
+            readAt?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            companyId?: string;
+        };
     };
     responses: never;
     parameters: {
@@ -7760,30 +7804,25 @@ export interface operations {
     };
     getAssetCheckouts: {
         parameters: {
-            query?: never;
+            query?: {
+                locationId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        checkouts: components["schemas"]["AssetCheckout"][];
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -7792,19 +7831,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description No access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
         };
     };
@@ -7815,31 +7849,40 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    itemId: string;
+                    locationId: string;
+                    assigneeName: string;
+                    /** @default 1 */
+                    quantity?: number;
+                    /** Format: date-time */
+                    dueAt?: string;
+                    conditionOut?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Checked out. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        checkout: components["schemas"]["AssetCheckout"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Missing item, location, assignee or a non-positive quantity. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -7848,19 +7891,23 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Not an Admin, or no access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Item or location not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -8163,23 +8210,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        comments: components["schemas"]["ContextComment"][];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Comments are not available for this entity type. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -8188,19 +8237,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
+            /** @description Record not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -8214,31 +8258,33 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    body: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Comment added. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        comment: components["schemas"]["ContextComment"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Empty comment, or comments are not available for this entity type. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
             /** @description No or invalid credentials. */
             401: {
@@ -8247,19 +8293,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
+            /** @description Record not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -10602,40 +10643,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        notifications: components["schemas"]["UserNotification"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13570,28 +13590,21 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    conditionIn?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        checkout: components["schemas"]["AssetCheckout"];
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -13600,19 +13613,32 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description No access to the location. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Checkout not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Already returned. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -14142,31 +14168,18 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        notification: components["schemas"]["UserNotification"];
                     };
                 };
-            };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description No or invalid credentials. */
             401: {
@@ -14175,19 +14188,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
+            /** @description Notification not found (also when it is addressed to someone else). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };

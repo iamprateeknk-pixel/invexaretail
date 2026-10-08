@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.36.0",
+    "version": "2026.37.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -4928,6 +4928,161 @@
             }
           }
         }
+      },
+      "AssetCheckout": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "locationId",
+          "assigneeName",
+          "quantity",
+          "status",
+          "checkedOutAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "assigneeName": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "CHECKED_OUT",
+              "RETURNED"
+            ]
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "conditionOut": {
+            "type": "string",
+            "nullable": true
+          },
+          "conditionIn": {
+            "type": "string",
+            "nullable": true
+          },
+          "checkedOutAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "returnedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
+      },
+      "ContextComment": {
+        "type": "object",
+        "required": [
+          "id",
+          "entityType",
+          "entityId",
+          "authorId",
+          "authorName",
+          "body",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "entityType": {
+            "type": "string"
+          },
+          "entityId": {
+            "type": "string"
+          },
+          "authorId": {
+            "type": "string"
+          },
+          "authorName": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
+      },
+      "UserNotification": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "body",
+          "type",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "readAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
       }
     }
   },
@@ -5411,8 +5566,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Posted.",
+          "200": {
+            "description": "Duplicate of an already-posted idempotency key - the original result, not a new post.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5421,8 +5576,8 @@
               }
             }
           },
-          "200": {
-            "description": "Duplicate of an already-posted idempotency key - the original result, not a new post.",
+          "201": {
+            "description": "Posted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5515,8 +5670,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Reversed.",
+          "200": {
+            "description": "Duplicate reversal request - the original reversal result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5525,8 +5680,8 @@
               }
             }
           },
-          "200": {
-            "description": "Duplicate reversal request - the original reversal result.",
+          "201": {
+            "description": "Reversed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5576,8 +5731,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created.",
+          "200": {
+            "description": "Duplicate file - returns the existing batch instead of creating a new one.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5586,8 +5741,8 @@
               }
             }
           },
-          "200": {
-            "description": "Duplicate file - returns the existing batch instead of creating a new one.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6815,11 +6970,11 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          },
           "403": {
             "description": "Admin only."
+          },
+          "404": {
+            "description": "Not found (also for another company's id)."
           }
         }
       }
@@ -6899,11 +7054,11 @@
               }
             }
           },
-          "409": {
-            "description": "Not found (also for another company's id) or not replayable."
-          },
           "403": {
             "description": "Admin only."
+          },
+          "409": {
+            "description": "Not found (also for another company's id) or not replayable."
           }
         }
       }
@@ -8420,72 +8575,119 @@
     "/asset-checkouts": {
       "get": {
         "operationId": "getAssetCheckouts",
-        "summary": "GET /asset-checkouts",
+        "summary": "List the company's asset checkouts, newest first; optionally for one location.",
         "tags": [
           "asset-checkouts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "checkouts"
+                  ],
+                  "properties": {
+                    "checkouts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AssetCheckout"
+                      }
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "No access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ],
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
         ]
       },
       "post": {
         "operationId": "postAssetCheckouts",
-        "summary": "POST /asset-checkouts",
+        "summary": "Check an item out to a named person (Admin). Item and location must belong to the caller's company.",
         "tags": [
           "asset-checkouts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Checked out.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "checkout"
+                  ],
+                  "properties": {
+                    "checkout": {
+                      "$ref": "#/components/schemas/AssetCheckout"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Missing item, location, assignee or a non-positive quantity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Not an Admin, or no access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item or location not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8494,17 +8696,45 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "itemId",
+                  "locationId",
+                  "assigneeName"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "assigneeName": {
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1
+                  },
+                  "dueAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "conditionOut": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay.",
+        "parameters": []
       }
     },
     "/audit": {
@@ -8938,34 +9168,54 @@
     "/comments/{entityType}/{entityId}": {
       "get": {
         "operationId": "getCommentsEntityTypeEntityId",
-        "summary": "GET /comments/{entityType}/{entityId}",
+        "summary": "List the comment thread on a record, oldest first.",
         "tags": [
           "comments"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "comments"
+                  ],
+                  "properties": {
+                    "comments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ContextComment"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Comments are not available for this entity type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Record not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8994,34 +9244,51 @@
       },
       "post": {
         "operationId": "postCommentsEntityTypeEntityId",
-        "summary": "POST /comments/{entityType}/{entityId}",
+        "summary": "Add a comment; @handles in the text are stored as mentions.",
         "tags": [
           "comments"
         ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Comment added.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "comment"
+                  ],
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/ContextComment"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
+            "description": "Empty comment, or comments are not available for this entity type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "401": {
             "description": "No or invalid credentials."
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Record not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9048,12 +9315,20 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "body"
+                ],
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
               }
             }
           }
@@ -12735,41 +13010,42 @@
     "/notification-inbox": {
       "get": {
         "operationId": "getNotificationInbox",
-        "summary": "GET /notification-inbox",
+        "summary": "The caller's latest 100 notifications: addressed to them, to their role, or company-wide.",
         "tags": [
           "notification-inbox"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "notifications"
+                  ],
+                  "properties": {
+                    "notifications": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UserNotification"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "parameters": []
       }
     },
     "/ops/metrics": {
@@ -17584,34 +17860,61 @@
     "/asset-checkouts/{id}/return": {
       "patch": {
         "operationId": "patchAssetCheckoutsIdReturn",
-        "summary": "PATCH /asset-checkouts/{id}/return",
+        "summary": "Mark a checked-out asset as returned.",
         "tags": [
           "asset-checkouts"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "checkout"
+                  ],
+                  "properties": {
+                    "checkout": {
+                      "$ref": "#/components/schemas/AssetCheckout"
+                    }
+                  }
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid request."
           },
           "401": {
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "No access to the location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Checkout not found (also for another company's).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -17635,7 +17938,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "conditionIn": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -18468,34 +18775,41 @@
     "/notification-inbox/{id}/read": {
       "patch": {
         "operationId": "patchNotificationInboxIdRead",
-        "summary": "PATCH /notification-inbox/{id}/read",
+        "summary": "Mark one of the caller's notifications as read.",
         "tags": [
           "notification-inbox"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "required": [
+                    "notification"
+                  ],
+                  "properties": {
+                    "notification": {
+                      "$ref": "#/components/schemas/UserNotification"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
           },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Notification not found (also when it is addressed to someone else).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -18512,18 +18826,7 @@
               "type": "string"
             }
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
+        ]
       }
     },
     "/purchase-orders/{id}/status": {
