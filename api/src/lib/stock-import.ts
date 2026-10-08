@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import readExcelFile from 'read-excel-file/node';
+import { aliasMapForProfile, BUILTIN_STOCK_FIELDS, normalizeHeader, type ImportProfile } from './import-profile.js';
 
 export type StockImportFormat = 'invexa-expiry-stock' | 'standard-items';
 
@@ -18,6 +19,8 @@ export type StockImportRow = {
   quantity?: number;
   purchaseValue?: number;
   saleValue?: number;
+  /** Values of company-defined custom columns, keyed by custom column key. */
+  extra?: Record<string, string | number | null>;
 };
 
 export type StockImportError = { rowNumber: number; message: string };
@@ -37,25 +40,8 @@ export type StockImportPreview = {
   mapping: Record<string, string>;
 };
 
-const HEADER_ALIASES: Record<string, string[]> = {
-  code: ['code', 'itemcode', 'sku', 'barcode'],
-  itemName: ['name', 'itemname', 'productname'],
-  companyName: ['companyname', 'brand', 'manufacturer'],
-  category: ['category'],
-  subcategory: ['subcategory', 'subcat', 'subgroup'],
-  unit: ['unit', 'packsize', 'pack', 'size'],
-  locationName: ['branchname', 'branch', 'location', 'locationname', 'store'],
-  batch: ['batch', 'batchno', 'batchnumber'],
-  lotNo: ['lotcode', 'lot', 'lotno', 'lotnumber'],
-  expiryDate: ['expirydate', 'expiry', 'expirationdate'],
-  quantity: ['closingstock', 'openingqty', 'openingstock', 'quantity', 'qty', 'onhand'],
-  purchaseValue: ['closingvaluepurrate', 'purchasevalue', 'costvalue'],
-  saleValue: ['closingvaluesalerate', 'salevalue', 'retailvalue'],
-};
-
-function normalizeHeader(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
+// Without a saved company profile every built-in column is recognised by its standard names.
+const DEFAULT_ALIASES: Record<string, string[]> = Object.fromEntries(BUILTIN_STOCK_FIELDS.map((field) => [field.key, field.aliases]));
 
 function text(value: unknown): string {
   return String(value ?? '').trim();
@@ -87,12 +73,12 @@ function parseDate(value: unknown): string | null | undefined {
   return date.toISOString();
 }
 
-function findHeader(rows: unknown[][]): { index: number; columns: Record<string, number>; mapping: Record<string, string> } | null {
+function findHeader(rows: unknown[][], aliasMap: Record<string, string[]>): { index: number; columns: Record<string, number>; mapping: Record<string, string> } | null {
   for (let rowIndex = 0; rowIndex < Math.min(rows.length, 30); rowIndex += 1) {
     const normalized = rows[rowIndex].map(normalizeHeader);
     const columns: Record<string, number> = {};
     const mapping: Record<string, string> = {};
-    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+    for (const [field, aliases] of Object.entries(aliasMap)) {
       const columnIndex = normalized.findIndex((header) => aliases.includes(header));
       if (columnIndex >= 0) {
         columns[field] = columnIndex;
@@ -149,12 +135,22 @@ export async function readTabularFile(buffer: Buffer, fileName: string): Promise
   return { sheetName, rows };
 }
 
-export async function parseStockImport(buffer: Buffer, fileName: string): Promise<StockImportPreview> {
+export async function parseStockImport(buffer: Buffer, fileName: string, profile?: ImportProfile): Promise<StockImportPreview> {
   const { sheetName, rows } = await readTabularFile(buffer, fileName);
-  const header = findHeader(rows);
+  const aliasMap = profile ? aliasMapForProfile(profile) : DEFAULT_ALIASES;
+  const header = findHeader(rows, aliasMap);
   if (!header) {
     throw new Error('Supported header row not found. Use Code + Name, or BRANCH NAME + ITEM NAME + CLOSING STOCK.');
   }
+
+  const fieldConfigs = profile ? profile.fields.filter((field) => field.enabled) : [];
+  const missingRequired = fieldConfigs.filter((field) => field.required && header.columns[field.key] === undefined && !field.defaultValue);
+  if (missingRequired.length) {
+    throw new Error(`Required column${missingRequired.length > 1 ? 's' : ''} not found in the file: ${missingRequired.map((field) => field.label).join(', ')}.`);
+  }
+  const defaults = new Map(fieldConfigs.filter((field) => field.defaultValue).map((field) => [field.key, field.defaultValue as string]));
+  const requiredFields = fieldConfigs.filter((field) => field.required && !['itemName'].includes(field.key));
+  const customFields = fieldConfigs.filter((field) => field.custom);
 
   const format: StockImportFormat = header.columns.locationName !== undefined && header.columns.quantity !== undefined
     ? 'invexa-expiry-stock'
@@ -172,7 +168,10 @@ export async function parseStockImport(buffer: Buffer, fileName: string): Promis
     if (!source.some((value) => text(value))) continue;
     if (source.some((value) => normalizeHeader(value) === 'grandtotals')) continue;
 
-    const get = (field: string) => source[header.columns[field]];
+    const get = (field: string) => {
+      const value = source[header.columns[field]];
+      return text(value) === '' && defaults.has(field) ? defaults.get(field) : value;
+    };
     const itemName = text(get('itemName'));
     const companyName = text(get('companyName'));
     const suppliedCode = text(get('code'));
@@ -184,6 +183,30 @@ export async function parseStockImport(buffer: Buffer, fileName: string): Promis
 
     if (!itemName) {
       errors.push({ rowNumber, message: 'ITEM NAME / Name is required.' });
+      continue;
+    }
+    const blankRequired = requiredFields.find((field) => text(get(field.key)) === '');
+    if (blankRequired) {
+      errors.push({ rowNumber, message: `${blankRequired.label} is required.` });
+      continue;
+    }
+    const extra: Record<string, string | number | null> = {};
+    let badCustom: string | null = null;
+    for (const field of customFields) {
+      const raw = get(field.key);
+      if (text(raw) === '') { extra[field.key] = null; continue; }
+      if (field.type === 'number') {
+        const parsed = finiteNumber(raw);
+        if (parsed === undefined) { badCustom = `${field.label} "${text(raw)}" must be a number.`; break; }
+        extra[field.key] = parsed;
+      } else if (field.type === 'date') {
+        const parsed = parseDate(raw);
+        if (parsed === undefined) { badCustom = `${field.label} "${text(raw)}" is invalid; expected DD/MM/YYYY.`; break; }
+        extra[field.key] = parsed;
+      } else extra[field.key] = text(raw);
+    }
+    if (badCustom) {
+      errors.push({ rowNumber, message: badCustom });
       continue;
     }
     if (format === 'standard-items' && !suppliedCode) {
@@ -228,6 +251,7 @@ export async function parseStockImport(buffer: Buffer, fileName: string): Promis
       quantity,
       purchaseValue: finiteNumber(get('purchaseValue')),
       saleValue: finiteNumber(get('saleValue')),
+      ...(customFields.length ? { extra } : {}),
     });
   }
 

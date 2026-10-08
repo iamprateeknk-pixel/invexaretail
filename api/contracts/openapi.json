@@ -28965,6 +28965,44 @@
           }
         }
       }
+    },
+    "/imports/opening-stock/template": {
+      "get": {
+        "operationId": "getImportsOpeningStockTemplate",
+        "summary": "Opening-stock import template (header + sample row) in the company's configured column order.",
+        "tags": [
+          "Imports"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "csv": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "csv"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
     }
   }
 }

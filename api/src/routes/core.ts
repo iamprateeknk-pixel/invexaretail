@@ -175,6 +175,7 @@ import {
   persistUserDelete,
   persistUserUpdate,
 } from '../lib/persistence.js';
+import { importTemplateCsv } from '../lib/import-profile.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
 import { allocatePick, isPickableLot, isPooledPick } from '../lib/kg-pick.js';
 import { allocateLots, parseTransferImport, PICK_EXCEPTION_REASONS, validatePickInput } from '../lib/warehouse-workflow.js';
@@ -2162,8 +2163,14 @@ async function readUploadedStockFile(req: Request): Promise<StockImportPreview> 
   if (!/\.(xlsx|xls|csv)$/i.test(req.file.originalname)) {
     throw new Error('Only .xlsx, .xls and .csv files are supported.');
   }
-  return parseStockImport(req.file.buffer, req.file.originalname);
+  return parseStockImport(req.file.buffer, req.file.originalname, controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
 }
+
+// Header row + sample row in the company's configured column order (Control Plane > Studio > Import columns).
+router.get('/imports/opening-stock/template', (req: Request, res: Response) => {
+  const csv = importTemplateCsv(controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
+  return res.json({ filename: 'invexa-opening-stock-template.csv', csv });
+});
 
 router.get('/imports/batches', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {

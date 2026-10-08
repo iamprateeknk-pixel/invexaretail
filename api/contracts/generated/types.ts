@@ -3906,6 +3906,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/imports/opening-stock/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Opening-stock import template (header + sample row) in the company's configured column order. */
+        get: operations["getImportsOpeningStockTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -19740,6 +19757,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthError"];
+                };
+            };
+        };
+    };
+    getImportsOpeningStockTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        filename: string;
+                        csv: string;
+                    };
                 };
             };
         };
