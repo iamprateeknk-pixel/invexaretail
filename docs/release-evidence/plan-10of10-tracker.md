@@ -7,7 +7,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 |---|---|---|---|
 | A Architecture | Snapshot reconciled off the request path | done | `lib/repository-reconciler.ts` + test; `/ops/metrics` `reconciliation` |
 | A | Database-first reads, drop in-memory snapshot | open | Large refactor; snapshot is now background-reconciled, not removed |
-| A | Remaining `core.ts` Transfer routes extracted | partial | `docs/route-ownership-matrix.md` |
+| A | Remaining `core.ts` Transfer routes extracted | done | `docs/route-ownership-matrix.md` |
 | B Stock integrity | Canonical posting, job consumption in one transaction | done | `lib/job-consumption-service.ts` + 8 Postgres tests |
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |
 | B | Virtual bundles/kits | done | `routes/bundles.ts`, contract entries |

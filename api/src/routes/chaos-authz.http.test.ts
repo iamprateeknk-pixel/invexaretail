@@ -7,6 +7,7 @@ import { seedUsers } from '../lib/seed.js';
 import { adjustStockLedger, createCountAssignment, createItemRecord, createTransferRecord, ensureLotRecord, findStockLedgerEntry, listCounts } from '../lib/repository.js';
 import { extractToken } from './enterprise-auth.js';
 import coreRouter from './core.js';
+import transfersRouter from './transfers.js';
 import commandCenterRouter from './command-center.js';
 import transferLogisticsRouter from './transfer-logistics.js';
 import { enforceOperationalCompanyScope } from '../lib/saas/tenant-scope.js';
@@ -26,6 +27,7 @@ async function withServer(run: (call: Api) => Promise<void>): Promise<void> {
   app.use('/api/v1', extractToken, enforceOperationalCompanyScope);
   app.use('/api/v1', transferLogisticsRouter);
   app.use('/api/v1', commandCenterRouter);
+  app.use('/api/v1', transfersRouter);
   app.use('/api/v1', coreRouter);
   const server = app.listen(0);
   const address = server.address();
