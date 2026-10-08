@@ -772,7 +772,10 @@ router.post('/items', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
+  // Codes, barcodes and aliases are unique per company (the database enforces (companyId, code)). Checking the process-wide
+  // list refused a code another company uses and put that company's item code and name in the 409 message.
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  const claimConflict = findIdentityConflict(ownItems, '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
   if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
     const item = createInventoryItem({
@@ -808,7 +811,8 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   const nextCode = typeof req.body.code === 'string' ? req.body.code.trim() : item.code;
   const nextName = typeof req.body.name === 'string' ? req.body.name.trim() : item.name;
   if (!nextCode || !nextName) return res.status(400).json({ message: 'Item Code and Item Name are required.' });
-  if (listItems().some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
+  const ownItems = itemsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listItems());
+  if (ownItems.some((candidate) => candidate.id !== item.id && candidate.code.trim().toLowerCase() === nextCode.toLowerCase())) {
     return res.status(409).json({ message: 'Another item already uses this Item Code.' });
   }
   let operationalMeta: ItemOperationalMeta;
@@ -819,7 +823,7 @@ router.put('/items/:itemId', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid item fields.' });
   }
-  const claimConflict = findIdentityConflict(listItems(), item.id, {
+  const claimConflict = findIdentityConflict(ownItems, item.id, {
     code: nextCode !== item.code ? nextCode : undefined,
     barcode: masterFields.barcode,
     aliases: masterFields.aliases,
