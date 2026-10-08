@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.19.0",
-    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified."
+    "version": "2026.20.0",
+    "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
     {
@@ -1604,6 +1604,229 @@
               "null"
             ],
             "description": "Case pack: suggested order quantities round up to a multiple of this."
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
+      },
+      "PriceListEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "priceType",
+          "price",
+          "effectiveFrom",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "priceType": {
+            "type": "string",
+            "description": "For example RETAIL or WHOLESALE."
+          },
+          "branchId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customerGroup": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "description": "Money, 2 decimal places on the server; always a JSON number."
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effectiveTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdById": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
+      },
+      "PriceGuardrailResult": {
+        "type": "object",
+        "required": [
+          "ok",
+          "violations"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "False when any violation has severity BLOCK."
+          },
+          "marginPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "code",
+                "severity",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "ABOVE_MRP",
+                    "BELOW_COST",
+                    "BELOW_MIN_MARGIN",
+                    "INVALID_EFFECTIVE_DATE"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "BLOCK",
+                    "WARN"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ItemPhoto": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "fileName",
+          "mimeType",
+          "isPrimary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes."
+          },
+          "isPrimary": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SerialNumber": {
+        "type": "object",
+        "required": [
+          "id",
+          "itemId",
+          "serial",
+          "status",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "lotId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serial": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IN_STOCK",
+              "RESERVED",
+              "SOLD",
+              "RETURNED",
+              "DAMAGED",
+              "LOST"
+            ]
+          },
+          "currentLocationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currentBinId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "soldAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "returnState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warrantyEnd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "companyId": {
             "type": "string"
@@ -4006,40 +4229,9 @@
     "/items/{itemId}/photos/{photoId}": {
       "delete": {
         "operationId": "deleteItemsItemIdPhotosPhotoId",
-        "summary": "DELETE /items/{itemId}/photos/{photoId}",
+        "summary": "Delete a photo. Admin only.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Item photos"
         ],
         "parameters": [
           {
@@ -4057,45 +4249,66 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Photo not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Photo storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       },
       "get": {
         "operationId": "getItemsItemIdPhotosPhotoId",
-        "summary": "GET /items/{itemId}/photos/{photoId}",
+        "summary": "The photo bytes, cached privately for 5 minutes.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Item photos"
         ],
         "parameters": [
           {
@@ -4113,6 +4326,44 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image.",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Photo not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Photo storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -6589,40 +6840,9 @@
     "/items/{itemId}/photos": {
       "get": {
         "operationId": "getItemsItemIdPhotos",
-        "summary": "GET /items/{itemId}/photos",
+        "summary": "An item's photos, primary first.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Item photos"
         ],
         "parameters": [
           {
@@ -6633,44 +6853,58 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "post": {
-        "operationId": "postItemsItemIdPhotos",
-        "summary": "POST /items/{itemId}/photos",
-        "tags": [
-          "items"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "photos": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ItemPhoto"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Photo storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "post": {
+        "operationId": "postItemsItemIdPhotos",
+        "summary": "Upload a photo (multipart field \"photo\"; image content is sniffed, not trusted from the filename). The first photo becomes primary. Admin, Store user and Warehouse picker.",
+        "tags": [
+          "Item photos"
         ],
         "parameters": [
           {
@@ -6683,56 +6917,104 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "photo"
+                ],
+                "properties": {
+                  "photo": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "primary": {
+                    "type": "string",
+                    "enum": [
+                      "true",
+                      "false"
+                    ]
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
-      }
-    },
-    "/items/{itemId}/price": {
-      "get": {
-        "operationId": "getItemsItemIdPrice",
-        "summary": "GET /items/{itemId}/price",
-        "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "photo": {
+                      "$ref": "#/components/schemas/ItemPhoto"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "No file, or not a supported image.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role may not upload photos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Item not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Photo not saved: database storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/items/{itemId}/price": {
+      "get": {
+        "operationId": "getItemsItemIdPrice",
+        "summary": "The single price that applies right now: the most specific currently-effective row (branch + customer group beats branch or group alone, which beats company-wide). Never an average.",
+        "tags": [
+          "Pricing"
         ],
         "parameters": [
           {
@@ -6742,6 +7024,116 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "priceType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "RETAIL"
+            }
+          },
+          {
+            "name": "branchId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerGroup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "price": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "price": {
+                          "type": "number"
+                        },
+                        "branchId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "customerGroup": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "effectiveTo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role may not view reporting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No effective price of that type for this item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -6749,40 +7141,9 @@
     "/items/{itemId}/prices": {
       "get": {
         "operationId": "getItemsItemIdPrices",
-        "summary": "GET /items/{itemId}/prices",
+        "summary": "An item's price list rows for the caller's company, newest effective first. Reporting roles only.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Pricing"
         ],
         "parameters": [
           {
@@ -6792,45 +7153,68 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "priceType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branchId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "priceLists": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceListEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          },
+          "403": {
+            "description": "Role may not view reporting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       },
       "post": {
         "operationId": "postItemsItemIdPrices",
-        "summary": "POST /items/{itemId}/prices",
+        "summary": "Publish a price. Blocked (422) when it exceeds MRP, is below landed cost or has an end date not after its start; a margin below the minimum is returned as a warning. Admin only.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Pricing"
         ],
         "parameters": [
           {
@@ -6843,56 +7227,132 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "priceType",
+                  "price"
+                ],
+                "properties": {
+                  "priceType": {
+                    "type": "string"
+                  },
+                  "price": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "branchId": {
+                    "type": "string"
+                  },
+                  "customerGroup": {
+                    "type": "string"
+                  },
+                  "effectiveFrom": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "effectiveTo": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "mrp": {
+                    "type": "number"
+                  },
+                  "landedCost": {
+                    "type": "number"
+                  },
+                  "minMarginPercent": {
+                    "type": "number"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "priceList": {
+                      "$ref": "#/components/schemas/PriceListEntry"
+                    },
+                    "guardrail": {
+                      "$ref": "#/components/schemas/PriceGuardrailResult"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing price type or non-positive price.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The price violates a blocking guardrail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "guardrail": {
+                      "$ref": "#/components/schemas/PriceGuardrailResult"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/items/{itemId}/serials": {
       "get": {
         "operationId": "getItemsItemIdSerials",
-        "summary": "GET /items/{itemId}/serials",
+        "summary": "An item's serial numbers, newest received first. status narrows to one lifecycle state.",
         "tags": [
-          "items"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Serial numbers"
         ],
         "parameters": [
           {
@@ -6902,45 +7362,58 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "IN_STOCK",
+                "RESERVED",
+                "SOLD",
+                "RETURNED",
+                "DAMAGED",
+                "LOST"
+              ]
+            }
           }
-        ]
-      },
-      "post": {
-        "operationId": "postItemsItemIdSerials",
-        "summary": "POST /items/{itemId}/serials",
-        "tags": [
-          "items"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "serials": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SerialNumber"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "post": {
+        "operationId": "postItemsItemIdSerials",
+        "summary": "Register a serial number as received into stock (and record the receive movement in the same transaction).",
+        "tags": [
+          "Serial numbers"
         ],
         "parameters": [
           {
@@ -6953,17 +7426,99 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "serial"
+                ],
+                "properties": {
+                  "serial": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "warrantyEnd": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "serial": {
+                      "$ref": "#/components/schemas/SerialNumber"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Serial number is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item not found (also for another company's item).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This serial is already registered for this item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/jobs": {
