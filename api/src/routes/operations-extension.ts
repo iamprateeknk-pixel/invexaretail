@@ -2047,6 +2047,15 @@ router.post('/orders/:id/retry-backorder', async (req, res) => {
 // APPROVAL RULES + REQUESTS (blueprint section 16.2)
 // ============================================================================
 
+// Approval, tolerance and evidence rules may be limited to a branch, and every response joins that branch's name. A
+// branch of another company must therefore look exactly like a missing one (404), or a rule could be used to read
+// another company's branch names.
+async function branchMissingInCompany(req: Request, branchId: unknown): Promise<boolean> {
+  if (typeof branchId !== 'string' || !branchId) return false;
+  const owned = await prisma.branch.findFirst({ where: { id: branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true } }).catch(() => null);
+  return !owned;
+}
+
 router.get('/approval-rules', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const rules = await prisma.approvalRule.findMany({
@@ -2066,6 +2075,7 @@ router.post('/approval-rules', async (req, res) => {
   if (!label || !triggerType || !Number.isFinite(valueThreshold) || valueThreshold <= 0 || !requiredApproverRole) {
     return res.status(400).json({ message: 'label, triggerType, a positive valueThreshold and requiredApproverRole are required.' });
   }
+  if (await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   try {
     const rule = await prisma.approvalRule.create({
       data: { label, triggerType, valueThreshold, requiredApproverRole, branchId: req.body.branchId || null, createdById: req.user!.id },
@@ -2085,6 +2095,7 @@ router.patch('/approval-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.valueThreshold !== undefined) data.valueThreshold = Number(req.body.valueThreshold);
   if (req.body.requiredApproverRole !== undefined) data.requiredApproverRole = req.body.requiredApproverRole;
+  if (req.body.branchId !== undefined && await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   const ownedApprovalRule = await prisma.approvalRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
   const rule = ownedApprovalRule ? await prisma.approvalRule.update({ where: { id: ownedApprovalRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Approval rule not found.' });
@@ -2144,6 +2155,7 @@ router.post('/tolerance-rules', async (req, res) => {
   if (!label || (valueThreshold === null && percentThreshold === null)) {
     return res.status(400).json({ message: 'label and at least one of valueThreshold/percentThreshold are required.' });
   }
+  if (await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   try {
     const rule = await prisma.toleranceRule.create({
       data: {
@@ -2169,6 +2181,7 @@ router.patch('/tolerance-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.valueThreshold !== undefined) data.valueThreshold = req.body.valueThreshold === '' || req.body.valueThreshold === null ? null : Number(req.body.valueThreshold);
   if (req.body.percentThreshold !== undefined) data.percentThreshold = req.body.percentThreshold === '' || req.body.percentThreshold === null ? null : Number(req.body.percentThreshold);
+  if (req.body.branchId !== undefined && await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   const ownedToleranceRule = await prisma.toleranceRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
   const rule = ownedToleranceRule ? await prisma.toleranceRule.update({ where: { id: ownedToleranceRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Tolerance rule not found.' });
@@ -2199,6 +2212,7 @@ router.post('/evidence-rules', async (req, res) => {
   if (!label || !triggerType || (quantityThreshold === null && valueThreshold === null)) {
     return res.status(400).json({ message: 'label, triggerType and at least one of quantityThreshold/valueThreshold are required.' });
   }
+  if (await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   try {
     const rule = await prisma.evidenceRule.create({
       data: {
@@ -2224,6 +2238,7 @@ router.patch('/evidence-rules/:id', async (req, res) => {
   if (req.body.branchId !== undefined) data.branchId = req.body.branchId || null;
   if (req.body.quantityThreshold !== undefined) data.quantityThreshold = req.body.quantityThreshold === '' || req.body.quantityThreshold === null ? null : Number(req.body.quantityThreshold);
   if (req.body.valueThreshold !== undefined) data.valueThreshold = req.body.valueThreshold === '' || req.body.valueThreshold === null ? null : Number(req.body.valueThreshold);
+  if (req.body.branchId !== undefined && await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
   const ownedEvidenceRule = await prisma.evidenceRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
   const rule = ownedEvidenceRule ? await prisma.evidenceRule.update({ where: { id: ownedEvidenceRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Evidence rule not found.' });
