@@ -93,6 +93,7 @@ class _StockScreenState extends State<StockScreen> {
           else
             DropdownButtonFormField<String>(
               key: const ValueKey('stock-location'),
+              isExpanded: true,
               initialValue: locations.any((location) => location.id == selected) ? selected : locations.first.id,
               decoration: const InputDecoration(labelText: 'Location'),
               items: [

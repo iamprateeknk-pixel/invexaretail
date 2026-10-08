@@ -98,12 +98,12 @@ class DashboardScreen extends StatelessWidget {
                 _MetricCard(
                   label: 'Pending counts', value: '${dashboard.pendingCounts}', icon: Icons.pending_actions_outlined,
                   severity: dashboard.pendingCounts > 0 ? TileSeverity.warn : TileSeverity.good,
-                  onTap: () => _push(context, CountScreen(controller: controller)),
+                  onTap: () => _pushPage(context, 'Count', CountScreen(controller: controller)),
                 ),
                 _MetricCard(
                   label: 'Transfer requests', value: '${dashboard.transferRequests}', icon: Icons.swap_horiz,
                   severity: dashboard.transferRequests > 0 ? TileSeverity.warn : TileSeverity.good,
-                  onTap: () => _push(context, TransfersScreen(controller: controller)),
+                  onTap: () => _pushPage(context, 'Transfers', TransfersScreen(controller: controller)),
                 ),
                 _MetricCard(
                   label: 'Expired lots', value: '${dashboard.expiredTillDate}', icon: Icons.event_busy_outlined,
@@ -155,13 +155,13 @@ class DashboardScreen extends StatelessWidget {
       tiles.add(_ActivityTile(
         label: 'Pick tasks open', value: openPicks, icon: Icons.local_shipping_outlined,
         severity: openPicks > 0 ? TileSeverity.warn : TileSeverity.good,
-        onTap: () => _push(context, PickScreen(controller: controller)),
+        onTap: () => _pushPage(context, 'Pick', PickScreen(controller: controller)),
       ));
       final putawayOpen = controller.putawayTasks.length;
       tiles.add(_ActivityTile(
         label: 'Putaway tasks', value: putawayOpen, icon: Icons.inventory_2_outlined,
         severity: putawayOpen > 0 ? TileSeverity.warn : TileSeverity.good,
-        onTap: () => _push(context, PutawayScreen(controller: controller)),
+        onTap: () => _pushPage(context, 'Putaway', PutawayScreen(controller: controller)),
       ));
     }
     if (controller.isBlindCountWorker) {
@@ -169,14 +169,14 @@ class DashboardScreen extends StatelessWidget {
       tiles.add(_ActivityTile(
         label: 'Count batches open', value: batchKeys.length, icon: Icons.fact_check_outlined,
         severity: batchKeys.isNotEmpty ? TileSeverity.warn : TileSeverity.good,
-        onTap: () => _push(context, CountScreen(controller: controller)),
+        onTap: () => _pushPage(context, 'Count', CountScreen(controller: controller)),
       ));
     }
     final transfersInScope = controller.transfers.length;
     tiles.add(_ActivityTile(
       label: 'Transfers in scope', value: transfersInScope, icon: Icons.swap_horiz,
       severity: TileSeverity.neutral,
-      onTap: () => _push(context, TransfersScreen(controller: controller)),
+      onTap: () => _pushPage(context, 'Transfers', TransfersScreen(controller: controller)),
     ));
     if (tiles.isEmpty) return const [];
     return [
@@ -198,6 +198,12 @@ class DashboardScreen extends StatelessWidget {
     if (percent >= 90) return TileSeverity.good;
     if (percent >= 70) return TileSeverity.warn;
     return TileSeverity.bad;
+  }
+
+  /// Count, Transfers, Pick and Putaway are tab bodies with no Scaffold of their own. Pushed bare they
+  /// draw on the route's black background with no Material (text with yellow underlines, no back button).
+  void _pushPage(BuildContext context, String title, Widget body) {
+    _push(context, Scaffold(appBar: AppBar(title: Text(title)), body: body));
   }
 
   void _push(BuildContext context, Widget screen) {
