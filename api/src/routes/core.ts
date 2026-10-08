@@ -1953,7 +1953,9 @@ router.get('/pick-waves', async (req: Request, res: Response) => {
     ? (locationId ? { locationId } : {})
     : { locationId: { in: context.assignedLocationIds } };
   const waves = await prisma.pickWave.findMany({
-    where: { ...scope, ...(status ? { status } : { status: { in: ['OPEN', 'IN_PROGRESS'] } }) },
+    // A pick wave has no company column of its own; it belongs to the company that owns its location. Without this an
+    // Admin listing waves with no locationId (scope {}) got every company's waves.
+    where: { ...scope, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...(status ? { status } : { status: { in: ['OPEN', 'IN_PROGRESS'] } }) },
     include: { location: { select: { id: true, code: true, name: true } }, assignedTo: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
     take: 100,
