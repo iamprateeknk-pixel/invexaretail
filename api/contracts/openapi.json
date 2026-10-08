@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invexa Retail API - extracted modules",
-    "version": "2026.27.0",
+    "version": "2026.29.0",
     "description": "Week 8 (API Modularization and Contract Generation): a versioned OpenAPI contract for the endpoints that have been extracted out of the god routers (routes/core.ts, routes/operations-extension.ts) into their own thin route + command/query service + repository modules. This is NOT a spec for the whole API - most of core.ts/operations-extension.ts's ~180 remaining routes are tracked as extraction backlog in docs/route-ownership-matrix.md and are deliberately not documented here yet, so this contract never silently drifts ahead of what has actually been modularized. Extending it is part of extracting the next module. Week 10 adds the Item Search / Stock Detail / Adjustment-Reversal vertical slice (routes/items.ts) - additive to, not a replacement for, core.ts's existing unpaginated GET /items. Week 13 adds the Week 11 staged-import-lifecycle endpoints (routes/imports.ts) and the Week 12 reporting/exception-dashboard endpoints (routes/reports.ts) to the contract - both existed in code before this week but were not yet documented here (see AGENTS.md's OpenAPI contract row: 'covers only extracted routes... grows as each future module is extracted'). Plan 10/10 (Phase 3-8) adds the virtual bundle/kit endpoints (routes/bundles.ts), the optional two-factor sign-in endpoints (routes/enterprise-auth.ts /auth/2fa/*), the stock reconciliation endpoints (routes/command-center.ts /ops/reconciliation*), and documents the X-Mutation-Id exactly-once replay header (lib/mutation-idempotency.ts) as a shared parameter. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp) and session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints. Operations catch-up adds /ops/sync-health, the webhook subscription and delivery endpoints (company scoped), and the approval-request endpoints. Adds the Entity 360 read model and the one-time web handoff used by the native app. Coverage pass: every operation the API serves under /api/v1 is now listed. Operations marked `x-contract-level: path-only` have a verified method, path, parameters and authentication but their request and response bodies are described as free-form objects until each is specified; operations without that marker are fully specified. Auth catch-up adds sign-in (/auth/login, /auth/send-otp, /auth/verify-otp), session (/auth/refresh-token, /auth/logout, /auth/logout-all) endpoints."
   },
   "servers": [
@@ -105,6 +105,18 @@
           "quantity": {
             "type": "number",
             "exclusiveMinimum": 0
+          },
+          "receivedQty": {
+            "type": "number"
+          },
+          "damagedQty": {
+            "type": "number"
+          },
+          "shortageQty": {
+            "type": "number"
+          },
+          "excessQty": {
+            "type": "number"
           }
         }
       },
@@ -3302,6 +3314,432 @@
             "format": "date-time"
           }
         }
+      },
+      "UserSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email",
+          "role",
+          "assignedLocationIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ADMIN",
+              "ADMIN_USER",
+              "BRANCH_MANAGER",
+              "STORE_USER",
+              "WAREHOUSE_PICKER",
+              "AUDITOR"
+            ]
+          },
+          "assignedLocationIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "UserPermission": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "permissionId": {
+            "type": "string"
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "denied": {
+            "type": "boolean",
+            "description": "An explicit deny wins over an allow."
+          },
+          "scopeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A location id when the grant is limited to one location."
+          },
+          "scopeType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "LOCATION",
+              null
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "permission": {
+            "type": "object",
+            "properties": {
+              "module": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "CompanyProfile": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "description": "A company's own profile. Every company has its own; one company's Admin never reads or changes another's.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industryKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SaasPlan": {
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "maxUsers": {
+            "type": "integer"
+          },
+          "maxLocations": {
+            "type": "integer"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "active": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Tenant": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "status",
+          "planCode"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "TRIAL",
+              "ACTIVE",
+              "SUSPENDED"
+            ]
+          },
+          "planCode": {
+            "type": "string"
+          },
+          "adminEmail": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TenantSubscription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "planCode": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "TRIAL",
+              "ACTIVE",
+              "PAST_DUE",
+              "CANCELLED"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SavedReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "ownerId",
+          "name",
+          "reportType",
+          "isShared",
+          "companyId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2
+          },
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "inventory",
+              "low-stock",
+              "moves",
+              "variance",
+              "expiry",
+              "activity"
+            ]
+          },
+          "locationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "isShared": {
+            "type": "boolean",
+            "description": "Visible to the whole company. Only an Admin can set this."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TransferRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceLocationId",
+          "destinationLocationId",
+          "status",
+          "lines"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sourceLocationId": {
+            "type": "string"
+          },
+          "destinationLocationId": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SUBMITTED",
+              "DRAFT",
+              "PENDING_PICK",
+              "REQUESTED",
+              "PICKING",
+              "PARTIAL",
+              "PICKED",
+              "READY_FOR_ADMIN",
+              "CONFIRMED",
+              "IN_TRANSIT",
+              "DISPATCHED",
+              "PARTIALLY_RECEIVED",
+              "PARTIAL_RECEIVED",
+              "RECEIVED",
+              "CLOSED",
+              "REJECTED",
+              "CANCELLED"
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferLine"
+            }
+          },
+          "cartonCount": {
+            "type": "integer"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "packing": {
+            "type": "object",
+            "properties": {
+              "completedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "completedById": {
+                "type": "string"
+              },
+              "cartonCount": {
+                "type": "integer"
+              }
+            }
+          },
+          "dispatch": {
+            "type": "object",
+            "properties": {
+              "dispatchedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "dispatchedById": {
+                "type": "string"
+              },
+              "carrier": {
+                "type": "string"
+              },
+              "awb": {
+                "type": "string"
+              },
+              "vehicleNo": {
+                "type": "string"
+              },
+              "expectedArrivalAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "companyId": {
+            "type": "string"
+          }
+        }
       }
     }
   },
@@ -6161,40 +6599,9 @@
     "/saved-reports/{id}": {
       "delete": {
         "operationId": "deleteSavedReportsId",
-        "summary": "DELETE /saved-reports/{id}",
+        "summary": "Delete a saved report. Its owner or an Admin only.",
         "tags": [
-          "saved-reports"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Saved reports"
         ],
         "parameters": [
           {
@@ -6204,6 +6611,36 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "403": {
+            "description": "Not the owner and not an Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (also for another company's report).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -6260,40 +6697,9 @@
     "/transfers/{transferId}": {
       "delete": {
         "operationId": "deleteTransfersTransferId",
-        "summary": "DELETE /transfers/{transferId}",
+        "summary": "Delete an editable transfer request before packing starts. Its requester (for Store users) or a transfer manager.",
         "tags": [
-          "transfers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Transfers"
         ],
         "parameters": [
           {
@@ -6303,45 +6709,79 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "transferId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The transfer could not be deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transfer not found (also for another company's transfer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Packing has started, so the transfer cannot be deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       },
       "patch": {
         "operationId": "patchTransfersTransferId",
-        "summary": "PATCH /transfers/{transferId}",
+        "summary": "Edit an editable transfer request (DRAFT, SUBMITTED or REQUESTED) before packing starts: locations, lines, carton count, notes. Its requester (for Store users) or a transfer manager. Expired or quarantined lots are refused while expiry blocking is on.",
         "tags": [
-          "transfers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Transfers"
         ],
         "parameters": [
           {
@@ -6354,55 +6794,115 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "sourceLocationId",
+                  "destinationLocationId",
+                  "lines"
+                ],
+                "properties": {
+                  "sourceLocationId": {
+                    "type": "string"
+                  },
+                  "destinationLocationId": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "$ref": "#/components/schemas/TransferLine"
+                    }
+                  },
+                  "cartonCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
-        }
-      }
-    },
-    "/users/{userId}": {
-      "delete": {
-        "operationId": "deleteUsersUserId",
-        "summary": "DELETE /users/{userId}",
-        "tags": [
-          "users"
-        ],
-        "x-contract-level": "path-only",
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Edited.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid request, an inactive item, or a lot that does not belong to its item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Transfer not found (also for another company's transfer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Packing has started, or an expired/quarantined lot is blocked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/users/{userId}": {
+      "delete": {
+        "operationId": "deleteUsersUserId",
+        "summary": "Permanently delete a user. Not yourself, and not a user who already has counts, transfers or assignments on record. Another company's user resolves 404. Main Admin only.",
+        "tags": [
+          "Users"
         ],
         "parameters": [
           {
@@ -6413,44 +6913,65 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "put": {
-        "operationId": "putUsersUserId",
-        "summary": "PUT /users/{userId}",
-        "tags": [
-          "users"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Deleted.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Deleting yourself, or the user has records on file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Only the Main Admin may do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "User not found (also for another company's user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "put": {
+        "operationId": "putUsersUserId",
+        "summary": "Change a user's name, role, locations or password. A password change ends all of that person's sessions. You cannot move your own role away from Admin. Another company's user resolves 404. Admin only.",
+        "tags": [
+          "Users"
         ],
         "parameters": [
           {
@@ -6463,16 +6984,94 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ADMIN_USER",
+                      "BRANCH_MANAGER",
+                      "STORE_USER",
+                      "WAREHOUSE_PICKER",
+                      "AUDITOR"
+                    ]
+                  },
+                  "assignedLocationIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/UserSummary"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field, or an attempt to change your own role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Non-admin caller, or an Admin user promoting to an admin role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found (also for another company's user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/approval-rules": {
@@ -7178,34 +7777,35 @@
     "/company": {
       "get": {
         "operationId": "getCompany",
-        "summary": "GET /company",
+        "summary": "The caller's own company profile. Admin and Admin user.",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "company": {
+                      "$ref": "#/components/schemas/CompanyProfile"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7216,85 +7816,169 @@
       },
       "put": {
         "operationId": "putCompany",
-        "summary": "PUT /company",
+        "summary": "Update the caller's own company profile (and apply its industry pack: default tags and custom fields). Never touches another company. Admin and Admin user.",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "industry": {
+                    "type": "string"
+                  },
+                  "industryKey": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "company": {
+                      "$ref": "#/components/schemas/CompanyProfile"
+                    },
+                    "pack": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "applied": {
+                      "type": "object",
+                      "properties": {
+                        "createdTags": {
+                          "type": "integer"
+                        },
+                        "createdFields": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Company name shorter than 2 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "500": {
+            "description": "The profile could not be saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
+        ]
       }
     },
     "/company/cycle-count-cadence": {
       "get": {
         "operationId": "getCompanyCycleCountCadence",
-        "summary": "GET /company/cycle-count-cadence",
+        "summary": "Days between required counts for each ABC class, and the defaults (7/30/90).",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "cadenceDays": {
+                      "type": "object",
+                      "properties": {
+                        "A": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "B": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "C": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      }
+                    },
+                    "defaultCadenceDays": {
+                      "type": "object",
+                      "properties": {
+                        "A": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "B": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "C": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -7305,85 +7989,143 @@
       },
       "put": {
         "operationId": "putCompanyCycleCountCadence",
-        "summary": "PUT /company/cycle-count-cadence",
+        "summary": "Override the cadence for one or more ABC classes; null clears a class back to its default. Admin and Admin user.",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "A": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  },
+                  "B": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  },
+                  "C": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "cadenceDays": {
+                      "type": "object",
+                      "properties": {
+                        "A": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "B": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "C": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "None of A, B, C given, or an invalid day count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Company profile not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
+        ]
       }
     },
     "/company/timezone": {
       "get": {
         "operationId": "getCompanyTimezone",
-        "summary": "GET /company/timezone",
+        "summary": "The company's business timezone (null means the process default) and the one currently in effect.",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "timezone": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "effective": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -7394,52 +8136,89 @@
       },
       "put": {
         "operationId": "putCompanyTimezone",
-        "summary": "PUT /company/timezone",
+        "summary": "Set the company timezone (an IANA name), or null to use the default. Admin and Admin user.",
         "tags": [
-          "company"
+          "Company"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "timezone"
+                ],
+                "properties": {
+                  "timezone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "examples": [
+                      "Asia/Kolkata"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "timezone": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "timezone is required, or is not a valid IANA name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Company profile not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
+        ]
       }
     },
     "/connectors": {
@@ -12192,34 +12971,31 @@
     "/saas/plans": {
       "get": {
         "operationId": "getSaasPlans",
-        "summary": "GET /saas/plans",
+        "summary": "The available subscription plans.",
         "tags": [
-          "saas"
+          "SaaS"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "plans": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SaasPlan"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
           "401": {
             "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
           }
         },
         "security": [
@@ -12232,34 +13008,44 @@
     "/saas/tenants": {
       "get": {
         "operationId": "getSaasTenants",
-        "summary": "GET /saas/tenants",
+        "summary": "Every tenant and the plan catalogue. Platform operator only.",
         "tags": [
-          "saas"
+          "SaaS"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "tenants": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Tenant"
+                      }
+                    },
+                    "entitlements": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SaasPlan"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only the platform operator (the Admin of the platform's own company) can manage tenants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12272,34 +13058,38 @@
     "/saved-reports": {
       "get": {
         "operationId": "getSavedReports",
-        "summary": "GET /saved-reports",
+        "summary": "Saved reports the caller owns plus those shared in their company.",
         "tags": [
-          "saved-reports"
+          "Saved reports"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "savedReports": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SavedReport"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role may not use reporting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12310,53 +13100,93 @@
       },
       "post": {
         "operationId": "postSavedReports",
-        "summary": "POST /saved-reports",
+        "summary": "Save a report definition. isShared is honoured for Admin and Admin-user roles only. A non-admin may only save for a location they are assigned to.",
         "tags": [
-          "saved-reports"
+          "Saved reports"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "reportType"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "reportType": {
+                    "type": "string",
+                    "enum": [
+                      "inventory",
+                      "low-stock",
+                      "moves",
+                      "variance",
+                      "expiry",
+                      "activity"
+                    ]
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "isShared": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "savedReport": {
+                      "$ref": "#/components/schemas/SavedReport"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "A name and a supported report type are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Role not allowed, or location access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/saved-views": {
@@ -13106,34 +13936,56 @@
     "/users": {
       "get": {
         "operationId": "getUsers",
-        "summary": "GET /users",
+        "summary": "The caller's company users. Branch managers see only the Store users and Warehouse pickers of locations they manage. Admin, Admin user and Branch manager.",
         "tags": [
-          "users"
+          "Users"
         ],
-        "x-contract-level": "path-only",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ADMIN",
+                "ADMIN_USER",
+                "BRANCH_MANAGER",
+                "STORE_USER",
+                "WAREHOUSE_PICKER",
+                "AUDITOR"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UserSummary"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only admins and branch managers can list users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -13144,92 +13996,127 @@
       },
       "post": {
         "operationId": "postUsers",
-        "summary": "POST /users",
+        "summary": "Create a user in the caller's company. The password must meet the policy and not be a publicly known default. An Admin user cannot create Admin or Admin-user accounts. Admin only.",
         "tags": [
-          "users"
+          "Users"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "email",
+                  "password",
+                  "role"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ADMIN_USER",
+                      "BRANCH_MANAGER",
+                      "STORE_USER",
+                      "WAREHOUSE_PICKER",
+                      "AUDITOR"
+                    ]
+                  },
+                  "assignedLocationIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/UserSummary"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid name, email, password (policy or publicly known), role or location.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Non-admin caller, or an Admin user creating an admin-level account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "A user with this email already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The user could not be saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/users/{userId}/permissions": {
       "get": {
         "operationId": "getUsersUserIdPermissions",
-        "summary": "GET /users/{userId}/permissions",
+        "summary": "A user's permission overrides. Main Admin only.",
         "tags": [
-          "users"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Users"
         ],
         "parameters": [
           {
@@ -13240,44 +14127,58 @@
               "type": "string"
             }
           }
-        ]
-      },
-      "put": {
-        "operationId": "putUsersUserIdPermissions",
-        "summary": "PUT /users/{userId}/permissions",
-        "tags": [
-          "users"
         ],
-        "x-contract-level": "path-only",
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UserPermission"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Only the Main Admin may do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "User not found (also for another company's user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
+        ]
+      },
+      "put": {
+        "operationId": "putUsersUserIdPermissions",
+        "summary": "Replace all of a user's permission overrides. Not your own, and not another Main Admin's. Main Admin only.",
+        "tags": [
+          "Users"
         ],
         "parameters": [
           {
@@ -13290,16 +14191,110 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "permissions"
+                ],
+                "properties": {
+                  "permissions": {
+                    "type": "array",
+                    "maxItems": 200,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "module",
+                        "action"
+                      ],
+                      "properties": {
+                        "module": {
+                          "type": "string"
+                        },
+                        "action": {
+                          "type": "string"
+                        },
+                        "allowed": {
+                          "type": "boolean"
+                        },
+                        "denied": {
+                          "type": "boolean"
+                        },
+                        "scopeId": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "maxLength": 191
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "userId": {
+                      "type": "string"
+                    },
+                    "permissionCount": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too many entries, an unknown module or action, your own account, or another Main Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only the Main Admin may do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found (also for another company's user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/workspace/profile": {
@@ -14723,40 +15718,9 @@
     "/transfers/{transferId}/status": {
       "patch": {
         "operationId": "patchTransfersTransferIdStatus",
-        "summary": "PATCH /transfers/{transferId}/status",
+        "summary": "Move a transfer to another status. The move must be legal for the caller's role; dispatch needs packing completed if it was started; reaching a terminal state releases the request-time reservation.",
         "tags": [
-          "transfers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Transfers"
         ],
         "parameters": [
           {
@@ -14769,16 +15733,107 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "SUBMITTED",
+                      "DRAFT",
+                      "PENDING_PICK",
+                      "REQUESTED",
+                      "PICKING",
+                      "PARTIAL",
+                      "PICKED",
+                      "READY_FOR_ADMIN",
+                      "CONFIRMED",
+                      "IN_TRANSIT",
+                      "DISPATCHED",
+                      "PARTIALLY_RECEIVED",
+                      "PARTIAL_RECEIVED",
+                      "RECEIVED",
+                      "CLOSED",
+                      "REJECTED",
+                      "CANCELLED"
+                    ]
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "responses": {
+          "200": {
+            "description": "Moved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid transfer status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Location access denied, or the status change is not allowed for this role or from the current status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transfer not found (also for another company's transfer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Packing was started; complete it before dispatching.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/auth/setup-biometric": {
@@ -17463,53 +18518,130 @@
     "/saas/onboard": {
       "post": {
         "operationId": "postSaasOnboard",
-        "summary": "POST /saas/onboard",
+        "summary": "Provision a new tenant with its first Admin account. The temporary password must meet the policy and not be publicly known. Platform operator only.",
         "tags": [
-          "saas"
+          "SaaS"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "companyName",
+                  "adminName",
+                  "adminEmail",
+                  "password"
+                ],
+                "properties": {
+                  "companyName": {
+                    "type": "string"
+                  },
+                  "adminName": {
+                    "type": "string"
+                  },
+                  "adminEmail": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "planCode": {
+                    "type": "string",
+                    "default": "starter"
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Provisioned.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    },
+                    "subscription": {
+                      "$ref": "#/components/schemas/TenantSubscription"
+                    },
+                    "company": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Invalid input, a weak or publicly known password, or an unknown plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
+            "description": "Only the platform operator (the Admin of the platform's own company) can manage tenants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
-          "404": {
-            "description": "Not found (also for another company's id)."
+          "409": {
+            "description": "An account with that admin email already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    },
+                    "subscription": {
+                      "$ref": "#/components/schemas/TenantSubscription"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/serials/{serial}/move": {
@@ -18319,144 +19451,243 @@
     "/transfers/import/commit": {
       "post": {
         "operationId": "postTransfersImportCommit",
-        "summary": "POST /transfers/import/commit",
+        "summary": "Create a transfer from a transfer file and release it to the pickers (PENDING_PICK) with its lot allocations. Refuses when any row is unmapped or short of stock. Admin and Admin user.",
         "tags": [
-          "transfers"
+          "Transfers"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file",
+                  "sourceLocationId",
+                  "destinationLocationId"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": ".xlsx, .xls or .csv"
+                  },
+                  "sourceLocationId": {
+                    "type": "string"
+                  },
+                  "destinationLocationId": {
+                    "type": "string"
+                  },
+                  "mergeDuplicates": {
+                    "type": "string",
+                    "enum": [
+                      "true",
+                      "false"
+                    ],
+                    "default": "true"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+          "201": {
+            "description": "Created.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "Missing input, identical source and destination, or rows that need fixing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only admins can import transfers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/transfers/import/preview": {
       "post": {
         "operationId": "postTransfersImportPreview",
-        "summary": "POST /transfers/import/preview",
+        "summary": "Preview a transfer file: map each row to an item, allocate lots (FEFO/FIFO per the company workflow), and report unmapped or insufficient-stock rows. Nothing is saved. Admin and Admin user.",
         "tags": [
-          "transfers"
+          "Transfers"
         ],
-        "x-contract-level": "path-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file",
+                  "sourceLocationId",
+                  "destinationLocationId"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": ".xlsx, .xls or .csv"
+                  },
+                  "sourceLocationId": {
+                    "type": "string"
+                  },
+                  "destinationLocationId": {
+                    "type": "string"
+                  },
+                  "mergeDuplicates": {
+                    "type": "string",
+                    "enum": [
+                      "true",
+                      "false"
+                    ],
+                    "default": "true"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Success. The response body is not yet specified in detail.",
+            "description": "Preview.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "properties": {
+                    "preview": {
+                      "type": "object",
+                      "properties": {
+                        "sheetName": {
+                          "type": "string"
+                        },
+                        "headerRow": {
+                          "type": "integer"
+                        },
+                        "totalRows": {
+                          "type": "integer"
+                        },
+                        "validRows": {
+                          "type": "integer"
+                        },
+                        "invalidRows": {
+                          "type": "integer"
+                        },
+                        "duplicateRows": {
+                          "type": "integer"
+                        },
+                        "mapping": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "errors": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "rowNumber": {
+                                "type": "integer"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
+            "description": "File, source or destination missing, or the file could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
+            "description": "Only admins can import transfers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
           }
         },
         "security": [
           {
             "bearerAuth": []
           }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        ]
       }
     },
     "/transfers/{transferId}/confirm": {
       "post": {
         "operationId": "postTransfersTransferIdConfirm",
-        "summary": "POST /transfers/{transferId}/confirm",
+        "summary": "Confirm transfer-out: deduct the accepted pick quantities lot by lot from the source and release the reservation. Passes the PO-style approval gate (a transfer above the configured value needs an approver). Only from READY_FOR_ADMIN or PARTIAL. Admin and Admin user.",
         "tags": [
-          "transfers"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Transfers"
         ],
         "parameters": [
           {
@@ -18468,18 +19699,82 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "Confirmed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "transfer": {
+                      "$ref": "#/components/schemas/TransferRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not ready for admin review, no accepted pick quantities, or the deduction failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only admins can confirm transfer-out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transfer not found (also for another company's transfer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Blocked pending approval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "approvalRequestId": {
+                      "type": "string"
+                    },
+                    "requiredApproverRole": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/transfers/{transferId}/receive": {
@@ -18547,40 +19842,9 @@
     "/users/{userId}/permissions/copy-from/{sourceUserId}": {
       "post": {
         "operationId": "postUsersUserIdPermissionsCopyFromSourceUserId",
-        "summary": "POST /users/{userId}/permissions/copy-from/{sourceUserId}",
+        "summary": "Give a user exactly the same permission overrides as another user of the same company (their base role is unchanged). Main Admin only.",
         "tags": [
-          "users"
-        ],
-        "x-contract-level": "path-only",
-        "responses": {
-          "200": {
-            "description": "Success. The response body is not yet specified in detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request."
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          },
-          "403": {
-            "description": "The caller's role or permissions do not allow this."
-          },
-          "404": {
-            "description": "Not found (also for another company's id)."
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
+          "Users"
         ],
         "parameters": [
           {
@@ -18600,18 +19864,74 @@
             }
           }
         ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+        "responses": {
+          "200": {
+            "description": "Copied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "userId": {
+                      "type": "string"
+                    },
+                    "permissionCount": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Your own account, the same user, or another Main Admin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only the Main Admin may do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found (also for another company's user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Permission overrides need a connected database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                }
               }
             }
           }
         },
-        "x-idempotency": "Mutating calls accept an X-Mutation-Id header for exactly-once replay."
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/webhook-deliveries/retry-due": {
