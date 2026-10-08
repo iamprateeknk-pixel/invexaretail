@@ -906,10 +906,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /catalog/custom-fields */
+        /** The caller's company custom field definitions, in display order. */
         get: operations["getCatalogCustomFields"];
         put?: never;
-        /** POST /catalog/custom-fields */
+        /** Define a custom field. An unknown type falls back to text. Names are unique within a company. Admin only. */
         post: operations["postCatalogCustomFields"];
         delete?: never;
         options?: never;
@@ -924,7 +924,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /catalog/items/{itemId} */
+        /** An item's tags and custom field values. */
         get: operations["getCatalogItemsItemId"];
         put?: never;
         post?: never;
@@ -941,10 +941,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /catalog/tags */
+        /** The caller's company tags by name, each with the number of items that carry it. */
         get: operations["getCatalogTags"];
         put?: never;
-        /** POST /catalog/tags */
+        /** Create a tag. Names are unique within a company. Admin only. */
         post: operations["postCatalogTags"];
         delete?: never;
         options?: never;
@@ -3693,7 +3693,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** PUT /catalog/items/{itemId}/custom-fields/{fieldId} */
+        /** Set (or clear, with an empty value) one custom field value on an item. A serial-number style field must be unique across the catalogue. Admin only. */
         put: operations["putCatalogItemsItemIdCustomFieldsFieldId"];
         post?: never;
         delete?: never;
@@ -3710,7 +3710,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** PUT /catalog/items/{itemId}/tags */
+        /** Replace the full set of tags on an item (an empty list clears them). Every tag must belong to the caller's company. Admin only. */
         put: operations["putCatalogItemsItemIdTags"];
         post?: never;
         delete?: never;
@@ -4512,6 +4512,43 @@ export interface components {
                 /** @description Money; always a JSON number (Decimal on the server). */
                 unitCost?: number;
             }[];
+        };
+        Tag: {
+            id: string;
+            name: string;
+            /** @default emerald */
+            color: string;
+            companyId: string;
+            /** Format: date-time */
+            createdAt?: string;
+            _count?: {
+                /** @description How many items carry the tag (list only). */
+                items?: number;
+            };
+        };
+        CustomFieldDefinition: {
+            id: string;
+            name: string;
+            companyId: string;
+            /** @enum {string} */
+            type: "text" | "number" | "date" | "boolean" | "select";
+            /** @description Choices for a select field. */
+            options?: string[] | null;
+            required: boolean;
+            sortOrder?: number;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CustomFieldValue: {
+            id?: string;
+            itemId: string;
+            fieldId: string;
+            value: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            field?: components["schemas"]["CustomFieldDefinition"];
         };
     };
     responses: never;
@@ -7211,40 +7248,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        fields?: components["schemas"]["CustomFieldDefinition"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7259,52 +7275,58 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name: string;
+                    /**
+                     * @default text
+                     * @enum {string}
+                     */
+                    type?: "text" | "number" | "date" | "boolean" | "select";
+                    options?: string[];
+                    required?: boolean;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        field?: components["schemas"]["CustomFieldDefinition"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Field name shorter than 2 characters. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description A custom field with this name already exists. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7319,44 +7341,26 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tags?: components["schemas"]["Tag"][];
+                        customFields?: components["schemas"]["CustomFieldValue"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
+            /** @description Item not found (also for another company's item). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -7369,40 +7373,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tags?: components["schemas"]["Tag"][];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description No or invalid credentials. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not found (also for another company's id). */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7417,52 +7400,53 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    name: string;
+                    /** @default emerald */
+                    color?: string;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
-            200: {
+            /** @description Created. */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        tag?: components["schemas"]["Tag"];
                     };
                 };
             };
-            /** @description Invalid request. */
+            /** @description Tag name shorter than 2 characters. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
-                content?: never;
             };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
-            404: {
+            /** @description A tag with this name already exists. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17694,52 +17678,52 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    /** @description Stored as text; null clears it. */
+                    value?: string | number | boolean | null;
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        customField?: components["schemas"]["CustomFieldValue"];
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Item or field not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description A serial-style field value must be unique across the catalogue. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
@@ -17752,52 +17736,42 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    [key: string]: unknown;
+                    tagIds: string[];
                 };
             };
         };
         responses: {
-            /** @description Success. The response body is not yet specified in detail. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        success?: boolean;
                     };
                 };
             };
-            /** @description Invalid request. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller's role or permissions do not allow this. */
+            /** @description Non-admin caller. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
-            /** @description Not found (also for another company's id). */
+            /** @description Item or tag not found (also for another company's). */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
             };
         };
     };
