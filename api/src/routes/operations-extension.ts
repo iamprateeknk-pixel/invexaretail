@@ -2338,6 +2338,22 @@ const EXCEPTION_STATUSES = ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL', 'RESOLVED
 const EXCEPTION_DISPOSITIONS = ['RESTOCK', 'VENDOR_RETURN', 'MARKDOWN', 'DESTROY', 'REWORK', 'WRITE_OFF', 'ACCEPT', 'RECOUNT', 'ESCALATE', 'NONE'];
 const EXCEPTION_MANAGER_ROLES = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'];
 
+/**
+ * An exception case may point at an item, a lot and an owner. Each must belong to the caller's company: another
+ * company's id has to look exactly like a missing one (the message is the same either way). Returns the message
+ * for the first reference that does not resolve inside the company, or null when every given one does.
+ */
+async function exceptionReferencesInCompany(companyId: string, refs: { itemId?: unknown; lotId?: unknown; ownerId?: unknown }): Promise<string | null> {
+  const id = (value: unknown) => (typeof value === 'string' && value ? value : null);
+  const itemId = id(refs.itemId);
+  const lotId = id(refs.lotId);
+  const ownerId = id(refs.ownerId);
+  if (itemId && !(await prisma.item.findFirst({ where: { id: itemId, companyId }, select: { id: true } }))) return 'Item was not found.';
+  if (lotId && !(await prisma.lot.findFirst({ where: { id: lotId, item: { companyId } }, select: { id: true } }))) return 'Lot was not found.';
+  if (ownerId && !(await prisma.user.findFirst({ where: { id: ownerId, companyId }, select: { id: true } }))) return 'Owner was not found.';
+  return null;
+}
+
 router.get('/exceptions', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   const status = typeof req.query.status === 'string' ? req.query.status : '';
@@ -2390,6 +2406,11 @@ router.post('/exceptions', async (req, res) => {
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
   const quantity = req.body.quantity !== undefined ? Number(req.body.quantity) : null;
+  // The case is stored under the caller's company, but GET /exceptions joins the item, lot and owner it points at.
+  // Anything named here that belongs to another company would therefore be readable through this company's case.
+  const refCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const refs = await exceptionReferencesInCompany(refCompanyId, { itemId: req.body.itemId, lotId: req.body.lotId, ownerId: req.body.ownerId });
+  if (refs) return res.status(404).json({ message: refs });
   const exceptionCase = await createExceptionCase({
     type: type as never,
     title,
@@ -2419,7 +2440,11 @@ router.patch('/exceptions/:id', async (req, res) => {
 
   const data: Record<string, unknown> = {};
   if (isManager) {
-    if (req.body.ownerId !== undefined) data.ownerId = req.body.ownerId || null;
+    if (req.body.ownerId !== undefined) {
+      const refs = await exceptionReferencesInCompany(req.companyId ?? DEFAULT_COMPANY_ID, { ownerId: req.body.ownerId });
+      if (refs) return res.status(404).json({ message: refs });
+      data.ownerId = req.body.ownerId || null;
+    }
     if (req.body.priority !== undefined) {
       if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(req.body.priority)) return res.status(400).json({ message: 'Invalid priority.' });
       data.priority = req.body.priority;
