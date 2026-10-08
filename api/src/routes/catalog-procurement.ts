@@ -1010,12 +1010,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
 router.get('/saved-reports', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const savedReports = await prisma.savedReport.findMany({
-    where: {
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      OR: [{ ownerId: req.user!.id }, { isShared: true }],
-      // Table views (web list pages) are stored as entityType `TABLE:<tableId>`; `?entityType=` narrows to one.
-      ...(typeof req.query.entityType === 'string' && req.query.entityType ? { entityType: req.query.entityType } : {}),
-    },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user!.id }, { isShared: true }] },
     orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
   });
   return res.json({ savedReports });
@@ -1064,7 +1059,12 @@ router.delete('/saved-reports/:id', async (req, res) => {
 // snapshot of item ids.
 router.get('/saved-views', async (req, res) => {
   const savedViews = await prisma.savedView.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, OR: [{ ownerId: req.user!.id }, { isShared: true }] },
+    where: {
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+      OR: [{ ownerId: req.user!.id }, { isShared: true }],
+      // Table views (web list pages) are stored as entityType `TABLE:<tableId>`; `?entityType=` narrows to one.
+      ...(typeof req.query.entityType === 'string' && req.query.entityType ? { entityType: req.query.entityType } : {}),
+    },
     orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }],
   });
   return res.json({ savedViews });
