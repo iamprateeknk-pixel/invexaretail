@@ -88,7 +88,7 @@ import {
   findPendingCountForLot,
   findStockLedgerEntry,
   findUserById,
-  getCompanyProfile,
+  findCompanyProfile,
   listCountAssignments,
   listCountAssignmentsFor,
   listCounts,
@@ -108,7 +108,7 @@ import {
   listUsers,
   locations,
   markAssignmentSubmitted,
-  setCompanyProfile,
+  saveCompanyProfile,
   updateCountReview,
   updateCountAssignment,
   updateTransferStatus,
@@ -426,11 +426,17 @@ router.get('/industries', (_req: Request, res: Response) => {
   });
 });
 
+// The caller's own company profile. A company that has none yet gets a neutral one named after it - never the
+// default company's (the old single global profile leaked the platform company's name and industry to every tenant).
+function companyProfileFor(companyId: string) {
+  return findCompanyProfile(companyId) ?? { name: controlPlane.companies.get(companyId)?.name ?? companyId, industry: 'Grocery', industryKey: 'grocery' };
+}
+
 router.get('/workspace/profile', (req: Request, res: Response) => {
-  const company = getCompanyProfile();
+  const companyId = req.companyId || DEFAULT_COMPANY_ID;
+  const company = companyProfileFor(companyId);
   const pack = getIndustryPack(company.industryKey ?? company.industry);
   const view = toWorkspacePackView(pack);
-  const companyId = req.companyId || DEFAULT_COMPANY_ID;
   return res.json({
     name: company.name,
     industry: company.industry ?? pack.label,
@@ -451,7 +457,7 @@ router.get('/runtime/config', (req: Request, res: Response) => {
 
 router.get('/company', (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
-  const company = getCompanyProfile();
+  const company = companyProfileFor(req.companyId ?? DEFAULT_COMPANY_ID);
   const pack = getIndustryPack(company.industryKey ?? company.industry);
   return res.json({ company: { ...company, industryKey: pack.key, industry: company.industry ?? pack.label } });
 });
@@ -464,10 +470,11 @@ router.put('/company', async (req: Request, res: Response) => {
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     return res.status(400).json({ message: 'Company name must be at least 2 characters.' });
   }
-  const current = getCompanyProfile();
+  const profileCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const current = companyProfileFor(profileCompanyId);
   const nextKey = resolveIndustryKey(industryKey ?? current.industryKey ?? industry ?? current.industry);
   const pack = getIndustryPack(nextKey);
-  const profile = setCompanyProfile({
+  const profile = saveCompanyProfile(profileCompanyId, {
     name: name.trim(),
     email: email?.trim() || undefined,
     phone: phone?.trim() || undefined,
@@ -477,8 +484,8 @@ router.put('/company', async (req: Request, res: Response) => {
   });
 
   try {
-    await persistCompanyProfile(profile);
-    const applied = await applyIndustryPack(nextKey, req.companyId ?? DEFAULT_COMPANY_ID);
+    await persistCompanyProfile(profile, profileCompanyId);
+    const applied = await applyIndustryPack(nextKey, profileCompanyId);
     return res.json({
       company: profile,
       pack: toWorkspacePackView(pack),
