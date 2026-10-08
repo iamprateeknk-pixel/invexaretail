@@ -17,6 +17,7 @@ import { seedUsers } from '../lib/seed.js';
 import { createTransferRecord, createCountRecord } from '../lib/repository.js';
 import { extractToken } from './enterprise-auth.js';
 import coreRouter from './core.js';
+import transfersRouter from './transfers.js';
 import { enforceOperationalCompanyScope, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 
 type Api = (method: string, path: string, token: string, body?: unknown) => Promise<{ status: number; body: any }>;
@@ -26,6 +27,7 @@ async function withServer(run: (call: Api) => Promise<void>): Promise<void> {
   const app = express();
   app.use(express.json());
   app.use('/api/v1', extractToken, enforceOperationalCompanyScope);
+  app.use('/api/v1', transfersRouter);
   app.use('/api/v1', coreRouter);
   const server = app.listen(0);
   const address = server.address();
