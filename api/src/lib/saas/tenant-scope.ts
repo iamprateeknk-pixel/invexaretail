@@ -148,3 +148,12 @@ export function enforceOperationalCompanyScope(req: Request, res: Response, next
   }
   next();
 }
+
+/**
+ * Bulk imports derive an id from a code or a name (a hash of it). That id used to be the same for every company, so two
+ * companies importing the same item code or branch name addressed the SAME row. The default company keeps the plain
+ * value (so ids already stored for it do not change); every other company's value is namespaced by its company id.
+ */
+export function scopedImportKey(companyId: string, value: string): string {
+  return !companyId || companyId === DEFAULT_COMPANY_ID ? value : `${companyId}|${value}`;
+}
