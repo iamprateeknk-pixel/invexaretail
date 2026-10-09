@@ -45,6 +45,7 @@ export function memoryGetPayload(path: string): Record<string, unknown> | null {
   if (path === '/jobs') return { jobs: [] };
   if (path === '/catalog/tags') return { tags: [] };
   if (path === '/catalog/custom-fields') return { fields: [] };
+  if (path === '/catalog/custom-field-values') return { values: {} };
   if (path === '/suppliers') return { suppliers: [] };
   if (path === '/purchase-orders') return { purchaseOrders: [] };
   if (path === '/orders') return { orders: [] };

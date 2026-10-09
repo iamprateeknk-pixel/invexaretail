@@ -1,12 +1,13 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, type ScopeContext } from '../lib/saas/control-plane.js';
+import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
 import { persistEnterpriseUser } from '../lib/persistence.js';
 import { validateEmail } from '../lib/otp-auth.js';
-import { defaultImportProfile, ImportProfileError, importTemplateCsv, normalizeImportProfile } from '../lib/import-profile.js';
+import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
+import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 
 function sendError(res: Response, error: unknown): void {
@@ -486,23 +487,53 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 
 studioRouter.use(requireLockedCompany);
 
-// Import columns: order, names, required flags, extra header aliases and custom columns.
+// Which table a column edit applies to: `stock` (default) or `lots`.
+export function tableOf(value: unknown): TableKey {
+  const wanted = String(value ?? 'stock');
+  const table = TABLE_KEYS.find((key) => key.toLowerCase() === wanted.toLowerCase());
+  if (!table || !isTableKey(table)) throw new ControlPlaneError('Unknown table', 'INVALID_TABLE', 400);
+  return table;
+}
+
+studioRouter.get('/draft/columns', (req: Request, res: Response) => {
+  try {
+    const table = tableOf(req.query.table);
+    res.json({ success: true, table, columns: controlPlane.getDraftColumns(requireScope(req), table) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Import columns: order, names, required flags, extra header aliases and (stock import) custom columns.
+function importKindOf(value: unknown): ImportKind {
+  const kind = String(value ?? 'OPENING_STOCK').toUpperCase();
+  if (!isImportKind(kind)) throw new ControlPlaneError('Unknown import type', 'INVALID_IMPORT_TYPE', 400);
+  return kind;
+}
+
 studioRouter.get('/import-profile', (req: Request, res: Response) => {
-  const companyId = scopedCompany(req);
-  const saved = controlPlane.importProfiles.get(companyId);
-  res.json({
-    success: true,
-    profile: saved ?? defaultImportProfile(),
-    isDefault: !saved,
-    templateCsv: importTemplateCsv(saved),
-  });
+  try {
+    const companyId = scopedCompany(req);
+    const kind = importKindOf(req.query.type);
+    const saved = controlPlane.getImportProfile(companyId, kind);
+    res.json({
+      success: true,
+      profile: saved ?? defaultImportProfile(kind),
+      isDefault: !saved,
+      templateCsv: importTemplateCsv(saved, kind),
+      lockedKeys: lockedFieldKeys(kind),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 studioRouter.put('/import-profile', (req: Request, res: Response) => {
   try {
     const companyId = scopedCompany(req);
-    const profile = normalizeImportProfile(req.body);
-    controlPlane.importProfiles.set(companyId, profile);
+    const kind = importKindOf(req.body?.type);
+    const profile = normalizeImportProfile(req.body, kind);
+    controlPlane.importProfiles.set(profileKey(companyId, kind), profile);
     controlPlane.auditEvent({
       actorUserId: requireScope(req).actorId,
       actorType: 'platform',
@@ -515,7 +546,7 @@ studioRouter.put('/import-profile', (req: Request, res: Response) => {
       before: null,
       after: { columns: profile.fields.filter((field) => field.enabled).map((field) => field.label) },
     });
-    res.json({ success: true, profile, isDefault: false, templateCsv: importTemplateCsv(profile) });
+    res.json({ success: true, profile, isDefault: false, templateCsv: importTemplateCsv(profile, kind), lockedKeys: lockedFieldKeys(kind) });
   } catch (error) {
     if (error instanceof ImportProfileError) {
       res.status(400).json({ success: false, error: error.message, code: 'INVALID_IMPORT_PROFILE' });
@@ -526,9 +557,14 @@ studioRouter.put('/import-profile', (req: Request, res: Response) => {
 });
 
 studioRouter.delete('/import-profile', (req: Request, res: Response) => {
-  const companyId = scopedCompany(req);
-  controlPlane.importProfiles.delete(companyId);
-  res.json({ success: true, profile: defaultImportProfile(), isDefault: true, templateCsv: importTemplateCsv(undefined) });
+  try {
+    const companyId = scopedCompany(req);
+    const kind = importKindOf(req.query.type);
+    controlPlane.importProfiles.delete(profileKey(companyId, kind));
+    res.json({ success: true, profile: defaultImportProfile(kind), isDefault: true, templateCsv: importTemplateCsv(undefined, kind), lockedKeys: lockedFieldKeys(kind) });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 studioRouter.get('/draft', (req: Request, res: Response) => {
@@ -548,6 +584,70 @@ studioRouter.post('/draft/stock/columns', (req: Request, res: Response) => {
       editableRoles: req.body?.editableRoles,
     });
     res.json({ success: true, draft });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => {
+  try {
+    const layout = Array.isArray(req.body?.columns) ? req.body.columns : null;
+    if (!layout) throw new ControlPlaneError('Columns list is required', 'INVALID_COLUMN_LAYOUT', 400);
+    const table = tableOf(req.body?.table);
+    res.json({ success: true, table, draft: controlPlane.setStockColumnLayout(requireScope(req), layout, table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.put('/draft/stock/formula-columns', (req: Request, res: Response) => {
+  try {
+    const table = tableOf(req.body?.table);
+    res.json({
+      success: true,
+      table,
+      draft: controlPlane.setStockFormulaColumn(requireScope(req), {
+        key: req.body?.key,
+        label: String(req.body?.label ?? ''),
+        formula: String(req.body?.formula ?? ''),
+        type: req.body?.type,
+      }, table),
+      columns: controlPlane.getDraftColumns(requireScope(req), table),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.delete('/draft/stock/formula-columns/:key', (req: Request, res: Response) => {
+  try {
+    const table = tableOf(req.query.table);
+    res.json({ success: true, table, draft: controlPlane.clearStockFormula(requireScope(req), param(req, 'key'), table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.post('/draft/stock/item-field-columns', (req: Request, res: Response) => {
+  try {
+    const table = tableOf(req.body?.table);
+    res.json({ success: true, table, draft: controlPlane.addItemFieldColumn(requireScope(req), { fieldName: String(req.body?.fieldName ?? ''), label: req.body?.label }, table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Names of the company's item custom fields (the ones imports and the catalog create).
+studioRouter.get('/item-fields', async (req: Request, res: Response) => {
+  try {
+    const companyId = scopedCompany(req);
+    if (!resolveDatabaseUrl()) {
+      res.json({ success: true, fields: [] });
+      return;
+    }
+    const { prisma } = await import('../lib/db.js');
+    const fields = await prisma.customFieldDefinition.findMany({ where: { companyId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }], select: { name: true, type: true } });
+    res.json({ success: true, fields });
   } catch (error) {
     sendError(res, error);
   }

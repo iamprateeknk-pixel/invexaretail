@@ -29011,6 +29011,37 @@
         "tags": [
           "Items"
         ],
+    "/imports/sales/template": {
+      "get": {
+        "operationId": "getImportsSalesTemplate",
+        "summary": "Sales import template (header + sample row) in the company's configured column order.",
+        "tags": [
+          "Imports"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "csv": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "csv"
+                  ]
+                }
+              }
+            }
+          }
+        },
         "security": [
           {
             "bearerAuth": []
@@ -29019,6 +29050,19 @@
         "responses": {
           "200": {
             "description": "Version.",
+        ]
+      }
+    },
+    "/imports/purchases/template": {
+      "get": {
+        "operationId": "getImportsPurchasesTemplate",
+        "summary": "Purchase import template (header + sample row) in the company's configured column order.",
+        "tags": [
+          "Imports"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29043,6 +29087,68 @@
             "description": "No or invalid credentials."
           }
         }
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "csv": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "csv"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/catalog/custom-field-values": {
+      "get": {
+        "operationId": "getCatalogCustomFieldValues",
+        "summary": "Every item's custom field values for the caller's company: { itemId: { fieldName: value } }.",
+        "tags": [
+          "Catalog"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "values": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "values"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     }
   }

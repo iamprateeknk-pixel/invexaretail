@@ -51,6 +51,8 @@ import {
 import {
   assertCountLocationAccess,
   canManageCountWork,
+  countsOnlyWhenAssigned,
+  isCountWorkerRole,
   parseCountPriority,
   parseCountReviewReason,
   parseCountReviewStatus,
@@ -174,8 +176,9 @@ import {
   persistUserCreate,
   persistUserDelete,
   persistUserUpdate,
+  saveImportedCustomValuesSafely,
 } from '../lib/persistence.js';
-import { importTemplateCsv } from '../lib/import-profile.js';
+import { importTemplateCsv, type ImportKind } from '../lib/import-profile.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
 import { allocatePick, isPickableLot, isPooledPick } from '../lib/kg-pick.js';
 import { allocateLots, parseTransferImport, PICK_EXCEPTION_REASONS, validatePickInput } from '../lib/warehouse-workflow.js';
@@ -387,7 +390,7 @@ router.get('/users', (req: Request, res: Response) => {
     }
     if (roleFilter && user.role !== roleFilter) return false;
     if (context.role !== 'BRANCH_MANAGER') return true;
-    return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)
+    return isCountWorkerRole(user.role)
       && user.assignedLocationIds.some((locationId) => canAccessLocation(context, locationId));
   });
   return res.json({
@@ -999,6 +1002,12 @@ function parseRequestId(value: unknown): string | undefined {
   return value.trim() || undefined;
 }
 
+/** True when the count was made against a task assigned to its submitter (a lot of a multi-lot task included). */
+function countWasAssignedWork(count: { itemId: string; locationId: string; submittedBy: string; createdAt: string }): boolean {
+  return listCountAssignments().some((assignment) => assignment.assignedToId === count.submittedBy
+    && assignment.itemId === count.itemId && assignment.locationId === count.locationId && assignment.createdAt <= count.createdAt);
+}
+
 function countsForRequest(userId: string, requestId: string) {
   return listCounts().filter((count) => count.submittedBy === userId && count.requestId === requestId);
 }
@@ -1124,12 +1133,10 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     // Store Users may only count what Admin assigned them; Admin can record ad hoc counts freely.
-    let assignment;
-    if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
-      assignment = findActiveAssignment(req.user!.id, item.id, validated.locationId);
-      if (!assignment) {
-        return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
-      }
+    // A branch manager may do either - a count of an item assigned to them closes that task.
+    const assignment = isCountWorkerRole(context.role) ? findActiveAssignment(req.user!.id, item.id, validated.locationId) : undefined;
+    if (!assignment && countsOnlyWhenAssigned(context.role)) {
+      return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
     }
 
     const { saved, bookQty } = await commitLotCount({
@@ -1263,6 +1270,11 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
     if (!current) return res.status(404).json({ message: 'Stock count was not found.' });
     if (current.status !== 'PENDING_REVIEW') return res.status(409).json({ message: `Count is already ${current.status} and cannot be reviewed again.` });
+    // Branch managers can be assigned count work too: whoever was handed the count cannot also approve it.
+    // (An admin's own ad hoc count has no assignment behind it and stays reviewable as before.)
+    if (current.submittedBy === req.user!.id && countWasAssignedWork(current)) {
+      return res.status(403).json({ message: 'You cannot review a count you were assigned and submitted yourself.', code: 'SELF_REVIEW' });
+    }
     try {
       assertCountLocationAccess(accessContext(req.user!), current.locationId);
     } catch {
@@ -1364,8 +1376,8 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
+  if (!storeUser || !isCountWorkerRole(storeUser.role)) {
+    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
     return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
@@ -1428,7 +1440,7 @@ router.patch('/count-assignments/:assignmentId', async (req: Request, res: Respo
   if (current.status === 'SUBMITTED' && !isAdmin) return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
   const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
   const assignee = findUserById(assignedToId);
-  if (!assignee || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
+  if (!assignee || !isCountWorkerRole(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
     return res.status(400).json({ message: 'Assignee must be a Store User assigned to this location.' });
   }
   const countDate = req.body.countDate ? new Date(req.body.countDate) : new Date(current.countDate);
@@ -1521,6 +1533,8 @@ router.delete('/count-assignments/:assignmentId', async (req: Request, res: Resp
 });
 router.get('/count-assignments/mine', async (req: Request, res: Response) => {
   if (!['STORE_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
+router.get('/count-assignments/mine', (req: Request, res: Response) => {
+  if (!isCountWorkerRole(req.user!.role)) {
     return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
   }
   // Database-first slice 7: the worker's own open tasks, with item name/code, straight from Postgres.
@@ -1535,6 +1549,49 @@ router.get('/count-assignments/mine', async (req: Request, res: Response) => {
 // Database-first slice 8: the response is built by lib/mobile-work.ts (Postgres in database mode).
 router.get('/mobile/work', async (req: Request, res: Response) => {
   return res.json(await loadMobileWork(tenantContext(req), accessContext(req.user!)));
+router.get('/mobile/work', (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  // Every count-worker role (store users, warehouse pickers, branch managers) gets its own tasks.
+  const countTasks = isCountWorkerRole(context.role)
+    ? listCountAssignmentsFor(req.user!.id).flatMap((assignment) => {
+        const item = listItems().find((candidate) => candidate.id === assignment.itemId);
+        if (!item || !isOperationalItem(item) || !canAccessLocation(context, assignment.locationId)) return [];
+        const lots = item.lots
+          .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && (findStockLedgerEntry(item.id, lot.id, assignment.locationId)?.onHand ?? 0) > 0)
+          .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
+        // Nothing on the shelf to count: not an actionable task for a store user.
+        if (!lots.length) return [];
+        return [{
+          assignmentId: assignment.id,
+          locationId: assignment.locationId,
+          countDate: assignment.countDate,
+          dueDate: assignment.dueDate,
+          priority: assignment.priority ?? 'NORMAL',
+          instructions: assignment.instructions,
+          campaignId: assignment.campaignId,
+          recount: Boolean(assignment.parentCountId),
+          item: {
+            id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
+            countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
+          },
+          lots,
+        }];
+      })
+    : [];
+  const receiveTasks = ['STORE_USER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER'].includes(context.role)
+    ? listTransfers()
+        .filter((transfer) => ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(transfer.status) && canAccessLocation(context, transfer.destinationLocationId))
+        .map((transfer) => ({
+          transferId: transfer.id,
+          sourceLocationId: transfer.sourceLocationId,
+          destinationLocationId: transfer.destinationLocationId,
+          status: transfer.status,
+          lineCount: transfer.lines.length,
+          cartonCount: transfer.cartonCount,
+          createdAt: transfer.createdAt,
+        }))
+    : [];
+  return res.json({ countTasks, receiveTasks });
 });
 
 router.get('/count-assignments', async (req: Request, res: Response) => {
@@ -1635,8 +1692,8 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
+  if (!storeUser || !isCountWorkerRole(storeUser.role)) {
+    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
     return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
@@ -2126,14 +2183,21 @@ async function readUploadedStockFile(req: Request): Promise<StockImportPreview> 
   if (!/\.(xlsx|xls|csv)$/i.test(req.file.originalname)) {
     throw new Error('Only .xlsx, .xls and .csv files are supported.');
   }
-  return parseStockImport(req.file.buffer, req.file.originalname, controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
+  return parseStockImport(req.file.buffer, req.file.originalname, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, 'OPENING_STOCK'));
 }
 
 // Header row + sample row in the company's configured column order (Control Plane > Studio > Import columns).
-router.get('/imports/opening-stock/template', (req: Request, res: Response) => {
-  const csv = importTemplateCsv(controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
-  return res.json({ filename: 'invexa-opening-stock-template.csv', csv });
-});
+const TEMPLATE_ROUTES: Array<[string, ImportKind, string]> = [
+  ['opening-stock', 'OPENING_STOCK', 'invexa-opening-stock-template.csv'],
+  ['sales', 'SALES', 'invexa-sales-template.csv'],
+  ['purchases', 'PURCHASE', 'invexa-purchase-template.csv'],
+];
+for (const [path, kind, filename] of TEMPLATE_ROUTES) {
+  router.get(`/imports/${path}/template`, (req: Request, res: Response) => {
+    const csv = importTemplateCsv(controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, kind), kind);
+    return res.json({ filename, csv });
+  });
+}
 
 router.get('/imports/batches', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {
@@ -2366,7 +2430,8 @@ router.post('/imports/opening-stock/commit', upload.single('file'), async (req: 
       if (result.created) created += 1;
       else updated += 1;
     }
-    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2497,7 +2562,8 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
       const { item } = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, req.companyId ?? DEFAULT_COMPANY_ID);
       imported.push(item);
     }
-    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2673,7 +2739,8 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
         else updated += 1;
       }
       await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: imported.length });
-      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length });
+      const customValues = await saveImportedCustomValuesSafely(companyId, preview.validRows);
+      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length, ...customValues });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
@@ -2767,7 +2834,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
   try {
     const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID);
     const fileHash = computeFileHash(req.file.buffer);
-    const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') });
+    const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType));
     const existing = await findDuplicateBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
@@ -2822,7 +2889,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
+    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', errors: plan.errors.slice(0, 100) });
     const batchId = `imp-${importType.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
@@ -3025,7 +3092,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'This user cannot assign stock takes at the selected location.' });
   }
   const user = findUserById(storeUserId);
-  if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role) || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected Store User is not assigned to this location.' });
+  if (!user || !isCountWorkerRole(user.role) || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected count worker is not assigned to this location.' });
   let parsedDueDate: string | undefined;
   let parsedPriority;
   try {

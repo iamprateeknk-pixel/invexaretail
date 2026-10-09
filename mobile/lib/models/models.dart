@@ -42,6 +42,9 @@ List<dynamic> asList(Object? value) {
 // quantity before submitting their physical count.
 bool canSeeBookQuantity(String role) => role != 'STORE_USER' && role != 'WAREHOUSE_PICKER';
 
+/// Roles an admin can assign count work to - mirrors the API's isCountWorkerRole.
+bool isCountWorkerRole(String role) => role == 'STORE_USER' || role == 'WAREHOUSE_PICKER' || role == 'BRANCH_MANAGER';
+
 bool canSubmitAdHocCount(String role) =>
     role == 'ADMIN' || role == 'ADMIN_USER' || role == 'BRANCH_MANAGER' || role == 'AUDITOR';
 

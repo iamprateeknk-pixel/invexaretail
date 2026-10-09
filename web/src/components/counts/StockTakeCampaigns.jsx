@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-const EMPTY_FORM = { name: '', dailyItemsPerUser: '20', userIds: [], startDate: '', endDate: '', includeNewStock: true };
+const EMPTY_FORM = { name: '', dailyItemsPerUser: '20', userIds: [], startDate: '', includeNewStock: true };
 
 export function StockTakeCampaigns({ token, locations, storeUsers, locationId, refreshKey }) {
   const [campaigns, setCampaigns] = useState([]);
@@ -114,10 +114,8 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
           <div className="grid gap-3 rounded-lg border p-4">
             <p className="text-sm font-medium">New campaign for {locationName(locationId)}</p>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-1.5"><Label>Name</Label><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. September full count" /></div>
+              <div className="grid gap-1.5"><Label>Stock take name</Label><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. September full count" /></div>
               <div className="grid gap-1.5"><Label>Items per user per day</Label><Input type="number" min="1" max="500" value={form.dailyItemsPerUser} onChange={(event) => setForm({ ...form, dailyItemsPerUser: event.target.value })} /></div>
-              <div className="grid gap-1.5"><Label>Start date (optional)</Label><Input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></div>
-              <div className="grid gap-1.5"><Label>End date (optional)</Label><Input type="date" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} /></div>
             </div>
             <div className="grid gap-1.5">
               <Label>Count workers who will count</Label>
@@ -132,11 +130,13 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
                 </div>
               ) : <p className="text-sm text-muted-foreground">No store users or warehouse pickers are assigned to this location.</p>}
             </div>
+            <div className="grid gap-1.5 sm:max-w-xs"><Label>Start date (blank = today)</Label><Input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></div>
+            <p className="text-xs text-muted-foreground">No end date: the stock take finishes by itself once every in-stock item has been counted once. A user who has not finished yesterday's items gets no new ones until those are done.</p>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.includeNewStock} onChange={(event) => setForm({ ...form, includeNewStock: event.target.checked })} />
               Add newly stocked items to the remaining queue
             </label>
-            <p className="text-xs text-muted-foreground">Only items with stock at this location are counted. Never-counted items go first, then the longest since last counted, then higher-value and earlier-expiring items.</p>
+            <p className="text-xs text-muted-foreground">Only items with stock at this location are counted - zero and negative stock are skipped. Never-counted items go first, then the longest since last counted, then higher-value and earlier-expiring items.</p>
             <div><Button onClick={create} disabled={busyId === 'new'}>Create draft</Button></div>
           </div>
         )}
