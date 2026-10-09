@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import readExcelFile from 'read-excel-file/node';
+import { evaluateFormula, FormulaError, parseFormula } from './formula.js';
 import { aliasMapForProfile, BUILTIN_STOCK_FIELDS, normalizeHeader, type ImportProfile } from './import-profile.js';
 
 export type StockImportFormat = 'invexa-expiry-stock' | 'standard-items';
@@ -73,7 +74,7 @@ function parseDate(value: unknown): string | null | undefined {
   return date.toISOString();
 }
 
-function findHeader(rows: unknown[][], aliasMap: Record<string, string[]>): { index: number; columns: Record<string, number>; mapping: Record<string, string> } | null {
+function findHeader(rows: unknown[][], aliasMap: Record<string, string[]>, virtualKeys: string[] = []): { index: number; columns: Record<string, number>; mapping: Record<string, string> } | null {
   for (let rowIndex = 0; rowIndex < Math.min(rows.length, 30); rowIndex += 1) {
     const normalized = rows[rowIndex].map(normalizeHeader);
     const columns: Record<string, number> = {};
@@ -85,6 +86,8 @@ function findHeader(rows: unknown[][], aliasMap: Record<string, string[]>): { in
         mapping[field] = text(rows[rowIndex][columnIndex]);
       }
     }
+    // A calculated column is not in the file; index -1 reads as an empty cell but counts as present.
+    for (const key of virtualKeys) if (columns[key] === undefined) columns[key] = -1;
     if (columns.itemName !== undefined && (columns.code !== undefined || (columns.locationName !== undefined && columns.quantity !== undefined))) {
       return { index: rowIndex, columns, mapping };
     }
@@ -138,13 +141,14 @@ export async function readTabularFile(buffer: Buffer, fileName: string): Promise
 export async function parseStockImport(buffer: Buffer, fileName: string, profile?: ImportProfile): Promise<StockImportPreview> {
   const { sheetName, rows } = await readTabularFile(buffer, fileName);
   const aliasMap = profile ? aliasMapForProfile(profile) : DEFAULT_ALIASES;
-  const header = findHeader(rows, aliasMap);
+  const calculated = profile ? profile.fields.filter((field) => field.enabled && field.formula) : [];
+  const header = findHeader(rows, aliasMap, calculated.map((field) => field.key));
   if (!header) {
     throw new Error('Supported header row not found. Use Code + Name, or BRANCH NAME + ITEM NAME + CLOSING STOCK.');
   }
 
   const fieldConfigs = profile ? profile.fields.filter((field) => field.enabled) : [];
-  const missingRequired = fieldConfigs.filter((field) => field.required && header.columns[field.key] === undefined && !field.defaultValue);
+  const missingRequired = fieldConfigs.filter((field) => field.required && header.columns[field.key] === undefined && !field.defaultValue && !field.formula);
   if (missingRequired.length) {
     throw new Error(`Required column${missingRequired.length > 1 ? 's' : ''} not found in the file: ${missingRequired.map((field) => field.label).join(', ')}.`);
   }
@@ -155,6 +159,9 @@ export async function parseStockImport(buffer: Buffer, fileName: string, profile
   const format: StockImportFormat = header.columns.locationName !== undefined && header.columns.quantity !== undefined
     ? 'invexa-expiry-stock'
     : 'standard-items';
+  const formulaInputs = fieldConfigs.filter((field) => field.type === 'number' && !field.formula);
+  const parsedFormulas = calculated.map((field) => ({ field, ast: parseFormula(field.formula as string) }));
+  const labelByKey = new Map(fieldConfigs.map((field) => [field.key.toLowerCase(), field.label]));
   const validRows: StockImportRow[] = [];
   const errors: StockImportError[] = [];
   let duplicateRows = 0;
@@ -168,7 +175,29 @@ export async function parseStockImport(buffer: Buffer, fileName: string, profile
     if (!source.some((value) => text(value))) continue;
     if (source.some((value) => normalizeHeader(value) === 'grandtotals')) continue;
 
+    const computed = new Map<string, number>();
+    if (parsedFormulas.length) {
+      const inputs: Record<string, number> = {};
+      for (const input of formulaInputs) {
+        const raw = source[header.columns[input.key]];
+        const number = finiteNumber(text(raw) === '' && defaults.has(input.key) ? defaults.get(input.key) : raw);
+        if (number !== undefined) inputs[input.key.toLowerCase()] = number;
+      }
+      let failed: string | null = null;
+      for (const { field, ast } of parsedFormulas) {
+        try {
+          computed.set(field.key, evaluateFormula(ast, inputs));
+        } catch (error) {
+          const message = error instanceof FormulaError ? error.message : 'Calculation failed.';
+          const missing = /^Unknown field "([^"]+)"/.exec(message);
+          failed = `Could not calculate ${field.label}: ${missing ? `${labelByKey.get(missing[1]) ?? missing[1]} is empty or not a number.` : message}`;
+          break;
+        }
+      }
+      if (failed) { errors.push({ rowNumber: index + 1, message: failed }); continue; }
+    }
     const get = (field: string) => {
+      if (computed.has(field)) return computed.get(field);
       const value = source[header.columns[field]];
       return text(value) === '' && defaults.has(field) ? defaults.get(field) : value;
     };

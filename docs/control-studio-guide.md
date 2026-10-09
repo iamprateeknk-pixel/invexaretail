@@ -18,6 +18,7 @@ Pick the import: **Stock / opening stock**, **Daily sales** or **Daily purchase*
 | Make a column compulsory | Tick **Required**. A file without it is rejected with the column name; a blank cell rejects only that row. |
 | Fill an empty cell automatically | Type a **Default when empty**. |
 | Ignore a column | Untick **Use**. |
+| Work a number out instead of reading it (stock import) | Open **Calculate from other columns** under a number column, click the columns and `+ - * /` to build e.g. Cartons × Pack Qty. The value is calculated for every row; the column need not be in the file. A row with an empty input is rejected on its own. |
 | Add your own column (stock import only) | **Add column**, choose Text / Number / Date. Values are saved on each item (matched by item code) when the import is confirmed. |
 
 Always on (greyed out): item name for stock; bill no., bill date, item name, quantity (and branch for sales).
