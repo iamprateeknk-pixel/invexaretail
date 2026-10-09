@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { checkItemLotFormula, ITEM_LOT_FORMULA_FIELD_OPTIONS } from '../lib/item-lot-table';
 import { checkLotFormula, LOT_FORMULA_FIELD_OPTIONS } from '../lib/lots-table';
 import { checkStockFormula, formatStockFormulaValue, STOCK_FORMULA_FIELD_OPTIONS } from '../lib/stock-table';
 import { controlRequest } from './control-api';
@@ -23,9 +24,16 @@ export const LOT_FORMULA_RECIPES = [
   { label: 'Sale value at risk', name: 'Value at risk', formula: 'if(days_to_expiry <= 30, sale_value, 0)', type: 'currency' },
 ];
 
+export const ITEM_LOT_FORMULA_RECIPES = [
+  { label: 'Margin per lot', name: 'Margin', formula: 'sale_value - purchase_value', type: 'currency' },
+  { label: 'Weeks to expiry', name: 'Weeks left', formula: 'round(days_to_expiry / 7, 1)', type: 'number' },
+  { label: 'Margin % of sale', name: 'Margin %', formula: 'if(sale_value = 0, 0, round((sale_value - purchase_value) / sale_value * 100, 1))', type: 'number' },
+];
+
 // What each table's formulas can use: the field buttons, the preview sample and the checker.
 const TABLE_FORMULA = {
   stock: { fields: STOCK_FORMULA_FIELD_OPTIONS, sample: { physical: 100, book: 90, variance: 10, quarantine: 5, reserved: 20, value: 2500 }, check: checkStockFormula, recipes: FORMULA_RECIPES, overridableKey: 'available', overridableDefault: 'max(0, physical - reserved - quarantine)', overridableText: 'Standard: physical − reserved − quarantine' },
+  itemLots: { fields: ITEM_LOT_FORMULA_FIELD_OPTIONS, sample: { days_to_expiry: 21, purchase_value: 800, sale_value: 1000 }, check: checkItemLotFormula, recipes: ITEM_LOT_FORMULA_RECIPES, overridableKey: null, overridableDefault: '', overridableText: '' },
   lots: { fields: LOT_FORMULA_FIELD_OPTIONS, sample: { quantity: 40, days_to_expiry: 21, purchase_value: 800, sale_value: 1000 }, check: checkLotFormula, recipes: LOT_FORMULA_RECIPES, overridableKey: null, overridableDefault: '', overridableText: '' },
 };
 
@@ -48,7 +56,7 @@ export function FormulaBuilder({ controlToken, onSaved }) {
   const config = TABLE_FORMULA[table];
   const [columns, setColumns] = useState([]);
   const [editing, setEditing] = useState(null); // { key?, name, formula, type }
-  const [samples, setSamples] = useState({ stock: TABLE_FORMULA.stock.sample, lots: TABLE_FORMULA.lots.sample });
+  const [samples, setSamples] = useState({ stock: TABLE_FORMULA.stock.sample, lots: TABLE_FORMULA.lots.sample, itemLots: TABLE_FORMULA.itemLots.sample });
   const sample = samples[table];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -155,7 +163,7 @@ export function FormulaBuilder({ controlToken, onSaved }) {
                 {FUNCTION_BUTTONS.map(([label, text]) => <Button key={label} type="button" size="sm" variant="ghost" title={text} onClick={() => add(text)}>{label}</Button>)}
               </div>
             </div>
-            <Input ref={inputRef} aria-label="Formula" className="font-mono" placeholder={table === 'lots' ? 'days_to_expiry / 7' : 'physical - reserved - quarantine'} value={editing.formula} onChange={(event) => setEditing({ ...editing, formula: event.target.value })} />
+            <Input ref={inputRef} aria-label="Formula" className="font-mono" placeholder={table === 'stock' ? 'physical - reserved - quarantine' : 'days_to_expiry / 7'} value={editing.formula} onChange={(event) => setEditing({ ...editing, formula: event.target.value })} />
             <div aria-live="polite" className={`rounded-md border p-2 text-sm ${preview?.ok ? 'border-primary/30 bg-primary/5' : 'border-destructive/40 bg-destructive/10 text-destructive'}`}>
               {preview?.ok ? <>Result for the sample numbers: <strong>{formatStockFormulaValue(preview.value, editing.type)}</strong></> : preview?.error}
             </div>

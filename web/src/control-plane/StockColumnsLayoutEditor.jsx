@@ -14,7 +14,7 @@ export function layoutPayload(columns) {
 }
 
 /** Columns that can be moved and renamed but never hidden, per table. */
-export const LOCKED_COLUMNS = { stock: ['item_code'], lots: ['item_lot', 'open'] };
+export const LOCKED_COLUMNS = { stock: ['item_code'], lots: ['item_lot', 'open'], itemLots: ['lot_no', 'print'] };
 
 /** Order, names and show/hide of a table's columns. Saved to the draft; publish makes it live. */
 export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
