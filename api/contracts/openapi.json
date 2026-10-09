@@ -29004,13 +29004,6 @@
         ]
       }
     },
-    "/items/version": {
-      "get": {
-        "operationId": "getItemsVersion",
-        "summary": "A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch.",
-        "tags": [
-          "Items"
-        ],
     "/imports/sales/template": {
       "get": {
         "operationId": "getImportsSalesTemplate",
@@ -29046,10 +29039,6 @@
           {
             "bearerAuth": []
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Version.",
         ]
       }
     },
@@ -29067,26 +29056,6 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": [
-                    "version"
-                  ],
-                  "properties": {
-                    "version": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "description": "Opaque; equal strings mean an unchanged catalogue."
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No or invalid credentials."
-          }
-        }
                   "properties": {
                     "filename": {
                       "type": "string"
@@ -29149,6 +29118,47 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/items/version": {
+      "get": {
+        "operationId": "getItemsVersion",
+        "summary": "A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch.",
+        "tags": [
+          "Items"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "version"
+                  ],
+                  "properties": {
+                    "version": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Opaque; equal strings mean an unchanged catalogue."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid credentials."
+          }
+        }
       }
     }
   }
