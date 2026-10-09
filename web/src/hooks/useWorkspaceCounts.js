@@ -1,5 +1,5 @@
 import { API_BASE, apiRequest } from '../lib/api-client';
-import { countReviewNoteIsValid, isCountManager } from '../lib/count-review';
+import { countReviewNoteIsValid, isCountManager, isCountWorker } from '../lib/count-review';
 import { normalizeCounts } from '../lib/workspace';
 import { useEffect, useState } from 'react';
 
@@ -54,8 +54,10 @@ export function useWorkspaceCounts({
       });
       const refreshed = await apiRequest('/api/v1/counts', { headers: { Authorization: `Bearer ${authToken}` } });
       setCounts(normalizeCounts(refreshed.counts, items, locations));
-      if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(role)) {
-        const assignmentsRefreshed = await apiRequest('/api/v1/count-assignments/mine', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (isCountWorker(role)) {
+        // A branch manager's list is the whole branch's open tasks, not only their own.
+        const path = isCountManager(role) ? '/api/v1/count-assignments' : '/api/v1/count-assignments/mine';
+        const assignmentsRefreshed = await apiRequest(path, { headers: { Authorization: `Bearer ${authToken}` } });
         setAssignments(assignmentsRefreshed.assignments ?? []);
       }
       showToast('Stock count submitted successfully!', 'success');

@@ -290,6 +290,7 @@ export function openingPreviewFromStagedRows(batch: ImportBatchRecord, rows: Sta
         quantity: typeof mapped.quantity === 'number' ? mapped.quantity : (typeof mapped.resultingQty === 'number' ? mapped.resultingQty : undefined),
         purchaseValue: typeof mapped.purchaseValue === 'number' ? mapped.purchaseValue : undefined,
         saleValue: typeof mapped.saleValue === 'number' ? mapped.saleValue : undefined,
+        extra: mapped.extra && typeof mapped.extra === 'object' && !Array.isArray(mapped.extra) ? mapped.extra as StockImportRow['extra'] : undefined,
       };
       return normalized;
     });

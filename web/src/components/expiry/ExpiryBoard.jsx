@@ -13,6 +13,9 @@ import { Separator } from '@/components/ui/separator';
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { itemFieldCell } from '@/hooks/useItemFieldValues';
+import { formatStockFormulaValue } from '@/lib/stock-table';
+import { DEFAULT_LOT_COLUMNS, lotFormulaValue } from '@/lib/lots-table';
 import {
   filterExpiryLots,
   formatExpiryDays,
@@ -49,6 +52,34 @@ function formatDate(value) {
   return date.toLocaleDateString('en-IN');
 }
 
+function lotCellClass(key) {
+  if (key === 'quantity') return 'font-semibold';
+  if (key === 'recommended_action') return 'hidden max-w-xs text-xs text-muted-foreground lg:table-cell';
+  if (key === 'open') return 'text-right';
+  return undefined;
+}
+
+function renderLotCell(column, lot, { itemFieldValues, openLot }) {
+  if (column.source === 'itemField') return itemFieldCell(itemFieldValues, lot.itemId, column.itemField);
+  if (column.formula) return formatStockFormulaValue(lotFormulaValue(column.formula, lot), column.type);
+  switch (column.key) {
+    case 'item_lot':
+      return (<><p className="font-medium">{lot.itemName}</p><p className="text-xs text-muted-foreground">{lot.itemCode} · Lot {lot.lotNo} · {lot.category}</p></>);
+    case 'quantity':
+      return (<>{lot.quantity}<p className="text-xs font-normal text-muted-foreground">{lot.unit}</p></>);
+    case 'expiry':
+      return (<>{formatDate(lot.expiryDate)}<p className="text-xs text-muted-foreground">{formatExpiryDays(lot)}</p></>);
+    case 'risk':
+      return (<><Badge variant={horizonBadgeVariant(lot.horizon)}>{lot.horizon}</Badge>{lot.lotStatus && lot.lotStatus !== 'AVAILABLE' ? <Badge className="mt-1" variant="outline">{lot.lotStatus}</Badge> : null}</>);
+    case 'recommended_action':
+      return lot.recommendedAction;
+    case 'open':
+      return <Button size="sm" variant="outline" onClick={() => openLot(lot)}>Open</Button>;
+    default:
+      return '—';
+  }
+}
+
 export default function ExpiryBoard({
   lots = [],
   summary,
@@ -56,6 +87,8 @@ export default function ExpiryBoard({
   locationName,
   role,
   loading = false,
+  columns = DEFAULT_LOT_COLUMNS,
+  itemFieldValues = {},
   onWriteOff,
   onSetExpiry,
   onSetLotStatus,
@@ -165,12 +198,9 @@ export default function ExpiryBoard({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Item / lot</TableHead>
-              <TableHead>Qty</TableHead>
-              <TableHead>Expiry</TableHead>
-              <TableHead>Risk</TableHead>
-              <TableHead className="hidden lg:table-cell">Recommended action</TableHead>
-              <TableHead className="text-right">Open</TableHead>
+              {columns.map((column) => (
+                <TableHead key={column.key} className={`${column.key === 'recommended_action' ? 'hidden lg:table-cell' : ''} ${column.key === 'open' ? 'text-right' : ''}`.trim() || undefined}>{column.label}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -179,27 +209,13 @@ export default function ExpiryBoard({
                 key={lot.id}
                 className={lot.horizon === 'EXPIRED' ? 'bg-destructive/5' : lot.horizon === 'CRITICAL' || lot.horizon === 'WARNING' ? 'bg-warning/10' : lot.horizon === 'MISSING' ? 'bg-muted/40' : ''}
               >
-                <TableCell>
-                  <p className="font-medium">{lot.itemName}</p>
-                  <p className="text-xs text-muted-foreground">{lot.itemCode} · Lot {lot.lotNo} · {lot.category}</p>
-                </TableCell>
-                <TableCell className="font-semibold">{lot.quantity}<p className="text-xs font-normal text-muted-foreground">{lot.unit}</p></TableCell>
-                <TableCell>
-                  {formatDate(lot.expiryDate)}
-                  <p className="text-xs text-muted-foreground">{formatExpiryDays(lot)}</p>
-                </TableCell>
-                <TableCell>
-                  <Badge variant={horizonBadgeVariant(lot.horizon)}>{lot.horizon}</Badge>
-                  {lot.lotStatus && lot.lotStatus !== 'AVAILABLE' ? <Badge className="mt-1" variant="outline">{lot.lotStatus}</Badge> : null}
-                </TableCell>
-                <TableCell className="hidden max-w-xs text-xs text-muted-foreground lg:table-cell">{lot.recommendedAction}</TableCell>
-                <TableCell className="text-right">
-                  <Button size="sm" variant="outline" onClick={() => openLot(lot)}>Open</Button>
-                </TableCell>
+                {columns.map((column) => (
+                  <TableCell key={column.key} className={lotCellClass(column.key)}>{renderLotCell(column, lot, { itemFieldValues, openLot })}</TableCell>
+                ))}
               </TableRow>
             )) : (
               <TableRow>
-                <TableCell colSpan={6} className="h-40 text-center text-muted-foreground">
+                <TableCell colSpan={columns.length} className="h-40 text-center text-muted-foreground">
                   {loading
                     ? 'Loading lot expiry…'
                     : filter === 'MISSING'

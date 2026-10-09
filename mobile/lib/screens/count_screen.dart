@@ -100,7 +100,7 @@ class _CountScreenState extends State<CountScreen> {
     final assignedIds = _selectedBatchRows.map((row) => row.itemId).toSet();
     // The work feed already dropped zero-stock items and lots and says how each
     // item is counted; an older server has no feed, so fall back to the catalog.
-    if (controller.isBlindCountWorker && controller.countTasks.isNotEmpty) {
+    if (controller.isCountWorker && controller.countTasks.isNotEmpty) {
       return [
         for (final task in controller.countTasks)
           if (assignedIds.contains(task.item.id) && task.locationId == _locationId) task.item,
