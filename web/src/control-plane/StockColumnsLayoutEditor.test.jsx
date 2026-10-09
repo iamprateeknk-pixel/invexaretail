@@ -5,7 +5,7 @@ import { stockTableColumns } from '../lib/stock-table.js';
 
 test('layoutPayload sends key, label and visibility in the edited order', () => {
   const payload = layoutPayload([{ key: 'b', label: 'B', visible: false, source: 'core' }, { key: 'a', label: 'A', source: 'core' }]);
-  assert.deepEqual(payload, [{ key: 'b', label: 'B', visible: false }, { key: 'a', label: 'A', visible: true }]);
+  assert.deepEqual(payload, [{ key: 'b', label: 'B', visible: false, visibleRoles: null }, { key: 'a', label: 'A', visible: true, visibleRoles: null }]);
 });
 
 test('the stock table follows the configured order, labels and hidden columns', () => {

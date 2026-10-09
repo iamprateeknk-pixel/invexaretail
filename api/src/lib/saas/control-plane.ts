@@ -441,6 +441,24 @@ const TABLE_RULES: Record<TableKey, { locked: string[]; formulaFields: readonly 
   itemLots: { locked: ['lot_no', 'print'], formulaFields: ['days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
 };
 
+export const COLUMN_ROLES = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'] as const;
+
+/**
+ * Which roles may see a column. No list (or every role) = everyone. ADMIN is always included so a layout
+ * can never hide a column from the people who manage it.
+ */
+export function normalizeColumnRoles(input: unknown): string[] | undefined {
+  if (input === null || input === undefined) return undefined;
+  if (!Array.isArray(input)) throw new ControlPlaneError('Roles must be a list', 'INVALID_ROLE', 400);
+  if (input.length === 0) return undefined;
+  const roles = new Set<string>(['ADMIN']);
+  for (const role of input) {
+    if (!(COLUMN_ROLES as readonly string[]).includes(String(role))) throw new ControlPlaneError(`Unknown role "${String(role)}"`, 'INVALID_ROLE', 400);
+    roles.add(String(role));
+  }
+  return roles.size === COLUMN_ROLES.length ? undefined : COLUMN_ROLES.filter((role) => roles.has(role));
+}
+
 export function isTableKey(value: unknown): value is TableKey {
   return typeof value === 'string' && (TABLE_KEYS as readonly string[]).includes(value);
 }
@@ -1467,7 +1485,7 @@ export class ControlPlane {
    * `layout` lists column keys in the wanted order; columns left out keep their relative order
    * after the listed ones. Essential columns (item name, row action) can be renamed and moved but never hidden.
    */
-  setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean }>, table: TableKey = 'stock'): ConfigurationVersion {
+  setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean; visibleRoles?: string[] | null }>, table: TableKey = 'stock'): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.assertBillingWritable(companyId);
     const draft = this.ensureDraft(scope);
@@ -1490,6 +1508,14 @@ export class ControlPlane {
           throw new ControlPlaneError(`The "${column.label}" column cannot be hidden`, 'COLUMN_REQUIRED', 400);
         }
         column.visible = Boolean(entry.visible);
+      }
+      if (entry.visibleRoles !== undefined) {
+        const roles = normalizeColumnRoles(entry.visibleRoles);
+        if (roles && TABLE_RULES[table].locked.includes(column.key)) {
+          throw new ControlPlaneError(`The "${column.label}" column must stay visible to every role`, 'COLUMN_REQUIRED', 400);
+        }
+        if (roles) column.visibleRoles = roles;
+        else delete column.visibleRoles;
       }
       ordered.push(column);
     }

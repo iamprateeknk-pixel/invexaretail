@@ -4,13 +4,38 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { controlRequest } from './control-api';
 import { moveField } from './ImportColumnsEditor';
 import { TableSwitcher } from './TableSwitcher';
 
 export function layoutPayload(columns) {
-  return columns.map((column) => ({ key: column.key, label: column.label, visible: column.visible !== false }));
+  return columns.map((column) => ({ key: column.key, label: column.label, visible: column.visible !== false, visibleRoles: column.visibleRoles?.length ? column.visibleRoles : null }));
+}
+
+export const ROLE_OPTIONS = [
+  { value: 'ADMIN', label: 'Admin' },
+  { value: 'ADMIN_USER', label: 'Admin user' },
+  { value: 'BRANCH_MANAGER', label: 'Branch manager' },
+  { value: 'STORE_USER', label: 'Store user' },
+  { value: 'WAREHOUSE_PICKER', label: 'Warehouse picker' },
+  { value: 'AUDITOR', label: 'Auditor' },
+];
+
+/** Plain-language summary of who can see a column. */
+export function rolesSummary(visibleRoles) {
+  if (!visibleRoles?.length || visibleRoles.length >= ROLE_OPTIONS.length) return 'Everyone';
+  return `Only ${ROLE_OPTIONS.filter((role) => visibleRoles.includes(role.value)).map((role) => role.label).join(', ')}`;
+}
+
+/** Toggle one role; Admin is always kept, and selecting every role means "everyone" (no list). */
+export function toggleRole(visibleRoles, role) {
+  if (role === 'ADMIN') return visibleRoles;
+  const current = new Set(visibleRoles?.length ? visibleRoles : ROLE_OPTIONS.map((option) => option.value));
+  if (current.has(role)) current.delete(role); else current.add(role);
+  current.add('ADMIN');
+  return current.size >= ROLE_OPTIONS.length ? undefined : ROLE_OPTIONS.filter((option) => current.has(option.value)).map((option) => option.value);
 }
 
 /** Columns that can be moved and renamed but never hidden, per table. */
@@ -121,6 +146,22 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
               >
                 {column.visible === false ? <><EyeOff className="size-4" />Hidden</> : <><Eye className="size-4" />Shown</>}
               </Button>
+              {!locked.includes(column.key) && (
+                <details className="text-xs md:col-span-4">
+                  <summary className="cursor-pointer text-muted-foreground">Who sees it: <strong>{rolesSummary(column.visibleRoles)}</strong></summary>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    {ROLE_OPTIONS.map((role) => {
+                      const checked = !column.visibleRoles?.length || column.visibleRoles.includes(role.value);
+                      return (
+                        <label key={role.value} className="flex items-center gap-1.5">
+                          <Checkbox checked={checked} disabled={role.value === 'ADMIN'} aria-label={`${role.label} can see ${column.label}`} onCheckedChange={() => edit(index, { visibleRoles: toggleRole(column.visibleRoles, role.value) })} />
+                          {role.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
         </div>
