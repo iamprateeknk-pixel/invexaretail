@@ -9,6 +9,7 @@ import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
+import { itemRowToRecord } from './item-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
@@ -121,43 +122,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     type: location.type as 'store' | 'warehouse',
   })));
 
-  replaceContents(items, dbItems.map((item: any) => ({
-    id: item.id,
-    code: item.code,
-    name: item.name,
-    category: item.category ?? undefined,
-    subcategory: item.subcategory ?? undefined,
-    company: item.company ?? undefined,
-    unit: item.unit ?? undefined,
-    countMethod: item.countMethod ?? 'LOT_SCAN',
-    pickMethod: item.pickMethod ?? 'LOT_SCAN',
-    allocationStrategy: item.allocationStrategy ?? 'FEFO',
-    lotRequired: item.lotRequired ?? true,
-    expiryRequired: item.expiryRequired ?? false,
-    decimalQuantity: item.decimalQuantity ?? false,
-    status: (item.status ?? 'ACTIVE') as 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
-    archiveReason: item.archiveReason ?? undefined,
-    archivedAt: item.archivedAt?.toISOString(),
-    archivedById: item.archivedById ?? undefined,
-    barcode: item.barcode ?? undefined,
-    hsn: item.hsn ?? undefined,
-    gstRate: item.gstRate ?? undefined,
-    mrp: item.mrp == null ? undefined : Number(item.mrp),
-    leadTimeDays: item.leadTimeDays ?? undefined,
-    shelfLifeDays: item.shelfLifeDays ?? undefined,
-    aliases: Array.isArray(item.aliases) ? (item.aliases as string[]) : undefined,
-    version: item.version ?? 1,
-    createdById: item.createdById ?? undefined,
-    updatedById: item.updatedById ?? undefined,
-    lots: item.lots.map((lot) => ({
-      id: lot.id,
-      itemId: lot.itemId,
-      lotNo: lot.lotNo,
-      expiryDate: lot.expiryDate?.toISOString() ?? null,
-      status: (lot.status as 'AVAILABLE' | 'EXPIRED' | 'BLOCKED' | 'QUARANTINE') ?? 'AVAILABLE',
-      attributes: (lot.attributes as Record<string, unknown> | null) ?? undefined,
-    })),
-  })));
+  replaceContents(items, dbItems.map(itemRowToRecord));
 
   adoptHydratedOwnership({
     locations: dbLocations.map((location) => ({ id: location.id, companyId: (location as { companyId?: string }).companyId })),

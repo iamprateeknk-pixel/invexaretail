@@ -7,7 +7,8 @@
 // repository exists to make structurally impossible to repeat).
 import { prisma } from '../db.js';
 import { databaseEnabled } from '../persistence.js';
-import { ownerOfItem } from '../saas/tenant-scope.js';
+import { itemsForCompany, ownerOfItem } from '../saas/tenant-scope.js';
+import { itemRowToRecord } from '../item-record-mapper.js';
 import { items as memoryItems, type ItemRecord } from '../repository.js';
 import type { TenantContext } from '../tenant-context.js';
 
@@ -140,4 +141,21 @@ export async function getCatalogueVersion(ctx: TenantContext): Promise<string | 
   ]);
   const stamp = (value: Date | null) => (value ? value.getTime() : 0);
   return `${items._count._all}.${stamp(items._max.updatedAt)}.${lots._count._all}.${stamp(lots._max.updatedAt)}`;
+}
+
+/**
+ * Database-first slice 6 (docs/db-first-reads-plan.md): the company's whole catalogue (items with lots), oldest first.
+ * Rows go through the same mapper snapshot hydration uses, so the shape is identical to the in-memory records.
+ * Callers that hold the catalogue should gate this behind getCatalogueVersion; it is a large read.
+ */
+export async function listItemsForCompany(ctx: TenantContext): Promise<ItemRecord[]> {
+  if (databaseEnabled) {
+    const rows = await prisma.item.findMany({
+      where: { companyId: ctx.companyId },
+      include: { lots: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map(itemRowToRecord);
+  }
+  return itemsForCompany(ctx.companyId, memoryItems);
 }

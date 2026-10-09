@@ -139,3 +139,10 @@ Run each file on its own, as CI does: running them together against one database
   as before. Proven in `item-catalogue-version.postgres.test.ts` (moves on item edit, lot edit, new/deleted item and lot;
   never moves for another company) and `web/src/lib/catalogue-version.test.js`. Next: switch `GET /items` itself to the
   database (mapping extraction, parity test) now that the polling cost is gone.
+- **Slice 6 done: `GET /items`** (the full catalogue) via `listItemsForCompany` in `item-repository.ts`. The Item-row to
+  ItemRecord mapping was extracted from snapshot hydration into `lib/item-record-mapper.ts`, so hydration and the
+  repository share one function and the shape cannot drift; `item-list-repository.postgres.test.ts` proves tenant
+  isolation and field-for-field parity with the hydrated snapshot (including an item with every optional column empty).
+  This is affordable now because the web app only calls it when `GET /items/version` moved (previous step).
+  Unblocked next: `/count-assignments/mine`, `/mobile/work`, `/dashboard`, `/cycle-counts/:locationId`, reports and exports,
+  which all join the catalogue.
