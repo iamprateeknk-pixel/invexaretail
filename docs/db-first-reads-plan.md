@@ -100,3 +100,16 @@ Run each file on its own, as CI does: running them together against one database
   Postgres it removes a real limit: the snapshot kept only the newest 10,000 movements across *all* companies, so a busy
   company could push another's history out. Tenant isolation, ordering, the 500 limit and parity with the hydrated
   snapshot are proven in `movement-repository.postgres.test.ts`.
+- **Slice 3 done: `GET /count-assignments`** (the admin list) via `lib/repositories/count-assignment-repository.ts`,
+  scoped through the assignment's location. `GET /count-assignments/mine` and `GET /mobile/work` are not converted yet:
+  they join each assignment with the item and its lots, so they wait for the `/items` slice.
+- **Finding for the `/items` slice (not yet done).** Two things make it different from slices 1-3:
+  1. *Mapping.* Hydration turns an `Item` row into an `ItemRecord` with ~30 field defaults and renames (`countMethod ??
+     'LOT_SCAN'`, `status ?? 'ACTIVE'`, `mrp` Decimal to number, `aliases` JSON, nested `lots` with ISO dates).
+     `item-repository.ts`'s `toItemRecord` is only a spread of the row, so it does not match. The right move is to
+     extract the hydration mapper into one exported function used by both hydration and the repository, so parity is
+     true by construction rather than by test.
+  2. *Cost.* The web workspace poll reads the whole catalogue. Today that is a memory copy; database-first makes every
+     poll a full-catalogue Postgres query (20k+ items with lots). The web side must page or ask per screen first
+     (`useItemSearch` already exists), otherwise this slice trades memory for database load. That is a performance
+     decision, so it is sequenced after the web change, not before.
