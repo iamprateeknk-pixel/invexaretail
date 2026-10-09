@@ -5,6 +5,18 @@ export function isCountManager(role) {
   return COUNT_MANAGER_ROLES.includes(role);
 }
 
+// Roles an admin can hand count work to - mirrors the API's isCountWorkerRole.
+export const COUNT_WORKER_ROLES = ['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER'];
+
+export function isCountWorker(role) {
+  return COUNT_WORKER_ROLES.includes(role);
+}
+
+/** Store users and pickers never see book quantity while counting; a branch manager does. */
+export function countsBlind(role) {
+  return role === 'STORE_USER' || role === 'WAREHOUSE_PICKER';
+}
+
 export function countReviewNoteIsValid(value) {
   return String(value ?? '').trim().length >= MIN_COUNT_REVIEW_NOTE;
 }

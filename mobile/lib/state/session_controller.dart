@@ -83,6 +83,9 @@ class SessionController extends ChangeNotifier {
   // /count-assignments/mine and /stock-counts already accept both roles) -
   // a picker's own warehouse stock counts were missing from the app entirely.
   bool get isBlindCountWorker => user?.role == 'STORE_USER' || user?.role == 'WAREHOUSE_PICKER';
+  // Anyone an admin can hand count work to: branch managers too (they count with book
+  // quantity visible, and someone else reviews what they submit).
+  bool get isCountWorker => user != null && isCountWorkerRole(user!.role);
   bool get showBookQuantity => user != null && canSeeBookQuantity(user!.role);
   bool get allowAdHocCount => user != null && canSubmitAdHocCount(user!.role);
   String get companyId => user?.companyId ?? 'default-company';
@@ -384,9 +387,9 @@ class SessionController extends ChangeNotifier {
       final jobs = <Future<void>>[
         if (slices.contains('items')) api.items().then((value) => items = value),
         if (slices.contains('counts')) api.counts().then((value) => counts = value),
-        if (slices.contains('assignments') && isBlindCountWorker)
+        if (slices.contains('assignments') && isCountWorker)
           api.myAssignments().then((value) => assignments = value),
-        if ((slices.contains('assignments') || slices.contains('stock')) && isBlindCountWorker)
+        if ((slices.contains('assignments') || slices.contains('stock')) && isCountWorker)
           _loadCountTasks(),
         if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
         if (slices.contains('putaway') && locationId != null)
@@ -420,7 +423,7 @@ class SessionController extends ChangeNotifier {
     dashboard = await dashFuture;
     counts = await countFuture;
     transfers = await transferFuture;
-    if (isBlindCountWorker) {
+    if (isCountWorker) {
       try {
         assignments = await api.myAssignments();
       } on ApiException {
@@ -578,7 +581,7 @@ class SessionController extends ChangeNotifier {
       // open remaining lots from the picker/store user and left the assignment permanently
       // ASSIGNED on the server with no way to reach it from the app again. Re-fetch from the
       // server instead, so the list always reflects the real close-or-still-open decision.
-      if (isBlindCountWorker) {
+      if (isCountWorker) {
         try {
           assignments = await api.myAssignments();
         } on ApiException {

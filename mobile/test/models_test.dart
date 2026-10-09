@@ -105,6 +105,10 @@ void main() {
     expect(canSeeBookQuantity('ADMIN'), isTrue);
     expect(canSubmitAdHocCount('STORE_USER'), isFalse);
     expect(canSubmitAdHocCount('ADMIN'), isTrue);
+    expect(isCountWorkerRole('BRANCH_MANAGER'), isTrue);
+    expect(isCountWorkerRole('WAREHOUSE_PICKER'), isTrue);
+    expect(isCountWorkerRole('AUDITOR'), isFalse);
+    expect(isCountWorkerRole('ADMIN'), isFalse);
   });
 
   test('queued counts round-trip through JSON', () {

@@ -4,6 +4,7 @@ import { classifyAbcItems, aggregateLocationStock } from './abc-cycle-count.js';
 import { getCampaign, listCampaignItems, listCampaigns, saveCampaign, saveCampaignItems } from './campaign-store.js';
 import { persistCampaign, persistCampaignItems } from './campaign-persistence.js';
 import { publishEvent } from './event-bus.js';
+import { isCountWorkerRole } from './count-lifecycle.js';
 import { persistAudit, persistCountAssignment, persistCountAssignmentUpdate } from './persistence.js';
 import {
   createCountAssignment,
@@ -73,7 +74,7 @@ async function audit(actor: CampaignActor, action: string, campaign: CampaignRec
 /** A count worker who can be given campaign work at this location, or an explanation of why not. */
 export function checkCampaignUser(userId: string, locationId: string, companyId: string): string | null {
   const user = findUserById(userId);
-  if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)) return `${userId} is not an eligible count worker.`;
+  if (!user || !isCountWorkerRole(user.role)) return `${userId} is not an eligible count worker.`;
   if (!user.assignedLocationIds.includes(locationId)) return `${user.name} is not assigned to this location.`;
   const enterprise = findEnterpriseUserById(userId);
   if (enterprise && (enterprise.status !== 'active' || enterprise.companyId !== companyId)) return `${user.name} is not an active user of this company.`;

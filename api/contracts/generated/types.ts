@@ -3924,6 +3924,7 @@ export interface paths {
         trace?: never;
     };
     "/items/version": {
+    "/imports/sales/template": {
         parameters: {
             query?: never;
             header?: never;
@@ -3932,6 +3933,42 @@ export interface paths {
         };
         /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
         get: operations["getItemsVersion"];
+        /** Sales import template (header + sample row) in the company's configured column order. */
+        get: operations["getImportsSalesTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/purchases/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Purchase import template (header + sample row) in the company's configured column order. */
+        get: operations["getImportsPurchasesTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/catalog/custom-field-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every item's custom field values for the caller's company: { itemId: { fieldName: value } }. */
+        get: operations["getCatalogCustomFieldValues"];
         put?: never;
         post?: never;
         delete?: never;
@@ -19802,6 +19839,7 @@ export interface operations {
         };
     };
     getItemsVersion: {
+    getImportsSalesTemplate: {
         parameters: {
             query?: never;
             header?: never;
@@ -19811,6 +19849,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Version. */
+            /** @description OK. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -19828,6 +19867,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+                        filename: string;
+                        csv: string;
+                    };
+                };
+            };
+        };
+    };
+    getImportsPurchasesTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        filename: string;
+                        csv: string;
+                    };
+                };
+            };
+        };
+    };
+    getCatalogCustomFieldValues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        values: {
+                            [key: string]: {
+                                [key: string]: string;
+                            };
+                        };
+                    };
+                };
             };
         };
     };

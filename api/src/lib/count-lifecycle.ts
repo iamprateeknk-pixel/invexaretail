@@ -12,6 +12,20 @@ export function canManageCountWork(role: string): boolean {
   return COUNT_MANAGERS.includes(role);
 }
 
+// Roles an admin can hand count work to (manual assignment, bulk stock take, ABC cycle
+// plan, auto stock-take campaign). Branch managers count too; store users and pickers stay
+// blind to book quantity, a branch manager does not, and nobody can approve their own count.
+const COUNT_WORKERS: readonly string[] = ['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER'];
+
+export function isCountWorkerRole(role: string): boolean {
+  return COUNT_WORKERS.includes(role);
+}
+
+/** Store users and pickers may only count what was assigned to them; other roles can also count ad hoc. */
+export function countsOnlyWhenAssigned(role: string): boolean {
+  return role === 'STORE_USER' || role === 'WAREHOUSE_PICKER';
+}
+
 export function parseCountReviewReason(value: unknown): string {
   const reason = typeof value === 'string' ? value.trim() : '';
   if (reason.length < MIN_COUNT_REVIEW_NOTE) {
