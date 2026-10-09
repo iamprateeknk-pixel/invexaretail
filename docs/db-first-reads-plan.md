@@ -152,3 +152,10 @@ Run each file on its own, as CI does: running them together against one database
   parity with the snapshot's assignment/item join are in `count-assignment-repository.postgres.test.ts`.
   `GET /mobile/work` is next: it also needs per-lot stock-ledger presence and incoming transfers, so it waits for the
   stock and transfer reads.
+- **Slice 8 done: `GET /mobile/work`** via `lib/mobile-work.ts`. The response is built by one pure function
+  (`buildMobileWork`) from loaded facts; only the loading differs by mode. Database mode asks Postgres for just this
+  user's open assignments, those items with lots, the stock-ledger rows for those item/location pairs, and receivable
+  transfers for the company, so it never loads the catalogue (phones poll this endpoint). Finding while doing it: the
+  database's `TransferStatus` enum has `PARTIAL_RECEIVED` but not `PARTIALLY_RECEIVED`, which only exists in the
+  in-memory type; the database query uses the real enum values. Parity with the snapshot, empty/blocked-lot filtering,
+  and cross-company isolation are in `mobile-work.postgres.test.ts`.

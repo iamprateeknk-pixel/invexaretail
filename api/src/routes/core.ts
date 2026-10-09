@@ -217,6 +217,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { loadMobileWork } from '../lib/mobile-work.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
@@ -1545,6 +1546,9 @@ router.get('/count-assignments/mine', (req: Request, res: Response) => {
 // items that still have counted-in stock at the location, with only the lots
 // worth counting and no quantities, so the blind count stays blind) and the
 // transfers waiting to be received at their branch. No full catalog.
+// Database-first slice 8: the response is built by lib/mobile-work.ts (Postgres in database mode).
+router.get('/mobile/work', async (req: Request, res: Response) => {
+  return res.json(await loadMobileWork(tenantContext(req), accessContext(req.user!)));
 router.get('/mobile/work', (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   // Every count-worker role (store users, warehouse pickers, branch managers) gets its own tasks.
