@@ -66,7 +66,7 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
                 <Button type="button" size="icon" variant="outline" aria-label={`Move ${column.label} down`} disabled={index === columns.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-4" /></Button>
               </div>
               <Input aria-label={`Column name ${index + 1}`} value={column.label} onChange={(event) => edit(index, { label: event.target.value })} />
-              <Badge variant="outline">{column.source === 'custom' ? 'Your column' : 'Built-in'}</Badge>
+              <Badge variant="outline">{column.source === 'formula' ? 'Calculated' : column.source === 'custom' ? 'Your column' : 'Built-in'}</Badge>
               <Button
                 type="button"
                 size="sm"

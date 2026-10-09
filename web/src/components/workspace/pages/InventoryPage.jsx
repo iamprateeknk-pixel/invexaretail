@@ -1,6 +1,6 @@
 import { paginateRows } from '../../../lib/pagination';
 import { stockActionIsAvailable } from '../../../lib/stock-metadata';
-import { availableQuantity, RIGHT_ALIGNED_STOCK_COLUMNS, stockTableColumns } from '../../../lib/stock-table';
+import { availableQuantity, formatStockFormulaValue, RIGHT_ALIGNED_STOCK_COLUMNS, stockFormulaValue, stockTableColumns } from '../../../lib/stock-table';
 import { TablePagination } from '../../TablePagination';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ export function InventoryPage() {
   const hasColor = Boolean(workspaceProfile.pack?.variantFields?.includes('Color'));
   const headerLabel = (column) => (column.key === 'pack_size' && column.label === 'Pack/Size' && workspaceProfile.pack?.variantFields?.includes('Size') ? 'Size' : column.label);
   const renderCell = (column, { row, item, lotCount }) => {
+    if (column.formula) return formatStockFormulaValue(stockFormulaValue(column.formula, row), column.type);
     switch (column.key) {
       case 'item_code': return <><p className="font-medium">{item?.code ?? row.itemId}</p><p className="text-xs text-muted-foreground">{row.itemName ?? item?.name}</p></>;
       case 'company': return item?.company || '—';
