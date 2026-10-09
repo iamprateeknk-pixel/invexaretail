@@ -1,3 +1,5 @@
+import { useItemFieldValues, usesItemFields } from '../../../hooks/useItemFieldValues';
+import { itemLotCellText, itemLotColumns } from '../../../lib/item-lot-table';
 import { formatDateTime } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -16,7 +18,10 @@ export function ItemDetailsDialog() {
     reorderDraft, role, saveItemCustomField, saveReorderRule,
     selectedItem, setCommentDraft, setItemFieldDrafts, setModalOpen,
     setPhotoItem, setReorderDraft, setSerialItem, setForecastItem, setPricingItem, setMasterDialog, submitLoading, tags, toggleItemTag,
+    runtimeConfig, authToken,
   } = useWorkspace();
+  const lotColumns = itemLotColumns(runtimeConfig?.page, { role });
+  const itemFieldValues = useItemFieldValues({ authToken, enabled: modalOpen === 'itemDetails' && usesItemFields(lotColumns) });
   return (
     <Dialog open={modalOpen === 'itemDetails'} onOpenChange={(open) => !open && setModalOpen(null)}>
         <DialogContent className="max-h-[92vh] w-[calc(100%-1rem)] overflow-y-auto sm:max-w-2xl">
@@ -59,7 +64,15 @@ export function ItemDetailsDialog() {
                   <div className="space-y-1 text-sm">
                     {selectedItem.lots.map((lot) => (
                       <div key={lot.id} className="flex items-center justify-between gap-3 rounded-md bg-muted/50 p-2">
-                        <div><p className="font-medium">{lot.lotNo}</p>{lot.expiryDate && <p className="text-xs text-muted-foreground">Expires: {new Date(lot.expiryDate).toLocaleDateString()}</p>}<p className="text-xs text-muted-foreground">Batch {lot.attributes?.batch || '—'} · Purchase ₹{Number(lot.attributes?.purchaseValue ?? 0).toLocaleString('en-IN')} · Sale ₹{Number(lot.attributes?.saleValue ?? 0).toLocaleString('en-IN')}</p>{lot.status && <Badge className="mt-1" variant={lot.status === 'AVAILABLE' ? 'success' : 'warning'}>{lot.status}</Badge>}</div>
+                        <div>
+                          {lotColumns.filter((column) => column.key !== 'print').map((column, index) => {
+                            if (column.key === 'status') return lot.status ? <Badge key={column.key} className="mt-1 mr-1" variant={lot.status === 'AVAILABLE' ? 'success' : 'warning'}>{lot.status}</Badge> : null;
+                            const text = itemLotCellText(column, lot, { itemFieldValues, itemId: selectedItem.itemId ?? selectedItem.id });
+                            return index === 0
+                              ? <p key={column.key} className="font-medium">{text}</p>
+                              : <p key={column.key} className="text-xs text-muted-foreground">{column.label}: {text}</p>;
+                          })}
+                        </div>
                         <Button type="button" size="sm" variant="ghost" onClick={() => printItemLabel(selectedItem, lot)}><Printer className="size-4" /><span className="sr-only">Print lot label</span></Button>
                       </div>
                     ))}

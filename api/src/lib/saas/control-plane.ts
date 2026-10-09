@@ -194,7 +194,7 @@ export type PageDefinition = {
   }>;
   widgets: Array<{ key: string; label: string; order: number }>;
   tabs: Array<{ key: string; label: string; order: number }>;
-  /** Column layouts of other tables (currently `lots`). Missing = the built-in default. */
+  /** Column layouts of other tables (`lots`, `itemLots`). Missing = the built-in default. */
   tables?: Record<string, ColumnDefinition[]>;
 };
 
@@ -402,8 +402,8 @@ function timingSafeEqual(a: string, b: string): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export type TableKey = 'stock' | 'lots';
-export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots'];
+export type TableKey = 'stock' | 'lots' | 'itemLots';
+export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots', 'itemLots'];
 
 const col = (key: string, label: string, type = 'text'): ColumnDefinition =>
   ({ key, label, type, source: 'core', visible: true, exportEnabled: true, mobileEnabled: true });
@@ -418,10 +418,27 @@ const DEFAULT_LOT_COLUMNS: ColumnDefinition[] = [
   col('open', 'Open'),
 ];
 
+// The "Lot Details" list inside the item detail dialog. `lot_no` and `print` (the label button) cannot be hidden.
+const DEFAULT_ITEM_LOT_COLUMNS: ColumnDefinition[] = [
+  col('lot_no', 'Lot'),
+  col('expiry', 'Expires', 'date'),
+  col('batch', 'Batch'),
+  col('purchase_value', 'Purchase', 'currency'),
+  col('sale_value', 'Sale', 'currency'),
+  col('status', 'Status'),
+  col('print', 'Print label'),
+];
+
+const DEFAULT_TABLE_COLUMNS: Record<Exclude<TableKey, 'stock'>, ColumnDefinition[]> = {
+  lots: DEFAULT_LOT_COLUMNS,
+  itemLots: DEFAULT_ITEM_LOT_COLUMNS,
+};
+
 /** Per table: columns that must stay visible, built-in columns that may hold a formula, and the numbers a formula may use. */
 const TABLE_RULES: Record<TableKey, { locked: string[]; formulaFields: readonly string[]; overridable: string[] }> = {
   stock: { locked: ['item_code'], formulaFields: STOCK_FORMULA_FIELDS, overridable: ['available'] },
   lots: { locked: ['item_lot', 'open'], formulaFields: ['quantity', 'days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
+  itemLots: { locked: ['lot_no', 'print'], formulaFields: ['days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
 };
 
 export function isTableKey(value: unknown): value is TableKey {
@@ -432,7 +449,7 @@ export function isTableKey(value: unknown): value is TableKey {
 export function pageTableColumns(page: PageDefinition, table: TableKey): ColumnDefinition[] {
   if (table === 'stock') return page.columns;
   page.tables ??= {};
-  return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_LOT_COLUMNS)) as ColumnDefinition[]);
+  return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_TABLE_COLUMNS[table])) as ColumnDefinition[]);
 }
 
 function clonePage(page: PageDefinition): PageDefinition {

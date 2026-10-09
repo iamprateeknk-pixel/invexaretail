@@ -1,5 +1,5 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, isTableKey, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
+import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -488,9 +488,10 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 studioRouter.use(requireLockedCompany);
 
 // Which table a column edit applies to: `stock` (default) or `lots`.
-function tableOf(value: unknown): TableKey {
-  const table = String(value ?? 'stock').toLowerCase();
-  if (!isTableKey(table)) throw new ControlPlaneError('Unknown table', 'INVALID_TABLE', 400);
+export function tableOf(value: unknown): TableKey {
+  const wanted = String(value ?? 'stock');
+  const table = TABLE_KEYS.find((key) => key.toLowerCase() === wanted.toLowerCase());
+  if (!table || !isTableKey(table)) throw new ControlPlaneError('Unknown table', 'INVALID_TABLE', 400);
   return table;
 }
 

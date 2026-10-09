@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 export const TABLE_OPTIONS = [
   { value: 'stock', label: 'Items & stock table' },
   { value: 'lots', label: 'Lots & expiry table' },
+  { value: 'itemLots', label: 'Item detail: lots' },
 ];
 
 /** Small tab-like switch between the tables a layout or formula applies to. */
