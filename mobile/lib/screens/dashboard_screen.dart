@@ -164,7 +164,7 @@ class DashboardScreen extends StatelessWidget {
         onTap: () => _pushPage(context, 'Putaway', PutawayScreen(controller: controller)),
       ));
     }
-    if (controller.isBlindCountWorker) {
+    if (controller.isCountWorker) {
       final batchKeys = controller.assignments.where((row) => row.status == null || row.status == 'ASSIGNED').map((row) => row.batchKey).toSet();
       tiles.add(_ActivityTile(
         label: 'Count batches open', value: batchKeys.length, icon: Icons.fact_check_outlined,

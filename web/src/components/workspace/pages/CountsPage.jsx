@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { countsBlind, isCountWorker } from '@/lib/count-review';
 import { CycleCountPlanner } from '../../counts/CycleCountPlanner';
 import { ItemSearchSelect } from '../../ItemSearchSelect';
 import { StockTakeCampaigns } from '../../counts/StockTakeCampaigns';
@@ -46,10 +47,12 @@ export function CountsPage() {
   const assignedItemIds = useMemo(
     () => new Set(
       (assignments ?? [])
-        .filter((assignment) => assignment.locationId === locationId && assignment.status === 'ASSIGNED')
+        // A branch manager's list holds everyone's tasks at the branch; count entry offers only their own.
+        .filter((assignment) => assignment.locationId === locationId && assignment.status === 'ASSIGNED'
+          && (!assignment.assignedToId || assignment.assignedToId === session?.user?.id))
         .map((assignment) => assignment.itemId),
     ),
-    [assignments, locationId],
+    [assignments, locationId, session?.user?.id],
   );
   const assignedItems = useMemo(
     () => (items ?? []).filter((item) => assignedItemIds.has(item.id)),
@@ -153,9 +156,12 @@ export function CountsPage() {
         />
       )}
 
-      {['STORE_USER', 'WAREHOUSE_PICKER'].includes(role) && activeSection === 'counts' && (
+      {isCountWorker(role) && activeSection === 'counts' && (countsBlind(role) || assignedItems.length > 0) && (
         <Card>
-          <CardHeader><CardTitle className="text-base">Blind count entry</CardTitle><p className="text-xs text-muted-foreground">System quantity stays hidden until submission.</p></CardHeader>
+          <CardHeader>
+            <CardTitle className="text-base">{countsBlind(role) ? 'Blind count entry' : 'My assigned counts'}</CardTitle>
+            <p className="text-xs text-muted-foreground">{countsBlind(role) ? 'System quantity stays hidden until submission.' : 'Items assigned to you for counting. Another manager or admin reviews what you submit.'}</p>
+          </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
             <div className="grid gap-2">
               <Label>Item</Label>
