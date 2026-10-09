@@ -1,4 +1,4 @@
-import { apiRequest } from './api-client';
+import { apiRequest } from './api-client.js';
 
 export const SALES_IMPORT_TEMPLATE = [
   'S_No.,Branch Name,Bill Date,Bill Time,Bill No.,Item Code,Item Name,Lot No.,Unit,Total Qty,Row Source',
