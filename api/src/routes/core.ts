@@ -214,6 +214,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
 
 const router = Router();
 
@@ -2185,13 +2186,12 @@ router.get('/imports/batches', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/imports/history', (req: Request, res: Response) => {
+router.get('/imports/history', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access required.' });
   // The movement list is process-wide. Only movements at locations the caller's company owns belong in its history;
   // a location with no known owner belongs to nobody, so it is left out rather than shown to everyone.
-  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
-  const mine = listDailyMovements().filter((movement) => companyOwnsLocation(companyId, movement.locationId));
-  return res.json({ movements: mine.sort((a, b) => b.transactionAt.localeCompare(a.transactionAt)).slice(0, 500) });
+  // Database-first slice 2: read through the scoped movement repository (Postgres in database mode).
+  return res.json({ movements: await listRecentMovementsForCompany(tenantContext(req)) });
 });
 
 router.get('/imports/:batchToken/errors', async (req: Request, res: Response, next: NextFunction) => {

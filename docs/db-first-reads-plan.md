@@ -96,3 +96,7 @@ Run each file on its own, as CI does: running them together against one database
   placeholder (parity, but knowingly wrong) or join the submitter's real role from `User` (correct, but a visible
   change to clients). That is a product decision for the slice owner, which is why `/counts` was not converted
   mechanically. Expect the same kind of decision wherever hydration fills a field the database does not hold.
+- **Slice 2 done: `GET /imports/history`** via `lib/repositories/movement-repository.ts`. Besides moving the read to
+  Postgres it removes a real limit: the snapshot kept only the newest 10,000 movements across *all* companies, so a busy
+  company could push another's history out. Tenant isolation, ordering, the 500 limit and parity with the hydrated
+  snapshot are proven in `movement-repository.postgres.test.ts`.
