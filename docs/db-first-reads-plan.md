@@ -100,3 +100,6 @@ Run each file on its own, as CI does: running them together against one database
   Postgres it removes a real limit: the snapshot kept only the newest 10,000 movements across *all* companies, so a busy
   company could push another's history out. Tenant isolation, ordering, the 500 limit and parity with the hydrated
   snapshot are proven in `movement-repository.postgres.test.ts`.
+- **Slice 3 done: `GET /count-assignments`** (the admin list) via `lib/repositories/count-assignment-repository.ts`,
+  scoped through the assignment's location. `GET /count-assignments/mine` and `GET /mobile/work` are not converted yet:
+  they join each assignment with the item and its lots, so they wait for the `/items` slice.

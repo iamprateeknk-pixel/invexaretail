@@ -214,6 +214,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
 import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
 
 const router = Router();
@@ -1575,13 +1576,13 @@ router.get('/mobile/work', (req: Request, res: Response) => {
   return res.json({ countTasks, receiveTasks });
 });
 
-router.get('/count-assignments', (req: Request, res: Response) => {
+router.get('/count-assignments', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins and branch managers can view count assignments.' });
   }
   const context = accessContext(req.user!);
-  const assignments = listCountAssignments()
-    .filter((assignment) => assignment.status === 'ASSIGNED')
+  // Database-first slice 3: read through the scoped assignment repository (Postgres in database mode).
+  const assignments = (await listOpenAssignmentsForCompany(tenantContext(req)))
     .filter((assignment) => canAccessLocation(context, assignment.locationId));
   return res.json({ assignments });
 });
