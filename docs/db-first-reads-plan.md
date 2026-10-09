@@ -122,3 +122,11 @@ Run each file on its own, as CI does: running them together against one database
   placeholder (so memory-mode and snapshot-based features are unchanged) and the parity test asserts everything else is
   equal. The row-to-record mapping moved into `lib/count-record-mapper.ts`, used by both hydration and the repository.
   If the product owner wants the old placeholder back, it is a one-line change in `count-repository.ts`.
+- **Measured cost of the `/items` slice (2026-10-09, local Postgres 17, 20,000 items x 2 lots).** A full-catalogue read
+  (`item.findMany` with `lots`) takes about 0.8-1.1 s, plus about 0.3 s to serialise a 24 MB body; the snapshot path
+  today pays only the serialisation. So converting `/items` as it is would make the endpoint roughly 3-4x slower and put
+  a ~1 s Postgres query behind every web poll. The 24 MB response is itself the underlying problem. The web app keeps
+  the whole catalogue in state and loads it from 8 call sites (`useWorkspaceHydration`, `useWorkspaceExpiry`,
+  `useWorkspaceImports`, `useWorkspaceStock`, `ItemMasterPanel` x3), so the real fix is paging/per-screen loading in
+  the web app (`useItemSearch` / `GET /items/search` already exist), after which `/items` can go database-first at a
+  few hundred rows per request. Until then `/items` stays on the snapshot on purpose.
