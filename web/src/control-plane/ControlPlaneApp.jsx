@@ -31,6 +31,7 @@ import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
 import { clearControlSession, exchangeSessionHandoff, handoffCodeFromHash, controlRequest, readControlSession, writeControlSession } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
 import { ImportColumnsEditor } from './ImportColumnsEditor';
+import { StockColumnsLayoutEditor } from './StockColumnsLayoutEditor';
 
 function stripeSessionFromLocation() {
   const hash = String(globalThis.location?.hash ?? '');
@@ -624,6 +625,7 @@ export function ControlPlaneApp() {
               <ImportColumnsEditor controlToken={controlToken} />
             </TabsContent>
             <TabsContent value="columns" className="grid gap-4">
+              <StockColumnsLayoutEditor controlToken={controlToken} onSaved={refreshLocked} />
               <Card>
                 <CardHeader><CardTitle className="text-base">Add custom stock column</CardTitle></CardHeader>
                 <CardContent className="grid gap-3 md:grid-cols-4">

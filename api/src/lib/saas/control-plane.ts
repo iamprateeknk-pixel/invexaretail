@@ -1383,6 +1383,40 @@ export class ControlPlane {
     return draft;
   }
 
+  /**
+   * Reorders, renames and shows/hides the stock table's columns (core and custom) in the draft.
+   * `layout` lists column keys in the wanted order; columns left out keep their relative order
+   * after the listed ones. The item code/name column can be renamed and moved but never hidden.
+   */
+  setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean }>): ConfigurationVersion {
+    const companyId = this.requireLockedCompany(scope);
+    this.assertBillingWritable(companyId);
+    const draft = this.ensureDraft(scope);
+    const byKey = new Map(draft.page.columns.map((column) => [column.key, column]));
+    const seen = new Set<string>();
+    const ordered: ColumnDefinition[] = [];
+    for (const entry of layout) {
+      const column = byKey.get(String(entry?.key ?? ''));
+      if (!column) throw new ControlPlaneError(`Unknown column "${String(entry?.key ?? '')}"`, 'COLUMN_NOT_FOUND', 404);
+      if (seen.has(column.key)) throw new ControlPlaneError(`Column "${column.label}" is listed twice`, 'DUPLICATE_COLUMN', 400);
+      seen.add(column.key);
+      if (entry.label !== undefined) {
+        const label = String(entry.label).replace(/\p{Cc}/gu, ' ').trim().slice(0, 60);
+        if (!label) throw new ControlPlaneError('Every column needs a name', 'INVALID_COLUMN_LABEL', 400);
+        column.label = label;
+      }
+      if (entry.visible !== undefined) {
+        if (column.key === 'item_code' && entry.visible === false) {
+          throw new ControlPlaneError('The item code & name column cannot be hidden', 'COLUMN_REQUIRED', 400);
+        }
+        column.visible = Boolean(entry.visible);
+      }
+      ordered.push(column);
+    }
+    draft.page.columns = [...ordered, ...draft.page.columns.filter((column) => !seen.has(column.key))];
+    return draft;
+  }
+
   setActionEnabled(scope: ScopeContext, actionKey: string, enabled: boolean): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
     const action = draft.page.actions.find((entry) => entry.key === actionKey);
