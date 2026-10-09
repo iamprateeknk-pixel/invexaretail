@@ -53,7 +53,6 @@ export function validateCampaignForm(form, locationId) {
   const quota = Number(form.dailyItemsPerUser);
   if (!Number.isInteger(quota) || quota < 1 || quota > 500) errors.push('Daily items per user must be a whole number from 1 to 500.');
   if (!form.userIds?.length) errors.push('Select at least one count worker.');
-  if (form.startDate && form.endDate && form.endDate < form.startDate) errors.push('End date must be on or after the start date.');
   if (!locationId) errors.push('Select a location first.');
   if (errors.length) return { ok: false, errors };
   return {
@@ -66,7 +65,6 @@ export function validateCampaignForm(form, locationId) {
       userIds: form.userIds,
       includeNewStock: form.includeNewStock !== false,
       ...(form.startDate ? { startDate: form.startDate } : {}),
-      ...(form.endDate ? { endDate: form.endDate } : {}),
     },
   };
 }
