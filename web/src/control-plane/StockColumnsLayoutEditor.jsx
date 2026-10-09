@@ -7,13 +7,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { controlRequest } from './control-api';
 import { moveField } from './ImportColumnsEditor';
+import { TableSwitcher } from './TableSwitcher';
 
 export function layoutPayload(columns) {
   return columns.map((column) => ({ key: column.key, label: column.label, visible: column.visible !== false }));
 }
 
-/** Order, names and show/hide of the Stock table columns. Saved to the draft; publish makes it live. */
+/** Columns that can be moved and renamed but never hidden, per table. */
+export const LOCKED_COLUMNS = { stock: ['item_code'], lots: ['item_lot', 'open'] };
+
+/** Order, names and show/hide of a table's columns. Saved to the draft; publish makes it live. */
 export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
+  const [table, setTable] = useState('stock');
   const [columns, setColumns] = useState([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -21,19 +26,20 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
   const [itemFields, setItemFields] = useState([]);
   const [pickedField, setPickedField] = useState('');
 
-  const load = useCallback((draft) => {
-    setColumns((draft?.page?.columns ?? []).map((column) => ({ ...column })));
+  const load = useCallback((nextColumns) => {
+    setColumns((nextColumns ?? []).map((column) => ({ ...column })));
     setDirty(false);
     setError('');
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    controlRequest('/studio/v1/draft', { token: controlToken })
-      .then((result) => { if (!cancelled) load(result.draft); })
+    setColumns([]);
+    controlRequest(`/studio/v1/draft/columns?table=${table}`, { token: controlToken })
+      .then((result) => { if (!cancelled) load(result.columns); })
       .catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not load columns'); });
     return () => { cancelled = true; };
-  }, [controlToken, load]);
+  }, [controlToken, table, load]);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,14 +51,21 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
 
   const usedFields = new Set(columns.filter((column) => column.itemField).map((column) => column.itemField));
   const availableFields = itemFields.filter((name) => !usedFields.has(name));
+  const locked = LOCKED_COLUMNS[table] ?? [];
+
+  const switchTable = (next) => {
+    if (next === table) return;
+    if (dirty && !window.confirm('Discard unsaved changes to this table?')) return;
+    setTable(next);
+  };
 
   async function addItemField() {
     if (!pickedField) return;
     setSaving(true);
     setError('');
     try {
-      const result = await controlRequest('/studio/v1/draft/stock/item-field-columns', { token: controlToken, method: 'POST', body: { fieldName: pickedField } });
-      load(result.draft);
+      const result = await controlRequest('/studio/v1/draft/stock/item-field-columns', { token: controlToken, method: 'POST', body: { fieldName: pickedField, table } });
+      load(result.columns);
       setPickedField('');
       onSaved?.();
       toast.success('Added to draft. Open "Preview / publish" to make it live.');
@@ -70,8 +83,8 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
     setSaving(true);
     setError('');
     try {
-      const result = await controlRequest('/studio/v1/draft/stock/column-layout', { token: controlToken, method: 'PUT', body: { columns: layoutPayload(columns) } });
-      load(result.draft);
+      const result = await controlRequest('/studio/v1/draft/stock/column-layout', { token: controlToken, method: 'PUT', body: { columns: layoutPayload(columns), table } });
+      load(result.columns);
       onSaved?.();
       toast.success('Saved to draft. Open "Preview / publish" to make it live.');
     } catch (caught) {
@@ -84,10 +97,11 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Stock table columns</CardTitle>
+        <CardTitle className="text-base">Table columns</CardTitle>
         <p className="text-xs text-muted-foreground">Move columns up or down, rename them, or hide them. People see the table in this order after you publish.</p>
       </CardHeader>
       <CardContent className="grid gap-3">
+        <TableSwitcher table={table} onChange={switchTable} disabled={saving} />
         <div className="grid gap-2">
           {columns.map((column, index) => (
             <div key={column.key} className={`grid items-center gap-2 rounded-md border p-2 md:grid-cols-[auto_1fr_auto_auto] ${column.visible === false ? 'opacity-60' : ''}`}>
@@ -101,7 +115,7 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
                 type="button"
                 size="sm"
                 variant={column.visible === false ? 'secondary' : 'outline'}
-                disabled={column.key === 'item_code'}
+                disabled={locked.includes(column.key)}
                 aria-pressed={column.visible !== false}
                 onClick={() => edit(index, { visible: column.visible === false })}
               >
