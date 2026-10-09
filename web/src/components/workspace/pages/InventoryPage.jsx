@@ -1,5 +1,7 @@
+import { itemFieldCell, useItemFieldValues, usesItemFields } from '../../../hooks/useItemFieldValues';
 import { paginateRows } from '../../../lib/pagination';
-import { stockActionIsAvailable, visibleStockColumns } from '../../../lib/stock-metadata';
+import { stockActionIsAvailable } from '../../../lib/stock-metadata';
+import { availableQuantity, formatStockFormulaValue, RIGHT_ALIGNED_STOCK_COLUMNS, stockFormulaValue, stockTableColumns } from '../../../lib/stock-table';
 import { TablePagination } from '../../TablePagination';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -13,11 +15,32 @@ export function InventoryPage() {
   const {
         searchedStockRows, items, workspaceProfile, canViewSystemStock, savedViews, applySavedView,
     saveCurrentView, setModalOpen, openScanner, role, setSelectedItem, setMasterDialog, inventoryPage, inventoryPageSize,
-    setInventoryPage, setInventoryPageSize, deleteSavedView, runtimeConfig,
+    setInventoryPage, setInventoryPageSize, deleteSavedView, runtimeConfig, authToken,
   } = useWorkspace();
   const runtimePage = runtimeConfig?.page;
-  const customColumns = visibleStockColumns(runtimePage, { role, canViewSystemStock })
-    .filter((column) => column.source === 'custom');
+  const tableColumns = stockTableColumns(runtimePage, { role, canViewSystemStock });
+  const itemFieldValues = useItemFieldValues({ authToken, enabled: usesItemFields(tableColumns) });
+  const hasColor = Boolean(workspaceProfile.pack?.variantFields?.includes('Color'));
+  const headerLabel = (column) => (column.key === 'pack_size' && column.label === 'Pack/Size' && workspaceProfile.pack?.variantFields?.includes('Size') ? 'Size' : column.label);
+  const renderCell = (column, { row, item, lotCount }) => {
+    if (column.source === 'itemField') return itemFieldCell(itemFieldValues, item?.id ?? row.itemId, column.itemField);
+    if (column.formula) return formatStockFormulaValue(stockFormulaValue(column.formula, row), column.type);
+    switch (column.key) {
+      case 'item_code': return <><p className="font-medium">{item?.code ?? row.itemId}</p><p className="text-xs text-muted-foreground">{row.itemName ?? item?.name}</p></>;
+      case 'company': return item?.company || '—';
+      case 'category': return <><p>{item?.category || '—'}</p>{!hasColor && <p className="text-xs text-muted-foreground">{item?.subcategory || '—'}</p>}</>;
+      case 'pack_size': return item?.unit || '—';
+      case 'lot_coverage': return <><Badge variant="secondary">{lotCount} {lotCount === 1 ? 'lot' : 'lots'}</Badge><p className="mt-1 text-xs text-muted-foreground">Open for lot & expiry detail</p></>;
+      case 'physical': return <span className="font-semibold">{row.physicalQuantity}</span>;
+      case 'book': return row.bookQuantity ?? 0;
+      case 'variance': return <span className={Number(row.variance ?? 0) < 0 ? 'font-medium text-destructive' : 'text-success'}>{row.variance ?? 0}</span>;
+      case 'quarantine': return row.quarantineQuantity > 0 ? <Badge variant="warning">{row.quarantineQuantity}</Badge> : <span className="text-muted-foreground">—</span>;
+      case 'reserved': return row.reservedQuantity > 0 ? <Badge variant="secondary" title="Held by pending transfer requests, not yet dispatched">{row.reservedQuantity}</Badge> : <span className="text-muted-foreground">—</span>;
+      case 'available': return availableQuantity(row);
+      case 'value': return `₹${Number(row.stockValue ?? 0).toLocaleString('en-IN')}`;
+      default: return row.fields?.[column.key] ?? row[column.key] ?? column.defaultValue ?? 0;
+    }
+  };
   const canExport = stockActionIsAvailable(runtimePage, 'export', role);
   const canScan = stockActionIsAvailable(runtimePage, 'scan', role);
   const canDailyImport = ['ADMIN', 'ADMIN_USER'].includes(role) && stockActionIsAvailable(runtimePage, 'daily_import', role);
@@ -80,18 +103,17 @@ export function InventoryPage() {
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto"><Table>
-          <TableHeader><TableRow><TableHead>Item code & name</TableHead><TableHead>Company</TableHead><TableHead>Category</TableHead><TableHead>{workspaceProfile.pack?.variantFields?.includes('Size') ? 'Size' : 'Pack/Size'}</TableHead>{workspaceProfile.pack?.variantFields?.includes('Color') && <TableHead>Color</TableHead>}<TableHead>Lot coverage</TableHead><TableHead>Total physical</TableHead>{canViewSystemStock && <TableHead>Total book</TableHead>}{canViewSystemStock && <TableHead>Variance</TableHead>}{canViewSystemStock && <TableHead>Quarantine</TableHead>}{canViewSystemStock && <TableHead>Reserved</TableHead>}{canViewSystemStock && <TableHead className="text-right">Value</TableHead>}{customColumns.map((column) => <TableHead key={column.key}>{column.label}</TableHead>)}</TableRow></TableHeader>
+          <TableHeader><TableRow>{tableColumns.flatMap((column) => {
+            const head = <TableHead key={column.key} className={RIGHT_ALIGNED_STOCK_COLUMNS.has(column.key) ? 'text-right' : undefined}>{headerLabel(column)}</TableHead>;
+            return column.key === 'pack_size' && hasColor ? [head, <TableHead key="color">Color</TableHead>] : [head];
+          })}</TableRow></TableHeader>
           <TableBody>
             {inventoryPageModel.rows.map((row) => { const item = items.find((entry) => entry.id === row.itemId); const lotCount = new Set(row.lotIds).size; return (
               <TableRow key={row.itemId + '-' + row.locationId} className="cursor-pointer transition-colors hover:bg-muted/50" onClick={() => { setSelectedItem({ ...row, lots: item?.lots ?? [] }); setModalOpen('itemDetails'); }}>
-                <TableCell><p className="font-medium">{item?.code ?? row.itemId}</p><p className="text-xs text-muted-foreground">{row.itemName ?? item?.name}</p></TableCell><TableCell>{item?.company || '—'}</TableCell><TableCell><p>{item?.category || '—'}</p>{!workspaceProfile.pack?.variantFields?.includes('Color') && <p className="text-xs text-muted-foreground">{item?.subcategory || '—'}</p>}</TableCell><TableCell>{item?.unit || '—'}</TableCell>{workspaceProfile.pack?.variantFields?.includes('Color') && <TableCell>{item?.subcategory || '—'}</TableCell>}<TableCell><Badge variant="secondary">{lotCount} {lotCount === 1 ? 'lot' : 'lots'}</Badge><p className="mt-1 text-xs text-muted-foreground">Open for lot & expiry detail</p></TableCell>
-                <TableCell className="font-semibold">{row.physicalQuantity}</TableCell>
-                {canViewSystemStock && <TableCell>{row.bookQuantity ?? 0}</TableCell>}
-                {canViewSystemStock && <TableCell className={Number(row.variance ?? 0) < 0 ? 'font-medium text-destructive' : 'text-success'}>{row.variance ?? 0}</TableCell>}
-                {canViewSystemStock && <TableCell>{row.quarantineQuantity > 0 ? <Badge variant="warning">{row.quarantineQuantity}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>}
-                {canViewSystemStock && <TableCell>{row.reservedQuantity > 0 ? <Badge variant="secondary" title="Held by pending transfer requests, not yet dispatched">{row.reservedQuantity}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>}
-                {canViewSystemStock && <TableCell className="text-right">₹{Number(row.stockValue ?? 0).toLocaleString('en-IN')}</TableCell>}
-                {customColumns.map((column) => <TableCell key={column.key}>{row.fields?.[column.key] ?? row[column.key] ?? column.defaultValue ?? 0}</TableCell>)}
+                {tableColumns.flatMap((column) => {
+                  const cell = <TableCell key={column.key} className={RIGHT_ALIGNED_STOCK_COLUMNS.has(column.key) ? 'text-right' : undefined}>{renderCell(column, { row, item, lotCount })}</TableCell>;
+                  return column.key === 'pack_size' && hasColor ? [cell, <TableCell key="color">{item?.subcategory || '—'}</TableCell>] : [cell];
+                })}
               </TableRow>
             ); })}
           </TableBody>

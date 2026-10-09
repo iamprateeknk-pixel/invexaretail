@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { prisma, resolveDatabaseUrl } from './db.js';
+import { saveImportedCustomValues } from './import-custom-values.js';
 import type { CompanyProfileRecord, CountAssignmentRecord, CountRecord, ItemRecord, LocationRecord, TransferRecord, UserRecord } from './repository.js';
 import type { AuditEvent } from './audit.js';
 import { transferCartons, companyProfile, counts, countAssignments, dailyMovements, items, locations, saveCompanyProfile, setCompanyProfile, stockLedger, syncCheckpoints, transfers, users } from './repository.js';
@@ -354,6 +355,9 @@ function importId(prefix: string, value: string): string {
 }
 
 export type StockImportCommitResult = {
+  /** Values of the company's custom import columns written onto items (set when the file had any). */
+  customValues?: { fields: number; values: number; unmatchedItems: number };
+  customValuesError?: string;
   batchId: string;
   importedItems: number;
   importedLots: number;
@@ -566,7 +570,25 @@ export async function persistOpeningStockImport(
     }
   }
 
-  return { batchId, importedItems: newItems.length, importedLots: newLots.length, importedLocations: newLocations.length, stockRows: prepared.length };
+  const customValues = await saveImportedCustomValuesSafely(companyId, preview.validRows);
+  return { batchId, importedItems: newItems.length, importedLots: newLots.length, importedLocations: newLocations.length, stockRows: prepared.length, ...customValues };
+}
+
+/**
+ * Custom-column values are written after the stock itself is committed. A failure here must not roll
+ * back (or hide) a stock import that already succeeded, so it is reported on the result instead.
+ */
+export async function saveImportedCustomValuesSafely(
+  companyId: string,
+  rows: Array<{ code: string; extra?: Record<string, string | number | null> }>,
+): Promise<Pick<StockImportCommitResult, 'customValues' | 'customValuesError'>> {
+  if (!rows.some((row) => row.extra && Object.keys(row.extra).length)) return {};
+  try {
+    return { customValues: await saveImportedCustomValues(companyId, rows) };
+  } catch (error) {
+    console.error('Custom column values could not be saved', error);
+    return { customValuesError: 'Stock was imported, but the custom column values could not be saved. Re-import the file to retry them.' };
+  }
 }
 
 export async function persistDailyMovementImport(input: { batchId: string; importType: 'SALES' | 'PURCHASE' | 'ADJUSTMENT' | string; fileName: string; importedBy: string; totalRows: number; invalidRows: number; duplicateRows: number; transactionFrom?: string; transactionTo?: string; movements: DailyMovementRecord[]; lots: LotRecord[]; checkpoints: SyncCheckpointRecord[]; fileHash?: string; branchId?: string | null; sourceFormat?: string; metadata?: Record<string, unknown>; companyId?: string }): Promise<{ committedRows: number }> {

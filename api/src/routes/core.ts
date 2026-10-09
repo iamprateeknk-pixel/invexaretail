@@ -174,8 +174,9 @@ import {
   persistUserCreate,
   persistUserDelete,
   persistUserUpdate,
+  saveImportedCustomValuesSafely,
 } from '../lib/persistence.js';
-import { importTemplateCsv } from '../lib/import-profile.js';
+import { importTemplateCsv, type ImportKind } from '../lib/import-profile.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
 import { allocatePick, isPickableLot, isPooledPick } from '../lib/kg-pick.js';
 import { allocateLots, parseTransferImport, PICK_EXCEPTION_REASONS, validatePickInput } from '../lib/warehouse-workflow.js';
@@ -2168,14 +2169,21 @@ async function readUploadedStockFile(req: Request): Promise<StockImportPreview> 
   if (!/\.(xlsx|xls|csv)$/i.test(req.file.originalname)) {
     throw new Error('Only .xlsx, .xls and .csv files are supported.');
   }
-  return parseStockImport(req.file.buffer, req.file.originalname, controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
+  return parseStockImport(req.file.buffer, req.file.originalname, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, 'OPENING_STOCK'));
 }
 
 // Header row + sample row in the company's configured column order (Control Plane > Studio > Import columns).
-router.get('/imports/opening-stock/template', (req: Request, res: Response) => {
-  const csv = importTemplateCsv(controlPlane.importProfiles.get(req.companyId ?? DEFAULT_COMPANY_ID));
-  return res.json({ filename: 'invexa-opening-stock-template.csv', csv });
-});
+const TEMPLATE_ROUTES: Array<[string, ImportKind, string]> = [
+  ['opening-stock', 'OPENING_STOCK', 'invexa-opening-stock-template.csv'],
+  ['sales', 'SALES', 'invexa-sales-template.csv'],
+  ['purchases', 'PURCHASE', 'invexa-purchase-template.csv'],
+];
+for (const [path, kind, filename] of TEMPLATE_ROUTES) {
+  router.get(`/imports/${path}/template`, (req: Request, res: Response) => {
+    const csv = importTemplateCsv(controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, kind), kind);
+    return res.json({ filename, csv });
+  });
+}
 
 router.get('/imports/batches', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {
@@ -2408,7 +2416,8 @@ router.post('/imports/opening-stock/commit', upload.single('file'), async (req: 
       if (result.created) created += 1;
       else updated += 1;
     }
-    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2539,7 +2548,8 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
       const { item } = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, req.companyId ?? DEFAULT_COMPANY_ID);
       imported.push(item);
     }
-    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2715,7 +2725,8 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
         else updated += 1;
       }
       await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: imported.length });
-      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length });
+      const customValues = await saveImportedCustomValuesSafely(companyId, preview.validRows);
+      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length, ...customValues });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
@@ -2809,7 +2820,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
   try {
     const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID);
     const fileHash = computeFileHash(req.file.buffer);
-    const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') });
+    const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType));
     const existing = await findDuplicateBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       type: importType,
@@ -2864,7 +2875,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
+    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', errors: plan.errors.slice(0, 100) });
     const batchId = `imp-${importType.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
