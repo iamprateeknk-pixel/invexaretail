@@ -13,6 +13,7 @@ import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persist
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import multer from 'multer';
 import { evidenceMime } from '../lib/transfer-evidence.js';
+import { pickerMayWork } from '../lib/transfer-assignment.js';
 import { createHash } from 'node:crypto';
 
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -1795,11 +1796,15 @@ router.get('/picker-tasks', (req: Request, res: Response) => {
   }
   const tasks = listTransfers()
     .filter((transfer) => ['REQUESTED', 'PENDING_PICK', 'PICKING', 'PARTIAL'].includes(transfer.status) && canAccessLocation(context, transfer.sourceLocationId))
+    // A transfer an admin handed to one picker leaves every other picker's queue.
+    .filter((transfer) => context.role !== 'WAREHOUSE_PICKER' || pickerMayWork(transfer, req.user!.id))
     .map((transfer) => ({
       transferId: transfer.id,
       locationId: transfer.sourceLocationId,
       lines: transfer.lines,
       status: 'ASSIGNED',
+      assignedPickerId: transfer.assignedPickerId ?? null,
+      assignedToMe: transfer.assignedPickerId === req.user!.id,
     }));
   return res.json({ tasks });
 });
@@ -3164,7 +3169,7 @@ router.post('/picker-tasks', (req: Request, res: Response) => {
 router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transfer = findTransferForCompany(req.body.transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId)) {
+  if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId) || !pickerMayWork(transfer, req.user!.id)) {
     return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
   }
 

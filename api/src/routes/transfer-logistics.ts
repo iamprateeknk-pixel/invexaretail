@@ -10,9 +10,11 @@ import type { Role } from '../lib/inventory.js';
 import type { ExpectedPackLine } from '../lib/pack-verification.js';
 import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import {
-  addTransferCarton, listItems, listTransferCartons, listTransfers, setTransferCartonStatus, setTransferLogistics, updateTransferStatus,
+  addTransferCarton, listItems, listLocations, listTransferCartons, listTransfers, setTransferCartonStatus, setTransferLogistics, updateTransferStatus,
   type TransferRecord,
 } from '../lib/repository.js';
+import { listUsersByCompany } from '../lib/enterprise-repository.js';
+import { notifyTransferDispatched } from '../lib/transfer-assignment.js';
 import {
   databaseEnabled, loadTransferPickSlips, persistAudit, persistTransferCarton, persistTransferLogistics, persistTransferStatus,
 } from '../lib/persistence.js';
@@ -225,6 +227,9 @@ router.post('/transfers/:transferId/dispatch', ...guard, async (req: Request, re
   });
   await persistTransferLogistics(updated, req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID);
   await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DISPATCHED', entityType: 'Transfer', entityId: transfer.id, metadata: { ...details } }));
+  const companyId = req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID;
+  const sourceName = listLocations().find((location) => location.id === updated.sourceLocationId)?.name ?? updated.sourceLocationId;
+  await notifyTransferDispatched(updated, companyId, listUsersByCompany(companyId), sourceName);
   return res.json({ success: true, transfer: updated });
 });
 

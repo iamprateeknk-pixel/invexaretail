@@ -178,6 +178,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     notes: transfer.notes ?? undefined,
     lines: transfer.lines.map((line: any) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty, receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty ?? 0 })),
     ...logisticsOf(transfer),
+    ...(transfer.assignedPickerId ? { assignedPickerId: transfer.assignedPickerId } : {}),
     createdAt: transfer.createdAt.toISOString(),
   })));
 
@@ -929,6 +930,15 @@ export async function persistTransferLogistics(transfer: TransferRecord, company
   await prisma.transfer.update({
     where: { id: transfer.id, companyId },
     data: { cartonCount: transfer.cartonCount ?? null, logistics: { packing: transfer.packing ?? null, dispatch: transfer.dispatch ?? null } as never },
+  });
+}
+
+export async function persistTransferAssignedPicker(transfer: TransferRecord, companyId: string): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.transfer.update({
+    where: { id: transfer.id, companyId },
+    data: { assignedPickerId: transfer.assignedPickerId ?? null },
   });
 }
 

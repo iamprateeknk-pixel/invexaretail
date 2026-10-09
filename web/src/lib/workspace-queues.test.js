@@ -20,6 +20,8 @@ test('picker tasks keep item names and summed quantities', () => {
   }], [{ id: 'item-1', name: 'Rice 5kg' }]);
   assert.equal(tasks[0].qty, 5);
   assert.match(tasks[0].line, /Rice 5kg/);
+  assert.equal(tasks[0].assignedToMe, false);
+  assert.equal(mapPickerTasks([{ transferId: 'tr-2', lines: [], assignedToMe: true }], [])[0].assignedToMe, true);
 });
 
 test('assigned location toggles add and remove a branch', () => {

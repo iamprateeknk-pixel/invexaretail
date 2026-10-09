@@ -74,6 +74,12 @@ real SQLite store (`lib/services/native_database.dart`). See
 `docs/offline-contract-and-mobile-store.md`, `docs/security-gates.md`,
 `docs/slo-and-alerting.md`.
 
+Transfer picker assignment: `Transfer.assignedPickerId` plus `lib/transfer-assignment.ts`
+(eligibility, `pickerMayWork`, inbox notifications). Every picker-facing transfer route must check
+`pickerMayWork` so an assigned transfer stays with its picker. Transfer notifications go through
+`notifyUsers` into `UserNotification`; they never fail the stock action that triggered them. See
+`docs/transfer-picker-assignment.md`.
+
 ## Module ownership
 
 | Area | Owning files | Notes |

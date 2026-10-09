@@ -17,10 +17,12 @@ import type { AccessContext, Role, TransferInput } from '../lib/inventory.js';
 import { listTransfersForContext } from '../lib/repositories/transfer-repository.js';
 import { createTransfer, TransferRoleError, TransferValidationError, TransferExpiryBlockedError, InsufficientStockError } from '../lib/transfer-command-service.js';
 import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
-import { canCreateTransfer, parseCartonCount } from '../lib/transfer-lifecycle.js';
+import { canCreateTransfer, canManageTransferDispatch, parseCartonCount } from '../lib/transfer-lifecycle.js';
 import { validateTransferRequest, validateTransferStatusChange, canAccessLocation } from '../lib/inventory.js';
-import { persistTransferReplacement, persistTransferDeletion, persistTransferStatus, persistAudit } from '../lib/persistence.js';
-import { replaceTransferRecord, listTransferCartons, removeTransferRecord, updateTransferStatus, findTransferForCompany, listItems, listLocations, type TransferRecord } from '../lib/repository.js';
+import { persistTransferReplacement, persistTransferDeletion, persistTransferStatus, persistTransferAssignedPicker, persistAudit } from '../lib/persistence.js';
+import { replaceTransferRecord, listTransferCartons, removeTransferRecord, updateTransferStatus, findTransferForCompany, listItems, listLocations, setTransferAssignedPicker, type TransferRecord } from '../lib/repository.js';
+import { findUserById as findEnterpriseUser, listUsersByCompany } from '../lib/enterprise-repository.js';
+import { PICKER_ASSIGNABLE_STATUSES, isEligiblePicker, notifyPickerAssigned, notifyTransferDispatched, pickerMayWork } from '../lib/transfer-assignment.js';
 import { activeCartons } from '../lib/transfer-packing.js';
 import { TERMINAL_TRANSFER_STATUSES, releaseReservedStock } from '../lib/reservation.js';
 import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
@@ -68,7 +70,14 @@ function accessContext(user: EnhancedUserRecord): AccessContext {
 
 router.get('/transfers/list', (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  return res.json({ transfers: listTransfersForContext(context) });
+  // A picker sees the transfers handed to them and the unassigned ones, not another picker's work.
+  const visible = listTransfersForContext(context)
+    .filter((transfer) => context.role !== 'WAREHOUSE_PICKER' || pickerMayWork(transfer, req.user!.id));
+  return res.json({
+    transfers: visible.map((transfer) => (transfer.assignedPickerId
+      ? { ...transfer, assignedPickerName: findEnterpriseUser(transfer.assignedPickerId)?.name ?? transfer.assignedPickerId }
+      : transfer)),
+  });
 });
 
 router.post('/transfers', async (req: Request, res: Response) => {
@@ -201,6 +210,9 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
     && !canAccessLocation(context, transfer.destinationLocationId)) {
     return res.status(403).json({ message: 'Transfer location access denied.' });
   }
+  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) {
+    return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
+  }
 
   // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
   if (nextStatus === 'DISPATCHED' && !transfer.packing && activeCartons(listTransferCartons(transfer.id)).length > 0) {
@@ -232,10 +244,70 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
       entityId: updated.id,
     }));
     void emitTransferUpdated(updated);
+    if (nextStatus === 'DISPATCHED' && transfer.status !== 'DISPATCHED') {
+      const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+      await notifyTransferDispatched(updated, companyId, listUsersByCompany(companyId), locationName(updated.sourceLocationId));
+    }
     return res.json({ success: true, transfer: updated });
   } catch (error) {
     return res.status(403).json({ message: error instanceof Error ? error.message : 'Transfer status change denied.' });
   }
+});
+
+function locationName(locationId: string): string {
+  return listLocations().find((location) => location.id === locationId)?.name ?? locationId;
+}
+
+// Admins and branch managers hand a queued transfer to one named picker. Only pickers of the
+// caller's own company who work the source location qualify.
+router.get('/transfers/:transferId/eligible-pickers', (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const transfer = findTransferForCompany(firstParam(req.params.transferId), companyId);
+  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!canManageTransferDispatch(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) {
+    return res.status(403).json({ message: 'Only admins and the source branch manager can assign a picker.' });
+  }
+  const pickers = listUsersByCompany(companyId)
+    .filter((user) => isEligiblePicker(user, companyId, transfer.sourceLocationId))
+    .map((user) => ({ id: user.id, name: user.name, email: user.email }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return res.json({ assignedPickerId: transfer.assignedPickerId ?? null, pickers });
+});
+
+router.patch('/transfers/:transferId/picker', async (req: Request, res: Response) => {
+  const context = accessContext(req.user!);
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const transfer = findTransferForCompany(firstParam(req.params.transferId), companyId);
+  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!canManageTransferDispatch(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) {
+    return res.status(403).json({ message: 'Only admins and the source branch manager can assign a picker.' });
+  }
+  if (!PICKER_ASSIGNABLE_STATUSES.includes(transfer.status)) {
+    return res.status(409).json({ message: `A picker can only be assigned before picking is finished; this transfer is ${transfer.status}.` });
+  }
+  const raw = req.body?.pickerId;
+  if (raw !== null && typeof raw !== 'string') return res.status(400).json({ message: 'pickerId must be a user id, or null to unassign.' });
+  const pickerId = typeof raw === 'string' ? raw.trim() : '';
+  // The same answer for another company's picker as for a missing one - never confirm the user exists.
+  if (pickerId && !isEligiblePicker(findEnterpriseUser(pickerId), companyId, transfer.sourceLocationId)) {
+    return res.status(400).json({ message: 'Choose a warehouse picker who works at the source location.' });
+  }
+  if ((transfer.assignedPickerId ?? '') === pickerId) return res.json({ success: true, unchanged: true, transfer });
+
+  const updated = setTransferAssignedPicker(transfer.id, pickerId || undefined);
+  try {
+    await persistTransferAssignedPicker(updated, companyId);
+  } catch (error) {
+    setTransferAssignedPicker(transfer.id, transfer.assignedPickerId);
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unable to assign the picker.' });
+  }
+  await persistAudit(recordAudit({
+    actorId: req.user!.id, actorRole: req.user!.role, action: pickerId ? 'TRANSFER_PICKER_ASSIGNED' : 'TRANSFER_PICKER_UNASSIGNED',
+    entityType: 'Transfer', entityId: transfer.id, metadata: { from: transfer.assignedPickerId ?? null, to: pickerId || null },
+  }));
+  if (pickerId) await notifyPickerAssigned(updated, companyId, locationName(updated.sourceLocationId), locationName(updated.destinationLocationId));
+  return res.json({ success: true, transfer: { ...updated, assignedPickerName: pickerId ? findEnterpriseUser(pickerId)?.name ?? pickerId : undefined } });
 });
 
 
@@ -262,6 +334,7 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker access denied.' });
+  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
   const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
   const itemsById = new Map(listItems().map((item) => [item.id, item]));
   const slips = await savedPickSlips(transferId);
@@ -312,6 +385,7 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
   const transfer = findTransferForCompany(firstParam(req.params.transferId), req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
   if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
   try {
     const quantity = Number(req.body?.quantity);
     const state = await pooledPickState(transfer, String(req.body?.itemId ?? ''));
@@ -328,6 +402,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  if (!pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
   const prior = await savedPickSlips(transferId);
   // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
