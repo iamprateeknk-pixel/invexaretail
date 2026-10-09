@@ -3923,7 +3923,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/items/version": {
     "/imports/sales/template": {
         parameters: {
             query?: never;
@@ -3931,8 +3930,6 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
-        get: operations["getItemsVersion"];
         /** Sales import template (header + sample row) in the company's configured column order. */
         get: operations["getImportsSalesTemplate"];
         put?: never;
@@ -3969,6 +3966,23 @@ export interface paths {
         };
         /** Every item's custom field values for the caller's company: { itemId: { fieldName: value } }. */
         get: operations["getCatalogCustomFieldValues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
+        get: operations["getItemsVersion"];
         put?: never;
         post?: never;
         delete?: never;
@@ -19838,7 +19852,6 @@ export interface operations {
             };
         };
     };
-    getItemsVersion: {
     getImportsSalesTemplate: {
         parameters: {
             query?: never;
@@ -19848,7 +19861,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Version. */
             /** @description OK. */
             200: {
                 headers: {
@@ -19856,17 +19868,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        /** @description Opaque; equal strings mean an unchanged catalogue. */
-                        version: string | null;
-                    };
-                };
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
                         filename: string;
                         csv: string;
                     };
@@ -19920,6 +19921,36 @@ export interface operations {
                         };
                     };
                 };
+            };
+        };
+    };
+    getItemsVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Opaque; equal strings mean an unchanged catalogue. */
+                        version: string | null;
+                    };
+                };
+            };
+            /** @description No or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

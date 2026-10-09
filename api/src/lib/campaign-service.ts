@@ -460,9 +460,9 @@ const emptyRun = (skipped?: RunResult['skipped']): RunResult => ({ ran: false, s
 
 /**
  * One day's automatic allocation: reconcile, refresh the queue against current
- * stock, then top every active user up to DailyItemsPerUser open tasks in
- * priority order. Unfinished work rolls over (it counts toward the quota, so
- * nothing is duplicated). Safe to call repeatedly - a date that already ran
+ * stock, then give every active user with no unfinished tasks a fresh batch
+ * of DailyItemsPerUser items in priority order. A user with any task still
+ * open gets nothing new until that batch is finished (nothing is duplicated). Safe to call repeatedly - a date that already ran
  * is skipped unless forced.
  */
 export async function runCampaignDay(
@@ -493,9 +493,12 @@ export async function runCampaignDay(
   }
   const waiting = items.filter((item) => item.status === 'PENDING' || (item.status === 'RECOUNT' && !openAssignmentFor(id, item.itemId)));
   const ordered = prioritizeItems(waiting, campaign.priorityOrder, { abcClass: eligible.abc, nearestExpiry: eligible.nearestExpiry });
+  // Strict rollover: a user with even one unfinished task gets nothing new
+  // until the whole earlier batch is done; then they get a fresh full batch.
+  const free = users.filter((userId) => !openLoad.get(userId));
   const plan = planDailyAllocation({
     candidates: ordered.map((item) => ({ itemId: item.itemId, avoidUserId: item.status === 'RECOUNT' ? item.assignedToId : undefined })),
-    userIds: users,
+    userIds: free,
     openLoad,
     dailyItemsPerUser: campaign.dailyItemsPerUser,
   });

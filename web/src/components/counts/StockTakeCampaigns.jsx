@@ -100,7 +100,7 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
       <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
         <div>
           <CardTitle className="text-base">Stock-take campaigns</CardTitle>
-          <p className="text-xs text-muted-foreground">Set a monthly count once - daily work is assigned automatically, unfinished tasks roll over, and coverage is tracked to 100%.</p>
+          <p className="text-xs text-muted-foreground">Set a monthly count once - daily work is assigned automatically, unfinished tasks must be finished before new ones, and coverage is tracked to 100%.</p>
         </div>
         <Button size="sm" variant={showForm ? 'outline' : 'default'} onClick={() => { setShowForm((value) => !value); setError(''); }}>
           {showForm ? 'Close' : 'New campaign'}
@@ -131,7 +131,7 @@ export function StockTakeCampaigns({ token, locations, storeUsers, locationId, r
               ) : <p className="text-sm text-muted-foreground">No store users or warehouse pickers are assigned to this location.</p>}
             </div>
             <div className="grid gap-1.5 sm:max-w-xs"><Label>Start date (blank = today)</Label><Input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></div>
-            <p className="text-xs text-muted-foreground">No end date: the stock take finishes by itself once every in-stock item has been counted once. A user who has not finished yesterday's items gets no new ones until those are done.</p>
+            <p className="text-xs text-muted-foreground">No end date: the stock take finishes by itself once every in-stock item has been counted once. A user with even one item left from an earlier day gets no new items until all of them are done.</p>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.includeNewStock} onChange={(event) => setForm({ ...form, includeNewStock: event.target.checked })} />
               Add newly stocked items to the remaining queue
