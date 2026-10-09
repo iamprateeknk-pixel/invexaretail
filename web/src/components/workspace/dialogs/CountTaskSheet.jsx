@@ -5,13 +5,17 @@ import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
 import { CheckCircle2 } from 'lucide-react';
+import { countsBlind, isCountWorker } from '@/lib/count-review';
 
 export function CountTaskSheet() {
   const {
-    canManageCounts, navigateTo, pickAssignment, role,
+    canManageCounts, navigateTo, pickAssignment, role, session,
     selectedCountTask, setModalOpen, setReviewReason, setReviewingCount,
     setSelectedCountTask,
   } = useWorkspace();
+  // Branch managers see everyone's tasks at the branch; only the assignee starts the count.
+  const isMyTask = Boolean(selectedCountTask?.assignmentId)
+    && (!selectedCountTask.assignedToId || selectedCountTask.assignedToId === session?.user?.id);
   return (
     <Sheet open={Boolean(selectedCountTask)} onOpenChange={(open) => !open && setSelectedCountTask(null)}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
@@ -34,7 +38,7 @@ export function CountTaskSheet() {
                 <div><h3 className="mb-4 text-sm font-semibold">Activity timeline</h3><div className="space-y-0">{[
                   ['Created', selectedCountTask.createdAt, true], ['Assigned', selectedCountTask.assignedAt, true], ['Started', selectedCountTask.startedAt, Boolean(selectedCountTask.startedAt)], ['Submitted', selectedCountTask.submittedAt, ['Pending review','Approved','Rejected','Recount'].includes(selectedCountTask.status)], ['Reviewed', selectedCountTask.reviewedAt, ['Approved','Rejected','Recount'].includes(selectedCountTask.status)],
                 ].map(([label, time, complete], index) => <div key={label} className="relative flex gap-3 pb-5"><div className="relative z-10 mt-0.5 flex size-5 items-center justify-center rounded-full border bg-background">{complete ? <CheckCircle2 className="size-4 text-primary" /> : <div className="size-2 rounded-full bg-muted-foreground/30" />}</div>{index < 4 && <div className="absolute top-5 left-[9px] h-full w-px bg-border" />}<div><p className={`text-sm font-medium ${complete ? '' : 'text-muted-foreground'}`}>{label}</p><p className="text-xs text-muted-foreground">{complete ? formatDateTime(time ?? selectedCountTask.createdAt) : 'Not reached'}</p></div></div>)}</div></div>
-                <div className="flex flex-wrap gap-2 border-t pt-5"><Button variant="outline" onClick={() => setSelectedCountTask(null)}>Close</Button>{["ADMIN", "ADMIN_USER"].includes(role) && selectedCountTask.assignmentId && <Button variant="outline" onClick={() => setModalOpen("editCountAssignment")}>Modify task</Button>}{canManageCounts && String(selectedCountTask.status).toLowerCase().includes('pending') && <Button onClick={() => { setReviewingCount(selectedCountTask); setReviewReason(''); setSelectedCountTask(null); setModalOpen('reviewVariance'); }}>Review count</Button>}{['STORE_USER', 'WAREHOUSE_PICKER'].includes(role) && selectedCountTask.assignmentId && <Button onClick={() => { pickAssignment(selectedCountTask); setSelectedCountTask(null); navigateTo('counts'); }}>Start blind count</Button>}</div>
+                <div className="flex flex-wrap gap-2 border-t pt-5"><Button variant="outline" onClick={() => setSelectedCountTask(null)}>Close</Button>{["ADMIN", "ADMIN_USER"].includes(role) && selectedCountTask.assignmentId && <Button variant="outline" onClick={() => setModalOpen("editCountAssignment")}>Modify task</Button>}{canManageCounts && String(selectedCountTask.status).toLowerCase().includes('pending') && <Button onClick={() => { setReviewingCount(selectedCountTask); setReviewReason(''); setSelectedCountTask(null); setModalOpen('reviewVariance'); }}>Review count</Button>}{isCountWorker(role) && isMyTask && <Button onClick={() => { pickAssignment(selectedCountTask); setSelectedCountTask(null); navigateTo('counts'); }}>{countsBlind(role) ? 'Start blind count' : 'Start count'}</Button>}</div>
               </div>
             </>
           )}

@@ -51,6 +51,8 @@ import {
 import {
   assertCountLocationAccess,
   canManageCountWork,
+  countsOnlyWhenAssigned,
+  isCountWorkerRole,
   parseCountPriority,
   parseCountReviewReason,
   parseCountReviewStatus,
@@ -387,7 +389,7 @@ router.get('/users', (req: Request, res: Response) => {
     }
     if (roleFilter && user.role !== roleFilter) return false;
     if (context.role !== 'BRANCH_MANAGER') return true;
-    return ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role)
+    return isCountWorkerRole(user.role)
       && user.assignedLocationIds.some((locationId) => canAccessLocation(context, locationId));
   });
   return res.json({
@@ -999,6 +1001,12 @@ function parseRequestId(value: unknown): string | undefined {
   return value.trim() || undefined;
 }
 
+/** True when the count was made against a task assigned to its submitter (a lot of a multi-lot task included). */
+function countWasAssignedWork(count: { itemId: string; locationId: string; submittedBy: string; createdAt: string }): boolean {
+  return listCountAssignments().some((assignment) => assignment.assignedToId === count.submittedBy
+    && assignment.itemId === count.itemId && assignment.locationId === count.locationId && assignment.createdAt <= count.createdAt);
+}
+
 function countsForRequest(userId: string, requestId: string) {
   return listCounts().filter((count) => count.submittedBy === userId && count.requestId === requestId);
 }
@@ -1124,12 +1132,10 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     // Store Users may only count what Admin assigned them; Admin can record ad hoc counts freely.
-    let assignment;
-    if (['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
-      assignment = findActiveAssignment(req.user!.id, item.id, validated.locationId);
-      if (!assignment) {
-        return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
-      }
+    // A branch manager may do either - a count of an item assigned to them closes that task.
+    const assignment = isCountWorkerRole(context.role) ? findActiveAssignment(req.user!.id, item.id, validated.locationId) : undefined;
+    if (!assignment && countsOnlyWhenAssigned(context.role)) {
+      return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
     }
 
     const { saved, bookQty } = await commitLotCount({
@@ -1263,6 +1269,11 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
     if (!current) return res.status(404).json({ message: 'Stock count was not found.' });
     if (current.status !== 'PENDING_REVIEW') return res.status(409).json({ message: `Count is already ${current.status} and cannot be reviewed again.` });
+    // Branch managers can be assigned count work too: whoever was handed the count cannot also approve it.
+    // (An admin's own ad hoc count has no assignment behind it and stays reviewable as before.)
+    if (current.submittedBy === req.user!.id && countWasAssignedWork(current)) {
+      return res.status(403).json({ message: 'You cannot review a count you were assigned and submitted yourself.', code: 'SELF_REVIEW' });
+    }
     try {
       assertCountLocationAccess(accessContext(req.user!), current.locationId);
     } catch {
@@ -1364,8 +1375,8 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
+  if (!storeUser || !isCountWorkerRole(storeUser.role)) {
+    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
     return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
@@ -1428,7 +1439,7 @@ router.patch('/count-assignments/:assignmentId', async (req: Request, res: Respo
   if (current.status === 'SUBMITTED' && !isAdmin) return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
   const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
   const assignee = findUserById(assignedToId);
-  if (!assignee || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
+  if (!assignee || !isCountWorkerRole(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
     return res.status(400).json({ message: 'Assignee must be a Store User assigned to this location.' });
   }
   const countDate = req.body.countDate ? new Date(req.body.countDate) : new Date(current.countDate);
@@ -1520,7 +1531,7 @@ router.delete('/count-assignments/:assignmentId', async (req: Request, res: Resp
   return res.json({ success: true, assignmentId, preservedCountId: current.countId ?? null });
 });
 router.get('/count-assignments/mine', (req: Request, res: Response) => {
-  if (!['STORE_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
+  if (!isCountWorkerRole(req.user!.role)) {
     return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
   }
   const assignments = listCountAssignmentsFor(req.user!.id).map((assignment) => {
@@ -1537,10 +1548,8 @@ router.get('/count-assignments/mine', (req: Request, res: Response) => {
 // transfers waiting to be received at their branch. No full catalog.
 router.get('/mobile/work', (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  // Warehouse pickers count assignments too (the server has always accepted both roles for
-  // /count-assignments/mine and /stock-counts) - this feed just never included them.
-  const isStore = context.role === 'STORE_USER' || context.role === 'WAREHOUSE_PICKER';
-  const countTasks = isStore
+  // Every count-worker role (store users, warehouse pickers, branch managers) gets its own tasks.
+  const countTasks = isCountWorkerRole(context.role)
     ? listCountAssignmentsFor(req.user!.id).flatMap((assignment) => {
         const item = listItems().find((candidate) => candidate.id === assignment.itemId);
         if (!item || !isOperationalItem(item) || !canAccessLocation(context, assignment.locationId)) return [];
@@ -1680,8 +1689,8 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   }
 
   const storeUser = findUserById(storeUserId);
-  if (!storeUser || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing Store User.' });
+  if (!storeUser || !isCountWorkerRole(storeUser.role)) {
+    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
     return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
@@ -3080,7 +3089,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'This user cannot assign stock takes at the selected location.' });
   }
   const user = findUserById(storeUserId);
-  if (!user || !['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role) || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected Store User is not assigned to this location.' });
+  if (!user || !isCountWorkerRole(user.role) || !user.assignedLocationIds.includes(locationId)) return res.status(400).json({ message: 'Selected count worker is not assigned to this location.' });
   let parsedDueDate: string | undefined;
   let parsedPriority;
   try {

@@ -83,7 +83,7 @@ test('campaign creation validates its input and allows one open campaign per bra
     const admin = tokenFor('admin@retail.local');
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, userIds: [] })).status, 400);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, dailyItemsPerUser: 0 })).status, 400);
-    assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, userIds: ['user-manager-1'] })).status, 400);
+    assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, userIds: ['user-auditor-1'] })).status, 400);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, locationId: 'nowhere' })).status, 400);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, timezone: 'Mars/Base' })).status, 400);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, priorityOrder: ['LUCKY'] })).status, 400);

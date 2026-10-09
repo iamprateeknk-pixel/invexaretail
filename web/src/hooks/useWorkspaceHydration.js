@@ -9,7 +9,7 @@ import {
   normalizeStockRows,
   normalizeTransfers,
 } from '../lib/workspace';
-import { isCountManager } from '../lib/count-review';
+import { isCountManager, isCountWorker } from '../lib/count-review';
 import { useEffect, useRef, useState } from 'react';
 
 export function useWorkspaceHydration({
@@ -94,7 +94,7 @@ export function useWorkspaceHydration({
     setAuditEvents(auditResponse.events ?? []);
     setPickerTasks(mapPickerTasks(pickerResponse.tasks ?? [], itemsResponse.items));
     setAssignments(assignmentsResponse.assignments ?? []);
-    const countWorkers = (storeUsersResponse.users ?? []).filter((user) => ['STORE_USER', 'WAREHOUSE_PICKER'].includes(user.role));
+    const countWorkers = (storeUsersResponse.users ?? []).filter((user) => isCountWorker(user.role));
     setStoreUsers(countWorkers);
     const firstStoreUser = countWorkers[0];
     if (firstStoreUser) setCycleCountStoreUserId(firstStoreUser.id);
