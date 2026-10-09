@@ -593,6 +593,9 @@ studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => 
   try {
     const layout = Array.isArray(req.body?.columns) ? req.body.columns : null;
     if (!layout) throw new ControlPlaneError('Columns list is required', 'INVALID_COLUMN_LAYOUT', 400);
+<<<<<<< HEAD
+    res.json({ success: true, draft: controlPlane.setStockColumnLayout(requireScope(req), layout) });
+=======
     const table = tableOf(req.body?.table);
     res.json({ success: true, table, draft: controlPlane.setStockColumnLayout(requireScope(req), layout, table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
   } catch (error) {
@@ -648,6 +651,7 @@ studioRouter.get('/item-fields', async (req: Request, res: Response) => {
     const { prisma } = await import('../lib/db.js');
     const fields = await prisma.customFieldDefinition.findMany({ where: { companyId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }], select: { name: true, type: true } });
     res.json({ success: true, fields });
+>>>>>>> 75102c98966f0117aa4f3f9f31e7bfd87608a24f
   } catch (error) {
     sendError(res, error);
   }
