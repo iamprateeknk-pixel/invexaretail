@@ -146,3 +146,9 @@ Run each file on its own, as CI does: running them together against one database
   This is affordable now because the web app only calls it when `GET /items/version` moved (previous step).
   Unblocked next: `/count-assignments/mine`, `/mobile/work`, `/dashboard`, `/cycle-counts/:locationId`, reports and exports,
   which all join the catalogue.
+- **Slice 7 done: `GET /count-assignments/mine`** (a count worker's own open tasks with item name and code) via
+  `listMyOpenAssignments` in `count-assignment-repository.ts`; the assignment-row mapping is now one function used by
+  both list functions. In database mode the assignment's location must belong to the caller's company. Isolation and
+  parity with the snapshot's assignment/item join are in `count-assignment-repository.postgres.test.ts`.
+  `GET /mobile/work` is next: it also needs per-lot stock-ledger presence and incoming transfers, so it waits for the
+  stock and transfer reads.

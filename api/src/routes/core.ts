@@ -220,7 +220,7 @@ import { listLocationsForCompany } from '../lib/repositories/location-repository
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
-import { listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
+import { listMyOpenAssignments, listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
 import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
 
 const router = Router();
@@ -1530,15 +1530,14 @@ router.delete('/count-assignments/:assignmentId', async (req: Request, res: Resp
   publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [current.locationId] });
   return res.json({ success: true, assignmentId, preservedCountId: current.countId ?? null });
 });
+router.get('/count-assignments/mine', async (req: Request, res: Response) => {
+  if (!['STORE_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
 router.get('/count-assignments/mine', (req: Request, res: Response) => {
   if (!isCountWorkerRole(req.user!.role)) {
     return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
   }
-  const assignments = listCountAssignmentsFor(req.user!.id).map((assignment) => {
-    const item = listItems().find((candidate) => candidate.id === assignment.itemId);
-    return { ...assignment, itemName: item?.name ?? assignment.itemId, itemCode: item?.code };
-  });
-  return res.json({ assignments });
+  // Database-first slice 7: the worker's own open tasks, with item name/code, straight from Postgres.
+  return res.json({ assignments: await listMyOpenAssignments(tenantContext(req)) });
 });
 
 // Blueprint v4 §37: the mobile app is task-first. This is the one call a

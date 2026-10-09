@@ -5,8 +5,8 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { hydrateRepositoryFromDatabase } from '../persistence.js';
-import { countAssignments } from '../repository.js';
-import { listOpenAssignmentsForCompany } from './count-assignment-repository.js';
+import { countAssignments, listCountAssignmentsFor, items as snapshotItems } from '../repository.js';
+import { listMyOpenAssignments, listOpenAssignmentsForCompany } from './count-assignment-repository.js';
 import type { TenantContext } from '../tenant-context.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
@@ -50,6 +50,42 @@ integration('parity: the repository equals the hydrated snapshot for the same co
   await hydrateRepositoryFromDatabase();
   const fromDb = await listOpenAssignmentsForCompany(ctxFor(c.id));
   const fromSnapshot = countAssignments.filter((row) => row.locationId === c.locationId && row.status === 'ASSIGNED');
+  assert.equal(fromDb.length, 2);
+  const byId = (x: { id: string }, y: { id: string }) => x.id.localeCompare(y.id);
+  assert.deepEqual([...fromDb].sort(byId), [...fromSnapshot].sort(byId));
+});
+
+integration("a worker's own tasks: only theirs, only open, with the item's name and code, never across companies", async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const other = await prisma.user.create({
+    data: { id: `${a.id}-other`, name: 'Other', email: `${a.id}-other@test.invexa.local`, passwordHash: 'x', role: 'STORE_USER', assignedLocations: '[]', companyId: a.id },
+  });
+  const mine1 = await assign(a);
+  await assign(a, 'SUBMITTED');
+  await prisma.countAssignment.create({ data: { locationId: a.locationId, itemId: a.itemId, assignedToId: other.id, assignedById: a.userId } });
+  await assign(b);
+
+  const ctx = { ...ctxFor(a.id), userId: a.userId };
+  const tasks = await listMyOpenAssignments(ctx);
+  assert.deepEqual(tasks.map((row) => row.id), [mine1.id]);
+  const item = await prisma.item.findUniqueOrThrow({ where: { id: a.itemId } });
+  assert.equal(tasks[0].itemName, item.name);
+  assert.equal(tasks[0].itemCode, item.code);
+  // the same user id asked for as another company sees nothing: the assignment's location must be the company's
+  assert.deepEqual(await listMyOpenAssignments({ ...ctxFor(b.id), userId: a.userId }), []);
+});
+
+integration('parity: a worker\'s tasks equal the hydrated snapshot join of assignment and item', async () => {
+  const c = await makeCompany();
+  await assign(c);
+  await assign(c, 'ASSIGNED', { priority: 'HIGH', instructions: 'Aisle 9' });
+  await hydrateRepositoryFromDatabase();
+  const fromDb = await listMyOpenAssignments({ ...ctxFor(c.id), userId: c.userId });
+  const fromSnapshot = listCountAssignmentsFor(c.userId).map((assignment) => {
+    const item = snapshotItems.find((candidate) => candidate.id === assignment.itemId);
+    return { ...assignment, itemName: item?.name ?? assignment.itemId, itemCode: item?.code };
+  });
   assert.equal(fromDb.length, 2);
   const byId = (x: { id: string }, y: { id: string }) => x.id.localeCompare(y.id);
   assert.deepEqual([...fromDb].sort(byId), [...fromSnapshot].sort(byId));
