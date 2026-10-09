@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword, verifyPassword } from '../otp-auth.js';
 import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
-import type { ImportProfile } from '../import-profile.js';
+import { profileKey, type ImportKind, type ImportProfile } from '../import-profile.js';
 import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 
@@ -448,6 +448,10 @@ export class ControlPlane {
   webhooks = new Map<string, ControlPlaneWebhook>();
   connectors = new Map<string, { id: string; companyId: string; type: string; status: 'healthy' | 'degraded' | 'down' }>();
   importProfiles = new Map<string, ImportProfile>();
+
+  getImportProfile(companyId: string, kind: ImportKind): ImportProfile | undefined {
+    return this.importProfiles.get(profileKey(companyId, kind));
+  }
   billing = new Map<string, { subscription: 'trial' | 'active' | 'past_due'; cycle: string; amount: number; stripeCustomerId?: string }>();
   invoices = new Map<string, BillingInvoice>();
   outbox: Array<{ id: string; event: string; payload: unknown; createdAt: string }> = [];

@@ -51,7 +51,7 @@ export function collectCustomValues(
 
 export async function saveImportedCustomValues(companyId: string, rows: RowWithExtra[]): Promise<ImportedCustomValuesResult> {
   if (!resolveDatabaseUrl()) return EMPTY;
-  const profile = controlPlane.importProfiles.get(companyId);
+  const profile = controlPlane.getImportProfile(companyId, 'OPENING_STOCK');
   const customFields = (profile?.fields ?? []).filter((field) => field.custom && field.enabled);
   if (!customFields.length) return EMPTY;
   const perItem = collectCustomValues(rows, customFields);
