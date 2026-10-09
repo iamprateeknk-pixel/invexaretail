@@ -22,13 +22,13 @@ test('only store users assigned to the location can be picked', () => {
 });
 
 test('the create form is validated and turned into the API payload', () => {
-  const bad = validateCampaignForm({ name: 'x', dailyItemsPerUser: '0', userIds: [], startDate: '2026-09-10', endDate: '2026-09-01' }, '');
+  const bad = validateCampaignForm({ name: 'x', dailyItemsPerUser: '0', userIds: [], startDate: '2026-09-10' }, '');
   assert.equal(bad.ok, false);
-  assert.equal(bad.errors.length, 5);
+  assert.equal(bad.errors.length, 4);
 
   const good = validateCampaignForm({ name: ' Sept count ', dailyItemsPerUser: '25', userIds: ['u1'], startDate: '', endDate: '2026-09-30', includeNewStock: false }, 'loc-1');
   assert.equal(good.ok, true);
-  assert.deepEqual(good.payload, { name: 'Sept count', locationId: 'loc-1', dailyItemsPerUser: 25, userIds: ['u1'], includeNewStock: false, endDate: '2026-09-30' });
+  assert.deepEqual(good.payload, { name: 'Sept count', locationId: 'loc-1', dailyItemsPerUser: 25, userIds: ['u1'], includeNewStock: false });
 });
 
 test('progress segments skip empty and excluded buckets', () => {

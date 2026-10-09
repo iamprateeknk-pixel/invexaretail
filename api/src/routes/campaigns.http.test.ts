@@ -4,7 +4,7 @@ import express from 'express';
 import { hashPassword, generateJWT } from '../lib/otp-auth.js';
 import { seedEnhancedUsersForMemoryMode, findUserByEmail, createEnhancedUser } from '../lib/enterprise-repository.js';
 import { seedUsers } from '../lib/seed.js';
-import { adjustStockLedger, countAssignments, users } from '../lib/repository.js';
+import { adjustStockLedger, countAssignments, updateCountAssignment, users } from '../lib/repository.js';
 import { resetCampaignStateForTests } from '../lib/campaign-store.js';
 import { runCampaignDay, runDueCampaigns } from '../lib/campaign-service.js';
 import { resetEventBusForTests, subscribe, type DomainEvent } from '../lib/event-bus.js';
@@ -245,6 +245,46 @@ test('count -> review -> recount -> approval drives coverage to a completed camp
     assert.equal((await call('POST', `/campaigns/${campaign.id}/pause`, admin)).status, 409);
     assert.equal((await call('POST', '/campaigns', admin, { ...campaignBody, name: 'October count' })).status, 201);
   });
+});
+
+test('a user who skips a day gets no new items until the old batch is done, then a fresh full batch', async () => {
+  freshState();
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const { body: { campaign } } = await call('POST', '/campaigns', admin, { ...campaignBody, userIds: [c1] });
+    await call('POST', `/campaigns/${campaign.id}/activate`, admin);
+    const dayOne = countAssignments.filter((row) => row.campaignId === campaign.id);
+    assert.equal(dayOne.length, 2);
+
+    // Day 2: on leave, nothing counted -> the same two tasks stay, nothing new.
+    const dayTwo = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 30 * HOUR) });
+    assert.equal(dayTwo.assigned, 0);
+
+    // Back at work: the old batch is finished, so the next day brings a new full batch.
+    for (const row of dayOne) updateCountAssignment(row.id, { status: 'SUBMITTED' });
+    const dayThree = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 54 * HOUR) });
+    assert.equal(dayThree.assigned, 2);
+    const fresh = countAssignments.filter((row) => row.campaignId === campaign.id && row.status === 'ASSIGNED');
+    assert.equal(fresh.some((row) => dayOne.some((old) => old.itemId === row.itemId)), false);
+  });
+});
+
+test('an item whose net stock is negative is never assigned, even with one positive lot', async () => {
+  freshState();
+  // item-1006: lot-1006 has +12, a second lot -20 -> net -8.
+  adjustStockLedger('item-1006', 'lot-1006-neg', 'loc-1', -20);
+  try {
+    await withServer(async (call) => {
+      const admin = tokenFor('admin@retail.local');
+      const { body: { campaign } } = await call('POST', '/campaigns', admin, campaignBody);
+      await call('POST', `/campaigns/${campaign.id}/activate`, admin);
+      const items = (await call('GET', `/campaigns/${campaign.id}/items`, admin)).body.items as Array<{ itemId: string }>;
+      assert.equal(items.some((row) => row.itemId === 'item-1006'), false);
+      assert.equal(countAssignments.some((row) => row.campaignId === campaign.id && row.itemId === 'item-1006'), false);
+    });
+  } finally {
+    adjustStockLedger('item-1006', 'lot-1006-neg', 'loc-1', 20);
+  }
 });
 
 test('stock that runs out leaves the queue and comes back when restocked; new stock joins it', async () => {

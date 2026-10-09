@@ -553,6 +553,16 @@ studioRouter.post('/draft/stock/columns', (req: Request, res: Response) => {
   }
 });
 
+studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => {
+  try {
+    const layout = Array.isArray(req.body?.columns) ? req.body.columns : null;
+    if (!layout) throw new ControlPlaneError('Columns list is required', 'INVALID_COLUMN_LAYOUT', 400);
+    res.json({ success: true, draft: controlPlane.setStockColumnLayout(requireScope(req), layout) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 studioRouter.post('/fields', (req: Request, res: Response) => {
   try {
     const draft = controlPlane.addField(requireScope(req), {

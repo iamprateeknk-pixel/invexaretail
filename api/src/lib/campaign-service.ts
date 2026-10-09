@@ -104,10 +104,17 @@ type Eligible = {
   nearestExpiry: Map<string, string>;
 };
 
-/** Current positive-stock items at the branch (zero stock is never eligible). */
+/**
+ * Current positive-stock items at the branch. Eligibility is the item's net
+ * on-hand across all its lots: zero or negative stock is never assigned, even
+ * when one lot is positive and another negative.
+ */
 function eligibleAt(locationId: string): Eligible {
   const ledger = listStockLedgerForLocation(locationId);
-  const aggregated = aggregateLocationStock(listItems().filter(isOperationalItem), ledger);
+  const netOnHand = new Map<string, number>();
+  for (const row of ledger) netOnHand.set(row.itemId, (netOnHand.get(row.itemId) ?? 0) + row.onHand);
+  const aggregated = aggregateLocationStock(listItems().filter(isOperationalItem), ledger)
+    .filter((row) => (netOnHand.get(row.itemId) ?? 0) > 0);
   const abc = new Map([...classifyAbcItems(aggregated).entries()].map(([itemId, value]) => [itemId, value.abcClass]));
   const positiveLots = new Set(ledger.filter((row) => row.onHand > 0).map((row) => row.lotId));
   const nearestExpiry = new Map<string, string>();
