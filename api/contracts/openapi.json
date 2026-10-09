@@ -29079,6 +29079,46 @@
           }
         ]
       }
+    },
+    "/catalog/custom-field-values": {
+      "get": {
+        "operationId": "getCatalogCustomFieldValues",
+        "summary": "Every item's custom field values for the caller's company: { itemId: { fieldName: value } }.",
+        "tags": [
+          "Catalog"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "values": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "values"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
     }
   }
 }

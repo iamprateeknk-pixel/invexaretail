@@ -168,13 +168,15 @@ export type ColumnDefinition = {
   key: string;
   label: string;
   type: string;
-  source: 'core' | 'custom' | 'formula';
+  source: 'core' | 'custom' | 'formula' | 'itemField';
   visible: boolean;
   exportEnabled: boolean;
   mobileEnabled: boolean;
   visibleRoles?: string[];
   /** Calculated column: evaluated per stock row from STOCK_FORMULA_FIELDS. */
   formula?: string;
+  /** Item custom field (by name) whose value this column shows for each stock row. */
+  itemField?: string;
 };
 
 export type PageDefinition = {
@@ -1473,13 +1475,34 @@ export class ControlPlane {
     return draft;
   }
 
+  /** Adds a stock table column that shows one of the company's item custom fields (by name). */
+  addItemFieldColumn(scope: ScopeContext, input: { fieldName: string; label?: string }): ConfigurationVersion {
+    const companyId = this.requireLockedCompany(scope);
+    this.assertBillingWritable(companyId);
+    const fieldName = String(input.fieldName ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 80);
+    if (!fieldName) throw new ControlPlaneError('Choose an item field', 'INVALID_ITEM_FIELD', 400);
+    const draft = this.ensureDraft(scope);
+    if (draft.page.columns.some((column) => column.itemField === fieldName)) {
+      throw new ControlPlaneError('This item field is already a column', 'DUPLICATE_COLUMN', 400);
+    }
+    if (draft.page.columns.filter((column) => column.source === 'itemField').length >= 12) {
+      throw new ControlPlaneError('A maximum of 12 item field columns is allowed', 'TOO_MANY_ITEM_FIELDS', 400);
+    }
+    const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60) || fieldName;
+    const slug = fieldName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'field';
+    let key = `field_${slug}`;
+    for (let n = 2; draft.page.columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
+    draft.page.columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
+    return draft;
+  }
+
   /** Removes a calculated column, or restores the standard formula of a built-in one. */
   clearStockFormula(scope: ScopeContext, key: string): ConfigurationVersion {
     this.requireLockedCompany(scope);
     const draft = this.ensureDraft(scope);
     const column = draft.page.columns.find((entry) => entry.key === key);
     if (!column) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
-    if (column.source === 'formula') draft.page.columns = draft.page.columns.filter((entry) => entry.key !== key);
+    if (column.source === 'formula' || column.source === 'itemField') draft.page.columns = draft.page.columns.filter((entry) => entry.key !== key);
     else if (column.formula) {
       delete column.formula;
       if (column.key === 'available') column.label = 'Available';

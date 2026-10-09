@@ -7,6 +7,7 @@ import * as enterprise from '../lib/enterprise-repository.js';
 import { persistEnterpriseUser } from '../lib/persistence.js';
 import { validateEmail } from '../lib/otp-auth.js';
 import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
+import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 
 function sendError(res: Response, error: unknown): void {
@@ -600,6 +601,30 @@ studioRouter.put('/draft/stock/formula-columns', (req: Request, res: Response) =
 studioRouter.delete('/draft/stock/formula-columns/:key', (req: Request, res: Response) => {
   try {
     res.json({ success: true, draft: controlPlane.clearStockFormula(requireScope(req), param(req, 'key')) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.post('/draft/stock/item-field-columns', (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, draft: controlPlane.addItemFieldColumn(requireScope(req), { fieldName: String(req.body?.fieldName ?? ''), label: req.body?.label }) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Names of the company's item custom fields (the ones imports and the catalog create).
+studioRouter.get('/item-fields', async (req: Request, res: Response) => {
+  try {
+    const companyId = scopedCompany(req);
+    if (!resolveDatabaseUrl()) {
+      res.json({ success: true, fields: [] });
+      return;
+    }
+    const { prisma } = await import('../lib/db.js');
+    const fields = await prisma.customFieldDefinition.findMany({ where: { companyId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }], select: { name: true, type: true } });
+    res.json({ success: true, fields });
   } catch (error) {
     sendError(res, error);
   }
