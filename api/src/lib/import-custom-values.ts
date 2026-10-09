@@ -103,3 +103,14 @@ export async function saveImportedCustomValues(companyId: string, rows: RowWithE
   }
   return { fields: fields.length, values: writes.length, unmatchedItems };
 }
+
+/** Every item's custom field values for one company: { [itemId]: { [fieldName]: value } }. */
+export async function loadCustomFieldValues(companyId: string): Promise<Record<string, Record<string, string>>> {
+  const rows = await prisma.customFieldValue.findMany({
+    where: { field: { companyId }, item: { companyId } },
+    select: { itemId: true, value: true, field: { select: { name: true } } },
+  });
+  const values: Record<string, Record<string, string>> = {};
+  for (const row of rows) (values[row.itemId] ??= {})[row.field.name] = row.value;
+  return values;
+}

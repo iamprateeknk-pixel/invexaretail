@@ -1,3 +1,4 @@
+import { loadCustomFieldValues } from '../lib/import-custom-values.js';
 import { loadSalesEvents } from '../lib/sales-demand.js';
 import { decimalsToNumbers, type DecimalsAsNumbers } from '../lib/decimal-json.js';
 import { newDocumentNumber } from '../lib/document-number.js';
@@ -106,6 +107,12 @@ router.post('/catalog/custom-fields', async (req, res) => {
     data: { name, companyId: catalogCompany(req), type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
   });
   return res.status(201).json({ field });
+});
+
+// Every item's custom field values for the caller's company in one call, for table columns that show
+// an item field. Shape: { values: { [itemId]: { [fieldName]: value } } }.
+router.get('/catalog/custom-field-values', async (req, res) => {
+  return res.json({ values: await loadCustomFieldValues(catalogCompany(req)) });
 });
 
 router.get('/catalog/items/:itemId', async (req, res) => {

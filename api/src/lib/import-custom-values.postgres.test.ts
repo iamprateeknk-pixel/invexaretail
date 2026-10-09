@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from './db.js';
-import { saveImportedCustomValues } from './import-custom-values.js';
+import { loadCustomFieldValues, saveImportedCustomValues } from './import-custom-values.js';
 import { defaultImportProfile, normalizeImportProfile } from './import-profile.js';
 import { persistOpeningStockImport } from './persistence.js';
 import { controlPlane } from './saas/control-plane.js';
@@ -83,4 +83,13 @@ integration('an opening-stock file with custom columns saves them onto the impor
   const dal = await prisma.item.findFirstOrThrow({ where: { companyId, code: 'E2E-2' } });
   assert.deepEqual(await valuesOf(rice.id), { 'Shelf Rack': 'R-1', MRP: '45.5' });
   assert.deepEqual(await valuesOf(dal.id), { MRP: '70' }, 'a blank cell stores nothing');
+});
+
+integration('loadCustomFieldValues returns only the calling company values, keyed by item id and field name', async () => {
+  const a = await makeCompany('LOAD-1');
+  const b = await makeCompany('LOAD-1');
+  await saveImportedCustomValues(a.companyId, [{ code: 'LOAD-1', extra: { custom_shelf_rack: 'A-RACK', custom_mrp: 5 } }]);
+  await saveImportedCustomValues(b.companyId, [{ code: 'LOAD-1', extra: { custom_shelf_rack: 'B-RACK' } }]);
+  assert.deepEqual(await loadCustomFieldValues(a.companyId), { [a.item.id]: { 'Shelf Rack': 'A-RACK', MRP: '5' } });
+  assert.deepEqual(await loadCustomFieldValues(b.companyId), { [b.item.id]: { 'Shelf Rack': 'B-RACK' } });
 });

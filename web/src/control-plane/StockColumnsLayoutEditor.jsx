@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, Eye, EyeOff, Save } from 'lucide-react';
+import { ArrowDown, ArrowUp, Eye, EyeOff, Plus, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,8 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [itemFields, setItemFields] = useState([]);
+  const [pickedField, setPickedField] = useState('');
 
   const load = useCallback((draft) => {
     setColumns((draft?.page?.columns ?? []).map((column) => ({ ...column })));
@@ -32,6 +34,34 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
       .catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not load columns'); });
     return () => { cancelled = true; };
   }, [controlToken, load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    controlRequest('/studio/v1/item-fields', { token: controlToken })
+      .then((result) => { if (!cancelled) setItemFields((result.fields ?? []).map((field) => field.name)); })
+      .catch(() => { if (!cancelled) setItemFields([]); });
+    return () => { cancelled = true; };
+  }, [controlToken]);
+
+  const usedFields = new Set(columns.filter((column) => column.itemField).map((column) => column.itemField));
+  const availableFields = itemFields.filter((name) => !usedFields.has(name));
+
+  async function addItemField() {
+    if (!pickedField) return;
+    setSaving(true);
+    setError('');
+    try {
+      const result = await controlRequest('/studio/v1/draft/stock/item-field-columns', { token: controlToken, method: 'POST', body: { fieldName: pickedField } });
+      load(result.draft);
+      setPickedField('');
+      onSaved?.();
+      toast.success('Added to draft. Open "Preview / publish" to make it live.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not add the field');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const edit = (index, patch) => { setColumns((current) => current.map((column, i) => (i === index ? { ...column, ...patch } : column))); setDirty(true); };
   const move = (index, direction) => { setColumns((current) => moveField(current, index, direction)); setDirty(true); };
@@ -66,7 +96,7 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
                 <Button type="button" size="icon" variant="outline" aria-label={`Move ${column.label} down`} disabled={index === columns.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-4" /></Button>
               </div>
               <Input aria-label={`Column name ${index + 1}`} value={column.label} onChange={(event) => edit(index, { label: event.target.value })} />
-              <Badge variant="outline">{column.source === 'formula' ? 'Calculated' : column.source === 'custom' ? 'Your column' : 'Built-in'}</Badge>
+              <Badge variant="outline">{column.source === 'formula' ? 'Calculated' : column.source === 'itemField' ? 'Item field' : column.source === 'custom' ? 'Your column' : 'Built-in'}</Badge>
               <Button
                 type="button"
                 size="sm"
@@ -81,6 +111,17 @@ export function StockColumnsLayoutEditor({ controlToken, onSaved }) {
           ))}
         </div>
         {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
+        {availableFields.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2">
+            <span className="text-xs text-muted-foreground">Show an item field (like Shelf Rack or MRP) as a column</span>
+            <select aria-label="Item field" className="h-8 rounded-md border bg-background px-2 text-sm" value={pickedField} onChange={(event) => setPickedField(event.target.value)}>
+              <option value="">Choose a field…</option>
+              {availableFields.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <Button type="button" size="sm" variant="outline" disabled={!pickedField || saving || dirty} onClick={addItemField}><Plus className="size-4" />Add column</Button>
+            {dirty && <span className="text-xs text-muted-foreground">Save your other changes first.</span>}
+          </div>
+        )}
         <div><Button type="button" onClick={save} disabled={saving || !dirty}><Save className="size-4" />{saving ? 'Saving…' : 'Save to draft'}</Button></div>
       </CardContent>
     </Card>

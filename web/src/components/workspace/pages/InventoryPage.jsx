@@ -1,3 +1,4 @@
+import { itemFieldCell, useItemFieldValues, usesItemFields } from '../../../hooks/useItemFieldValues';
 import { paginateRows } from '../../../lib/pagination';
 import { stockActionIsAvailable } from '../../../lib/stock-metadata';
 import { availableQuantity, formatStockFormulaValue, RIGHT_ALIGNED_STOCK_COLUMNS, stockFormulaValue, stockTableColumns } from '../../../lib/stock-table';
@@ -14,13 +15,15 @@ export function InventoryPage() {
   const {
         searchedStockRows, items, workspaceProfile, canViewSystemStock, savedViews, applySavedView,
     saveCurrentView, setModalOpen, openScanner, role, setSelectedItem, setMasterDialog, inventoryPage, inventoryPageSize,
-    setInventoryPage, setInventoryPageSize, deleteSavedView, runtimeConfig,
+    setInventoryPage, setInventoryPageSize, deleteSavedView, runtimeConfig, authToken,
   } = useWorkspace();
   const runtimePage = runtimeConfig?.page;
   const tableColumns = stockTableColumns(runtimePage, { role, canViewSystemStock });
+  const itemFieldValues = useItemFieldValues({ authToken, enabled: usesItemFields(tableColumns) });
   const hasColor = Boolean(workspaceProfile.pack?.variantFields?.includes('Color'));
   const headerLabel = (column) => (column.key === 'pack_size' && column.label === 'Pack/Size' && workspaceProfile.pack?.variantFields?.includes('Size') ? 'Size' : column.label);
   const renderCell = (column, { row, item, lotCount }) => {
+    if (column.source === 'itemField') return itemFieldCell(itemFieldValues, item?.id ?? row.itemId, column.itemField);
     if (column.formula) return formatStockFormulaValue(stockFormulaValue(column.formula, row), column.type);
     switch (column.key) {
       case 'item_code': return <><p className="font-medium">{item?.code ?? row.itemId}</p><p className="text-xs text-muted-foreground">{row.itemName ?? item?.name}</p></>;
