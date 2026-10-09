@@ -5,6 +5,8 @@
 // aliases. Companies can also add custom columns to the stock import (saved on items - see
 // lib/import-custom-values.ts). Nothing here touches the stock ledger.
 
+import { FormulaError, validateFormula } from './formula.js';
+
 export type ImportFieldType = 'text' | 'number' | 'date';
 export type ImportKind = 'OPENING_STOCK' | 'SALES' | 'PURCHASE';
 export const IMPORT_KINDS: readonly ImportKind[] = ['OPENING_STOCK', 'SALES', 'PURCHASE'];
@@ -20,6 +22,8 @@ export type ImportFieldConfig = {
   aliases: string[];
   /** Used when the cell is empty. */
   defaultValue?: string;
+  /** Stock import, number columns only: calculated from the other number columns instead of read from the file. */
+  formula?: string;
 };
 
 export type ImportProfile = {
@@ -205,8 +209,11 @@ export function normalizeImportProfile(input: unknown, kind: ImportKind = 'OPENI
       required: builtin?.locked ? true : Boolean(raw?.required) && enabled,
       aliases,
       defaultValue,
+      ...(enabled && cleanText(raw?.formula, 300) ? { formula: cleanText(raw?.formula, 300) } : {}),
     });
   }
+
+  validateColumnFormulas(fields, kind);
 
   // Built-in columns can be turned off but never lost: re-append any missing ones (off, unless essential).
   for (const builtin of builtins) {
@@ -217,6 +224,26 @@ export function normalizeImportProfile(input: unknown, kind: ImportKind = 'OPENI
     });
   }
   return { importType: kind, fields, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * A column formula may only use the other enabled number columns that are themselves read from the file
+ * (no formula chains), and only the stock import supports them.
+ */
+function validateColumnFormulas(fields: ImportFieldConfig[], kind: ImportKind): void {
+  for (const field of fields) {
+    if (!field.formula) continue;
+    if (kind !== 'OPENING_STOCK') throw new ImportProfileError('Formulas are only available for the stock import.');
+    if (field.type !== 'number') throw new ImportProfileError(`"${field.label}" is not a number column, so it cannot be calculated.`);
+    const inputs = fields.filter((other) => other !== field && other.enabled && other.type === 'number' && !other.formula);
+    try {
+      validateFormula(field.formula, inputs.map((input) => input.key.toLowerCase()));
+    } catch (error) {
+      if (!(error instanceof FormulaError)) throw error;
+      const names = inputs.map((input) => input.label).join(', ') || 'none yet - add a number column first';
+      throw new ImportProfileError(`Formula for "${field.label}": ${error.message.replace(/You can use: .*$/, '').trim()} Columns you can use: ${names}.`);
+    }
+  }
 }
 
 /** Header text -> field lookup used by the parsers (all normalized, lower-case). */

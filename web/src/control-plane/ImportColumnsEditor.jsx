@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { evaluateFormula, validateFormula } from '../lib/formula';
 import { controlRequest } from './control-api';
 
 const TYPE_LABELS = { text: 'Text', number: 'Number', date: 'Date' };
@@ -14,6 +15,23 @@ export const IMPORT_KIND_OPTIONS = [
   { value: 'SALES', label: 'Daily sales' },
   { value: 'PURCHASE', label: 'Daily purchase' },
 ];
+
+/** Number columns a formula for `field` may use: the other enabled number columns that are read from the file. */
+export function formulaInputsFor(fields, field) {
+  return fields.filter((other) => other !== field && other.enabled && other.type === 'number' && !other.formula);
+}
+
+/** Live check of a column formula against sample values (10 in every input column). */
+export function checkImportFormula(formula, inputs) {
+  const keys = inputs.map((input) => input.key.toLowerCase());
+  try {
+    const ast = validateFormula(formula, keys);
+    const sample = Object.fromEntries(keys.map((key) => [key, 10]));
+    return { ok: true, value: evaluateFormula(ast, sample) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message.replace(/You can use: .*$/, '').trim() : 'Invalid formula' };
+  }
+}
 
 export function moveField(fields, index, direction) {
   const target = index + direction;
@@ -166,6 +184,29 @@ export function ImportColumnsEditor({ controlToken }) {
                   Required
                 </label>
               </div>
+              {kind === 'OPENING_STOCK' && field.type === 'number' && field.enabled && (
+                <details className="text-xs md:col-span-5" open={Boolean(field.formula)}>
+                  <summary className="cursor-pointer text-muted-foreground">Calculate from other columns{field.formula ? <> · <strong className="font-mono">{field.formula}</strong></> : ' (optional)'}</summary>
+                  <div className="mt-2 grid gap-2">
+                    <p className="text-muted-foreground">Instead of reading this column from the file, work it out for every row, e.g. Cartons × Pack Qty.</p>
+                    <div className="flex flex-wrap gap-1">
+                      {formulaInputsFor(fields, field).map((input) => (
+                        <Button key={input.key} type="button" size="sm" variant="outline" onClick={() => edit(index, { formula: `${field.formula ? `${field.formula} ` : ''}${input.key.toLowerCase()}` })}>{input.label}</Button>
+                      ))}
+                      {['+', '-', '*', '/', '(', ')'].map((operator) => (
+                        <Button key={operator} type="button" size="sm" variant="secondary" aria-label={`Add ${operator}`} onClick={() => edit(index, { formula: `${field.formula ?? ''} ${operator}`.trim() })}>{operator}</Button>
+                      ))}
+                      {formulaInputsFor(fields, field).length === 0 && <span className="text-muted-foreground">Add a number column first (Add column → Number).</span>}
+                    </div>
+                    <Input aria-label={`Formula for ${field.label}`} className="font-mono" placeholder="custom_cartons * custom_pack_qty" value={field.formula ?? ''} onChange={(event) => edit(index, { formula: event.target.value })} />
+                    {field.formula ? (() => {
+                      const result = checkImportFormula(field.formula, formulaInputsFor(fields, field));
+                      return <p aria-live="polite" className={result.ok ? 'text-primary' : 'text-destructive'}>{result.ok ? `With 10 in every column the result is ${result.value}.` : result.error}</p>;
+                    })() : null}
+                    {field.formula ? <div><Button type="button" size="sm" variant="ghost" onClick={() => edit(index, { formula: '' })}>Read it from the file again</Button></div> : null}
+                  </div>
+                </details>
+              )}
               <div className="flex justify-end">
                 {field.custom && (
                   <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${field.label}`} onClick={() => { setFields((current) => current.filter((_, i) => i !== index)); setDirty(true); }}>
