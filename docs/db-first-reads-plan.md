@@ -130,3 +130,12 @@ Run each file on its own, as CI does: running them together against one database
   `useWorkspaceImports`, `useWorkspaceStock`, `ItemMasterPanel` x3), so the real fix is paging/per-screen loading in
   the web app (`useItemSearch` / `GET /items/search` already exist), after which `/items` can go database-first at a
   few hundred rows per request. Until then `/items` stays on the snapshot on purpose.
+
+- **Catalogue paging, step 1: a version gate instead of a rewrite.** Rather than paging 50 components, the web app now asks
+  `GET /items/version` (two indexed aggregates: row counts plus newest `updatedAt` of items and lots, company scoped) and
+  refetches the 24 MB catalogue only when the version moved. Safety polls and events that do not touch the catalogue (stock,
+  counts, transfers) now cost one small query instead of the full read. This is what makes a database-first `GET /items`
+  affordable: it only runs on real catalogue changes and at login. Memory mode returns `null` (unknown), so clients refetch
+  as before. Proven in `item-catalogue-version.postgres.test.ts` (moves on item edit, lot edit, new/deleted item and lot;
+  never moves for another company) and `web/src/lib/catalogue-version.test.js`. Next: switch `GET /items` itself to the
+  database (mapping extraction, parity test) now that the polling cost is gone.

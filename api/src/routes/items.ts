@@ -10,7 +10,7 @@ import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
 import { isDomainError, statusForErrorCode } from '../lib/errors.js';
 import type { TenantContext } from '../lib/tenant-context.js';
-import { searchItems, assertItemOwnedByTenant, ItemNotFoundError } from '../lib/repositories/item-repository.js';
+import { searchItems, assertItemOwnedByTenant, getCatalogueVersion, ItemNotFoundError } from '../lib/repositories/item-repository.js';
 import { getStockDetail } from '../lib/stock-detail-service.js';
 import { postInventoryMovement, reverseInventoryMovement, NegativeStockBlockedError, MovementNotFoundError, AlreadyReversedError } from '../lib/inventory-posting-service.js';
 import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
@@ -31,6 +31,12 @@ function tenantContextFor(req: Request): TenantContext {
     role: req.user!.role as TenantContext['role'],
   };
 }
+
+// Cheap change detector for the full catalogue (GET /items): the web app asks this first and refetches the
+// catalogue only when the version moved. null (memory mode) means "unknown - refetch".
+router.get('/items/version', async (req: Request, res: Response) => {
+  return res.json({ version: await getCatalogueVersion(tenantContextFor(req)) });
+});
 
 router.get('/items/search', async (req: Request, res: Response) => {
   const ctx = tenantContextFor(req);

@@ -124,3 +124,20 @@ export async function assertItemOwnedByTenant(ctx: TenantContext, itemId: string
   const owned = await prisma.item.findFirst({ where: { id: itemId, companyId: ctx.companyId }, select: { id: true } });
   if (!owned) throw new ItemNotFoundError(itemId);
 }
+
+/**
+ * A cheap fingerprint of the company's catalogue (items and their lots): row counts plus the newest updatedAt of
+ * each. A client that already holds the catalogue compares it with the version it last loaded and refetches the
+ * (large) catalogue only when it changed. Deleting a row changes a count; every write path bumps updatedAt
+ * (Prisma @updatedAt, and the one raw lot update sets it explicitly). Memory mode has no cheap reliable
+ * fingerprint, so it returns null and clients simply refetch, as they did before this existed.
+ */
+export async function getCatalogueVersion(ctx: TenantContext): Promise<string | null> {
+  if (!databaseEnabled) return null;
+  const [items, lots] = await Promise.all([
+    prisma.item.aggregate({ where: { companyId: ctx.companyId }, _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.lot.aggregate({ where: { item: { companyId: ctx.companyId } }, _count: { _all: true }, _max: { updatedAt: true } }),
+  ]);
+  const stamp = (value: Date | null) => (value ? value.getTime() : 0);
+  return `${items._count._all}.${stamp(items._max.updatedAt)}.${lots._count._all}.${stamp(lots._max.updatedAt)}`;
+}
