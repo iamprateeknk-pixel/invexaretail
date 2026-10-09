@@ -8,6 +8,7 @@ import { transferCartons, companyProfile, counts, countAssignments, dailyMovemen
 import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
+import { countRowToRecord } from './count-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
@@ -163,31 +164,8 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     items: dbItems.map((item) => ({ id: item.id, companyId: (item as { companyId?: string }).companyId })),
   });
 
-  replaceContents(counts, dbCounts.map((count) => ({
-    id: count.id,
-    itemId: count.itemId,
-    lotId: count.lotId,
-    locationId: count.locationId,
-    physicalQuantity: count.physicalQty,
-    bookQty: count.bookQty,
-    mode: count.mode as 'scan' | 'manual' | 'weight',
-    submittedBy: count.submittedById,
-    role: 'STORE_USER' as const,
-    createdAt: count.createdAt.toISOString(),
-    status: count.reviewStatus as 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW' | 'RECOUNT',
-    reviewedBy: count.approvedById ?? undefined,
-    reviewedAt: count.approvedAt?.toISOString(),
-    reviewReason: count.reviewReason ?? undefined,
-    reasonCode: (count as { reasonCode?: string | null }).reasonCode ?? undefined,
-    parentCountId: count.parentCountId ?? undefined,
-    requestId: (count as { requestId?: string | null }).requestId ?? undefined,
-    reconciliationRequired: (count as { reconciliationRequired?: boolean }).reconciliationRequired ?? false,
-    reconciliationNote: (count as { reconciliationNote?: string | null }).reconciliationNote ?? undefined,
-    reconciliationAt: (count as { reconciliationAt?: Date | null }).reconciliationAt?.toISOString(),
-    bookQtyOriginal: (count as { bookQtyOriginal?: number | null }).bookQtyOriginal ?? undefined,
-    lateDelta: (count as { lateDelta?: number }).lateDelta ?? 0,
-    lateMovementKeys: Array.isArray((count as { lateMovementKeys?: unknown }).lateMovementKeys) ? (count as { lateMovementKeys: string[] }).lateMovementKeys : undefined,
-  })));
+  // The role is not stored on StockCount; the snapshot keeps its historical placeholder (see lib/repositories/count-repository.ts).
+  replaceContents(counts, dbCounts.map((count) => countRowToRecord(count, 'STORE_USER')));
 
   replaceContents(stockLedger, dbStockLedger.map((row) => ({
     itemId: row.itemId,
