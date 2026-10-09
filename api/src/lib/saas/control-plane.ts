@@ -194,6 +194,8 @@ export type PageDefinition = {
   }>;
   widgets: Array<{ key: string; label: string; order: number }>;
   tabs: Array<{ key: string; label: string; order: number }>;
+  /** Column layouts of other tables (currently `lots`). Missing = the built-in default. */
+  tables?: Record<string, ColumnDefinition[]>;
 };
 
 export type ConfigurationVersion = {
@@ -398,6 +400,39 @@ function timingSafeEqual(a: string, b: string): boolean {
   const right = Buffer.from(b);
   if (left.length !== right.length) return false;
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export type TableKey = 'stock' | 'lots';
+export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots'];
+
+const col = (key: string, label: string, type = 'text'): ColumnDefinition =>
+  ({ key, label, type, source: 'core', visible: true, exportEnabled: true, mobileEnabled: true });
+
+// The Lots & expiry table. `item_lot` and `open` (the row action) cannot be hidden.
+const DEFAULT_LOT_COLUMNS: ColumnDefinition[] = [
+  col('item_lot', 'Item / lot'),
+  col('quantity', 'Qty', 'number'),
+  col('expiry', 'Expiry', 'date'),
+  col('risk', 'Risk'),
+  col('recommended_action', 'Recommended action'),
+  col('open', 'Open'),
+];
+
+/** Per table: columns that must stay visible, built-in columns that may hold a formula, and the numbers a formula may use. */
+const TABLE_RULES: Record<TableKey, { locked: string[]; formulaFields: readonly string[]; overridable: string[] }> = {
+  stock: { locked: ['item_code'], formulaFields: STOCK_FORMULA_FIELDS, overridable: ['available'] },
+  lots: { locked: ['item_lot', 'open'], formulaFields: ['quantity', 'days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
+};
+
+export function isTableKey(value: unknown): value is TableKey {
+  return typeof value === 'string' && (TABLE_KEYS as readonly string[]).includes(value);
+}
+
+/** Columns of one table on a page; non-stock tables are created from their defaults on first use. */
+export function pageTableColumns(page: PageDefinition, table: TableKey): ColumnDefinition[] {
+  if (table === 'stock') return page.columns;
+  page.tables ??= {};
+  return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_LOT_COLUMNS)) as ColumnDefinition[]);
 }
 
 function clonePage(page: PageDefinition): PageDefinition {
@@ -1392,16 +1427,35 @@ export class ControlPlane {
     return draft;
   }
 
+  private tableColumnsOf(draft: ConfigurationVersion, table: TableKey): ColumnDefinition[] {
+    return pageTableColumns(draft.page, table);
+  }
+
+  private setTableColumnsOf(draft: ConfigurationVersion, table: TableKey, columns: ColumnDefinition[]): void {
+    if (table === 'stock') draft.page.columns = columns;
+    else {
+      draft.page.tables ??= {};
+      draft.page.tables[table] = columns;
+    }
+  }
+
+  /** The draft's columns for one table (created from the built-in defaults if never edited). */
+  getDraftColumns(scope: ScopeContext, table: TableKey = 'stock'): ColumnDefinition[] {
+    this.requireLockedCompany(scope);
+    return this.tableColumnsOf(this.ensureDraft(scope), table);
+  }
+
   /**
-   * Reorders, renames and shows/hides the stock table's columns (core and custom) in the draft.
+   * Reorders, renames and shows/hides a table's columns (core and custom) in the draft.
    * `layout` lists column keys in the wanted order; columns left out keep their relative order
-   * after the listed ones. The item code/name column can be renamed and moved but never hidden.
+   * after the listed ones. Essential columns (item name, row action) can be renamed and moved but never hidden.
    */
-  setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean }>): ConfigurationVersion {
+  setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean }>, table: TableKey = 'stock'): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.assertBillingWritable(companyId);
     const draft = this.ensureDraft(scope);
-    const byKey = new Map(draft.page.columns.map((column) => [column.key, column]));
+    const current = this.tableColumnsOf(draft, table);
+    const byKey = new Map(current.map((column) => [column.key, column]));
     const seen = new Set<string>();
     const ordered: ColumnDefinition[] = [];
     for (const entry of layout) {
@@ -1415,47 +1469,48 @@ export class ControlPlane {
         column.label = label;
       }
       if (entry.visible !== undefined) {
-        if (column.key === 'item_code' && entry.visible === false) {
-          throw new ControlPlaneError('The item code & name column cannot be hidden', 'COLUMN_REQUIRED', 400);
+        if (TABLE_RULES[table].locked.includes(column.key) && entry.visible === false) {
+          throw new ControlPlaneError(`The "${column.label}" column cannot be hidden`, 'COLUMN_REQUIRED', 400);
         }
         column.visible = Boolean(entry.visible);
       }
       ordered.push(column);
     }
-    draft.page.columns = [...ordered, ...draft.page.columns.filter((column) => !seen.has(column.key))];
+    this.setTableColumnsOf(draft, table, [...ordered, ...current.filter((column) => !seen.has(column.key))]);
     return draft;
   }
 
   /**
-   * Adds or updates a calculated stock column in the draft. New columns are keyed `calc_*`;
-   * the built-in `available` column can also be given a formula (clear it to restore the standard one).
+   * Adds or updates a calculated column in the draft. New columns are keyed `calc_*`; some built-in
+   * columns (stock: `available`) can also be given a formula (clear it to restore the standard one).
    */
-  setStockFormulaColumn(scope: ScopeContext, input: { key?: string; label: string; formula: string; type?: string }): ConfigurationVersion {
+  setStockFormulaColumn(scope: ScopeContext, input: { key?: string; label: string; formula: string; type?: string }, table: TableKey = 'stock'): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.assertBillingWritable(companyId);
     const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60);
     if (!label) throw new ControlPlaneError('Give the column a name', 'INVALID_COLUMN_LABEL', 400);
     const formula = String(input.formula ?? '').trim();
     try {
-      validateFormula(formula, STOCK_FORMULA_FIELDS);
+      validateFormula(formula, TABLE_RULES[table].formulaFields);
     } catch (error) {
       if (error instanceof FormulaError) throw new ControlPlaneError(error.message, 'INVALID_FORMULA', 400);
       throw error;
     }
     const draft = this.ensureDraft(scope);
+    const columns = this.tableColumnsOf(draft, table);
     const type = input.type === 'currency' ? 'currency' : 'number';
     const requestedKey = String(input.key ?? '').trim();
-    if (requestedKey === 'available') {
-      const available = draft.page.columns.find((column) => column.key === 'available');
-      if (!available) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
-      available.formula = formula;
-      available.label = label;
+    if (requestedKey && TABLE_RULES[table].overridable.includes(requestedKey)) {
+      const target = columns.find((column) => column.key === requestedKey);
+      if (!target) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
+      target.formula = formula;
+      target.label = label;
       return draft;
     }
     if (requestedKey && !/^calc_[a-z0-9_]{1,30}$/.test(requestedKey)) {
       throw new ControlPlaneError('Only calculated columns can hold a formula', 'INVALID_COLUMN_KEY', 400);
     }
-    const existing = requestedKey ? draft.page.columns.find((column) => column.key === requestedKey) : undefined;
+    const existing = requestedKey ? columns.find((column) => column.key === requestedKey) : undefined;
     if (requestedKey && !existing) throw new ControlPlaneError('Unknown calculated column', 'COLUMN_NOT_FOUND', 404);
     if (existing) {
       existing.label = label;
@@ -1463,46 +1518,48 @@ export class ControlPlane {
       existing.type = type;
       return draft;
     }
-    if (draft.page.columns.filter((column) => column.source === 'formula').length >= 12) {
+    if (columns.filter((column) => column.source === 'formula').length >= 12) {
       throw new ControlPlaneError('A maximum of 12 calculated columns is allowed', 'TOO_MANY_FORMULAS', 400);
     }
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'column';
     let key = `calc_${slug}`;
-    for (let n = 2; draft.page.columns.some((column) => column.key === key); n += 1) key = `calc_${slug}_${n}`;
-    draft.page.columns.push({
+    for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `calc_${slug}_${n}`;
+    columns.push({
       key, label, type, source: 'formula', formula, visible: true, exportEnabled: true, mobileEnabled: true,
     });
     return draft;
   }
 
-  /** Adds a stock table column that shows one of the company's item custom fields (by name). */
-  addItemFieldColumn(scope: ScopeContext, input: { fieldName: string; label?: string }): ConfigurationVersion {
+  /** Adds a table column that shows one of the company's item custom fields (by name). */
+  addItemFieldColumn(scope: ScopeContext, input: { fieldName: string; label?: string }, table: TableKey = 'stock'): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.assertBillingWritable(companyId);
     const fieldName = String(input.fieldName ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 80);
     if (!fieldName) throw new ControlPlaneError('Choose an item field', 'INVALID_ITEM_FIELD', 400);
     const draft = this.ensureDraft(scope);
-    if (draft.page.columns.some((column) => column.itemField === fieldName)) {
+    const columns = this.tableColumnsOf(draft, table);
+    if (columns.some((column) => column.itemField === fieldName)) {
       throw new ControlPlaneError('This item field is already a column', 'DUPLICATE_COLUMN', 400);
     }
-    if (draft.page.columns.filter((column) => column.source === 'itemField').length >= 12) {
+    if (columns.filter((column) => column.source === 'itemField').length >= 12) {
       throw new ControlPlaneError('A maximum of 12 item field columns is allowed', 'TOO_MANY_ITEM_FIELDS', 400);
     }
     const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60) || fieldName;
     const slug = fieldName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'field';
     let key = `field_${slug}`;
-    for (let n = 2; draft.page.columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
-    draft.page.columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
+    for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
+    columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
     return draft;
   }
 
-  /** Removes a calculated column, or restores the standard formula of a built-in one. */
-  clearStockFormula(scope: ScopeContext, key: string): ConfigurationVersion {
+  /** Removes a calculated / item-field column, or restores the standard formula of a built-in one. */
+  clearStockFormula(scope: ScopeContext, key: string, table: TableKey = 'stock'): ConfigurationVersion {
     this.requireLockedCompany(scope);
     const draft = this.ensureDraft(scope);
-    const column = draft.page.columns.find((entry) => entry.key === key);
+    const columns = this.tableColumnsOf(draft, table);
+    const column = columns.find((entry) => entry.key === key);
     if (!column) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
-    if (column.source === 'formula' || column.source === 'itemField') draft.page.columns = draft.page.columns.filter((entry) => entry.key !== key);
+    if (column.source === 'formula' || column.source === 'itemField') this.setTableColumnsOf(draft, table, columns.filter((entry) => entry.key !== key));
     else if (column.formula) {
       delete column.formula;
       if (column.key === 'available') column.label = 'Available';
@@ -1631,6 +1688,9 @@ export class ControlPlane {
     const published = this.published.get(companyId) ?? this.blankConfig(companyId, 'system', 1, 'published');
     const page = clonePage(published.page);
     page.columns = page.columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
+    for (const [key, columns] of Object.entries(page.tables ?? {})) {
+      page.tables![key] = columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
+    }
     page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
     return {
       companyId,

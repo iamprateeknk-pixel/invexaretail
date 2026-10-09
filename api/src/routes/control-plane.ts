@@ -1,5 +1,5 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, type ScopeContext } from '../lib/saas/control-plane.js';
+import { ControlPlaneError, controlPlane, isTableKey, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -487,6 +487,22 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 
 studioRouter.use(requireLockedCompany);
 
+// Which table a column edit applies to: `stock` (default) or `lots`.
+function tableOf(value: unknown): TableKey {
+  const table = String(value ?? 'stock').toLowerCase();
+  if (!isTableKey(table)) throw new ControlPlaneError('Unknown table', 'INVALID_TABLE', 400);
+  return table;
+}
+
+studioRouter.get('/draft/columns', (req: Request, res: Response) => {
+  try {
+    const table = tableOf(req.query.table);
+    res.json({ success: true, table, columns: controlPlane.getDraftColumns(requireScope(req), table) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 // Import columns: order, names, required flags, extra header aliases and (stock import) custom columns.
 function importKindOf(value: unknown): ImportKind {
   const kind = String(value ?? 'OPENING_STOCK').toUpperCase();
@@ -576,7 +592,8 @@ studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => 
   try {
     const layout = Array.isArray(req.body?.columns) ? req.body.columns : null;
     if (!layout) throw new ControlPlaneError('Columns list is required', 'INVALID_COLUMN_LAYOUT', 400);
-    res.json({ success: true, draft: controlPlane.setStockColumnLayout(requireScope(req), layout) });
+    const table = tableOf(req.body?.table);
+    res.json({ success: true, table, draft: controlPlane.setStockColumnLayout(requireScope(req), layout, table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
   } catch (error) {
     sendError(res, error);
   }
@@ -584,14 +601,17 @@ studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => 
 
 studioRouter.put('/draft/stock/formula-columns', (req: Request, res: Response) => {
   try {
+    const table = tableOf(req.body?.table);
     res.json({
       success: true,
+      table,
       draft: controlPlane.setStockFormulaColumn(requireScope(req), {
         key: req.body?.key,
         label: String(req.body?.label ?? ''),
         formula: String(req.body?.formula ?? ''),
         type: req.body?.type,
-      }),
+      }, table),
+      columns: controlPlane.getDraftColumns(requireScope(req), table),
     });
   } catch (error) {
     sendError(res, error);
@@ -600,7 +620,8 @@ studioRouter.put('/draft/stock/formula-columns', (req: Request, res: Response) =
 
 studioRouter.delete('/draft/stock/formula-columns/:key', (req: Request, res: Response) => {
   try {
-    res.json({ success: true, draft: controlPlane.clearStockFormula(requireScope(req), param(req, 'key')) });
+    const table = tableOf(req.query.table);
+    res.json({ success: true, table, draft: controlPlane.clearStockFormula(requireScope(req), param(req, 'key'), table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
   } catch (error) {
     sendError(res, error);
   }
@@ -608,7 +629,8 @@ studioRouter.delete('/draft/stock/formula-columns/:key', (req: Request, res: Res
 
 studioRouter.post('/draft/stock/item-field-columns', (req: Request, res: Response) => {
   try {
-    res.json({ success: true, draft: controlPlane.addItemFieldColumn(requireScope(req), { fieldName: String(req.body?.fieldName ?? ''), label: req.body?.label }) });
+    const table = tableOf(req.body?.table);
+    res.json({ success: true, table, draft: controlPlane.addItemFieldColumn(requireScope(req), { fieldName: String(req.body?.fieldName ?? ''), label: req.body?.label }, table), columns: controlPlane.getDraftColumns(requireScope(req), table) });
   } catch (error) {
     sendError(res, error);
   }
