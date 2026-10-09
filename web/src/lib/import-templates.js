@@ -28,6 +28,21 @@ export async function downloadOpeningStockTemplate(token) {
   downloadCsvTemplate('invexa-opening-stock-template.csv', csv);
 }
 
+const DAILY_TEMPLATE_PATHS = { SALES: ['sales', 'invexa-sales-template.csv'], PURCHASE: ['purchases', 'invexa-purchase-template.csv'] };
+
+// Sales/purchase templates in the company's own column layout; standard template if the API is unreachable.
+export async function downloadDailyImportTemplate(type, token) {
+  const [path, filename] = DAILY_TEMPLATE_PATHS[type === 'PURCHASE' ? 'PURCHASE' : 'SALES'];
+  let csv = type === 'PURCHASE' ? PURCHASE_IMPORT_TEMPLATE : SALES_IMPORT_TEMPLATE;
+  try {
+    const result = await apiRequest(`/api/v1/imports/${path}/template`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (result?.csv) csv = result.csv;
+  } catch {
+    // keep the standard template
+  }
+  downloadCsvTemplate(filename, csv);
+}
+
 export function downloadCsvTemplate(filename, csv) {
   const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a');

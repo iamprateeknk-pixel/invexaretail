@@ -6,7 +6,7 @@ import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeChecko
 import * as enterprise from '../lib/enterprise-repository.js';
 import { persistEnterpriseUser } from '../lib/persistence.js';
 import { validateEmail } from '../lib/otp-auth.js';
-import { defaultImportProfile, ImportProfileError, importTemplateCsv, normalizeImportProfile } from '../lib/import-profile.js';
+import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 
 function sendError(res: Response, error: unknown): void {
@@ -486,23 +486,36 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 
 studioRouter.use(requireLockedCompany);
 
-// Import columns: order, names, required flags, extra header aliases and custom columns.
+// Import columns: order, names, required flags, extra header aliases and (stock import) custom columns.
+function importKindOf(value: unknown): ImportKind {
+  const kind = String(value ?? 'OPENING_STOCK').toUpperCase();
+  if (!isImportKind(kind)) throw new ControlPlaneError('Unknown import type', 'INVALID_IMPORT_TYPE', 400);
+  return kind;
+}
+
 studioRouter.get('/import-profile', (req: Request, res: Response) => {
-  const companyId = scopedCompany(req);
-  const saved = controlPlane.importProfiles.get(companyId);
-  res.json({
-    success: true,
-    profile: saved ?? defaultImportProfile(),
-    isDefault: !saved,
-    templateCsv: importTemplateCsv(saved),
-  });
+  try {
+    const companyId = scopedCompany(req);
+    const kind = importKindOf(req.query.type);
+    const saved = controlPlane.getImportProfile(companyId, kind);
+    res.json({
+      success: true,
+      profile: saved ?? defaultImportProfile(kind),
+      isDefault: !saved,
+      templateCsv: importTemplateCsv(saved, kind),
+      lockedKeys: lockedFieldKeys(kind),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 studioRouter.put('/import-profile', (req: Request, res: Response) => {
   try {
     const companyId = scopedCompany(req);
-    const profile = normalizeImportProfile(req.body);
-    controlPlane.importProfiles.set(companyId, profile);
+    const kind = importKindOf(req.body?.type);
+    const profile = normalizeImportProfile(req.body, kind);
+    controlPlane.importProfiles.set(profileKey(companyId, kind), profile);
     controlPlane.auditEvent({
       actorUserId: requireScope(req).actorId,
       actorType: 'platform',
@@ -515,7 +528,7 @@ studioRouter.put('/import-profile', (req: Request, res: Response) => {
       before: null,
       after: { columns: profile.fields.filter((field) => field.enabled).map((field) => field.label) },
     });
-    res.json({ success: true, profile, isDefault: false, templateCsv: importTemplateCsv(profile) });
+    res.json({ success: true, profile, isDefault: false, templateCsv: importTemplateCsv(profile, kind), lockedKeys: lockedFieldKeys(kind) });
   } catch (error) {
     if (error instanceof ImportProfileError) {
       res.status(400).json({ success: false, error: error.message, code: 'INVALID_IMPORT_PROFILE' });
@@ -526,9 +539,14 @@ studioRouter.put('/import-profile', (req: Request, res: Response) => {
 });
 
 studioRouter.delete('/import-profile', (req: Request, res: Response) => {
-  const companyId = scopedCompany(req);
-  controlPlane.importProfiles.delete(companyId);
-  res.json({ success: true, profile: defaultImportProfile(), isDefault: true, templateCsv: importTemplateCsv(undefined) });
+  try {
+    const companyId = scopedCompany(req);
+    const kind = importKindOf(req.query.type);
+    controlPlane.importProfiles.delete(profileKey(companyId, kind));
+    res.json({ success: true, profile: defaultImportProfile(kind), isDefault: true, templateCsv: importTemplateCsv(undefined, kind), lockedKeys: lockedFieldKeys(kind) });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 studioRouter.get('/draft', (req: Request, res: Response) => {

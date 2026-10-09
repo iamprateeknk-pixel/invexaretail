@@ -9,6 +9,11 @@ import { Input } from '@/components/ui/input';
 import { controlRequest } from './control-api';
 
 const TYPE_LABELS = { text: 'Text', number: 'Number', date: 'Date' };
+export const IMPORT_KIND_OPTIONS = [
+  { value: 'OPENING_STOCK', label: 'Stock / opening stock' },
+  { value: 'SALES', label: 'Daily sales' },
+  { value: 'PURCHASE', label: 'Daily purchase' },
+];
 
 export function moveField(fields, index, direction) {
   const target = index + direction;
@@ -27,6 +32,8 @@ export function newCustomField(existing) {
 
 /** Plain-language editor for the Excel import columns of the locked company. */
 export function ImportColumnsEditor({ controlToken }) {
+  const [kind, setKind] = useState('OPENING_STOCK');
+  const [lockedKeys, setLockedKeys] = useState(['itemName']);
   const [fields, setFields] = useState([]);
   const [isDefault, setIsDefault] = useState(true);
   const [dirty, setDirty] = useState(false);
@@ -35,6 +42,7 @@ export function ImportColumnsEditor({ controlToken }) {
 
   const apply = useCallback((result) => {
     setFields(result.profile.fields);
+    setLockedKeys(result.lockedKeys ?? ['itemName']);
     setIsDefault(Boolean(result.isDefault));
     setDirty(false);
     setError('');
@@ -42,11 +50,11 @@ export function ImportColumnsEditor({ controlToken }) {
 
   useEffect(() => {
     let cancelled = false;
-    controlRequest('/studio/v1/import-profile', { token: controlToken })
+    controlRequest(`/studio/v1/import-profile?type=${kind}`, { token: controlToken })
       .then((result) => { if (!cancelled) apply(result); })
       .catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not load import columns'); });
     return () => { cancelled = true; };
-  }, [controlToken, apply]);
+  }, [controlToken, kind, apply]);
 
   const edit = (index, patch) => {
     setFields((current) => current.map((field, i) => (i === index ? { ...field, ...patch } : field)));
@@ -58,7 +66,7 @@ export function ImportColumnsEditor({ controlToken }) {
     setSaving(true);
     setError('');
     try {
-      apply(await controlRequest('/studio/v1/import-profile', { token: controlToken, method: 'PUT', body: { fields } }));
+      apply(await controlRequest('/studio/v1/import-profile', { token: controlToken, method: 'PUT', body: { type: kind, fields } }));
       toast.success('Import columns saved. The next import uses this layout.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Save failed');
@@ -70,7 +78,7 @@ export function ImportColumnsEditor({ controlToken }) {
   async function reset() {
     setSaving(true);
     try {
-      apply(await controlRequest('/studio/v1/import-profile', { token: controlToken, method: 'DELETE' }));
+      apply(await controlRequest(`/studio/v1/import-profile?type=${kind}`, { token: controlToken, method: 'DELETE' }));
       toast.message('Back to the standard import columns');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Reset failed');
@@ -93,6 +101,14 @@ export function ImportColumnsEditor({ controlToken }) {
         <Badge variant={isDefault ? 'secondary' : 'success'}>{isDefault ? 'Standard layout' : 'Custom layout'}</Badge>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Which import">
+          {IMPORT_KIND_OPTIONS.map((option) => (
+            <Button key={option.value} type="button" role="tab" aria-selected={kind === option.value} size="sm" variant={kind === option.value ? 'default' : 'outline'}
+              onClick={() => { if (kind === option.value) return; if (dirty && !window.confirm('Discard unsaved changes to this layout?')) return; setKind(option.value); }}>
+              {option.label}
+            </Button>
+          ))}
+        </div>
         <div className="rounded-md border bg-muted/40 p-3">
           <p className="mb-2 text-xs font-medium text-muted-foreground">Your Excel file will have these columns, in this order</p>
           <div className="flex flex-wrap gap-1" aria-label="Column order preview">
@@ -142,11 +158,11 @@ export function ImportColumnsEditor({ controlToken }) {
               </div>
               <div className="grid gap-2 text-xs">
                 <label className="flex items-center gap-2">
-                  <Checkbox checked={field.enabled} disabled={field.key === 'itemName'} onCheckedChange={(value) => edit(index, { enabled: Boolean(value), required: value ? field.required : false })} />
+                  <Checkbox checked={field.enabled} disabled={lockedKeys.includes(field.key)} onCheckedChange={(value) => edit(index, { enabled: Boolean(value), required: value ? field.required : false })} />
                   Use
                 </label>
                 <label className="flex items-center gap-2">
-                  <Checkbox checked={field.required} disabled={!field.enabled || field.key === 'itemName'} onCheckedChange={(value) => edit(index, { required: Boolean(value) })} />
+                  <Checkbox checked={field.required} disabled={!field.enabled || lockedKeys.includes(field.key)} onCheckedChange={(value) => edit(index, { required: Boolean(value) })} />
                   Required
                 </label>
               </div>
@@ -164,7 +180,7 @@ export function ImportColumnsEditor({ controlToken }) {
         {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
 
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => { setFields((current) => [...current, newCustomField(current)]); setDirty(true); }}><Plus className="size-4" />Add column</Button>
+          {kind === 'OPENING_STOCK' && <Button type="button" variant="outline" onClick={() => { setFields((current) => [...current, newCustomField(current)]); setDirty(true); }}><Plus className="size-4" />Add column</Button>}
           <Button type="button" onClick={save} disabled={saving || !dirty}><Save className="size-4" />{saving ? 'Saving…' : 'Save columns'}</Button>
           <Button type="button" variant="ghost" onClick={reset} disabled={saving || isDefault}><RotateCcw className="size-4" />Back to standard</Button>
         </div>

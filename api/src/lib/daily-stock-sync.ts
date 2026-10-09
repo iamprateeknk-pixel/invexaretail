@@ -1,3 +1,4 @@
+import { aliasMapForProfile, type ImportProfile } from './import-profile.js';
 import { readTabularFile } from './stock-import.js';
 
 export type DailyImportType = 'SALES' | 'PURCHASE';
@@ -88,23 +89,34 @@ function dateAt(dateValue: unknown, timeValue: unknown, fallbackTime: string): {
   return Number.isNaN(iso.getTime()) ? { assumed: !time } : { at: iso.toISOString(), assumed: !time };
 }
 
-function findHeader(rows: unknown[][], kind: DailyImportType) {
+function findHeader(rows: unknown[][], kind: DailyImportType, aliasMap: Record<string, string[]> = aliases) {
   for (let index = 0; index < Math.min(rows.length, 20); index += 1) {
     const headers = rows[index].map(norm); const columns: Record<string, number> = {}; const mapping: Record<string, string> = {};
-    for (const [field, choices] of Object.entries(aliases)) { const found = headers.findIndex((header) => choices.includes(header)); if (found >= 0) { columns[field] = found; mapping[field] = value(rows[index][found]); } }
+    for (const [field, choices] of Object.entries(aliasMap)) { const found = headers.findIndex((header) => choices.includes(header)); if (found >= 0) { columns[field] = found; mapping[field] = value(rows[index][found]); } }
     if (columns.billDate !== undefined && columns.reference !== undefined && columns.itemName !== undefined && columns.quantity !== undefined && (kind === 'PURCHASE' || columns.locationName !== undefined)) return { index, columns, mapping };
   }
   return undefined;
 }
 
-export async function parseDailyStockImport(buffer: Buffer, fileName: string, kind: DailyImportType, options: { purchaseLocationName: string; purchaseTime?: string }): Promise<DailyImportPreview> {
+export async function parseDailyStockImport(buffer: Buffer, fileName: string, kind: DailyImportType, options: { purchaseLocationName: string; purchaseTime?: string }, profile?: ImportProfile): Promise<DailyImportPreview> {
   const { sheetName, rows } = await readTabularFile(buffer, fileName);
-  const header = findHeader(rows, kind);
+  const header = findHeader(rows, kind, profile ? aliasMapForProfile(profile) : aliases);
   if (!header) throw new Error(kind === 'SALES' ? 'Sales sheet must include Branch Name, Bill Date, Bill No., Item Name and Total Qty.' : 'Purchase sheet must include Bill Date, Bill No., Item Name and Total Qty.');
+  const fieldConfigs = profile ? profile.fields.filter((field) => field.enabled) : [];
+  const missingRequired = fieldConfigs.filter((field) => field.required && header.columns[field.key] === undefined && !field.defaultValue);
+  if (missingRequired.length) throw new Error(`Required column${missingRequired.length > 1 ? 's' : ''} not found in the file: ${missingRequired.map((field) => field.label).join(', ')}.`);
+  const defaults = new Map(fieldConfigs.filter((field) => field.defaultValue).map((field) => [field.key, field.defaultValue as string]));
+  // Essential columns (bill no., date, item, qty) already have their own row errors below.
+  const requiredFields = fieldConfigs.filter((field) => field.required && !['billDate', 'reference', 'itemName', 'quantity', 'locationName'].includes(field.key));
   const validRows: DailyStockRow[] = []; const errors: DailyImportPreview['errors'] = []; const duplicates: DailyImportDuplicate[] = []; const seen = new Set<string>();
   for (let index = header.index + 1; index < rows.length; index += 1) {
     const source = rows[index]; if (!source.some((cell) => value(cell))) continue;
-    const get = (field: string) => source[header.columns[field]];
+    const get = (field: string) => {
+      const cell = source[header.columns[field]];
+      return value(cell) === '' && defaults.has(field) ? defaults.get(field) : cell;
+    };
+    const blankRequired = requiredFields.find((field) => value(get(field.key)) === '');
+    if (blankRequired) { errors.push({ rowNumber: index + 1, message: `${blankRequired.label} is required.` }); continue; }
     const itemName = value(get('itemName')); const reference = value(get('reference')); const qty = numeric(get('quantity'));
     const sourceLineNo = value(get('lineNo'));
     const rowNumber = index + 1;
