@@ -135,6 +135,8 @@ export type TransferRecord = {
   packing?: { completedAt: string; completedById: string; cartonCount: number };
   // Blueprint v4 §17: set at dispatch.
   dispatch?: { dispatchedAt: string; dispatchedById: string; carrier?: string; awb?: string; vehicleNo?: string; expectedArrivalAt?: string };
+  // The picker an admin/branch manager assigned. Unset: any picker at the source location may pick.
+  assignedPickerId?: string;
   createdAt: string;
   // Bare-id call-site migration slice 8: the in-memory mirror carried no
   // company identifier at all, so core.ts's bare-id lookups depended
@@ -615,6 +617,14 @@ export function setTransferLogistics(id: string, patch: Pick<TransferRecord, 'pa
   if (patch.packing !== undefined) transfer.packing = patch.packing;
   if (patch.dispatch !== undefined) transfer.dispatch = patch.dispatch;
   if (patch.cartonCount !== undefined) transfer.cartonCount = patch.cartonCount;
+  return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
+}
+
+export function setTransferAssignedPicker(id: string, pickerId: string | undefined): TransferRecord {
+  const transfer = transfers.find((record) => record.id === id);
+  if (!transfer) throw new Error('Transfer was not found.');
+  if (pickerId) transfer.assignedPickerId = pickerId;
+  else delete transfer.assignedPickerId;
   return { ...transfer, lines: transfer.lines.map((line) => ({ ...line })) };
 }
 

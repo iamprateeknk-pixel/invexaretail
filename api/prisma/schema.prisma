@@ -944,6 +944,10 @@ model Transfer {
   // Blueprint v4 §16/§17: packing completion and dispatch details
   // ({ packing: {...}, dispatch: {...} }) - see lib/transfer-packing.ts.
   logistics             Json?
+  // The WAREHOUSE_PICKER an admin/branch manager handed this transfer to. Null means
+  // any picker at the source location may pick it (the behaviour before assignment existed).
+  // No FK, like ExceptionCase owners in memory mode: the route validates the user.
+  assignedPickerId      String?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
@@ -959,6 +963,7 @@ model Transfer {
   @@index([companyId])
   @@index([destinationLocationId, status])
   @@index([sourceLocationId, createdAt])
+  @@index([assignedPickerId, status])
 }
 
 model TransferLine {

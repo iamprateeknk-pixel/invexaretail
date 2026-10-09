@@ -1369,6 +1369,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
+        get: operations["getItemsVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{itemId}/forecast": {
         parameters: {
             query?: never;
@@ -2699,6 +2716,40 @@ export interface paths {
         patch: operations["patchTransfersTransferIdStatus"];
         trace?: never;
     };
+    "/transfers/{transferId}/eligible-pickers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Warehouse pickers of the caller's company who work the transfer's source location - the choices for assigning a picker. */
+        get: operations["getTransfersTransferIdEligiblePickers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transfers/{transferId}/picker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Assign the transfer to one named warehouse picker (null unassigns). Only that picker can then see and pick it, and they are notified. Unassigned transfers stay open to every picker at the source. */
+        patch: operations["patchTransfersTransferIdPicker"];
+        trace?: never;
+    };
     "/auth/setup-biometric": {
         parameters: {
             query?: never;
@@ -3923,7 +3974,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/items/version": {
     "/imports/sales/template": {
         parameters: {
             query?: never;
@@ -3931,8 +3981,6 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
-        get: operations["getItemsVersion"];
         /** Sales import template (header + sample row) in the company's configured column order. */
         get: operations["getImportsSalesTemplate"];
         put?: never;
@@ -4025,6 +4073,9 @@ export interface components {
             notes?: string;
             /** Format: date-time */
             createdAt?: string;
+            /** @description The picker this transfer is assigned to. Absent: any picker at the source may pick it. */
+            assignedPickerId?: string;
+            assignedPickerName?: string;
         };
         TransferListItem: components["schemas"]["Transfer"] & {
             cartons?: {
@@ -5034,6 +5085,9 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
             companyId?: string;
+            /** @description The picker this transfer is assigned to. Absent: any picker at the source may pick it. */
+            assignedPickerId?: string;
+            assignedPickerName?: string;
         };
         PickWave: {
             id: string;
@@ -10056,6 +10110,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getItemsVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Opaque; equal strings mean an unchanged catalogue. */
+                        version: string | null;
+                    };
+                };
+            };
+            /** @description No or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -15216,6 +15300,121 @@ export interface operations {
             };
         };
     };
+    getTransfersTransferIdEligiblePickers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transferId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eligible pickers, by name, and the current assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        assignedPickerId: string | null;
+                        pickers: {
+                            id: string;
+                            name: string;
+                            email: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Only admins and the source branch manager can assign a picker. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Transfer not found (also for another company's transfer). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    patchTransfersTransferIdPicker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transferId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    pickerId: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Assigned (or unchanged). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success?: boolean;
+                        unchanged?: boolean;
+                        transfer?: components["schemas"]["TransferRecord"];
+                    };
+                };
+            };
+            /** @description pickerId is not an active warehouse picker of this company at the source location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Only admins and the source branch manager can assign a picker. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Transfer not found (also for another company's transfer). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Picking is already finished; there is nothing to assign. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
     postAuthSetupBiometric: {
         parameters: {
             query?: never;
@@ -19838,7 +20037,6 @@ export interface operations {
             };
         };
     };
-    getItemsVersion: {
     getImportsSalesTemplate: {
         parameters: {
             query?: never;
@@ -19848,7 +20046,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Version. */
             /** @description OK. */
             200: {
                 headers: {
@@ -19856,17 +20053,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        /** @description Opaque; equal strings mean an unchanged catalogue. */
-                        version: string | null;
-                    };
-                };
-            };
-            /** @description No or invalid credentials. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
                         filename: string;
                         csv: string;
                     };

@@ -9,6 +9,7 @@ export function mapPickerTasks(tasks, items) {
     line: (task.lines ?? []).map((line) => `${items.find((item) => item.id === line.itemId)?.name ?? line.itemId} / ${line.lotId}`).join(', '),
     qty: (task.lines ?? []).reduce((total, line) => total + line.quantity, 0),
     status: task.status,
+    assignedToMe: Boolean(task.assignedToMe),
   }));
 }
 
