@@ -214,6 +214,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { loadMobileWork } from '../lib/mobile-work.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
@@ -1531,51 +1532,9 @@ router.get('/count-assignments/mine', async (req: Request, res: Response) => {
 // items that still have counted-in stock at the location, with only the lots
 // worth counting and no quantities, so the blind count stays blind) and the
 // transfers waiting to be received at their branch. No full catalog.
-router.get('/mobile/work', (req: Request, res: Response) => {
-  const context = accessContext(req.user!);
-  // Warehouse pickers count assignments too (the server has always accepted both roles for
-  // /count-assignments/mine and /stock-counts) - this feed just never included them.
-  const isStore = context.role === 'STORE_USER' || context.role === 'WAREHOUSE_PICKER';
-  const countTasks = isStore
-    ? listCountAssignmentsFor(req.user!.id).flatMap((assignment) => {
-        const item = listItems().find((candidate) => candidate.id === assignment.itemId);
-        if (!item || !isOperationalItem(item) || !canAccessLocation(context, assignment.locationId)) return [];
-        const lots = item.lots
-          .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && (findStockLedgerEntry(item.id, lot.id, assignment.locationId)?.onHand ?? 0) > 0)
-          .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
-        // Nothing on the shelf to count: not an actionable task for a store user.
-        if (!lots.length) return [];
-        return [{
-          assignmentId: assignment.id,
-          locationId: assignment.locationId,
-          countDate: assignment.countDate,
-          dueDate: assignment.dueDate,
-          priority: assignment.priority ?? 'NORMAL',
-          instructions: assignment.instructions,
-          campaignId: assignment.campaignId,
-          recount: Boolean(assignment.parentCountId),
-          item: {
-            id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
-            countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
-          },
-          lots,
-        }];
-      })
-    : [];
-  const receiveTasks = ['STORE_USER', 'BRANCH_MANAGER', 'ADMIN', 'ADMIN_USER'].includes(context.role)
-    ? listTransfers()
-        .filter((transfer) => ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'].includes(transfer.status) && canAccessLocation(context, transfer.destinationLocationId))
-        .map((transfer) => ({
-          transferId: transfer.id,
-          sourceLocationId: transfer.sourceLocationId,
-          destinationLocationId: transfer.destinationLocationId,
-          status: transfer.status,
-          lineCount: transfer.lines.length,
-          cartonCount: transfer.cartonCount,
-          createdAt: transfer.createdAt,
-        }))
-    : [];
-  return res.json({ countTasks, receiveTasks });
+// Database-first slice 8: the response is built by lib/mobile-work.ts (Postgres in database mode).
+router.get('/mobile/work', async (req: Request, res: Response) => {
+  return res.json(await loadMobileWork(tenantContext(req), accessContext(req.user!)));
 });
 
 router.get('/count-assignments', async (req: Request, res: Response) => {
