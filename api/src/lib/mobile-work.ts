@@ -6,6 +6,7 @@
 import type { TransferStatus } from '@prisma/client';
 import { prisma } from './db.js';
 import { databaseEnabled } from './persistence.js';
+import { isCountWorkerRole } from './count-lifecycle.js';
 import { canAccessLocation, type AccessContext } from './inventory.js';
 import { isOperationalItem } from './item-master.js';
 import { itemRowToRecord } from './item-record-mapper.js';
@@ -132,9 +133,9 @@ function loadFromSnapshot(userId: string, isCounter: boolean, canReceive: boolea
 }
 
 export async function loadMobileWork(ctx: TenantContext, context: AccessContext) {
-  // Warehouse pickers count assignments too (the server has always accepted both roles for
-  // /count-assignments/mine and /stock-counts).
-  const isCounter = context.role === 'STORE_USER' || context.role === 'WAREHOUSE_PICKER';
+  // Every count-worker role (store users, warehouse pickers, branch managers) gets its own tasks -
+  // the same rule /count-assignments/mine and /stock-counts use.
+  const isCounter = isCountWorkerRole(context.role);
   const canReceive = RECEIVER_ROLES.includes(context.role);
   const facts = databaseEnabled
     ? await loadFromDatabase(ctx, context, isCounter, canReceive)
@@ -144,6 +145,6 @@ export async function loadMobileWork(ctx: TenantContext, context: AccessContext)
 
 /** The snapshot path on its own, for parity tests that run with the database enabled. */
 export function loadMobileWorkFromSnapshot(ctx: TenantContext, context: AccessContext) {
-  const isCounter = context.role === 'STORE_USER' || context.role === 'WAREHOUSE_PICKER';
+  const isCounter = isCountWorkerRole(context.role);
   return buildMobileWork(context, loadFromSnapshot(ctx.userId, isCounter, RECEIVER_ROLES.includes(context.role)));
 }
