@@ -87,7 +87,7 @@ export function ImportColumnsEditor({ controlToken }) {
         <div>
           <CardTitle className="text-base">Excel import columns</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            Move columns up or down, rename them, mark them required, turn them off, or add your own. The import and the downloadable template follow this list.
+            Move columns up or down, rename them, mark them required, turn them off, or add your own. The import and the downloadable template follow this list. Values in your own columns are saved on each item (as custom fields, matched by item code) when the import is confirmed.
           </p>
         </div>
         <Badge variant={isDefault ? 'secondary' : 'success'}>{isDefault ? 'Standard layout' : 'Custom layout'}</Badge>

@@ -174,6 +174,7 @@ import {
   persistUserCreate,
   persistUserDelete,
   persistUserUpdate,
+  saveImportedCustomValuesSafely,
 } from '../lib/persistence.js';
 import { importTemplateCsv } from '../lib/import-profile.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
@@ -2408,7 +2409,8 @@ router.post('/imports/opening-stock/commit', upload.single('file'), async (req: 
       if (result.created) created += 1;
       else updated += 1;
     }
-    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2539,7 +2541,8 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
       const { item } = await upsertCompanyItem({ code: row.code, name: row.itemName, category: row.category, subcategory: row.subcategory, company: row.companyName, unit: row.unit }, req.companyId ?? DEFAULT_COMPANY_ID);
       imported.push(item);
     }
-    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview) });
+    const customValues = await saveImportedCustomValuesSafely(req.companyId ?? DEFAULT_COMPANY_ID, preview.validRows);
+    return res.json({ message: `Imported ${imported.length} items.`, imported, preview: importPreviewResponse(preview), ...customValues });
   } catch (error) {
     return res.status(400).json({ message: `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
@@ -2715,7 +2718,8 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
         else updated += 1;
       }
       await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: imported.length });
-      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length });
+      const customValues = await saveImportedCustomValuesSafely(companyId, preview.validRows);
+      return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length, ...customValues });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
