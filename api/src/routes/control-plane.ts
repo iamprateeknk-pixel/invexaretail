@@ -563,6 +563,30 @@ studioRouter.put('/draft/stock/column-layout', (req: Request, res: Response) => 
   }
 });
 
+studioRouter.put('/draft/stock/formula-columns', (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      draft: controlPlane.setStockFormulaColumn(requireScope(req), {
+        key: req.body?.key,
+        label: String(req.body?.label ?? ''),
+        formula: String(req.body?.formula ?? ''),
+        type: req.body?.type,
+      }),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.delete('/draft/stock/formula-columns/:key', (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, draft: controlPlane.clearStockFormula(requireScope(req), param(req, 'key')) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 studioRouter.post('/fields', (req: Request, res: Response) => {
   try {
     const draft = controlPlane.addField(requireScope(req), {

@@ -2,6 +2,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword, verifyPassword } from '../otp-auth.js';
 import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
 import type { ImportProfile } from '../import-profile.js';
+import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
@@ -167,11 +168,13 @@ export type ColumnDefinition = {
   key: string;
   label: string;
   type: string;
-  source: 'core' | 'custom';
+  source: 'core' | 'custom' | 'formula';
   visible: boolean;
   exportEnabled: boolean;
   mobileEnabled: boolean;
   visibleRoles?: string[];
+  /** Calculated column: evaluated per stock row from STOCK_FORMULA_FIELDS. */
+  formula?: string;
 };
 
 export type PageDefinition = {
@@ -1414,6 +1417,69 @@ export class ControlPlane {
       ordered.push(column);
     }
     draft.page.columns = [...ordered, ...draft.page.columns.filter((column) => !seen.has(column.key))];
+    return draft;
+  }
+
+  /**
+   * Adds or updates a calculated stock column in the draft. New columns are keyed `calc_*`;
+   * the built-in `available` column can also be given a formula (clear it to restore the standard one).
+   */
+  setStockFormulaColumn(scope: ScopeContext, input: { key?: string; label: string; formula: string; type?: string }): ConfigurationVersion {
+    const companyId = this.requireLockedCompany(scope);
+    this.assertBillingWritable(companyId);
+    const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60);
+    if (!label) throw new ControlPlaneError('Give the column a name', 'INVALID_COLUMN_LABEL', 400);
+    const formula = String(input.formula ?? '').trim();
+    try {
+      validateFormula(formula, STOCK_FORMULA_FIELDS);
+    } catch (error) {
+      if (error instanceof FormulaError) throw new ControlPlaneError(error.message, 'INVALID_FORMULA', 400);
+      throw error;
+    }
+    const draft = this.ensureDraft(scope);
+    const type = input.type === 'currency' ? 'currency' : 'number';
+    const requestedKey = String(input.key ?? '').trim();
+    if (requestedKey === 'available') {
+      const available = draft.page.columns.find((column) => column.key === 'available');
+      if (!available) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
+      available.formula = formula;
+      available.label = label;
+      return draft;
+    }
+    if (requestedKey && !/^calc_[a-z0-9_]{1,30}$/.test(requestedKey)) {
+      throw new ControlPlaneError('Only calculated columns can hold a formula', 'INVALID_COLUMN_KEY', 400);
+    }
+    const existing = requestedKey ? draft.page.columns.find((column) => column.key === requestedKey) : undefined;
+    if (requestedKey && !existing) throw new ControlPlaneError('Unknown calculated column', 'COLUMN_NOT_FOUND', 404);
+    if (existing) {
+      existing.label = label;
+      existing.formula = formula;
+      existing.type = type;
+      return draft;
+    }
+    if (draft.page.columns.filter((column) => column.source === 'formula').length >= 12) {
+      throw new ControlPlaneError('A maximum of 12 calculated columns is allowed', 'TOO_MANY_FORMULAS', 400);
+    }
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'column';
+    let key = `calc_${slug}`;
+    for (let n = 2; draft.page.columns.some((column) => column.key === key); n += 1) key = `calc_${slug}_${n}`;
+    draft.page.columns.push({
+      key, label, type, source: 'formula', formula, visible: true, exportEnabled: true, mobileEnabled: true,
+    });
+    return draft;
+  }
+
+  /** Removes a calculated column, or restores the standard formula of a built-in one. */
+  clearStockFormula(scope: ScopeContext, key: string): ConfigurationVersion {
+    this.requireLockedCompany(scope);
+    const draft = this.ensureDraft(scope);
+    const column = draft.page.columns.find((entry) => entry.key === key);
+    if (!column) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
+    if (column.source === 'formula') draft.page.columns = draft.page.columns.filter((entry) => entry.key !== key);
+    else if (column.formula) {
+      delete column.formula;
+      if (column.key === 'available') column.label = 'Available';
+    } else throw new ControlPlaneError('This column has no formula', 'NO_FORMULA', 400);
     return draft;
   }
 
