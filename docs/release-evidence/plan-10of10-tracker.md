@@ -6,7 +6,7 @@ Status is `done` (code + test evidence), `partial` (shipped slice, named remaind
 | Area | Item | Status | Evidence / remainder |
 |---|---|---|---|
 | A Architecture | Snapshot reconciled off the request path | done | `lib/repository-reconciler.ts` + test; `/ops/metrics` `reconciliation` |
-| A | Database-first reads, drop in-memory snapshot | open | Large refactor, deliberately not started in code: survey, slice order and the local Postgres recipe are in `docs/db-first-reads-plan.md`. Needs a memory-vs-Postgres parity helper first |
+| A | Database-first reads, drop in-memory snapshot | partial | 5 of 27 snapshot-reading GET handlers now read Postgres through TenantContext-scoped repositories with real-Postgres parity tests: `/locations`, `/imports/history`, `/count-assignments`, `/sync-status`, `/counts` (PRs 107, 109-112). The rest are blocked on `/items`, which measured ~1 s + 24 MB at 20k items and so needs the web app to page its catalogue first (8 call sites). See `docs/db-first-reads-plan.md` |
 | A | Remaining `core.ts` Transfer routes extracted | done | `docs/route-ownership-matrix.md` |
 | B Stock integrity | Canonical posting, job consumption in one transaction | done | `lib/job-consumption-service.ts` + 8 Postgres tests |
 | B | Nightly reconciliation with evidence | done | `lib/stock-reconciliation.ts`, `reconciliation_runs` migration, 6 Postgres tests |

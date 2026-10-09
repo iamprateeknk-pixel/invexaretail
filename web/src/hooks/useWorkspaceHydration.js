@@ -1,5 +1,6 @@
 import { API_BASE, apiRequest } from '../lib/api-client';
 import { nextPollDelayMs } from '../lib/poll-policy';
+import { fetchCatalogueVersion, loadCatalogueIfChanged } from '../lib/catalogue-version';
 import { LIVE_STATUS, createLiveClient, invalidationsForTopics } from '../lib/live-events';
 import { mapPickerTasks } from '../lib/workspace-queues';
 import {
@@ -45,8 +46,13 @@ export function useWorkspaceHydration({
   setWorkspaceProfile,
   showToast,
 }) {
+  // Version of the catalogue we currently hold (see lib/catalogue-version.js); null = unknown.
+  const itemsVersion = useRef(null);
+
   async function hydrateWorkspace(token, currentRole) {
     const headers = { Authorization: `Bearer ${token}` };
+    // Read before the catalogue itself so a change landing in between is caught by the next check.
+    itemsVersion.current = await fetchCatalogueVersion(headers);
     // Independent resources load together so login does not pay an extra network round-trip.
     const [locationsResponse, itemsResponse, countsResponse, transfersResponse, dashboardResponse, workspaceResponse, runtimeResponse] = await Promise.all([
       apiRequest('/api/v1/locations', { headers }),
@@ -172,9 +178,17 @@ export function useWorkspaceHydration({
     let currentItems = latest.current.items;
     const currentLocations = latest.current.locations;
     if (slices.has('items')) {
-      const response = await apiRequest('/api/v1/items', { headers });
-      currentItems = response.items ?? currentItems;
-      setItems(currentItems);
+      // Most refreshes find the catalogue unchanged; skip the (large) fetch then.
+      const loaded = await loadCatalogueIfChanged({
+        lastVersion: itemsVersion.current,
+        fetchVersion: () => fetchCatalogueVersion(headers),
+        fetchItems: async () => (await apiRequest('/api/v1/items', { headers })).items,
+      });
+      if (loaded.items) {
+        currentItems = loaded.items ?? currentItems;
+        setItems(currentItems);
+      }
+      itemsVersion.current = loaded.version;
     }
     if (slices.has('campaigns')) setCampaignRevision((value) => value + 1);
     const jobs = [];

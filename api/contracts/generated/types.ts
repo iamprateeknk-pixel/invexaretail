@@ -3923,6 +3923,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/version": {
     "/imports/sales/template": {
         parameters: {
             query?: never;
@@ -3930,6 +3931,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** A cheap fingerprint of the company catalogue (items and lots). Compare with the version last loaded and refetch GET /items only when it changed. null in memory mode means unknown: refetch. */
+        get: operations["getItemsVersion"];
         /** Sales import template (header + sample row) in the company's configured column order. */
         get: operations["getImportsSalesTemplate"];
         put?: never;
@@ -19835,6 +19838,7 @@ export interface operations {
             };
         };
     };
+    getItemsVersion: {
     getImportsSalesTemplate: {
         parameters: {
             query?: never;
@@ -19844,6 +19848,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Version. */
             /** @description OK. */
             200: {
                 headers: {
@@ -19851,6 +19856,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @description Opaque; equal strings mean an unchanged catalogue. */
+                        version: string | null;
+                    };
+                };
+            };
+            /** @description No or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
                         filename: string;
                         csv: string;
                     };
