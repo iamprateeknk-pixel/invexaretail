@@ -215,6 +215,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
 import { listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
@@ -755,8 +756,7 @@ router.delete('/users/:userId', async (req: Request, res: Response) => {
   return res.json({ success: true });
 });
 
-router.get('/items', (req: Request, res: Response) => {
-  const companyId = req.companyId ?? req.user?.companyId ?? DEFAULT_COMPANY_ID;
+router.get('/items', async (req: Request, res: Response) => {
   let filter;
   try {
     filter = parseStatusFilter(req.query.status);
@@ -765,7 +765,9 @@ router.get('/items', (req: Request, res: Response) => {
   }
   // Operational users only ever see ACTIVE items; admins can ask for
   // ARCHIVED / all to maintain the master (blueprint v4 §6).
-  return res.json({ items: visibleItems(req.user!.role, itemsForCompany(companyId, listItems()), filter) });
+  // Database-first slice 6: read through the scoped item repository (Postgres in database mode). The web app
+  // gates this behind GET /items/version, so it only runs when the catalogue actually changed.
+  return res.json({ items: visibleItems(req.user!.role, await listItemsForCompany(tenantContext(req)), filter) });
 });
 
 router.post('/items', async (req: Request, res: Response) => {
