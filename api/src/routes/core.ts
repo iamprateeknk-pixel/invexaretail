@@ -214,6 +214,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
 import { listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
 import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
 
@@ -2882,9 +2883,11 @@ router.post('/imports/sales/commit', upload.single('file'), (req, res) => commit
 router.post('/imports/purchases/preview', upload.single('file'), (req, res) => previewDailyImport(req, res, 'PURCHASE'));
 router.post('/imports/purchases/commit', upload.single('file'), (req, res) => commitDailyImport(req, res, 'PURCHASE'));
 
-router.get('/sync-status', (req: Request, res: Response) => {
-  const checkpoints = listSyncCheckpoints();
-  return res.json({ locations: locationsForCompany(req.companyId ?? DEFAULT_COMPANY_ID, listLocations()).map((location) => ({ locationId: location.id, locationName: location.name, salesSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'SALES')?.syncedThroughAt ?? null, purchaseSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'PURCHASE')?.syncedThroughAt ?? null })) });
+// Database-first slice 4: locations and checkpoints both come from the scoped repositories.
+router.get('/sync-status', async (req: Request, res: Response) => {
+  const ctx = tenantContext(req);
+  const [checkpoints, companyLocations] = await Promise.all([listSyncCheckpointsForCompany(ctx), listLocationsForCompany(ctx)]);
+  return res.json({ locations: companyLocations.map((location) => ({ locationId: location.id, locationName: location.name, salesSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'SALES')?.syncedThroughAt ?? null, purchaseSyncedThrough: checkpoints.find((entry) => entry.locationId === location.id && entry.sourceType === 'PURCHASE')?.syncedThroughAt ?? null })) });
 });
 
 // ---------------------------------------------------------------------------

@@ -113,3 +113,6 @@ Run each file on its own, as CI does: running them together against one database
      poll a full-catalogue Postgres query (20k+ items with lots). The web side must page or ask per screen first
      (`useItemSearch` already exists), otherwise this slice trades memory for database load. That is a performance
      decision, so it is sequenced after the web change, not before.
+- **Slice 4 done: `GET /sync-status`** via `lib/repositories/sync-checkpoint-repository.ts` plus the slice-1 location
+  repository. Same pattern: scoped through the checkpoint's location; tenant isolation, SALES/PURCHASE-only and parity
+  with the hydrated snapshot are proven in `sync-checkpoint-repository.postgres.test.ts`.
