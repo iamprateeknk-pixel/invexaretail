@@ -214,6 +214,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
 import { listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
 import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
@@ -926,7 +927,8 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
 router.get('/counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const blindCountWorker = ['STORE_USER', 'WAREHOUSE_PICKER'].includes(context.role);
-  const visible = listCounts().filter((count) =>
+  // Database-first slice 5: read through the scoped count repository (Postgres in database mode).
+  const visible = (await listCountsForCompany(tenantContext(req))).filter((count) =>
     canAccessLocation(context, count.locationId)
     && (!blindCountWorker || count.submittedBy === req.user!.id),
   );

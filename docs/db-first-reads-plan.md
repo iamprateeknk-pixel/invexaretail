@@ -116,3 +116,9 @@ Run each file on its own, as CI does: running them together against one database
 - **Slice 4 done: `GET /sync-status`** via `lib/repositories/sync-checkpoint-repository.ts` plus the slice-1 location
   repository. Same pattern: scoped through the checkpoint's location; tenant isolation, SALES/PURCHASE-only and parity
   with the hydrated snapshot are proven in `sync-checkpoint-repository.postgres.test.ts`.
+- **Slice 5 done: `GET /counts`**, taking the decision recorded above: the database-first read returns the submitter's
+  *real* role (joined from `User`), not the hydration placeholder. Checked first that nothing consumes it: no code in
+  `web/` or `mobile/` reads `count.role`; only the blind-count branch of this endpoint echoes it. The snapshot keeps its
+  placeholder (so memory-mode and snapshot-based features are unchanged) and the parity test asserts everything else is
+  equal. The row-to-record mapping moved into `lib/count-record-mapper.ts`, used by both hydration and the repository.
+  If the product owner wants the old placeholder back, it is a one-line change in `count-repository.ts`.
