@@ -247,7 +247,7 @@ test('count -> review -> recount -> approval drives coverage to a completed camp
   });
 });
 
-test('a user who skips a day gets no new items until the old batch is done, then a fresh full batch', async () => {
+test('a user with even one unfinished item gets no new items until the old batch is done, then a fresh full batch', async () => {
   freshState();
   await withServer(async (call) => {
     const admin = tokenFor('admin@retail.local');
@@ -260,9 +260,14 @@ test('a user who skips a day gets no new items until the old batch is done, then
     const dayTwo = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 30 * HOUR) });
     assert.equal(dayTwo.assigned, 0);
 
+    // Half done is still not done: one task left -> still nothing new.
+    updateCountAssignment(dayOne[0].id, { status: 'SUBMITTED' });
+    const partial = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 54 * HOUR) });
+    assert.equal(partial.assigned, 0);
+
     // Back at work: the old batch is finished, so the next day brings a new full batch.
-    for (const row of dayOne) updateCountAssignment(row.id, { status: 'SUBMITTED' });
-    const dayThree = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 54 * HOUR) });
+    updateCountAssignment(dayOne[1].id, { status: 'SUBMITTED' });
+    const dayThree = await runCampaignDay(campaign.id, COMPANY, { now: new Date(Date.now() + 78 * HOUR) });
     assert.equal(dayThree.assigned, 2);
     const fresh = countAssignments.filter((row) => row.campaignId === campaign.id && row.status === 'ASSIGNED');
     assert.equal(fresh.some((row) => dayOne.some((old) => old.itemId === row.itemId)), false);
