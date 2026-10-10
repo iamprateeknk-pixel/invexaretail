@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { canCreateTransfer, transferQueueActions } from '../../../lib/transfer-lifecycle';
 import { logisticsLabel } from '../../../lib/transfer-packing';
 import TransferPackingDialog from '../../transfers/TransferPackingDialog';
+import AssignPickerDialog from '../../transfers/AssignPickerDialog';
 import { statusBadgeVariant } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
 import { TableToolbar } from '@/components/ui/table-toolbar';
@@ -15,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowRight, Pencil, Trash2 } from 'lucide-react';
+import { ArrowRight, Pencil, Trash2, UserCheck } from 'lucide-react';
 
 const EDITABLE_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'REQUESTED']);
 
@@ -38,6 +39,7 @@ export function TransfersPage() {
     openTransferEditor, deleteTransfers, submitLoading,
   } = useWorkspace();
   const [packingTransfer, setPackingTransfer] = useState(null);
+  const [pickerTransfer, setPickerTransfer] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [pendingDelete, setPendingDelete] = useState([]);
   const itemsById = new Map((items ?? []).map((item) => [item.id, item]));
@@ -78,7 +80,7 @@ export function TransfersPage() {
       <TableToolbar tableId="transfers" userId={session?.user?.id} state={view.state} onChange={view.setState} defaults={DEFAULT_TABLE_STATE} searchLabel="Search transfers" columns={COLUMNS} exportCsv={{ filename: 'transfers', columns: EXPORT_COLUMNS, rows: view.visible }} />
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
-          <div><CardTitle className="text-base">Transfer queue</CardTitle><p className="mt-1 text-xs text-muted-foreground">Import → FEFO pick slips → admin confirm → dispatch → receive</p></div>
+          <div><CardTitle className="text-base">Transfer queue</CardTitle><p className="mt-1 text-xs text-muted-foreground">Import → assign picker → FEFO pick slips → admin confirm → dispatch → receive</p></div>
           <div className="flex flex-wrap gap-2">
             {selectedIds.size > 0 && <Button variant="destructive" onClick={() => setPendingDelete([...selectedIds])}><Trash2 className="size-4" />Delete selected ({selectedIds.size})</Button>}
             {['ADMIN', 'ADMIN_USER'].includes(role) && <Button variant="outline" onClick={() => { setTransferImportForm((current) => ({ ...current, sourceLocationId: locations.find((entry) => entry.type === 'warehouse')?.id || locationId, destinationLocationId: locations.find((entry) => entry.type === 'store')?.id || locationId })); setModalOpen('transferImport'); }}>Import transfer</Button>}
@@ -100,11 +102,12 @@ export function TransfersPage() {
                     <TableCell>{transfer.fromName} <ArrowRight className="mx-1 inline size-3" /> {transfer.toName}</TableCell>
                     <TableCell>{transfer.qty} units</TableCell>
                     <TableCell>{transfer.cartonCount || '—'}{(transfer.cartons ?? []).length > 0 && <p className="text-xs text-muted-foreground">{transfer.cartons.map((carton) => carton.packageId).join(', ')}</p>}</TableCell>
-                    <TableCell><Badge variant={statusBadgeVariant(transfer.status)}>{transfer.status.replaceAll('_', ' ')}</Badge>{logisticsLabel(transfer) && <Badge className="ml-1" variant={transfer.delayed ? 'destructive' : 'outline'}>{logisticsLabel(transfer)}</Badge>}{transfer.dispatch && <p className="mt-1 text-xs text-muted-foreground">{[transfer.dispatch.carrier, transfer.dispatch.vehicleNo, transfer.dispatch.awb].filter(Boolean).join(' · ')}</p>}</TableCell>
+                    <TableCell><Badge variant={statusBadgeVariant(transfer.status)}>{transfer.status.replaceAll('_', ' ')}</Badge>{logisticsLabel(transfer) && <Badge className="ml-1" variant={transfer.delayed ? 'destructive' : 'outline'}>{logisticsLabel(transfer)}</Badge>}{transfer.assignedPickerId && <p className="mt-1 text-xs text-muted-foreground">Picker: {transfer.assignedPickerName ?? transfer.assignedPickerId}</p>}{transfer.dispatch && <p className="mt-1 text-xs text-muted-foreground">{[transfer.dispatch.carrier, transfer.dispatch.vehicleNo, transfer.dispatch.awb].filter(Boolean).join(' · ')}</p>}</TableCell>
                     <TableCell><div className="flex flex-wrap justify-end gap-1">
                       {editable && transfer.lines?.length === 1 && <Button variant="outline" size="sm" onClick={() => openTransferEditor(transfer)}><Pencil className="size-3.5" />Edit</Button>}
                       {editable && <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setPendingDelete([transfer.id])}><Trash2 className="size-3.5" />Delete</Button>}
                       <Button variant="outline" size="sm" onClick={() => setEvidenceTransfer(transfer)}>Photos</Button>
+                      {actions.assignPicker && <Button variant="outline" size="sm" onClick={() => setPickerTransfer(transfer)}><UserCheck className="size-3.5" />{transfer.assignedPickerId ? 'Change picker' : 'Assign picker'}</Button>}
                       {actions.confirm && <Button size="sm" onClick={() => confirmPickedTransfer(transfer.id)}>Review & confirm</Button>}
                       {(actions.dispatch || (['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'WAREHOUSE_PICKER'].includes(role) && ['READY_FOR_ADMIN', 'PARTIAL', 'CONFIRMED'].includes(transfer.status))) && <Button variant="outline" size="sm" onClick={() => setPackingTransfer(transfer)}>Pack & dispatch</Button>}
                       {actions.inTransit && <Button variant="outline" size="sm" onClick={() => changeTransferStatus(transfer.id, 'IN_TRANSIT')}>In transit</Button>}
@@ -128,6 +131,7 @@ export function TransfersPage() {
         </DialogContent>
       </Dialog>
 
+      {pickerTransfer && <AssignPickerDialog key={pickerTransfer.id} transfer={pickerTransfer} token={authToken} onAssigned={() => refreshTransfers()} onClose={() => setPickerTransfer(null)} />}
       {packingTransfer && <TransferPackingDialog key={packingTransfer.id} transfer={packingTransfer} token={authToken} itemsById={itemsById} canDispatch={['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role)} onChanged={refreshTransfers} onClose={() => setPackingTransfer(null)} />}
     </>
   );

@@ -86,7 +86,7 @@ export function PickingPage() {
                   <TableCell className="font-medium">{task.line}</TableCell>
                   <TableCell>{task.transferId}</TableCell>
                   <TableCell>{task.qty} units</TableCell>
-                  <TableCell><Badge variant={statusBadgeVariant(task.status)}>{task.status}</Badge></TableCell>
+                  <TableCell><Badge variant={statusBadgeVariant(task.status)}>{task.status}</Badge>{task.assignedToMe && <Badge className="ml-1" variant="outline">Assigned to you</Badge>}</TableCell>
                   <TableCell className="text-right">{['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(role) && <Button size="sm" disabled={submitLoading} onClick={() => openPickerTransfer(task.transferId)}>Open picker</Button>}</TableCell>
                 </TableRow>
               )) : <TableRow><TableCell colSpan={canManageWaves ? 6 : 5} className="h-40 text-center text-muted-foreground">No picking tasks are assigned at this location.</TableCell></TableRow>}

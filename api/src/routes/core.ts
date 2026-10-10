@@ -13,6 +13,7 @@ import { beginReceiptRequest, endReceiptRequest, findReceiptByRequestId, persist
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import multer from 'multer';
 import { evidenceMime } from '../lib/transfer-evidence.js';
+import { pickerMayWork } from '../lib/transfer-assignment.js';
 import { createHash } from 'node:crypto';
 
 import { extractToken, requireAuth } from './enterprise-auth.js';
@@ -1795,11 +1796,15 @@ router.get('/picker-tasks', (req: Request, res: Response) => {
   }
   const tasks = listTransfers()
     .filter((transfer) => ['REQUESTED', 'PENDING_PICK', 'PICKING', 'PARTIAL'].includes(transfer.status) && canAccessLocation(context, transfer.sourceLocationId))
+    // A transfer an admin handed to one picker leaves every other picker's queue.
+    .filter((transfer) => context.role !== 'WAREHOUSE_PICKER' || pickerMayWork(transfer, req.user!.id))
     .map((transfer) => ({
       transferId: transfer.id,
       locationId: transfer.sourceLocationId,
       lines: transfer.lines,
       status: 'ASSIGNED',
+      assignedPickerId: transfer.assignedPickerId ?? null,
+      assignedToMe: transfer.assignedPickerId === req.user!.id,
     }));
   return res.json({ tasks });
 });
@@ -2537,6 +2542,18 @@ function configuredPurchaseWarehouse(companyId: string = DEFAULT_COMPANY_ID) {
   return basni ?? (warehouses.length === 1 ? warehouses[0] : undefined);
 }
 
+/**
+ * The location the admin chose at import time for a purchase file ("Receive into"), checked to be one of this
+ * company's own locations. Undefined when nothing was chosen: the purchase then goes to the configured H.O. Basni warehouse.
+ */
+function requestedPurchaseDestination(companyId: string, requestedId: unknown) {
+  const id = typeof requestedId === 'string' ? requestedId.trim() : '';
+  if (!id) return undefined;
+  const location = locationsForCompany(companyId, listLocations()).find((entry) => entry.id === id);
+  if (!location) throw new Error('Choose one of your own locations to receive the purchase into.');
+  return location;
+}
+
 function dailyItem(row: DailyStockRow, companyId: string = DEFAULT_COMPANY_ID) {
   const catalog = itemsForCompany(companyId, listItems());
   const code = row.itemCode ? catalog.find((item) => normalName(item.code) === normalName(row.itemCode!)) : undefined;
@@ -2552,16 +2569,16 @@ function inactiveImportMessage(item: { code: string; status?: string }): string 
   return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 
-function planDailyImport(preview: DailyImportPreview, importedBy: string, companyId: string = DEFAULT_COMPANY_ID) {
-  const errors = [...preview.errors]; const warehouse = configuredPurchaseWarehouse(companyId); const prepared: Array<{ row: DailyStockRow; item: ReturnType<typeof listItems>[number]; locationId: string; lotId: string; qtyDelta: number; newLot?: ReturnType<typeof ensureLotRecord> }> = [];
-  if (preview.importType === 'PURCHASE' && !warehouse) errors.push({ rowNumber: 0, message: 'Set exactly one warehouse as H.O. Basni before importing purchases.' });
+function planDailyImport(preview: DailyImportPreview, importedBy: string, companyId: string = DEFAULT_COMPANY_ID, destination?: ReturnType<typeof requestedPurchaseDestination>) {
+  const errors = [...preview.errors]; const warehouse = destination ?? configuredPurchaseWarehouse(companyId); const prepared: Array<{ row: DailyStockRow; item: ReturnType<typeof listItems>[number]; locationId: string; lotId: string; qtyDelta: number; newLot?: ReturnType<typeof ensureLotRecord> }> = [];
+  if (preview.importType === 'PURCHASE' && !warehouse) errors.push({ rowNumber: 0, message: 'Choose where to receive the purchase, or set one warehouse as H.O. Basni.' });
   for (const row of preview.validRows) {
     const item = dailyItem(row, companyId);
     if (!item) { errors.push({ rowNumber: row.rowNumber, message: row.itemCode ? `Unknown Item Code: ${row.itemCode}` : `Unknown or ambiguous Item Name: ${row.itemName}` }); continue; }
     if (!isOperationalItem(item)) { errors.push({ rowNumber: row.rowNumber, message: inactiveImportMessage(item) }); continue; }
     const location = preview.importType === 'PURCHASE' ? warehouse : matchImportLocation(row.locationName, locationsForCompany(companyId, listLocations()));
-    if (!location) { errors.push({ rowNumber: row.rowNumber, message: `Unknown ${preview.importType === 'PURCHASE' ? 'H.O. Basni warehouse' : 'sales branch'}: ${row.locationName}` }); continue; }
-    if (preview.importType === 'PURCHASE' && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
+    if (!location) { errors.push({ rowNumber: row.rowNumber, message: `Unknown ${preview.importType === 'PURCHASE' ? 'purchase location' : 'sales branch'}: ${row.locationName}` }); continue; }
+    if (preview.importType === 'PURCHASE' && !destination && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
     let lot = row.lotNo ? item.lots.find((entry) => normalName(entry.lotNo) === normalName(row.lotNo!)) : undefined;
     if (!lot && row.movementType === 'SALE_OUT') {
       const available = item.lots.map((entry) => ({ lot: entry, qty: listStockLedgerForLocation(location.id).find((stock) => stock.itemId === item.id && stock.lotId === entry.id)?.onHand ?? 0 })).filter((entry) => entry.qty > 0).sort((a, b) => new Date(a.lot.expiryDate ?? '9999-12-31').getTime() - new Date(b.lot.expiryDate ?? '9999-12-31').getTime());
@@ -2671,7 +2688,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       metadata: { fileName: batch.fileName, rows: persisted.committedRows, batchToken: batch.id },
     }));
     return res.status(201).json({
-      message: `${importType === 'PURCHASE' ? 'Purchase received into H.O. Basni' : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`,
+      message: `${importType === 'PURCHASE' ? `Purchase received into ${String((batch.metadata as { purchaseWarehouse?: string } | null)?.purchaseWarehouse ?? 'H.O. Basni')}` : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`,
       batchId: batch.id,
       batchToken: batch.id,
       committedRows: persisted.committedRows,
@@ -2787,7 +2804,8 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID);
+    const requestedDestination = importType === 'PURCHASE' ? requestedPurchaseDestination(req.companyId ?? DEFAULT_COMPANY_ID, req.body?.destinationLocationId) : undefined;
+    const warehouse = requestedDestination ?? configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID);
     const fileHash = computeFileHash(req.file.buffer);
     const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType));
     const existing = await findDuplicateBatch({
@@ -2799,7 +2817,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
       sourceDateTo: preview.transactionTo ?? null,
     });
     if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
-    const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
+    const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
     const staged = stageDailyImport(preview, plan);
     const batch = await createPreviewBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -2844,7 +2862,8 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
   if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Admin access is required for daily imports.' });
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
-    const warehouse = configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID);
+    const requestedDestination = importType === 'PURCHASE' ? requestedPurchaseDestination(req.companyId ?? DEFAULT_COMPANY_ID, req.body?.destinationLocationId) : undefined;
+    const warehouse = requestedDestination ?? configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', errors: plan.errors.slice(0, 100) });
     const batchId = `imp-${importType.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
@@ -2856,7 +2875,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
     for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);
     await applyLateMovementsQuietly(movements, req.user!.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `${importType}_IMPORT_COMMITTED`, entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, rows: persisted.committedRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, purchaseWarehouse: warehouse?.name } }));
-    return res.status(201).json({ message: `${importType === 'PURCHASE' ? 'Purchase received into H.O. Basni' : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`, batchId, committedRows: persisted.committedRows });
+    return res.status(201).json({ message: `${importType === 'PURCHASE' ? `Purchase received into ${warehouse?.name ?? 'H.O. Basni'}` : 'Sales and sales returns'} committed: ${persisted.committedRows} stock movements.`, batchId, committedRows: persisted.committedRows });
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit import.' }); }
 }
 
@@ -3164,7 +3183,7 @@ router.post('/picker-tasks', (req: Request, res: Response) => {
 router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transfer = findTransferForCompany(req.body.transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId)) {
+  if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId) || !pickerMayWork(transfer, req.user!.id)) {
     return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
   }
 

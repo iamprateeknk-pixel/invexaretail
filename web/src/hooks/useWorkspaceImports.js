@@ -20,7 +20,7 @@ export function useWorkspaceImports({
 }) {
   const [importFile, setImportFile] = useState(null);
   const [importPreview, setImportPreview] = useState(null);
-  const [dailyImportForm, setDailyImportForm] = useState({ type: 'SALES', file: null, purchaseTime: '12:00' });
+  const [dailyImportForm, setDailyImportForm] = useState({ type: 'SALES', file: null, purchaseTime: '12:00', destinationLocationId: '' });
   const [dailyImportPreview, setDailyImportPreview] = useState(null);
   const [importBatches, setImportBatches] = useState([]);
   const [reversalBatch, setReversalBatch] = useState(null);
@@ -217,7 +217,7 @@ export function useWorkspaceImports({
         });
         const { conflict, result } = await readImportResponse(response);
         showToast(result.message, conflict ? 'warning' : 'success');
-        setModalOpen(null); setDailyImportForm({ type: 'SALES', file: null, purchaseTime: '12:00' }); setDailyImportPreview(null);
+        setModalOpen(null); setDailyImportForm({ type: 'SALES', file: null, purchaseTime: '12:00', destinationLocationId: '' }); setDailyImportPreview(null);
         await loadAppData(authToken, role);
       } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to import daily stock movements.', 'error'); }
       finally { setSubmitLoading(false); }
@@ -227,6 +227,7 @@ export function useWorkspaceImports({
     try {
       setSubmitLoading(true);
       const formData = new FormData(); formData.append('file', dailyImportForm.file); formData.append('purchaseTime', dailyImportForm.purchaseTime);
+      if (dailyImportForm.type === 'PURCHASE' && dailyImportForm.destinationLocationId) formData.append('destinationLocationId', dailyImportForm.destinationLocationId);
       const kind = dailyImportForm.type === 'PURCHASE' ? 'purchases' : 'sales';
       const response = await fetch(`${API_BASE}/api/v1/imports/${kind}/preview`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: formData });
       const { conflict, result } = await readImportResponse(response);
