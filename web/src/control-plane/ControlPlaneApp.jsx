@@ -19,13 +19,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/sonner';
 import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
 import { clearControlSession, exchangeSessionHandoff, handoffCodeFromHash, controlRequest, readControlSession, writeControlSession } from './control-api';
@@ -33,6 +31,9 @@ import { isControlPlaneDeployment } from './control-route';
 import { FormulaBuilder } from './FormulaBuilder';
 import { ImportColumnsEditor } from './ImportColumnsEditor';
 import { StockColumnsLayoutEditor } from './StockColumnsLayoutEditor';
+import { AutomationsEditor, FieldsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, StockExtraColumnCard, WorkflowsEditor } from './StudioEditors';
+import { Advanced, ModeSwitch, StudioModeProvider } from './studio-mode';
+import { labelOf, MOBILE_SCREENS, ROLE_OPTIONS } from './studio-catalog';
 
 function stripeSessionFromLocation() {
   const hash = String(globalThis.location?.hash ?? '');
@@ -51,7 +52,7 @@ const NAV = [
   { id: 'overview', label: 'Company', icon: Building2 },
   { id: 'studio', label: 'Studio', icon: SlidersHorizontal },
   { id: 'users', label: 'Users', icon: Shield },
-  { id: 'workflow', label: 'Workflows', icon: Workflow },
+  { id: 'workflow', label: 'Approvals', icon: Workflow },
   { id: 'mobile', label: 'Mobile & sync', icon: Smartphone },
   { id: 'integrations', label: 'Integrations', icon: KeyRound },
   { id: 'billing', label: 'Billing', icon: CreditCard },
@@ -59,6 +60,14 @@ const NAV = [
 ];
 
 export function ControlPlaneApp() {
+  return (
+    <StudioModeProvider>
+      <ControlPlaneWorkspace />
+    </StudioModeProvider>
+  );
+}
+
+function ControlPlaneWorkspace() {
   const [session, setSession] = useState(() => readControlSession());
   const [exchanging, setExchanging] = useState(() => Boolean(handoffCodeFromHash()));
   useEffect(() => {
@@ -83,44 +92,10 @@ export function ControlPlaneApp() {
   const [health, setHealth] = useState(null);
   const [billing, setBilling] = useState(null);
   const [integrations, setIntegrations] = useState(null);
-  const [columnName, setColumnName] = useState('Minimum Stock');
-  const [columnKey, setColumnKey] = useState('minimum_stock');
-  const [ruleKey, setRuleKey] = useState('expiry_task');
-  const [ruleName, setRuleName] = useState('Near-expiry task');
-  const [ruleField, setRuleField] = useState('daysToExpiry');
-  const [ruleComparator, setRuleComparator] = useState('Lt');
-  const [ruleValue, setRuleValue] = useState('30');
-  const [ruleAction, setRuleAction] = useState('CREATE_TASK:EXPIRY_ACTION');
-  const [ruleTestContext, setRuleTestContext] = useState('{\n  "daysToExpiry": 10\n}');
-  const [ruleTestResult, setRuleTestResult] = useState(null);
-  const [reportKey, setReportKey] = useState('low_stock');
-  const [reportName, setReportName] = useState('Low stock');
-  const [reportEntity, setReportEntity] = useState('inventory');
-  const [reportColumns, setReportColumns] = useState('item_code, available');
-  const [automationKey, setAutomationKey] = useState('low_stock_notify');
-  const [automationName, setAutomationName] = useState('Low stock notify');
-  const [automationTrigger, setAutomationTrigger] = useState('event');
-  const [automationExpression, setAutomationExpression] = useState('inventory.low_stock');
-  const [automationActionKey, setAutomationActionKey] = useState('SEND_NOTIFICATION');
-  const [mobilePolicyRole, setMobilePolicyRole] = useState('STORE_USER');
-  const [mobilePolicyOfflineHours, setMobilePolicyOfflineHours] = useState('12');
-  const [mobilePolicySyncScope, setMobilePolicySyncScope] = useState('stock, counts');
-  const [mobilePolicyNavigation, setMobilePolicyNavigation] = useState('dashboard, stock, counts');
-  const [fieldEntityType, setFieldEntityType] = useState('transfer');
-  const [fieldKey, setFieldKey] = useState('');
-  const [fieldName, setFieldName] = useState('');
-  const [fieldType, setFieldType] = useState('text');
-  const [fieldRequired, setFieldRequired] = useState(false);
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('STORE_USER');
   const [previewRole, setPreviewRole] = useState('ADMIN');
-  const [workflowValue, setWorkflowValue] = useState('150000');
-  const [simulation, setSimulation] = useState(null);
-  const [simulateKey, setSimulateKey] = useState('transfer.approval');
-  const [newWorkflowKey, setNewWorkflowKey] = useState('');
-  const [newWorkflowName, setNewWorkflowName] = useState('');
-  const [newWorkflowThreshold, setNewWorkflowThreshold] = useState('100000');
   const [newCompanyName, setNewCompanyName] = useState('');
   const [newCompanyPlan, setNewCompanyPlan] = useState('starter');
   const [newAdminName, setNewAdminName] = useState('');
@@ -514,9 +489,12 @@ export function ControlPlaneApp() {
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold">{NAV.find((item) => item.id === section)?.label}</h1>
-            <p className="text-sm text-muted-foreground">Draft → preview → publish. Core inventory invariants stay server-enforced.</p>
+            <p className="text-sm text-muted-foreground">Make changes, save them to the draft, then publish to make them live. Simple shows plain choices; Advanced also shows technical keys.</p>
           </div>
-          {lockBadge}
+          <div className="flex flex-wrap items-center gap-2">
+            <ModeSwitch />
+            {lockBadge}
+          </div>
         </div>
         {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
 
@@ -612,16 +590,16 @@ export function ControlPlaneApp() {
 
         {section === 'studio' && (
           <Tabs defaultValue="columns">
-            <TabsList>
+            <TabsList className="h-auto flex-wrap justify-start">
               <TabsTrigger value="columns">Stock columns</TabsTrigger>
               <TabsTrigger value="import-columns">Import columns</TabsTrigger>
               <TabsTrigger value="formulas">Formulas</TabsTrigger>
-              <TabsTrigger value="fields">Fields</TabsTrigger>
+              <TabsTrigger value="fields">Extra fields</TabsTrigger>
               <TabsTrigger value="rules">Rules</TabsTrigger>
               <TabsTrigger value="reports">Reports</TabsTrigger>
               <TabsTrigger value="automations">Automations</TabsTrigger>
-              <TabsTrigger value="mobile-policy">Mobile policy</TabsTrigger>
-              <TabsTrigger value="preview">Preview / publish</TabsTrigger>
+              <TabsTrigger value="mobile-policy">Mobile app</TabsTrigger>
+              <TabsTrigger value="preview">Publish</TabsTrigger>
             </TabsList>
             <TabsContent value="formulas" className="grid gap-4">
               <FormulaBuilder controlToken={controlToken} onSaved={refreshLocked} />
@@ -631,18 +609,8 @@ export function ControlPlaneApp() {
             </TabsContent>
             <TabsContent value="columns" className="grid gap-4">
               <StockColumnsLayoutEditor controlToken={controlToken} onSaved={refreshLocked} />
-              <Card>
-                <CardHeader><CardTitle className="text-base">Add custom stock column</CardTitle></CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-4">
-                  <div className="grid gap-2"><Label>Name</Label><Input value={columnName} onChange={(event) => setColumnName(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Key</Label><Input value={columnKey} onChange={(event) => setColumnKey(event.target.value)} /></div>
-                  <div className="flex items-end"><Button onClick={async () => {
-                    await controlRequest('/studio/v1/draft/stock/columns', { token: controlToken, method: 'POST', body: { name: columnName, key: columnKey, type: 'number' } });
-                    await refreshLocked();
-                    toast.success('Saved to draft');
-                  }}>Save draft</Button></div>
-                </CardContent>
-              </Card>
+              <StockExtraColumnCard controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
+              <Advanced label="Advanced: raw draft columns">
               <Card>
                 <CardHeader className="flex-row items-center justify-between">
                   <CardTitle className="text-base">Draft columns</CardTitle>
@@ -663,317 +631,22 @@ export function ControlPlaneApp() {
                   </Table>
                 </CardContent>
               </Card>
+              </Advanced>
             </TabsContent>
             <TabsContent value="fields" className="grid gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Add field</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Works across entity types (transfer, order, item, ...), not just the stock page. Stock still
-                    also gets a rendered column via "Stock columns" — this tab covers everything else.
-                  </p>
-                </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-5">
-                  <div className="grid gap-2"><Label>Entity type</Label><Input value={fieldEntityType} onChange={(event) => setFieldEntityType(event.target.value)} placeholder="transfer" /></div>
-                  <div className="grid gap-2"><Label>Key</Label><Input value={fieldKey} onChange={(event) => setFieldKey(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Name</Label><Input value={fieldName} onChange={(event) => setFieldName(event.target.value)} /></div>
-                  <div className="grid gap-2">
-                    <Label>Type</Label>
-                    <Select value={fieldType} onValueChange={setFieldType}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {['text', 'number', 'date', 'select', 'boolean'].map((type) => (
-                          <SelectItem key={type} value={type}>{type}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <Checkbox id="field-required" checked={fieldRequired} onCheckedChange={setFieldRequired} />
-                    <Label htmlFor="field-required">Required</Label>
-                  </div>
-                  <div className="flex items-end md:col-span-5">
-                    <Button onClick={async () => {
-                      await controlRequest('/studio/v1/fields', {
-                        token: controlToken,
-                        method: 'POST',
-                        body: { entityType: fieldEntityType, key: fieldKey, name: fieldName, type: fieldType, required: fieldRequired },
-                      });
-                      await refreshLocked();
-                      toast.success('Field saved to draft');
-                    }}>Save draft</Button>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Draft fields</CardTitle></CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Entity</TableHead><TableHead>Key</TableHead><TableHead>Label</TableHead><TableHead>Type</TableHead><TableHead>Required</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.fields ?? []).map((field) => (
-                        <TableRow key={`${field.entityType}:${field.fieldKey}`}>
-                          <TableCell>{field.entityType}</TableCell>
-                          <TableCell>{field.fieldKey}</TableCell>
-                          <TableCell>{field.label}</TableCell>
-                          <TableCell>{field.dataType}</TableCell>
-                          <TableCell>{field.required ? 'Yes' : 'No'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+              <FieldsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
             </TabsContent>
             <TabsContent value="rules" className="grid gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Add rule</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    One condition per rule for now: a context field compared against a value. Save to draft, then
-                    publish for it to take effect.
-                  </p>
-                </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-3">
-                  <div className="grid gap-2"><Label>Key</Label><Input value={ruleKey} onChange={(event) => setRuleKey(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Name</Label><Input value={ruleName} onChange={(event) => setRuleName(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Context field</Label><Input value={ruleField} onChange={(event) => setRuleField(event.target.value)} placeholder="daysToExpiry" /></div>
-                  <div className="grid gap-2">
-                    <Label>Comparator</Label>
-                    <Select value={ruleComparator} onValueChange={setRuleComparator}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="eq">equals</SelectItem>
-                        <SelectItem value="Gt">greater than</SelectItem>
-                        <SelectItem value="Gte">greater or equal</SelectItem>
-                        <SelectItem value="Lt">less than</SelectItem>
-                        <SelectItem value="Lte">less or equal</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-2"><Label>Value</Label><Input value={ruleValue} onChange={(event) => setRuleValue(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Outcome action</Label><Input value={ruleAction} onChange={(event) => setRuleAction(event.target.value)} /></div>
-                  <div className="flex items-end md:col-span-3">
-                    <Button onClick={async () => {
-                      const conditionKey = ruleComparator === 'eq' ? ruleField : `${ruleField}${ruleComparator}`;
-                      const value = ruleComparator === 'eq' ? ruleValue : Number(ruleValue);
-                      await controlRequest('/studio/v1/rules', {
-                        token: controlToken,
-                        method: 'POST',
-                        body: { key: ruleKey, name: ruleName, condition: { [conditionKey]: value }, outcome: { action: ruleAction } },
-                      });
-                      await refreshLocked();
-                      toast.success('Rule saved to draft');
-                    }}>Save draft</Button>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Draft rules</CardTitle></CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Name</TableHead><TableHead>Condition</TableHead><TableHead>Outcome</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.rules ?? []).map((rule) => (
-                        <TableRow key={rule.key}>
-                          <TableCell>{rule.key}</TableCell>
-                          <TableCell>{rule.name}</TableCell>
-                          <TableCell className="font-mono text-xs">{JSON.stringify(rule.condition)}</TableCell>
-                          <TableCell className="font-mono text-xs">{JSON.stringify(rule.outcome)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Test evaluate (published rules)</CardTitle></CardHeader>
-                <CardContent className="grid gap-3">
-                  <Textarea rows={4} className="font-mono text-xs" value={ruleTestContext} onChange={(event) => setRuleTestContext(event.target.value)} />
-                  <div className="flex items-center gap-3">
-                    <Button variant="outline" onClick={async () => {
-                      let context;
-                      try {
-                        context = JSON.parse(ruleTestContext);
-                      } catch {
-                        toast.error('Context must be valid JSON');
-                        return;
-                      }
-                      const result = await controlRequest('/studio/v1/rules/evaluate', { token: controlToken, method: 'POST', body: context });
-                      setRuleTestResult(result.outcomes);
-                    }}>Test evaluate</Button>
-                    {ruleTestResult && (
-                      <span className="text-sm text-muted-foreground">
-                        {ruleTestResult.length ? `Outcomes: ${ruleTestResult.join(', ')}` : 'No rule matched.'}
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <RulesEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
             </TabsContent>
             <TabsContent value="reports" className="grid gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Add report</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Dataset + columns for now — filters, pivot and scheduling come later.
-                  </p>
-                </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-4">
-                  <div className="grid gap-2"><Label>Key</Label><Input value={reportKey} onChange={(event) => setReportKey(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Name</Label><Input value={reportName} onChange={(event) => setReportName(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Entity</Label><Input value={reportEntity} onChange={(event) => setReportEntity(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Columns (comma-separated)</Label><Input value={reportColumns} onChange={(event) => setReportColumns(event.target.value)} /></div>
-                  <div className="flex items-end">
-                    <Button onClick={async () => {
-                      const columns = reportColumns.split(',').map((column) => column.trim()).filter(Boolean);
-                      await controlRequest('/studio/v1/reports', {
-                        token: controlToken,
-                        method: 'POST',
-                        body: { key: reportKey, name: reportName, entity: reportEntity, columns, filters: {} },
-                      });
-                      await refreshLocked();
-                      toast.success('Report saved to draft');
-                    }}>Save draft</Button>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Draft reports</CardTitle></CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Name</TableHead><TableHead>Entity</TableHead><TableHead>Columns</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.reports ?? []).map((report) => (
-                        <TableRow key={report.key}>
-                          <TableCell>{report.key}</TableCell>
-                          <TableCell>{report.name}</TableCell>
-                          <TableCell>{report.entity}</TableCell>
-                          <TableCell className="font-mono text-xs">{report.columns.join(', ')}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+              <ReportsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
             </TabsContent>
             <TabsContent value="automations" className="grid gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Add automation</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Trigger (schedule/event) + expression -&gt; one action key. The action itself still needs
-                    backend wiring per key; this records the intent and makes it visible/editable in Studio.
-                  </p>
-                </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-5">
-                  <div className="grid gap-2"><Label>Key</Label><Input value={automationKey} onChange={(event) => setAutomationKey(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Name</Label><Input value={automationName} onChange={(event) => setAutomationName(event.target.value)} /></div>
-                  <div className="grid gap-2">
-                    <Label>Trigger</Label>
-                    <Select value={automationTrigger} onValueChange={setAutomationTrigger}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="event">event</SelectItem>
-                        <SelectItem value="schedule">schedule</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-2"><Label>Expression</Label><Input value={automationExpression} onChange={(event) => setAutomationExpression(event.target.value)} placeholder="inventory.low_stock" /></div>
-                  <div className="grid gap-2"><Label>Action key</Label><Input value={automationActionKey} onChange={(event) => setAutomationActionKey(event.target.value)} /></div>
-                  <div className="flex items-end">
-                    <Button onClick={async () => {
-                      await controlRequest('/studio/v1/automations', {
-                        token: controlToken,
-                        method: 'POST',
-                        body: { key: automationKey, name: automationName, trigger: automationTrigger, expression: automationExpression, actionKey: automationActionKey },
-                      });
-                      await refreshLocked();
-                      toast.success('Automation saved to draft');
-                    }}>Save draft</Button>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Draft automations</CardTitle></CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Name</TableHead><TableHead>Trigger</TableHead><TableHead>Expression</TableHead><TableHead>Action</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.automations ?? []).map((automation) => (
-                        <TableRow key={automation.key}>
-                          <TableCell>{automation.key}</TableCell>
-                          <TableCell>{automation.name}</TableCell>
-                          <TableCell>{automation.trigger}</TableCell>
-                          <TableCell className="font-mono text-xs">{automation.expression}</TableCell>
-                          <TableCell className="font-mono text-xs">{automation.actionKey}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+              <AutomationsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
             </TabsContent>
             <TabsContent value="mobile-policy" className="grid gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Set role mobile policy</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Offline max age, what syncs, and the navigation this role sees on the Flutter app. Local
-                    storage is always encrypted.
-                  </p>
-                </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-4">
-                  <div className="grid gap-2">
-                    <Label>Role</Label>
-                    <Select value={mobilePolicyRole} onValueChange={setMobilePolicyRole}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER', 'AUDITOR', 'ADMIN'].map((role) => (
-                          <SelectItem key={role} value={role}>{role}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-2"><Label>Offline max hours</Label><Input type="number" value={mobilePolicyOfflineHours} onChange={(event) => setMobilePolicyOfflineHours(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Sync scope (comma-separated)</Label><Input value={mobilePolicySyncScope} onChange={(event) => setMobilePolicySyncScope(event.target.value)} /></div>
-                  <div className="grid gap-2"><Label>Navigation (comma-separated)</Label><Input value={mobilePolicyNavigation} onChange={(event) => setMobilePolicyNavigation(event.target.value)} /></div>
-                  <div className="flex items-end">
-                    <Button onClick={async () => {
-                      await controlRequest('/studio/v1/mobile-policy', {
-                        token: controlToken,
-                        method: 'POST',
-                        body: {
-                          role: mobilePolicyRole,
-                          offlineMaxHours: Number(mobilePolicyOfflineHours),
-                          syncScope: mobilePolicySyncScope.split(',').map((entry) => entry.trim()).filter(Boolean),
-                          navigation: mobilePolicyNavigation.split(',').map((entry) => entry.trim()).filter(Boolean),
-                        },
-                      });
-                      await refreshLocked();
-                      toast.success('Mobile policy saved to draft');
-                    }}>Save draft</Button>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader><CardTitle className="text-base">Draft mobile policies</CardTitle></CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Role</TableHead><TableHead>Offline max</TableHead><TableHead>Sync scope</TableHead><TableHead>Navigation</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.mobilePolicies ?? []).map((policy) => (
-                        <TableRow key={policy.role}>
-                          <TableCell>{policy.role}</TableCell>
-                          <TableCell>{policy.offlineMaxHours}h</TableCell>
-                          <TableCell className="font-mono text-xs">{policy.syncScope.join(', ')}</TableCell>
-                          <TableCell className="font-mono text-xs">{policy.navigation.join(', ')}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+              <MobilePolicyEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
             </TabsContent>
             <TabsContent value="preview" className="grid gap-4">
               <div className="flex flex-wrap gap-2">
@@ -981,14 +654,14 @@ export function ControlPlaneApp() {
                   <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {['ADMIN', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'].map((role) => (
-                      <SelectItem key={role} value={role}>{role}</SelectItem>
+                      <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <Button variant="outline" onClick={async () => {
                   const preview = await controlRequest('/studio/v1/preview', { token: controlToken, method: 'POST', body: { role: previewRole, device: 'desktop' } });
-                  toast.success(`Preview ${preview.preview.page.columns.length} columns as ${previewRole}`);
-                }}>Preview as role</Button>
+                  toast.success(`${labelOf(ROLE_OPTIONS, previewRole)} would see ${preview.preview.page.columns.length} stock columns`);
+                }}>See what this role gets</Button>
                 <Button onClick={async () => {
                   try {
                     await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST' });
@@ -1001,19 +674,23 @@ export function ControlPlaneApp() {
                     toast.error(message);
                   }
                 }}>Publish</Button>
-                <Button variant="outline" onClick={async () => {
-                  await controlRequest('/studio/v1/rollback', { token: controlToken, method: 'POST', body: { version: 1 } });
-                  await refreshLocked();
-                  toast.message('Rolled back to version 1');
-                }}>Rollback v1</Button>
               </div>
               <Card>
-                <CardHeader><CardTitle className="text-base">Live runtime for this company</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
                 <CardContent className="text-sm text-muted-foreground">
-                  Version {runtime?.version ?? '—'} · {(runtime?.page?.columns ?? []).map((column) => column.label).join(' · ')}
+                  Published version {runtime?.version ?? '—'} · stock columns: {(runtime?.page?.columns ?? []).map((column) => column.label).join(' · ')}
                   <p className="mt-2">Items & stock in the grocery workspace uses this published page: custom columns and enabled header actions.</p>
                 </CardContent>
               </Card>
+              <Advanced label="Advanced: undo">
+                <div>
+                  <Button variant="outline" onClick={async () => {
+                  await controlRequest('/studio/v1/rollback', { token: controlToken, method: 'POST', body: { version: 1 } });
+                  await refreshLocked();
+                  toast.message('Rolled back to version 1');
+                }}>Go back to version 1</Button>
+                </div>
+              </Advanced>
             </TabsContent>
           </Tabs>
         )}
@@ -1029,7 +706,7 @@ export function ControlPlaneApp() {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER', 'AUDITOR', 'ADMIN'].map((role) => (
-                      <SelectItem key={role} value={role}>{role}</SelectItem>
+                      <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1048,8 +725,8 @@ export function ControlPlaneApp() {
                     <TableRow key={user.id}>
                       <TableCell>{user.name}</TableCell>
                       <TableCell>{user.email}</TableCell>
-                      <TableCell>{user.role}{user.isPrimaryAdmin ? ' · primary' : ''}</TableCell>
-                      <TableCell>{user.status}</TableCell>
+                      <TableCell>{labelOf(ROLE_OPTIONS, user.role)}{user.isPrimaryAdmin ? ' · main admin' : ''}</TableCell>
+                      <TableCell>{user.status === 'active' ? 'Active' : 'Inactive'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1059,99 +736,33 @@ export function ControlPlaneApp() {
         )}
 
         {section === 'workflow' && (
-          <div className="grid gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Create approval workflow</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Value at or under the threshold auto-approves; above it goes to a branch manager. Other
-                  trigger/condition shapes need direct API use for now — this covers the common approval-limit
-                  pattern.
-                </p>
-              </CardHeader>
-              <CardContent className="grid gap-3 md:grid-cols-4">
-                <div className="grid gap-2"><Label>Key</Label><Input value={newWorkflowKey} onChange={(event) => setNewWorkflowKey(event.target.value)} placeholder="count.approval" /></div>
-                <div className="grid gap-2"><Label>Name</Label><Input value={newWorkflowName} onChange={(event) => setNewWorkflowName(event.target.value)} /></div>
-                <div className="grid gap-2"><Label>Auto-approve up to</Label><Input type="number" value={newWorkflowThreshold} onChange={(event) => setNewWorkflowThreshold(event.target.value)} /></div>
-                <div className="flex items-end">
-                  <Button onClick={async () => {
-                    await controlRequest('/studio/v1/workflows', {
-                      token: controlToken,
-                      method: 'POST',
-                      body: {
-                        key: newWorkflowKey,
-                        name: newWorkflowName,
-                        version: 1,
-                        graph: {
-                          nodes: [
-                            { id: 'start', type: 'trigger', config: { event: `${newWorkflowKey}.created` } },
-                            { id: 'check', type: 'condition', config: { field: 'value', op: 'lte', amount: Number(newWorkflowThreshold) } },
-                            { id: 'auto', type: 'action', config: { action: 'AUTO_APPROVE' } },
-                            { id: 'manager', type: 'approval', config: { role: 'BRANCH_MANAGER' } },
-                          ],
-                        },
-                      },
-                    });
-                    await refreshLocked();
-                    toast.success('Workflow saved to draft');
-                  }}>Save draft</Button>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle className="text-base">Draft workflows</CardTitle></CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Name</TableHead><TableHead>Threshold</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {(draft?.workflows ?? []).map((workflow) => (
-                      <TableRow key={workflow.key}>
-                        <TableCell>{workflow.key}</TableCell>
-                        <TableCell>{workflow.name}</TableCell>
-                        <TableCell>{workflow.graph.nodes.find((node) => node.type === 'condition')?.config.amount ?? '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle className="text-base">Simulate (published workflows)</CardTitle></CardHeader>
-              <CardContent className="grid gap-3 md:grid-cols-4">
-                <Input value={simulateKey} onChange={(event) => setSimulateKey(event.target.value)} placeholder="transfer.approval" />
-                <Input value={workflowValue} onChange={(event) => setWorkflowValue(event.target.value)} />
-                <Button onClick={async () => {
-                  try {
-                    const result = await controlRequest('/studio/v1/workflows/simulate', { token: controlToken, method: 'POST', body: { key: simulateKey, value: Number(workflowValue) } });
-                    setSimulation(result.simulation);
-                  } catch (caught) {
-                    toast.error(caught instanceof Error ? caught.message : 'Simulation failed');
-                  }
-                }}>Simulate</Button>
-                <div className="text-sm text-muted-foreground">{simulation ? `${simulation.outcome} (workflow v${simulation.pinnedVersion})` : 'Run a value through a published workflow.'}</div>
-              </CardContent>
-            </Card>
-          </div>
+          <WorkflowsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
         )}
 
         {section === 'mobile' && (
           <div className="grid gap-4">
+            <p className="text-sm text-muted-foreground">What each role gets in the phone app. Change it in Studio → Mobile app, then publish.</p>
+            {(draft?.mobilePolicies ?? []).length === 0 && <p className="text-sm text-muted-foreground">No role has mobile settings yet.</p>}
             {(draft?.mobilePolicies ?? []).map((policy) => (
               <Card key={policy.role}>
-                <CardHeader><CardTitle className="text-base">{policy.role}</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base">{labelOf(ROLE_OPTIONS, policy.role)}</CardTitle></CardHeader>
                 <CardContent className="text-sm text-muted-foreground">
-                  Encrypted local store · offline {policy.offlineMaxHours}h · nav {policy.navigation.join(', ')}
+                  Screens: {policy.navigation.map((screen) => labelOf(MOBILE_SCREENS, screen)).join(', ') || '—'} · works offline up to {policy.offlineMaxHours} hours · phone data is encrypted
                 </CardContent>
               </Card>
             ))}
-            <Button variant="outline" onClick={async () => {
-              const result = await controlRequest('/sync/v1/mutations', {
-                token: controlToken,
-                method: 'POST',
-                body: { mutationId: crypto.randomUUID(), companyId: company.id, userId: session.user.id, deviceId: 'control-demo', actionType: 'STOCK_ADJUST', payload: { itemId: 'item-1', delta: -1 } },
-              });
-              toast.success(`Sync ${result.mutation.status}`);
-            }}>Post sample stock movement</Button>
+            <Advanced label="Advanced: sync test">
+              <div>
+                <Button variant="outline" onClick={async () => {
+                  const result = await controlRequest('/sync/v1/mutations', {
+                    token: controlToken,
+                    method: 'POST',
+                    body: { mutationId: crypto.randomUUID(), companyId: company.id, userId: session.user.id, deviceId: 'control-demo', actionType: 'STOCK_ADJUST', payload: { itemId: 'item-1', delta: -1 } },
+                  });
+                  toast.success(`Sync ${result.mutation.status}`);
+                }}>Post sample stock movement</Button>
+              </div>
+            </Advanced>
           </div>
         )}
 

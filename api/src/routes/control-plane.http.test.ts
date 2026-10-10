@@ -382,3 +382,23 @@ test('HTTP: Control Plane webhook returns the signing secret once', async () => 
     assert.equal(denied.body.code, 'FEATURE_NOT_ENTITLED');
   });
 });
+
+test('HTTP: Studio draft entries can be edited and removed by key', async () => {
+  await withServer(async (url) => {
+    const login = await json(url, '/control/v1/auth/login', { method: 'POST', body: JSON.stringify({ email: 'superadmin@invexa.local', password: controlPlane.seedPassword }) });
+    const locked = await json(url, '/control/v1/sessions/select-company', { method: 'POST', headers: { Authorization: `Bearer ${login.body.token}` }, body: JSON.stringify({ companyId: 'default-company' }) });
+    const auth = { Authorization: `Bearer ${locked.body.token}` };
+
+    const added = await json(url, '/studio/v1/fields', { method: 'POST', headers: auth, body: JSON.stringify({ entityType: 'item', key: 'shelf', name: 'Shelf', type: 'text' }) });
+    assert.equal(added.status, 200);
+    const edited = await json(url, '/studio/v1/fields', { method: 'POST', headers: auth, body: JSON.stringify({ entityType: 'item', key: 'shelf', name: 'Rack', type: 'text', replace: true }) });
+    assert.equal(edited.body.draft.fields.find((field: { fieldKey: string }) => field.fieldKey === 'shelf').label, 'Rack');
+
+    assert.equal((await json(url, `/studio/v1/fields/${encodeURIComponent('item:shelf')}`, { method: 'DELETE', headers: auth })).body.draft.fields.length, 0);
+    assert.equal((await json(url, '/studio/v1/rules/high_value_adjustment', { method: 'DELETE', headers: auth })).status, 200);
+    assert.equal((await json(url, '/studio/v1/mobile-policy/STORE_USER', { method: 'DELETE', headers: auth })).status, 200);
+    assert.equal((await json(url, '/studio/v1/rules/high_value_adjustment', { method: 'DELETE', headers: auth })).status, 404);
+    // Without a locked company session nothing can be removed.
+    assert.equal((await json(url, '/studio/v1/reports/low_stock', { method: 'DELETE' })).status, 401);
+  });
+});

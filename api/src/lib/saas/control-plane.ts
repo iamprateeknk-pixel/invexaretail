@@ -247,6 +247,8 @@ export type AutomationDefinition = {
   actionKey: string;
 };
 
+export type DraftEntryKind = 'fields' | 'workflows' | 'rules' | 'reports' | 'automations' | 'mobilePolicies';
+
 export type MobilePolicy = {
   role: string;
   offlineMaxHours: number;
@@ -1432,14 +1434,19 @@ export class ControlPlane {
     defaultValue?: unknown;
     visibleRoles?: string[];
     editableRoles?: string[];
+    // true = edit the existing field with this entity + key instead of refusing the duplicate.
+    replace?: boolean;
   }): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.assertBillingWritable(companyId);
     if (!this.plans.get(this.requireCompany(companyId).planId)?.capabilities.custom_fields) {
       throw new ControlPlaneError('Custom fields are not entitled', 'FEATURE_NOT_ENTITLED', 403);
     }
+    if (!/^[a-z][a-z0-9_]{0,59}$/.test(input.key)) throw new ControlPlaneError('Field key must be lowercase letters, numbers and _', 'INVALID_FIELD_KEY', 400);
+    if (!input.name.trim()) throw new ControlPlaneError('Every field needs a name', 'INVALID_FIELD_NAME', 400);
     const draft = this.ensureDraft(scope);
-    if (draft.fields.some((entry) => entry.entityType === input.entityType && entry.fieldKey === input.key)) {
+    const existing = draft.fields.findIndex((entry) => entry.entityType === input.entityType && entry.fieldKey === input.key);
+    if (existing >= 0 && !input.replace) {
       throw new ControlPlaneError('Duplicate field key for this entity', 'RESERVED_FIELD', 400);
     }
     const field: FieldDefinition = {
@@ -1458,7 +1465,8 @@ export class ControlPlane {
       mobileEnabled: true,
       status: 'active',
     };
-    draft.fields.push(field);
+    if (existing >= 0) draft.fields[existing] = { ...field, id: draft.fields[existing].id };
+    else draft.fields.push(field);
     return draft;
   }
 
@@ -1835,6 +1843,27 @@ export class ControlPlane {
     const normalized: MobilePolicy = { ...policy, encryptedLocalStore: true };
     if (index >= 0) draft.mobilePolicies[index] = normalized;
     else draft.mobilePolicies.push(normalized);
+    return draft;
+  }
+
+  /**
+   * Removes one entry from the draft: a field (key = "entityType:fieldKey"), workflow, rule,
+   * report, automation, or a role's mobile policy (key = role). Takes effect on the next publish.
+   */
+  removeDraftEntry(scope: ScopeContext, kind: DraftEntryKind, key: string): ConfigurationVersion {
+    const companyId = this.requireLockedCompany(scope);
+    this.assertBillingWritable(companyId);
+    const draft = this.ensureDraft(scope);
+    const before = draft[kind].length;
+    if (kind === 'fields') {
+      const [entityType, fieldKey] = key.split(':');
+      draft.fields = draft.fields.filter((entry) => !(entry.entityType === entityType && entry.fieldKey === fieldKey));
+    } else if (kind === 'mobilePolicies') {
+      draft.mobilePolicies = draft.mobilePolicies.filter((entry) => entry.role !== key);
+    } else {
+      (draft as unknown as Record<string, Array<{ key: string }>>)[kind] = (draft[kind] as Array<{ key: string }>).filter((entry) => entry.key !== key);
+    }
+    if (draft[kind].length === before) throw new ControlPlaneError('That entry was not found in the draft', 'DRAFT_ENTRY_NOT_FOUND', 404);
     return draft;
   }
 
