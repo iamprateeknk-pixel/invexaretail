@@ -297,6 +297,31 @@ export async function transitionBatch(companyId: string, id: string, to: ImportB
   return (await getBatch(companyId, id))!;
 }
 
+/**
+ * Finishes a commit after its stock was written. persistOpeningStockImport / persistDailyMovementImport stamp the
+ * batch POSTED inside the same transaction as the stock (so a crash can never leave stock posted under a batch that
+ * still looks committable). A batch they already stamped only gets the final metadata here; one still VALIDATED
+ * (memory mode, or a path that does not stamp it) makes the normal VALIDATED -> POSTED transition. Calling
+ * transitionBatch(..., 'POSTED') after them instead failed every database-mode commit with
+ * "Cannot move import batch from POSTED to POSTED" - after the stock had already been posted.
+ */
+export async function completeBatchPosting(companyId: string, id: string, metadataPatch: Record<string, unknown>): Promise<ImportBatchRecord> {
+  const current = await getBatch(companyId, id);
+  if (!current) throw new Error('Import batch was not found.');
+  if (current.status !== 'POSTED') return transitionBatch(companyId, id, 'POSTED', metadataPatch);
+  const nextMetadata = { ...(current.metadata ?? {}), ...metadataPatch };
+  if (!databaseEnabled()) {
+    const stored = memoryBatches.get(id)!;
+    memoryBatches.set(id, { ...stored, metadata: nextMetadata });
+  } else {
+    await prisma.importBatch.updateMany({
+      where: { id, companyId, status: 'POSTED' },
+      data: { metadata: nextMetadata as Prisma.InputJsonValue },
+    });
+  }
+  return (await getBatch(companyId, id))!;
+}
+
 export async function findDuplicateBatch(input: {
   companyId: string;
   type: string;
