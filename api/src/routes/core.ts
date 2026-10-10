@@ -201,6 +201,7 @@ import {
   findDuplicateBatch,
   getBatch,
   listRows,
+  completeBatchPosting,
   transitionBatch,
 } from '../lib/import-batch-store.js';
 import {
@@ -2669,7 +2670,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
     await applyDailyLedger(movements, lots, checkpoints, persisted.committedRows);
     // Movements dated before an existing count make that count's book quantity stale.
     await applyLateMovementsQuietly(movements, req.user!.id);
-    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await completeBatchPosting(companyId, batch.id, { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2706,7 +2707,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       return res.json({ message: `Imported ${imported.length} items (${created} new, ${updated} updated).`, imported, batchToken: batch.id, committedRows: imported.length, ...customValues });
     }
     const result = await persistOpeningStockImport(preview, batch.fileName, req.user!.id, { batchId: batch.id, fileHash: batch.fileHash ?? undefined, branchId: batch.branchId, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
-    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: result.stockRows });
+    await completeBatchPosting(companyId, batch.id, { committedRows: result.stockRows });
     await persistAudit(recordAudit({
       actorId: req.user!.id,
       actorRole: req.user!.role,
@@ -2778,7 +2779,7 @@ async function commitImportBatchToken(req: Request, res: Response, batchToken: s
       branchId: batch.branchId,
       sourceFormat: batch.sourceFormat, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await applyDailyLedger(movements, lots, [], persisted.committedRows);
-    await transitionBatch(companyId, batch.id, 'POSTED', { committedRows: persisted.committedRows });
+    await completeBatchPosting(companyId, batch.id, { committedRows: persisted.committedRows });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batch.id, metadata: { fileName: batch.fileName, mode, rows: persisted.committedRows, fileHash } }));
     return res.status(201).json({
       message: persisted.committedRows ? `Updated ${persisted.committedRows} branch/item/lot stock rows.` : 'This exact file and mode were already applied; stock was not changed again.',
