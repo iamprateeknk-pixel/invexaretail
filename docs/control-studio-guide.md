@@ -4,7 +4,7 @@ For the person who sets up a company at `control.invexaretail.com`. No coding ne
 per company: lock one company first (Company list -> **Lock session**), then open **Studio**.
 
 Changes to table layouts and formulas go to a **draft**. Nothing changes for your team until you open
-**Preview / publish** and publish. Import columns are different: they apply as soon as you press **Save columns**.
+**Publish** and publish. Import columns are different: they apply as soon as you press **Save columns**.
 
 ## 1. Excel import columns (Studio -> Import columns)
 
@@ -59,9 +59,31 @@ Examples: `max(0, physical - reserved - quarantine)`, `if(book = 0, 0, round(var
 A cell shows "-" when the formula cannot be worked out for that row (divide by zero, or a lot with no expiry date).
 A formula that reads book / variance / reserved / quarantine / value is hidden from people who cannot see system stock.
 
-## 4. Going live and undoing
+## 4. Simple and Advanced (every screen)
 
-**Preview / publish**: preview as a role and device, then publish. **Rollback** returns to an earlier version.
+The **Simple / Advanced** switch at the top of the Control Plane applies to every screen and is remembered on
+your computer. **Simple** shows only plain choices (names, drop-downs, ticks) and a one-line summary of what
+each entry does. **Advanced** also shows the technical bits: keys, raw column/scope lists, the rule's stored
+condition, workflow version, the sample sync test and "Go back to version 1".
+
+Every Studio list (Extra fields, Rules, Reports, Automations, Mobile app, and Approvals in the left menu) works
+the same way as Import columns: edit in place, **Add**, the bin icon to remove, then **Save changes** (or
+**Discard**). Saved changes go to the draft; **Publish** makes them live.
+
+| Screen | What you set | Used by the app today? |
+|---|---|---|
+| Extra fields | Field name, what it is for (item, transfer, ...), kind of value, must be filled | Not yet - stored and published only |
+| Rules | When *this* is more/less than *that* (several conditions = all must be true), then *do this*. **Try your rules** checks a made-up case. | Not yet - only the Try box runs them |
+| Reports | Name, what it is about, which columns | Not yet |
+| Automations | When something happens / on a schedule, then do something | Not yet |
+| Mobile app | Per role: screens, what is kept offline, how long it may stay offline | Not yet - the phone app shows its standard screens |
+| Approvals | For transfers / adjustments / ...: approve automatically up to Rs X, above that a branch manager or admin. **Try an amount** checks it. | Not yet - live approvals use the main app's approval rules |
+
+Each of these screens shows a yellow note while the app does not act on it yet, so nobody expects an effect.
+
+## 5. Going live and undoing
+
+**Publish** tab: **See what this role gets**, then **Publish**. **Go back to version 1** (Advanced) returns to the first version.
 Layouts are versioned together, so rollback restores columns and formulas of all three tables.
 
 ## For developers
@@ -72,3 +94,9 @@ Layouts are versioned together, so rollback restores columns and formulas of all
 - Table layouts live in the config version page (`page.columns`, `page.tables.{lots,itemLots}`),
   edited through `ControlPlane.setStockColumnLayout / setStockFormulaColumn / addItemFieldColumn`.
 - Web: `web/src/control-plane/*` (editors), `web/src/lib/{stock,lots,item-lot}-table.js` (rendering).
+- Simple / Advanced: `web/src/control-plane/studio-mode.jsx` (`StudioModeProvider`, `Advanced`, the shared
+  `StudioListEditor`); plain-language catalogues and converters (rule rows <-> condition object, approval model
+  <-> workflow graph): `studio-catalog.js`. New Studio lists should reuse `StudioListEditor` rather than a new form.
+- Removing a draft entry: `DELETE /studio/v1/{fields|rules|reports|automations|workflows|mobile-policy}/:key`
+  (`ControlPlane.removeDraftEntry`; a field's key is `entityType:fieldKey`). `POST /studio/v1/fields` with
+  `replace: true` edits a field in place.

@@ -1,5 +1,5 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
+import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -664,6 +664,7 @@ studioRouter.post('/fields', (req: Request, res: Response) => {
       defaultValue: req.body?.defaultValue,
       visibleRoles: req.body?.visibleRoles,
       editableRoles: req.body?.editableRoles,
+      replace: Boolean(req.body?.replace),
     });
     res.json({ success: true, draft });
   } catch (error) {
@@ -804,6 +805,20 @@ studioRouter.post('/mobile-policy', (req: Request, res: Response) => {
       encryptedLocalStore: true,
     });
     res.json({ success: true, draft });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Remove one draft entry; the change goes live on the next publish.
+const REMOVABLE: Record<string, DraftEntryKind> = {
+  fields: 'fields', workflows: 'workflows', rules: 'rules', reports: 'reports', automations: 'automations', 'mobile-policy': 'mobilePolicies',
+};
+studioRouter.delete('/:kind/:key', (req: Request, res: Response, next: NextFunction) => {
+  const kind = REMOVABLE[param(req, 'kind')];
+  if (!kind) return next();
+  try {
+    res.json({ success: true, draft: controlPlane.removeDraftEntry(requireScope(req), kind, param(req, 'key')) });
   } catch (error) {
     sendError(res, error);
   }
