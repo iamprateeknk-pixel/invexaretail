@@ -108,7 +108,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
   const companyIds = [...new Set([DEFAULT_COMPANY_ID, ...profileCompanyIds])];
 
   const [dbLocations, dbItems, dbCounts, dbTransfers, dbStockLedger, dbAssignments, dbUsers] = await Promise.all([
-    prisma.location.findMany({ where: { companyId: { in: companyIds } } }),
+    prisma.location.findMany({ where: { companyId: { in: companyIds } }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] }),
     prisma.item.findMany({ where: { companyId: { in: companyIds } }, include: { lots: true } }),
     prisma.stockCount.findMany({ where: { companyId: { in: companyIds } } }),
     prisma.transfer.findMany({ where: { companyId: { in: companyIds } }, include: { lines: true } }),
@@ -121,6 +121,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     id: location.id,
     name: location.name,
     type: location.type as 'store' | 'warehouse',
+    sortOrder: location.sortOrder,
   })));
 
   replaceContents(items, dbItems.map(itemRowToRecord));

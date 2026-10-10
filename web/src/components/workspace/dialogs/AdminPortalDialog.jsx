@@ -23,12 +23,13 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 
 export function AdminPortalDialog() {
   const {
     adminLoading, adminPortalOpen, adminTab, allUsers,
     companyForm, copyPermissionsFrom, createLocation, createUser, darkMode,
-    deleteLocationById, deleteUserById, editLocationForm, editUserForm,
+    deleteLocationById, deleteUserById, editLocationForm, editUserForm, moveLocation,
     editingLocationId, editingUserId, industryApplyPending, isMobile,
     locations, newLocationForm, newUserForm, openUserPermissions,
     permissionCatalog, permissionDraft, permissionScopeId, permissionUser,
@@ -99,14 +100,22 @@ export function AdminPortalDialog() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-24">Order</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {locations.map((location) => (
+                  {locations.map((location, index) => (
                     <TableRow key={location.id}>
+                      <TableCell>
+                        {/* Order here is the order of the location switcher, on web and mobile. */}
+                        <div className="flex gap-1">
+                          <Button type="button" size="icon" variant="ghost" className="size-7" aria-label={`Move ${location.name} up`} title="Move up" onClick={() => moveLocation(location.id, -1)} disabled={adminLoading || index === 0}><ArrowUp className="size-4" /></Button>
+                          <Button type="button" size="icon" variant="ghost" className="size-7" aria-label={`Move ${location.name} down`} title="Move down" onClick={() => moveLocation(location.id, 1)} disabled={adminLoading || index === locations.length - 1}><ArrowDown className="size-4" /></Button>
+                        </div>
+                      </TableCell>
                       {editingLocationId === location.id ? (
                         <>
                           <TableCell>

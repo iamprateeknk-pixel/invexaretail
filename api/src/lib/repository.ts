@@ -6,6 +6,8 @@ export type LocationRecord = {
   id: string;
   name: string;
   type: 'store' | 'warehouse';
+  /** Admin-chosen display order (lower first); absent means 0, i.e. creation order. */
+  sortOrder?: number;
 };
 
 export type ItemRecord = {

@@ -17,6 +17,7 @@ import enterpriseAuthRouter from './routes/enterprise-auth.js';
 import enterpriseManagementRouter from './routes/enterprise-management.js';
 import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
+import locationOrderRouter from './routes/location-order.js';
 import transfersRouter from './routes/transfers.js';
 import branchesRouter from './routes/branches.js';
 import itemsRouter from './routes/items.js';
@@ -317,6 +318,8 @@ app.use('/api/v1', transferLabelsRouter);
 app.use('/api/v1', importsRouter);
 app.use('/api/v1', reportsRouter);
 app.use('/api/v1', entitiesRouter);
+// Before coreRouter: core's PUT /locations/:locationId would otherwise read "order" as a location id.
+app.use('/api/v1', locationOrderRouter);
 app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 
