@@ -218,6 +218,7 @@ import { prisma } from '../lib/db.js';
 import { enforcePermissionOverrides, PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { buildPickerTasks, listPickableTransfers } from '../lib/picker-tasks.js';
 import { loadMobileWork } from '../lib/mobile-work.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
@@ -1789,23 +1790,13 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
 // PICKER TASKS
 // ============================================
 
-router.get('/picker-tasks', (req: Request, res: Response) => {
+// Database-first slice 9: the task list is built by lib/picker-tasks.ts (Postgres in database mode).
+router.get('/picker-tasks', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role)) {
     return res.status(403).json({ message: 'Picker task access denied.' });
   }
-  const tasks = listTransfers()
-    .filter((transfer) => ['REQUESTED', 'PENDING_PICK', 'PICKING', 'PARTIAL'].includes(transfer.status) && canAccessLocation(context, transfer.sourceLocationId))
-    // A transfer an admin handed to one picker leaves every other picker's queue.
-    .filter((transfer) => context.role !== 'WAREHOUSE_PICKER' || pickerMayWork(transfer, req.user!.id))
-    .map((transfer) => ({
-      transferId: transfer.id,
-      locationId: transfer.sourceLocationId,
-      lines: transfer.lines,
-      status: 'ASSIGNED',
-      assignedPickerId: transfer.assignedPickerId ?? null,
-      assignedToMe: transfer.assignedPickerId === req.user!.id,
-    }));
+  const tasks = buildPickerTasks(context, req.user!.id, await listPickableTransfers(tenantContext(req)));
   return res.json({ tasks });
 });
 

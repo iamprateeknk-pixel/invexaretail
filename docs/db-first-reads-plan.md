@@ -159,3 +159,7 @@ Run each file on its own, as CI does: running them together against one database
   database's `TransferStatus` enum has `PARTIAL_RECEIVED` but not `PARTIALLY_RECEIVED`, which only exists in the
   in-memory type; the database query uses the real enum values. Parity with the snapshot, empty/blocked-lot filtering,
   and cross-company isolation are in `mobile-work.postgres.test.ts`.
+- **Slice 9 done: `GET /picker-tasks`** via `lib/picker-tasks.ts`: `listPickableTransfers` loads the company's transfers that
+  still need picking (Postgres in database mode), and `buildPickerTasks` is the pure access/assignment filter shared by both
+  modes (a transfer assigned to another picker leaves a picker's queue; an admin sees all). Isolation, status filter,
+  assignment rule and parity with the hydrated snapshot are in `picker-tasks.postgres.test.ts`.
