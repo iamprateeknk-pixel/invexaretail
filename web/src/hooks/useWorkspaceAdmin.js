@@ -1,10 +1,12 @@
 import { apiRequest } from '../lib/api-client';
 import { DEFAULT_WORKSPACE_PROFILE } from '../lib/workspace';
 import { toggleAssignedLocationIds } from '../lib/workspace-queues';
+import { moveLocationId } from '../lib/location-order';
 import { useState } from 'react';
 
 export function useWorkspaceAdmin({
   authToken,
+  locations,
   setLocations,
   setWorkspaceProfile,
   showToast,
@@ -207,6 +209,29 @@ export function useWorkspaceAdmin({
     }
   }
 
+  // Moves a location one place up (-1) or down (+1) in the switcher order. Optimistic: the list reorders at once
+  // and goes back if the server refuses.
+  async function moveLocation(locationId, delta) {
+    const previous = locations;
+    const orderedIds = moveLocationId(previous.map((location) => location.id), locationId, delta);
+    if (!orderedIds) return;
+    setLocations(orderedIds.map((id) => previous.find((location) => location.id === id)));
+    setAdminLoading(true);
+    try {
+      const response = await apiRequest('/api/v1/locations/order', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ locationIds: orderedIds }),
+      });
+      setLocations(response.locations ?? orderedIds.map((id) => previous.find((location) => location.id === id)));
+    } catch (error) {
+      setLocations(previous);
+      showToast(error instanceof Error ? error.message : 'Failed to save the location order.', 'error');
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
   async function deleteLocationById(locationId) {
     setAdminLoading(true);
     try {
@@ -333,6 +358,7 @@ export function useWorkspaceAdmin({
     startEditLocation,
     saveLocationEdit,
     deleteLocationById,
+    moveLocation,
     createUser,
     startEditUser,
     saveUserEdit,

@@ -248,6 +248,8 @@ model Location {
   branch                Branch?  @relation(fields: [branchId], references: [id])
   parentId              String?
   status                String   @default("ACTIVE")
+  // Admin-chosen display order in the location switcher; lower first, ties fall back to createdAt.
+  sortOrder             Int      @default(0)
   companyId             String   @default("default-company")
   tenantId              String   @default("tenant-invexa")
   description           String?  @db.Text

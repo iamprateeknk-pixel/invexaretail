@@ -9,6 +9,7 @@ import { enforceOperationalCompanyScope } from '../lib/saas/tenant-scope.js';
 import coreRouter from './core.js';
 import transfersRouter from './transfers.js';
 import branchesRouter from './branches.js';
+import locationOrderRouter from './location-order.js';
 import itemsRouter from './items.js';
 import bundlesRouter from './bundles.js';
 import transferEvidenceRouter from './transfer-evidence.js';
@@ -50,7 +51,7 @@ const fill = (path: string) => path.replace(/:[A-Za-z]+\??/g, 'probe').replace(/
 test('no route on the operational routers answers a request that carries no credentials', async () => {
   seedEnhancedUsersForMemoryMode(seedUsers, hashPassword('x'));
   const routers: Array<[string, Router]> = [
-    ['core', coreRouter], ['transfers', transfersRouter], ['branches', branchesRouter], ['items', itemsRouter], ['bundles', bundlesRouter], ['transfer-evidence', transferEvidenceRouter], ['transfer-labels', transferLabelsRouter], ['imports', importsRouter], ['reports', reportsRouter], ['entities', entitiesRouter], ['catalog-procurement', catalogProcurementRouter], ['operations-extension', operationsExtensionRouter],
+    ['core', coreRouter], ['transfers', transfersRouter], ['branches', branchesRouter], ['location-order', locationOrderRouter], ['items', itemsRouter], ['bundles', bundlesRouter], ['transfer-evidence', transferEvidenceRouter], ['transfer-labels', transferLabelsRouter], ['imports', importsRouter], ['reports', reportsRouter], ['entities', entitiesRouter], ['catalog-procurement', catalogProcurementRouter], ['operations-extension', operationsExtensionRouter],
     ['campaigns', campaignsRouter], ['item-master', itemMasterRouter], ['import-control-center', importControlCenterRouter],
     ['transfer-logistics', transferLogisticsRouter], ['command-center', commandCenterRouter],
   ];

@@ -90,6 +90,7 @@ export function useWorkspaceApp() {
 
   const admin = useWorkspaceAdmin({
     authToken,
+    locations: core.locations,
     setLocations: core.setLocations,
     setWorkspaceProfile: core.setWorkspaceProfile,
     showToast,

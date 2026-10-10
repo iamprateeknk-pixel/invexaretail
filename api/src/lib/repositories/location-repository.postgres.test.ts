@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { hydrateRepositoryFromDatabase } from '../persistence.js';
 import { locations as snapshot } from '../repository.js';
-import { listLocationsForCompany } from './location-repository.js';
+import { LocationOrderError, listLocationsForCompany, saveLocationOrder } from './location-repository.js';
 import type { TenantContext } from '../tenant-context.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
@@ -49,4 +49,42 @@ integration('parity: the repository equals the hydrated snapshot for the same co
   const fromSnapshot = snapshot.filter((row) => fromDb.some((d) => d.id === row.id));
   assert.equal(fromDb.length, 2);
   assert.deepEqual([...fromSnapshot].sort((x, y) => x.id.localeCompare(y.id)), [...fromDb].sort((x, y) => x.id.localeCompare(y.id)));
+});
+
+integration('an admin-chosen order is saved per company and read back in that order', async () => {
+  const company = await makeCompany();
+  const store = await makeLocation(company, 'Store');
+  const warehouse = await makeLocation(company, 'Warehouse', 'warehouse');
+  const branch = await makeLocation(company, 'Branch');
+
+  const saved = await saveLocationOrder(ctxFor(company), [warehouse.id, branch.id, store.id]);
+  assert.deepEqual(saved.map((row) => row.id), [warehouse.id, branch.id, store.id]);
+  assert.deepEqual((await listLocationsForCompany(ctxFor(company))).map((row) => row.id), [warehouse.id, branch.id, store.id]);
+  const rows = await prisma.location.findMany({ where: { companyId: company }, select: { id: true, sortOrder: true } });
+  assert.deepEqual(Object.fromEntries(rows.map((row) => [row.id, row.sortOrder])), { [warehouse.id]: 1, [branch.id]: 2, [store.id]: 3 });
+
+  // saving again is safe and the new order wins
+  await saveLocationOrder(ctxFor(company), [store.id, warehouse.id, branch.id]);
+  assert.deepEqual((await listLocationsForCompany(ctxFor(company))).map((row) => row.id), [store.id, warehouse.id, branch.id]);
+});
+
+integration("another company's location id is refused like an unknown one and its order never changes", async () => {
+  const a = await makeCompany();
+  const b = await makeCompany();
+  const a1 = await makeLocation(a, 'A one');
+  const a2 = await makeLocation(a, 'A two');
+  const b1 = await makeLocation(b, 'B one');
+  const b2 = await makeLocation(b, 'B two');
+
+  // B tries to reorder using A's real ids (alone, and mixed with its own): both fail closed
+  await assert.rejects(saveLocationOrder(ctxFor(b), [a2.id, a1.id]), LocationOrderError);
+  await assert.rejects(saveLocationOrder(ctxFor(b), [b2.id, a1.id]), LocationOrderError);
+  await assert.rejects(saveLocationOrder(ctxFor(b), [b2.id, `loc-${randomUUID()}`]), LocationOrderError, 'an unknown id fails the same way');
+  const untouched = await prisma.location.findMany({ where: { id: { in: [a1.id, a2.id] } }, select: { sortOrder: true } });
+  assert.ok(untouched.every((row) => row.sortOrder === 0), "A's rows were never written");
+
+  // the identical call shape succeeds for the owner, proving the refusal was the tenant check
+  await saveLocationOrder(ctxFor(a), [a2.id, a1.id]);
+  assert.deepEqual((await listLocationsForCompany(ctxFor(a))).map((row) => row.id), [a2.id, a1.id]);
+  assert.deepEqual((await listLocationsForCompany(ctxFor(b))).map((row) => row.id), [b1.id, b2.id], "B's order is unaffected");
 });
