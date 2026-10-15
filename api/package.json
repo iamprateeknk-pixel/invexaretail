@@ -34,7 +34,7 @@
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/instrumentation-express": "^0.70.0",
-    "@opentelemetry/instrumentation-http": "^0.222.0",
+    "@opentelemetry/instrumentation-http": "^0.223.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
