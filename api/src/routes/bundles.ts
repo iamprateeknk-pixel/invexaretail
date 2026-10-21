@@ -33,7 +33,7 @@ async function availableByItem(companyId: string, itemIds: string[], locationId?
     select: { itemId: true, onHand: true, reserved: true },
   });
   const totals = new Map<string, number>();
-  for (const row of rows) totals.set(row.itemId, (totals.get(row.itemId) ?? 0) + row.onHand - row.reserved);
+  for (const row of rows) totals.set(row.itemId, (totals.get(row.itemId) ?? 0) + Number(row.onHand) - Number(row.reserved));
   return totals;
 }
 
