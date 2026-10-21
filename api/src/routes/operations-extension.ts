@@ -517,7 +517,7 @@ router.get('/expiry-alerts', async (req, res) => {
         itemId: row.itemId,
         lotId: row.lotId,
         locationId: row.locationId,
-        quantity: row.onHand,
+        quantity: Number(row.onHand),
         expiryDate: row.lot.expiryDate,
         daysUntilExpiry: days,
         status: 'ACTIVE',
@@ -559,7 +559,7 @@ router.get('/expiry-board', async (req, res) => {
           itemId: row.itemId,
           lotId: row.lotId,
           locationId: row.locationId,
-          quantity: row.onHand,
+          quantity: Number(row.onHand),
         })),
       })
     : emptyExpiryBoard();
@@ -601,30 +601,30 @@ router.post('/expiry-write-off', async (req, res) => {
       ]);
       if (!lot) throw new Error('Lot not found.');
       const quantity = Number.isFinite(requestedQty) && requestedQty > 0 ? requestedQty : Number(ledger?.onHand ?? 0);
-      if (!ledger || quantity <= 0 || quantity > ledger.onHand) throw new Error('Write-off quantity exceeds current lot stock.');
+      if (!ledger || quantity <= 0 || quantity > Number(ledger.onHand)) throw new Error('Write-off quantity exceeds current lot stock.');
       const days = lot.expiryDate ? daysUntilExpiry(lot.expiryDate) : 0;
       const alertId = expiryAlertId(itemId, lotId, locationId);
       await tx.expiryAlert.upsert({
         where: { id: alertId },
         create: {
           id: alertId, itemId, lotId, locationId,
-          quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
+          quantity: Number(ledger.onHand), expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
           status: 'ACTIVE', recommendedAction: recommendedExpiryAction(days),
           metadata: { severity: lot.expiryDate ? expirySeverity(days) : 'MISSING' },
           companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         },
         update: {
-          quantity: ledger.onHand, expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
+          quantity: Number(ledger.onHand), expiryDate: lot.expiryDate ?? new Date(), daysUntilExpiry: days,
           status: 'ACTIVE', resolvedAt: null,
           recommendedAction: recommendedExpiryAction(days),
         },
       });
       const claimed = await tx.expiryAlert.updateMany({
         where: { id: alertId, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
-        data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, ledger.onHand - quantity) },
+        data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, Number(ledger.onHand) - quantity) },
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
-      const afterBalance = ledger.onHand - quantity;
+      const afterBalance = Number(ledger.onHand) - quantity;
       // Canonical posting inside this transaction (journal + ledger + audit + outbox).
       // The key carries the ledger version so a later, legitimate write-off of the same
       // lot (the alert id is deterministic per item/lot/location) is a new movement.
@@ -638,9 +638,9 @@ router.post('/expiry-write-off', async (req, res) => {
       await tx.auditLog.create({ data: {
         actorId: req.user!.id, actorRole: req.user!.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
         entityType: 'ExpiryAlert', entityId: alertId,
-        metadata: { quantity, beforeBalance: ledger.onHand, afterBalance, movementId: movement.id, reason, itemId, lotId, locationId },
+        metadata: { quantity, beforeBalance: Number(ledger.onHand), afterBalance, movementId: movement.id, reason, itemId, lotId, locationId },
       } });
-      return { alertId, movementId: movement.id, quantity, beforeBalance: ledger.onHand, afterBalance };
+      return { alertId, movementId: movement.id, quantity, beforeBalance: Number(ledger.onHand), afterBalance };
     });
     try {
       adjustStockLedger(itemId, lotId, locationId, -result.quantity);
@@ -695,13 +695,13 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
         where: { itemId_lotId_locationId: { itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId } },
       });
       const quantity = Number.isFinite(requestedQty) && requestedQty > 0 ? requestedQty : Number(alert.quantity);
-      if (!ledger || quantity <= 0 || quantity > ledger.onHand) throw new Error('Write-off quantity exceeds current lot stock.');
+      if (!ledger || quantity <= 0 || quantity > Number(ledger.onHand)) throw new Error('Write-off quantity exceeds current lot stock.');
       const claimed = await tx.expiryAlert.updateMany({
         where: { id: alert.id, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
         data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, alert.quantity - quantity) },
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
-      const afterBalance = ledger.onHand - quantity;
+      const afterBalance = Number(ledger.onHand) - quantity;
       const { movement } = await postInventoryMovementInTransaction(tx, {
         tenant: tenantContextOf(req), itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId,
         movementType: 'EXPIRY_WRITE_OFF', qtyDelta: -quantity,
@@ -712,9 +712,9 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
       await tx.auditLog.create({ data: {
         actorId: req.user!.id, actorRole: req.user!.role, action: 'EXPIRY_STOCK_WRITTEN_OFF',
         entityType: 'ExpiryAlert', entityId: alert.id,
-        metadata: { quantity, beforeBalance: ledger.onHand, afterBalance, movementId: movement.id, reason },
+        metadata: { quantity, beforeBalance: Number(ledger.onHand), afterBalance, movementId: movement.id, reason },
       } });
-      return { alertId: alert.id, movementId: movement.id, quantity, beforeBalance: ledger.onHand, afterBalance };
+      return { alertId: alert.id, movementId: movement.id, quantity, beforeBalance: Number(ledger.onHand), afterBalance };
     });
     return res.json({ success: true, result });
   } catch (error) {
@@ -750,7 +750,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
   // Days with nothing on the shelf are censored, not counted as zero demand (audit O-2).
   const allMovements = await prisma.stockMovement.findMany({ where: { itemId: req.params.itemId, locationId, timestamp: { gte: since } }, select: { qtyDelta: true, timestamp: true } });
   const currentLedger = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId }, select: { onHand: true } });
-  const opening = openingBalancesByDay({ currentOnHand: currentLedger.reduce((sum, row) => sum + row.onHand, 0), movements: allMovements, windowStart: since, windowDays });
+  const opening = openingBalancesByDay({ currentOnHand: currentLedger.reduce((sum, row) => sum + Number(row.onHand), 0), movements: allMovements.map((m) => ({ ...m, qtyDelta: Number(m.qtyDelta) })), windowStart: since, windowDays });
   const censored = censorStockoutDays(dailyDemand.map((value) => Math.max(0, value)), opening);
   const netDailyDemand = censored.demand.length ? censored.demand : dailyDemand.map((value) => Math.max(0, value));
   const plainDemand = computeDemandStats(netDailyDemand);
@@ -761,7 +761,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
 
   const ledgerRows = await prisma.stockLedger.findMany({ where: { itemId: req.params.itemId, locationId }, include: { lot: { select: { status: true, expiryDate: true } } } });
   // Cover is sellable stock only: blocked, quarantined and expired lots do not count (audit O-6).
-  const onHand = totalSellable(ledgerRows);
+  const onHand = totalSellable(ledgerRows.map((row) => ({ ...row, onHand: Number(row.onHand), reserved: Number(row.reserved) })));
   const openLines = await prisma.purchaseOrderLine.findMany({
     where: { itemId: req.params.itemId, purchaseOrder: { locationId, status: { in: [...OPEN_PO_STATUSES] } } },
   });
@@ -774,13 +774,13 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     where: { itemId: req.params.itemId, stock: { some: { locationId, onHand: { gt: 0 } } } },
     include: { stock: { where: { locationId } } },
   }).catch(() => []);
-  const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => row.onHand > 0).map((row) => ({
+  const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => Number(row.onHand) > 0).map((row) => ({
     itemId: req.params.itemId,
     itemName: item?.name ?? req.params.itemId,
     lotId: lot.id,
     lotNo: lot.lotNo,
     locationId: row.locationId,
-    onHand: row.onHand,
+    onHand: Number(row.onHand),
     status: lot.status,
     expiryDate: lot.expiryDate?.toISOString() ?? null,
   })));
@@ -795,7 +795,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     select: { locationId: true, onHand: true, location: { select: { name: true } } },
   });
   const overstockRows = rules.map((rule) => {
-    const here = networkLedger.filter((row) => row.locationId === rule.locationId).reduce((sum, row) => sum + row.onHand, 0);
+    const here = networkLedger.filter((row) => row.locationId === rule.locationId).reduce((sum, row) => sum + Number(row.onHand), 0);
     const location = networkLedger.find((row) => row.locationId === rule.locationId)?.location;
     return {
       itemId: req.params.itemId,
@@ -890,10 +890,10 @@ router.get('/intelligence/:locationId', async (req, res) => {
   for (const entry of ledger) {
     if (entry.locationId === req.params.locationId) {
       const current = quantities.get(entry.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
-      const sellableHere = sellableQuantity({ onHand: entry.onHand, reserved: 0, lot: entry.lot });
+      const sellableHere = sellableQuantity({ onHand: Number(entry.onHand), reserved: 0, lot: entry.lot });
       current.onHand += sellableHere;
-      current.reserved += sellableHere > 0 ? entry.reserved : 0;
-      current.inTransit += entry.inTransit;
+      current.reserved += sellableHere > 0 ? Number(entry.reserved) : 0;
+      current.inTransit += Number(entry.inTransit);
       quantities.set(entry.itemId, current);
     }
     const byLocation = network.get(entry.itemId) ?? new Map();
@@ -907,7 +907,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
       shippingCostPerKm: entry.location.shippingCostPerKm == null ? null : Number(entry.location.shippingCostPerKm),
       deliverySlaHours: entry.location.deliverySlaHours,
     };
-    source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved, lot: entry.lot });
+    source.available += sellableQuantity({ onHand: Number(entry.onHand), reserved: Number(entry.reserved), lot: entry.lot });
     byLocation.set(entry.locationId, source);
     network.set(entry.itemId, byLocation);
   }
@@ -1009,7 +1009,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
   const networkUnitsByKey = new Map<string, number>();
   for (const m of networkMovements) {
     const key = `${m.itemId}|${m.locationId}`;
-    networkUnitsByKey.set(key, (networkUnitsByKey.get(key) ?? 0) + signedSalesQty(m.movementType, m.qtyDelta));
+    networkUnitsByKey.set(key, (networkUnitsByKey.get(key) ?? 0) + signedSalesQty(m.movementType, Number(m.qtyDelta)));
   }
   const networkByItem = new Map<string, Array<{ locationId: string; locationName: string; avgDailyDemand: number; onHand: number }>>();
   for (const itemId of expiringItemIds) {
@@ -1021,13 +1021,13 @@ router.get('/intelligence/:locationId', async (req, res) => {
       }));
     if (locations.length) networkByItem.set(itemId, locations);
   }
-  const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => row.onHand > 0).map((row) => ({
+  const lotInputs = lots.flatMap((lot) => lot.stock.filter((row) => Number(row.onHand) > 0).map((row) => ({
     itemId: lot.itemId,
     itemName: lot.item.name,
     lotId: lot.id,
     lotNo: lot.lotNo,
     locationId: row.locationId,
-    onHand: row.onHand,
+    onHand: Number(row.onHand),
     status: lot.status,
     expiryDate: lot.expiryDate?.toISOString() ?? null,
   })));
@@ -1269,7 +1269,7 @@ router.get('/locations/:locationId/pick-face-replenishment', async (req, res) =>
     const max = bin.pickFaceMax ?? min;
     // One decision per item in this pick face (its rows are per lot, and were suggested separately).
     const onHandByItem = new Map<string, number>();
-    for (const row of pickFaceStock) onHandByItem.set(row.itemId, (onHandByItem.get(row.itemId) ?? 0) + row.onHand);
+    for (const row of pickFaceStock) onHandByItem.set(row.itemId, (onHandByItem.get(row.itemId) ?? 0) + Number(row.onHand));
     for (const [itemId, onHand] of onHandByItem) {
       const reserveRows = await prisma.binStock.findMany({
         where: { locationId, itemId, binId: { in: [...reserveBinCodeById.keys()] } },
@@ -1280,9 +1280,9 @@ router.get('/locations/:locationId/pick-face-replenishment', async (req, res) =>
         .filter((row) => {
           const lot = lotInfo.get(row.lotId);
           // Never replenish a pick face from a blocked, quarantined or expired lot.
-          return !lot || sellableQuantity({ onHand: row.onHand, lot }) > 0;
+          return !lot || sellableQuantity({ onHand: Number(row.onHand), lot }) > 0;
         })
-        .map((row) => ({ binId: row.binId, code: reserveBinCodeById.get(row.binId) ?? row.binId, onHand: row.onHand, lotId: row.lotId || undefined, expiryDate: lotInfo.get(row.lotId)?.expiryDate?.toISOString() ?? null }));
+        .map((row) => ({ binId: row.binId, code: reserveBinCodeById.get(row.binId) ?? row.binId, onHand: Number(row.onHand), lotId: row.lotId || undefined, expiryDate: lotInfo.get(row.lotId)?.expiryDate?.toISOString() ?? null }));
       const suggestion = planPickFaceReplenishment({ binId: bin.id, code: bin.code, onHand, min, max }, reserveCandidates);
       if (suggestion) suggestions.push({ itemId, ...suggestion });
     }
@@ -1954,7 +1954,7 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   const locationId = returnRequest.order.fulfillmentLocationId;
   const lot = await returnLot(returnRequest.id, line.itemId);
   const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } } });
-  if (!ledger || ledger.quarantine + 1e-8 < line.quantity) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
+  if (!ledger || Number(ledger.quarantine) + 1e-8 < line.quantity) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
   const restock = plan.action === 'RESTOCK';
   await prisma.$transaction(async (tx) => {
     await tx.stockLedger.update({
@@ -2555,7 +2555,7 @@ router.get('/locations/:locationId/bin-stock', async (req, res) => {
     orderBy: [{ binId: 'asc' }, { itemId: 'asc' }],
     take: 500,
   }).catch(() => []);
-  if (rows.length) return res.json({ bins: rows });
+  if (rows.length) return res.json({ bins: rows.map((row) => ({ ...row, onHand: Number(row.onHand), reserved: Number(row.reserved) })) });
   return res.json({ bins: serializeMemory() });
 });
 
