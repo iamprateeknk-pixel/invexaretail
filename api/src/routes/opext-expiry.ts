@@ -121,7 +121,7 @@ router.post('/expiry-write-off', async (req, res) => {
   try {
     const result = await prisma.$transaction(async (tx) => {
       const [ledger, lot] = await Promise.all([
-        tx.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } }),
+        tx.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId, lotId, locationId } } }),
         tx.lot.findUnique({ where: { id: lotId } }),
       ]);
       if (!lot) throw new Error('Lot not found.');
@@ -217,7 +217,7 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
       if (!['ACTIVE', 'ACKNOWLEDGED'].includes(String(alert.status))) throw new Error('Expiry alert is already resolved.');
       if (!canAccessLocation(req, alert.locationId)) throw new Error('Location access denied.');
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId: alert.companyId, itemId: alert.itemId, lotId: alert.lotId, locationId: alert.locationId } },
       });
       const quantity = Number.isFinite(requestedQty) && requestedQty > 0 ? requestedQty : Number(alert.quantity);
       if (!ledger || quantity <= 0 || quantity > Number(ledger.onHand)) throw new Error('Write-off quantity exceeds current lot stock.');
