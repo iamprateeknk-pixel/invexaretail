@@ -50,21 +50,32 @@ import {
 
 type RouteLayer = {
   route?: { path: string | string[]; methods: Record<string, boolean> };
+  handle?: { stack?: RouteLayer[] };
 };
 
 function routeTable(router: Router): string[] {
   const table: string[] = [];
-  const stack = (router as unknown as { stack: RouteLayer[] }).stack;
-  for (const layer of stack) {
-    if (!layer.route) continue;
-    const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
-    for (const path of paths) {
-      if (typeof path !== 'string') continue;
-      for (const method of Object.keys(layer.route.methods)) {
-        table.push(`${method.toUpperCase()} ${path}`);
+  const walk = (stack: RouteLayer[]): void => {
+    for (const layer of stack) {
+      if (layer.route) {
+        const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+        for (const path of paths) {
+          if (typeof path !== 'string') continue;
+          for (const method of Object.keys(layer.route.methods)) {
+            table.push(`${method.toUpperCase()} ${path}`);
+          }
+        }
+        continue;
       }
+      // Phase 4 composers mount sub-routers via router.use(...): those
+      // layers carry no route of their own, so recurse into the mounted
+      // router's stack. Composer mounts are path-less, so registration
+      // order and paths pass through unchanged.
+      const subStack = layer.handle?.stack;
+      if (subStack) walk(subStack);
     }
-  }
+  };
+  walk((router as unknown as { stack: RouteLayer[] }).stack);
   return table;
 }
 
