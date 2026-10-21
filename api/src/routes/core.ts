@@ -226,54 +226,11 @@ import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
 import { listMyOpenAssignments, listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
 import { listRecentMovementsForCompany } from '../lib/repositories/movement-repository.js';
+import { accessContext, tenantContext, csvEscape, firstParam, inactiveItemMessage, VALID_ROLES, EMAIL_PATTERN, requireAdmin, companyProfileFor, isOperationalAdmin, upload } from './core-shared.js';
 
 const router = Router();
 
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
-
-const INVENTORY_ROLES: readonly string[] = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'];
-
-// EnhancedUserRecord carries a wider role union than the inventory rules know
-// about. An unmapped role falls back to the least privileged one rather than
-// silently inheriting admin access.
-function accessContext(user: EnhancedUserRecord): AccessContext {
-  const role = INVENTORY_ROLES.includes(user.role) ? (user.role as Role) : 'STORE_USER';
-  return { role, assignedLocationIds: user.locationIds ?? [], companyId: user.companyId };
-}
-
-function tenantContext(req: Request): TenantContext {
-  return {
-    companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
-    tenantId: DEFAULT_TENANT_ID,
-    userId: req.user!.id,
-    role: req.user!.role as TenantContext['role'],
-  };
-}
-
-function csvEscape(value: unknown): string {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`;
-}
-
-function xmlEscape(value: unknown): string {
-  return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
-}
-
-function firstParam(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value[0] : (value ?? '');
-}
-
-// Blueprint v4 §6: an inactive or archived item stays in history but cannot
-// take part in any new transaction.
-function inactiveItemMessage(itemIds: string[]): string | null {
-  const catalog = listItems();
-  for (const id of itemIds) {
-    const item = catalog.find((entry) => entry.id === id);
-    if (item && !isOperationalItem(item)) {
-      return `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be used in new transactions.`;
-    }
-  }
-  return null;
-}
 
 router.get('/permissions/catalog', async (req: Request, res: Response) => {
   if (req.user!.role !== 'ADMIN') return res.status(403).json({ message: 'Only Main Admin can view the permission catalog.' });
@@ -419,17 +376,6 @@ router.get('/locations', async (req: Request, res: Response) => {
 // ADMIN PORTAL: company profile, locations, users
 // ============================================
 
-const VALID_ROLES: readonly Role[] = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'];
-const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-function requireAdmin(req: Request, res: Response): boolean {
-  if (!isOperationalAdmin(req.user!.role)) {
-    res.status(403).json({ message: 'Admin access required.' });
-    return false;
-  }
-  return true;
-}
-
 router.get('/industries', (_req: Request, res: Response) => {
   return res.json({
     industries: listIndustryCatalog().map((pack) => ({
@@ -443,12 +389,6 @@ router.get('/industries', (_req: Request, res: Response) => {
     })),
   });
 });
-
-// The caller's own company profile. A company that has none yet gets a neutral one named after it - never the
-// default company's (the old single global profile leaked the platform company's name and industry to every tenant).
-function companyProfileFor(companyId: string) {
-  return findCompanyProfile(companyId) ?? { name: controlPlane.companies.get(companyId)?.name ?? companyId, industry: 'Grocery', industryKey: 'grocery' };
-}
 
 router.get('/workspace/profile', (req: Request, res: Response) => {
   const companyId = req.companyId || DEFAULT_COMPANY_ID;
@@ -2030,8 +1970,6 @@ router.get('/export/:type', (req: Request, res: Response) => {
   return res.status(400).json({ message: 'Export type must be stock, counts or transfers.' });
 });
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
-
 type StockUpdateMode = 'SET' | 'ADD' | 'REMOVE';
 
 function stockImportId(prefix: string, value: string): string {
@@ -2526,7 +2464,7 @@ router.post('/import/items', upload.single('file'), async (req: Request, res: Re
 // leave their source branch and sales returns add stock back to that branch.
 // ---------------------------------------------------------------------------
 const normalName = (input: string) => input.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-const isOperationalAdmin = (role: string) => role === 'ADMIN' || role === 'ADMIN_USER';
+
 
 function configuredPurchaseWarehouse(companyId: string = DEFAULT_COMPANY_ID) {
   const warehouses = locationsForCompany(companyId, listLocations()).filter((location) => location.type === 'warehouse');
