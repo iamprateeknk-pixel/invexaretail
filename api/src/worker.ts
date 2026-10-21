@@ -9,11 +9,16 @@ import { startReconciliationSchedule } from './lib/reconciliation-schedule.js';
 import { startAlertSweep } from './lib/alerting.js';
 import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
 import { deliverPersistedEvent } from './lib/event-bus.js';
+import { resolveDatabaseUrl } from './lib/db.js';
+import { assertProductionSecrets } from './lib/production-guard.js';
 
 async function main() {
-  if (process.env.REQUIRE_DATABASE === 'true' && !process.env.DATABASE_URL) {
+  if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
     throw new Error('DATABASE_URL is mandatory for the production worker.');
   }
+  // R9: in production the worker fails closed on placeholder secrets or a
+  // missing database, exactly like the API (see lib/production-guard.ts).
+  assertProductionSecrets();
   await withDistributedLock('boot-sweep', async () => {
     await campaignSchedulerTick();
     await orderSweepTick();
