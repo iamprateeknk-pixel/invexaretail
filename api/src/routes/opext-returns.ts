@@ -160,9 +160,9 @@ router.patch('/returns/:id/status', async (req, res) => {
       } else if (plan.action === 'HOLD') {
         // Physically back in the building but not sellable: quarantine until a disposition is decided.
         await prisma.stockLedger.upsert({
-          where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } },
+          where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } },
           update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
-          create: { itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+          create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
         });
         adjustQuarantineLedger(line.itemId, lot.id, locationId, line.quantity);
         void createExceptionCase({
@@ -213,7 +213,7 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
 
   const locationId = returnRequest.order.fulfillmentLocationId;
   const lot = await returnLot(returnRequest.id, line.itemId);
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: lot.id, locationId } } });
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } } });
   if (!ledger || Number(ledger.quarantine) + 1e-8 < line.quantity) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
   const restock = plan.action === 'RESTOCK';
   await prisma.$transaction(async (tx) => {
