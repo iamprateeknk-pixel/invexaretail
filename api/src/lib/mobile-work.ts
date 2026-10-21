@@ -94,7 +94,7 @@ async function loadFromDatabase(ctx: TenantContext, context: AccessContext, isCo
       : [],
   ]);
 
-  const stock = new Map<string, number>(ledgerRows.map((row) => [`${row.itemId}|${row.lotId}|${row.locationId}`, row.onHand] as const));
+  const stock = new Map<string, number>(ledgerRows.map((row) => [`${row.itemId}|${row.lotId}|${row.locationId}`, Number(row.onHand)] as const));
   return {
     assignments,
     itemsById: new Map<string, ItemRecord>(itemRows.map((row) => [row.id, itemRowToRecord(row)] as const)),
