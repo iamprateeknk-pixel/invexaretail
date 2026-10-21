@@ -40,7 +40,10 @@ export class InsufficientStockError extends DomainError {
 export type ReserveLine = { itemId: string; lotId: string; locationId: string; quantity: number };
 
 export type ReserveOptions = {
-  companyId?: string;
+  // Required since Phase 3 (R3): the reservation UPDATE/SELECT are
+  // company-scoped, so a caller that cannot name its company cannot
+  // reserve - before this, the field existed but was never used in SQL.
+  companyId: string;
   tenantId?: string;
   actorId?: string;
   requestId?: string;
@@ -73,20 +76,23 @@ export async function reserveStockForTransfer(lines: ReserveLine[], options: Res
         `UPDATE "StockLedger"
          SET reserved = reserved + ?, version = version + 1
          WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?
+           AND "companyId" = ?
            AND ("onHand" - reserved) >= ?`,
         line.quantity,
         line.itemId,
         line.lotId,
         line.locationId,
+        options.companyId,
         line.quantity,
       );
       if (affected === 0) {
         const [existing] = await queryRaw<Array<{ onHand: number; reserved: number }>>(
           tx,
-          `SELECT "onHand"::float8 AS "onHand", reserved::float8 AS reserved FROM "StockLedger" WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?`,
+          `SELECT "onHand"::float8 AS "onHand", reserved::float8 AS reserved FROM "StockLedger" WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ? AND "companyId" = ?`,
           line.itemId,
           line.lotId,
           line.locationId,
+          options.companyId,
         );
         const available = existing ? existing.onHand - existing.reserved : 0;
         throw new InsufficientStockError(
@@ -127,7 +133,7 @@ export async function reserveStockForTransfer(lines: ReserveLine[], options: Res
  * physical stock movement (if any) has already been posted elsewhere by
  * the time this runs.
  */
-export async function releaseReservedStock(lines: ReserveLine[]): Promise<void> {
+export async function releaseReservedStock(lines: ReserveLine[], options: { companyId: string }): Promise<void> {
   if (!databaseEnabled || !lines.length) return;
   for (const line of lines) {
     try {
@@ -135,11 +141,12 @@ export async function releaseReservedStock(lines: ReserveLine[]): Promise<void> 
         prisma,
         `UPDATE "StockLedger"
          SET reserved = GREATEST(0, reserved - ?), version = version + 1
-         WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?`,
+         WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ? AND "companyId" = ?`,
         line.quantity,
         line.itemId,
         line.lotId,
         line.locationId,
+        options.companyId,
       );
     } catch (error) {
       console.error('releaseReservedStock failed (non-blocking):', error instanceof Error ? error.message : error);
