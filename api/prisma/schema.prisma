@@ -827,9 +827,9 @@ model StockLedger {
   lot            Lot      @relation(fields: [lotId], references: [id])
   locationId     String
   location       Location @relation(fields: [locationId], references: [id])
-  onHand         Float    @default(0)
-  reserved       Float    @default(0)
-  inTransit      Float    @default(0)
+  onHand         Decimal    @default(0) @db.Decimal(18, 3)
+  reserved       Decimal    @default(0) @db.Decimal(18, 3)
+  inTransit      Decimal    @default(0) @db.Decimal(18, 3)
   // Blueprint section 7.2 inventory state model: physical stock that is on
   // hand but not sellable. Quarantine = received/counted but blocked
   // pending a QC/exception disposition (Exception Inbox); Damaged = the
@@ -837,8 +837,8 @@ model StockLedger {
   // write-off/vendor-return. Neither bucket is part of `onHand` availability
   // math done elsewhere - they are tracked here so quarantined stock is
   // visible instead of silently vanishing from the ledger.
-  quarantine     Float    @default(0)
-  damaged        Float    @default(0)
+  quarantine     Decimal    @default(0) @db.Decimal(18, 3)
+  damaged        Decimal    @default(0) @db.Decimal(18, 3)
   version        Int      @default(0)
   lastUpdatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1577,7 +1577,7 @@ model InventoryMovement {
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
   movementType    String
-  qtyDelta        Float
+  qtyDelta        Decimal @db.Decimal(18, 3)
   transactionAt   DateTime
   importedAt      DateTime @default(now())
   sourceType      String
@@ -1646,9 +1646,9 @@ model StockMovement {
   location          Location @relation(fields: [locationId], references: [id])
   binId             String?
   movementType      StockMovementType
-  qtyDelta          Float
-  beforeBalance     Float
-  afterBalance      Float
+  qtyDelta          Decimal @db.Decimal(18, 3)
+  beforeBalance     Decimal @db.Decimal(18, 3)
+  afterBalance      Decimal @db.Decimal(18, 3)
   sourceDocument    String?
   sourceLineId      String?
   actor             String?
@@ -1686,10 +1686,10 @@ model StockBalance {
   lot             Lot?     @relation(fields: [lotId], references: [id])
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
-  onHand          Float    @default(0)
-  reserved        Float    @default(0)
-  inTransit       Float    @default(0)
-  available       Float    @default(0)
+  onHand          Decimal    @default(0) @db.Decimal(18, 3)
+  reserved        Decimal    @default(0) @db.Decimal(18, 3)
+  inTransit       Decimal    @default(0) @db.Decimal(18, 3)
+  available       Decimal    @default(0) @db.Decimal(18, 3)
   version         Int      @default(0)
   lastPostedAt    DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -2217,8 +2217,8 @@ model BinStock {
   locationId  String
   location    Location @relation(fields: [locationId], references: [id])
   binId       String
-  onHand      Float    @default(0)
-  reserved    Float    @default(0)
+  onHand      Decimal    @default(0) @db.Decimal(18, 3)
+  reserved    Decimal    @default(0) @db.Decimal(18, 3)
   version     Int      @default(0)
   updatedAt   DateTime @updatedAt
 
@@ -2238,7 +2238,7 @@ model BinMovement {
   location    Location @relation(fields: [locationId], references: [id])
   fromBinId   String
   toBinId     String
-  quantity    Float
+  quantity    Decimal @db.Decimal(18, 3)
   reference   String?
   actorId     String?
   createdAt   DateTime @default(now())

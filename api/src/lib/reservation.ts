@@ -83,7 +83,7 @@ export async function reserveStockForTransfer(lines: ReserveLine[], options: Res
       if (affected === 0) {
         const [existing] = await queryRaw<Array<{ onHand: number; reserved: number }>>(
           tx,
-          `SELECT "onHand", reserved FROM "StockLedger" WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?`,
+          `SELECT "onHand"::float8 AS "onHand", reserved::float8 AS reserved FROM "StockLedger" WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?`,
           line.itemId,
           line.lotId,
           line.locationId,

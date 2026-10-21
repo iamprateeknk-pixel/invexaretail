@@ -134,7 +134,7 @@ export async function moveBinStockPersisted(input: BinStockKey & { toBinId: stri
   const [, , movement] = await prisma.$transaction(async (tx) => {
     const fromKey = { itemId_lotId_locationId_binId: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId } };
     const fromRow = await tx.binStock.findUnique({ where: fromKey });
-    const fromOnHand = (fromRow?.onHand ?? 0) - input.quantity;
+    const fromOnHand = (fromRow ? Number(fromRow.onHand) : 0) - input.quantity;
     if (fromOnHand < -1e-8) throw new Error(`Bin ${input.binId} does not have ${input.quantity} of item ${input.itemId}.`);
     const fromUpdate = fromRow
       ? tx.binStock.update({ where: { id: fromRow.id }, data: { onHand: fromOnHand, version: { increment: 1 } } })
@@ -143,7 +143,7 @@ export async function moveBinStockPersisted(input: BinStockKey & { toBinId: stri
     const toKey = { itemId_lotId_locationId_binId: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId } };
     const toRow = await tx.binStock.findUnique({ where: toKey });
     const toUpdate = toRow
-      ? tx.binStock.update({ where: { id: toRow.id }, data: { onHand: toRow.onHand + input.quantity, version: { increment: 1 } } })
+      ? tx.binStock.update({ where: { id: toRow.id }, data: { onHand: Number(toRow.onHand) + input.quantity, version: { increment: 1 } } })
       : tx.binStock.create({ data: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId, onHand: input.quantity } });
 
     const movementCreate = tx.binMovement.create({
@@ -155,7 +155,7 @@ export async function moveBinStockPersisted(input: BinStockKey & { toBinId: stri
     });
     return Promise.all([fromUpdate, toUpdate, movementCreate]);
   });
-  return movement;
+  return { ...movement, quantity: Number(movement.quantity) };
 }
 
 export async function persistBinStockDelta(input: BinStockKey & { qtyDelta: number }): Promise<void> {
@@ -176,7 +176,7 @@ export async function persistBinStockDelta(input: BinStockKey & { qtyDelta: numb
     });
     return;
   }
-  const onHand = existing.onHand + input.qtyDelta;
+  const onHand = Number(existing.onHand) + input.qtyDelta;
   if (onHand < -1e-8) throw new Error(`Bin ${input.binId} does not have ${-input.qtyDelta} of item ${input.itemId}.`);
   await prisma.binStock.update({ where: { id: existing.id }, data: { onHand, version: { increment: 1 } } });
 }

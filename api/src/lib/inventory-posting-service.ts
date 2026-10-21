@@ -105,7 +105,7 @@ export async function postInventoryMovement(cmd: PostMovementCommand): Promise<P
   if (!cmd.reason && !cmd.sourceDocument) throw new Error('A reason or sourceDocument is required to post an inventory movement.');
 
   const existing = await findByIdempotencyKey(cmd.tenant.companyId, cmd.idempotencyKey);
-  if (existing) return { duplicate: true, movement: existing, balance: { onHand: existing.afterBalance } };
+  if (existing) return { duplicate: true, movement: existing, balance: { onHand: Number(existing.afterBalance) } };
 
   const policy = await resolveNegativeStockPolicy(cmd.locationId);
   const correlationId = cmd.correlationId ?? randomUUID();
@@ -116,7 +116,7 @@ export async function postInventoryMovement(cmd: PostMovementCommand): Promise<P
       where: { itemId_lotId_locationId: { itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
     }).catch(() => null);
 
-    const beforeBalance = current?.onHand ?? 0;
+    const beforeBalance = current ? Number(current.onHand) : 0;
     const afterBalance = beforeBalance + cmd.qtyDelta;
 
     if (afterBalance < 0) {
@@ -209,7 +209,7 @@ export async function postInventoryMovement(cmd: PostMovementCommand): Promise<P
         // Another concurrent request with the identical idempotency key won
         // the race - this is the duplicate-retry case, not a real conflict.
         const winner = await findByIdempotencyKey(cmd.tenant.companyId, cmd.idempotencyKey);
-        if (winner) return { duplicate: true, movement: winner, balance: { onHand: winner.afterBalance } };
+        if (winner) return { duplicate: true, movement: winner, balance: { onHand: Number(winner.afterBalance) } };
       }
       // OPTIMISTIC_LOCK_LOST or any other transient failure: retry the
       // outer loop from a fresh balance read.
@@ -241,7 +241,7 @@ export async function postInventoryMovementInTransaction(
   if (!cmd.reason && !cmd.sourceDocument) throw new Error('A reason or sourceDocument is required to post an inventory movement.');
 
   const existing = await tx.stockMovement.findFirst({ where: { companyId: cmd.tenant.companyId, idempotencyKey: cmd.idempotencyKey } });
-  if (existing) return { duplicate: true, movement: existing, balance: { onHand: existing.afterBalance } };
+  if (existing) return { duplicate: true, movement: existing, balance: { onHand: Number(existing.afterBalance) } };
 
   const config = await tx.workflowConfiguration.findFirst({ where: { type: 'STOCK_POSTING', scopeId: cmd.locationId } });
   const policy: NegativeStockPolicy = (NEGATIVE_STOCK_POLICIES as readonly string[]).includes(config?.negativeStockRule ?? '')
@@ -256,7 +256,7 @@ export async function postInventoryMovementInTransaction(
       companyId: cmd.tenant.companyId, tenantId: cmd.tenant.tenantId,
     },
   });
-  const afterBalance = ledger.onHand;
+  const afterBalance = Number(ledger.onHand);
   const beforeBalance = afterBalance - cmd.qtyDelta;
   if (afterBalance < 0) {
     if (policy === 'BLOCK') {
@@ -317,7 +317,7 @@ export async function reverseInventoryMovement(
     lotId: original.lotId,
     locationId: original.locationId,
     movementType: original.movementType,
-    qtyDelta: -original.qtyDelta,
+    qtyDelta: -Number(original.qtyDelta),
     reason: reason.trim() || 'Manual reversal',
     sourceDocument: original.sourceDocument ?? undefined,
     sourceLineId: original.sourceLineId ?? undefined,
