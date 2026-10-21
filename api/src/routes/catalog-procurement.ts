@@ -159,7 +159,7 @@ router.get('/reorder-rules', async (req, res) => {
     return res.json({ rules: listReorderRules(locationId) });
   }
   const rules = await prisma.reorderRule.findMany({ where: { locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, orderBy: { createdAt: 'asc' } });
-  return res.json({ rules });
+  return res.json({ rules: rules.map(decimalsToNumbers) });
 });
 
 // Matches the Action Center's own dismissal TTL (operations-extension.ts) - a dismissed
@@ -199,7 +199,7 @@ async function computeReorderSuggestions(companyId: string, locationId: string, 
     const days = byItem.get(item.id)!;
     const dailyDemand = Array.from({ length: windowDays }, (_, offset) => days.get(new Date(since.getTime() + offset * 86_400_000).toISOString().slice(0, 10)) ?? 0);
     const rule = ruleByItem.get(item.id);
-    const suggestion = suggestReorderRule({ itemId: item.id, dailyDemand, leadTimeDays, servicePercent, decimal: item.decimalQuantity, currentMin: rule?.minQty, currentTarget: rule?.targetQty });
+    const suggestion = suggestReorderRule({ itemId: item.id, dailyDemand, leadTimeDays, servicePercent, decimal: item.decimalQuantity, currentMin: rule?.minQty == null ? undefined : Number(rule.minQty), currentTarget: rule?.targetQty == null ? undefined : Number(rule.targetQty) });
     return suggestion ? [{ ...suggestion, code: item.code, name: item.name, decimal: item.decimalQuantity }] : [];
   });
 }
@@ -378,7 +378,7 @@ router.get('/suppliers/:id/price-breaks', async (req, res) => {
   const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId }, select: { id: true } });
   if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
   const breaks = await prisma.supplierPriceBreak.findMany({ where: { supplierId: supplier.id, companyId }, orderBy: [{ itemId: 'asc' }, { minQty: 'asc' }] });
-  return res.json({ priceBreaks: breaks.map((row) => ({ ...row, unitCost: Number(row.unitCost) })) });
+  return res.json({ priceBreaks: breaks.map((row) => ({ ...row, minQty: Number(row.minQty), unitCost: Number(row.unitCost) })) });
 });
 
 // Replaces the whole ladder for one supplier + item: [{ minQty, unitCost }], quantities ascending with costs falling.
@@ -824,14 +824,14 @@ router.get('/purchase-orders/plan', async (req, res) => {
   }
 
   const breakRows = await prisma.supplierPriceBreak.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: { in: itemIds } }, select: { supplierId: true, itemId: true, minQty: true, unitCost: true } });
-  const breaksFor = (itemId: string, supplierId: string | undefined) => breakRows.filter((row) => row.itemId === itemId && row.supplierId === supplierId).map((row) => ({ minQty: row.minQty, unitCost: Number(row.unitCost) }));
+  const breaksFor = (itemId: string, supplierId: string | undefined) => breakRows.filter((row) => row.itemId === itemId && row.supplierId === supplierId).map((row) => ({ minQty: Number(row.minQty), unitCost: Number(row.unitCost) }));
   const planInputs: PlanInput[] = rules.map((rule) => ({
     priceBreaks: breaksFor(rule.itemId, lastSupplier.get(rule.itemId)?.supplierId),
     itemId: rule.itemId, code: catalog.get(rule.itemId)?.code, name: catalog.get(rule.itemId)?.name,
-    onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: rule.minQty, targetQty: rule.targetQty,
+    onHand: onHand.get(rule.itemId) ?? 0, reserved: reserved.get(rule.itemId) ?? 0, minQty: Number(rule.minQty), targetQty: Number(rule.targetQty),
     openPoQty: open.get(rule.itemId) ?? 0, inTransitQty: inTransit.get(rule.itemId) ?? 0,
     avgDailyDemand: (sold.get(rule.itemId) ?? 0) / windowDays, demandDays: (sold.get(rule.itemId) ?? 0) > 0 ? windowDays : 0,
-    orderMultiple: (rule as { orderMultiple?: number | null }).orderMultiple ?? null,
+    orderMultiple: rule.orderMultiple == null ? null : Number(rule.orderMultiple),
     decimal: Boolean(catalog.get(rule.itemId)?.decimalQuantity), unitCost: lastSupplier.get(rule.itemId)?.unitCost, supplierId: lastSupplier.get(rule.itemId)?.supplierId ?? null,
   }));
   // EOQ is opt-in: it needs the buyer's own cost of placing an order and yearly holding rate, which the system cannot know.
@@ -840,7 +840,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const result = planPurchases({
     orderingCost, holdingRate, budget: Number(req.query.budget) >= 0 && req.query.budget !== undefined && req.query.budget !== '' ? Number(req.query.budget) : undefined,
     items: planInputs,
-    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: (supplier as { moq?: number | null }).moq, status: (supplier as { status?: string | null }).status })),
+    suppliers: suppliers.map((supplier) => ({ id: supplier.id, name: supplier.name, measured: supplierLeadTimeStats(bySupplier.get(supplier.id) ?? []), leadTimeDays: (supplier as { leadTimeDays?: number | null }).leadTimeDays, moq: supplier.moq == null ? null : Number(supplier.moq), status: (supplier as { status?: string | null }).status })),
   });
   return res.json({ locationId, windowDays, ...result, groups: groupBySupplier(result.suggestions) });
 });
