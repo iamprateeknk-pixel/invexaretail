@@ -80,7 +80,7 @@ async function fefoLotsForItem(companyId: string, itemId: string, locationId: st
       expiryDate: lot.expiryDate?.toISOString() ?? null,
       // Reservation-aware: a lot another order or transfer already claimed
       // is not offered again here.
-      available: Math.max(0, (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0)),
+      available: Math.max(0, Number(ledger?.onHand ?? 0) - Number(ledger?.reserved ?? 0)),
       status: (lot.status as FefoLot['status']) ?? 'AVAILABLE',
       manufacturedAt: lot.manufacturedAt?.toISOString() ?? null,
       shelfLifeDays: item.shelfLifeDays ?? null,
@@ -154,7 +154,7 @@ async function itemAvailabilityByLocation(companyId: string, itemIds: string[], 
   });
   for (const row of rows) {
     const atLocation = map.get(row.locationId) ?? new Map<string, number>();
-    atLocation.set(row.itemId, (atLocation.get(row.itemId) ?? 0) + Math.max(0, row.onHand - row.reserved));
+    atLocation.set(row.itemId, (atLocation.get(row.itemId) ?? 0) + Math.max(0, Number(row.onHand) - Number(row.reserved)));
     map.set(row.locationId, atLocation);
   }
   return map;
@@ -442,7 +442,7 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId } },
       });
-      if (!ledger || ledger.onHand < line.requestedQty) {
+      if (!ledger || Number(ledger.onHand) < line.requestedQty) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
       }
       // onHand leaves through the canonical service (journal + ledger + audit + outbox in
