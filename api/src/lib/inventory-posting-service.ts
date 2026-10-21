@@ -113,7 +113,7 @@ export async function postInventoryMovement(cmd: PostMovementCommand): Promise<P
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const current = await prisma.stockLedger.findUnique({
-      where: { itemId_lotId_locationId: { itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
+      where: { companyId_itemId_lotId_locationId: { companyId: cmd.tenant.companyId, itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
     }).catch(() => null);
 
     const beforeBalance = current ? Number(current.onHand) : 0;
@@ -249,7 +249,7 @@ export async function postInventoryMovementInTransaction(
     : 'BLOCK';
 
   const ledger = await tx.stockLedger.upsert({
-    where: { itemId_lotId_locationId: { itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
+    where: { companyId_itemId_lotId_locationId: { companyId: cmd.tenant.companyId, itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId } },
     update: { onHand: { increment: cmd.qtyDelta }, version: { increment: 1 } },
     create: {
       itemId: cmd.itemId, lotId: cmd.lotId, locationId: cmd.locationId, onHand: cmd.qtyDelta, version: 1,
