@@ -99,3 +99,27 @@ integration('reserving against a lot with no StockLedger row at all fails closed
   const lot = await prisma.lot.create({ data: { itemId, lotNo: `LOT-${randomUUID().slice(0, 8)}` } });
   await assert.rejects(() => reserveStockForTransfer([{ itemId, lotId: lot.id, locationId, quantity: 1 }], { companyId }), InsufficientStockError);
 });
+
+integration('a reservation under another company can neither see nor release this company's stock', async () => {
+  const a = await makeFixture(10);
+  const b = await makeFixture(10);
+
+  // Company B reserving against company A's tuple (same item/lot/location
+  // identifiers, B's company): the row is not B's, so it must read as
+  // zero availability - not as A's 10 units.
+  await assert.rejects(
+    () => reserveStockForTransfer([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 1 }], { companyId: b.companyId }),
+    InsufficientStockError,
+  );
+
+  // Reserve 4 under A, then try to release them under B: the release is
+  // company-scoped, so A's reservation must survive B's release attempt.
+  await reserveStockForTransfer([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: a.companyId });
+  await releaseReservedStock([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: b.companyId });
+  const afterForeignRelease = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: a.companyId, itemId: a.itemId, lotId: a.lotId, locationId: a.locationId } } });
+  assert.equal(Number(afterForeignRelease?.reserved), 4, 'a foreign company release must not decrement this company's reservation');
+
+  await releaseReservedStock([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: a.companyId });
+  const afterOwnRelease = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: a.companyId, itemId: a.itemId, lotId: a.lotId, locationId: a.locationId } } });
+  assert.equal(Number(afterOwnRelease?.reserved), 0);
+});
