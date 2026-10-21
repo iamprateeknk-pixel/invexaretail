@@ -677,7 +677,7 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
     actorId: req.user!.id, actorRole: req.user!.role, action: `EXPIRY_ALERT_${status}`,
     entityType: 'ExpiryAlert', entityId: alert.id, metadata: { reason, locationId: alert.locationId },
   } });
-  return res.json({ alert });
+  return res.json({ alert: decimalsToNumbers(alert) });
 });
 
 router.post('/expiry-alerts/:id/write-off', async (req, res) => {
@@ -698,7 +698,7 @@ router.post('/expiry-alerts/:id/write-off', async (req, res) => {
       if (!ledger || quantity <= 0 || quantity > Number(ledger.onHand)) throw new Error('Write-off quantity exceeds current lot stock.');
       const claimed = await tx.expiryAlert.updateMany({
         where: { id: alert.id, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] } },
-        data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, alert.quantity - quantity) },
+        data: { status: 'RESOLVED_BY_WRITE_OFF', resolvedAt: new Date(), quantity: Math.max(0, Number(alert.quantity) - quantity) },
       });
       if (claimed.count !== 1) throw new Error('Expiry alert was already processed.');
       const afterBalance = Number(ledger.onHand) - quantity;
@@ -789,7 +789,7 @@ router.get('/items/:itemId/forecast', async (req, res) => {
     shelfLifeByItem: new Map([[req.params.itemId, item?.shelfLifeDays]]),
   });
 
-  const rules = await prisma.reorderRule.findMany({ where: { itemId: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
+  const rules = decimalsToNumbers(await prisma.reorderRule.findMany({ where: { itemId: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } }));
   const networkLedger = await prisma.stockLedger.findMany({
     where: { itemId: req.params.itemId },
     select: { locationId: true, onHand: true, location: { select: { name: true } } },
@@ -871,14 +871,14 @@ router.get('/intelligence/:locationId', async (req, res) => {
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   const dismissedSince = new Date(Date.now() - INTELLIGENCE_DISMISSAL_TTL_MS);
   const [rules, ledger, counts, dismissals, destinationLocation] = await Promise.all([
-    prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true } }),
+    prisma.reorderRule.findMany({ where: { locationId: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true } }).then((rows) => decimalsToNumbers(rows)),
     // Scoped to this company's locations (it used to read every tenant's whole ledger on each request)
     // and to the items that have rules, with the lot fields needed to judge what is sellable.
     prisma.stockLedger.findMany({
       where: { location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
       select: { itemId: true, locationId: true, onHand: true, reserved: true, inTransit: true, lot: { select: { status: true, expiryDate: true } }, location: { select: { name: true, type: true, latitude: true, longitude: true, shippingCostPerKm: true, deliverySlaHours: true } } },
     }),
-    prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }),
+    prisma.stockCount.findMany({ where: { locationId: req.params.locationId, countDate: { gte: since }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { item: true }, orderBy: { countDate: 'desc' }, take: 250 }).then((rows) => decimalsToNumbers(rows)),
     prisma.intelligenceDismissal.findMany({ where: { locationId: req.params.locationId, createdAt: { gte: dismissedSince } } }),
     // Audit R-1: donors are ranked by estimated shipping cost/lead time when this and the donor both have coordinates.
     prisma.location.findFirst({ where: { id: req.params.locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { latitude: true, longitude: true, shippingCostPerKm: true } }),
@@ -924,17 +924,17 @@ router.get('/intelligence/:locationId', async (req, res) => {
   const networkIncoming = new Map<string, number>();
   for (const transfer of inboundTransfers) {
     for (const line of transfer.lines) {
-      const qty = Math.max(0, line.requestedQty - line.receivedQty - line.damagedQty - line.shortageQty);
+      const qty = Math.max(0, Number(line.requestedQty) - Number(line.receivedQty) - Number(line.damagedQty) - Number(line.shortageQty));
       if (transfer.destinationLocationId === req.params.locationId) incoming.set(line.itemId, (incoming.get(line.itemId) ?? 0) + qty);
       const key = `${line.itemId}|${transfer.destinationLocationId}`;
       networkIncoming.set(key, (networkIncoming.get(key) ?? 0) + qty);
     }
   }
   // A donor keeps its own reorder minimum for the item.
-  const donorRules = await prisma.reorderRule.findMany({
+  const donorRules = decimalsToNumbers(await prisma.reorderRule.findMany({
     where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: { in: rules.map((rule) => rule.itemId) } },
     select: { itemId: true, locationId: true, minQty: true },
-  });
+  }));
   const minimumAt = (itemId: string, donorLocationId: string) => donorRules.find((row) => row.itemId === itemId && row.locationId === donorLocationId)?.minQty ?? 0;
 
   const recommendations = rules.map((rule) => {
@@ -1313,7 +1313,7 @@ router.get('/putaway-tasks', async (req, res) => {
     orderBy: { createdAt: 'asc' },
     take: 300,
   });
-  return res.json({ tasks });
+  return res.json({ tasks: decimalsToNumbers(tasks) });
 });
 
 router.post('/putaway-tasks/:id/confirm', async (req, res) => {
@@ -1353,10 +1353,10 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
   });
   try {
     await persistBinStockDelta({
-      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: STAGING_BIN_ID, qtyDelta: -task.quantity,
+      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: STAGING_BIN_ID, qtyDelta: -Number(task.quantity),
     });
     await persistBinStockDelta({
-      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: bin.id, qtyDelta: task.quantity,
+      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: bin.id, qtyDelta: Number(task.quantity),
     });
   } catch (error) {
     console.error('bin stock putaway persist failed (non-blocking):', error instanceof Error ? error.message : error);
@@ -1492,7 +1492,7 @@ router.get('/orders', async (req, res) => {
     orderBy: { createdAt: 'desc' },
     take: 200,
   }).catch(() => []);
-  return res.json({ orders });
+  return res.json({ orders: decimalsToNumbers(orders) });
 });
 
 router.post('/orders', async (req, res) => {
@@ -1574,7 +1574,7 @@ router.post('/orders/:id/fulfill', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
     const order = await fulfillOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
-    return res.json({ order });
+    return res.json({ order: decimalsToNumbers(order) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to fulfill order.' });
@@ -1585,7 +1585,7 @@ router.post('/orders/:id/cancel', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
     const order = await cancelOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
-    return res.json({ order });
+    return res.json({ order: decimalsToNumbers(order) });
   } catch (error) {
     if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
     return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to cancel order.' });
@@ -1606,8 +1606,8 @@ async function packVerificationFor(companyId: string, orderId: string, session: 
     prisma.packedLine.findMany({ where: { packSessionId: session.id } }),
   ]);
   if (!order) return null;
-  const expected = order.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.requestedQty }));
-  const scanned = packedLines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.quantity }));
+  const expected = order.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: Number(line.requestedQty) }));
+  const scanned = packedLines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: Number(line.quantity) }));
   return verifyPackScan(expected, scanned);
 }
 
@@ -1775,7 +1775,7 @@ router.post('/orders/:id/returns', async (req, res) => {
   });
   const alreadyReturnedByLine = new Map<string, number>();
   for (const line of existingReturns) {
-    alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + line.quantity);
+    alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + Number(line.quantity));
   }
   const orderLinesById = new Map(order.lines.map((line) => [line.id, line]));
   const validationInput = requestedLines
@@ -1784,7 +1784,7 @@ router.post('/orders/:id/returns', async (req, res) => {
       return {
         orderLineId: String(line.orderLineId || ''),
         quantity: Number(line.quantity),
-        fulfilledQty: orderLine?.fulfilledQty ?? 0,
+        fulfilledQty: orderLine?.fulfilledQty == null ? 0 : Number(orderLine.fulfilledQty),
         alreadyReturnedQty: alreadyReturnedByLine.get(String(line.orderLineId)) ?? 0,
       };
     })
