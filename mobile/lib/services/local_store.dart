@@ -1,7 +1,4 @@
-import 'dart:convert';
 import 'dart:math' as math;
-
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/models.dart';
 
@@ -155,112 +152,10 @@ QueuedAction stampAction(QueuedAction row, String companyId, String userId, {Str
   return QueuedAction.fromJson(json);
 }
 
-class PrefsStore implements LocalStore {
-  PrefsStore({SharedPreferences? prefs}) : _prefs = prefs;
-
-  // Legacy preference-backed store: no offline read model (the SQLite store provides it).
-  @override
-  Future<void> putReadModel(String scope, String path, String body) async {}
-
-  @override
-  Future<CachedRead?> getReadModel(String scope, String path) async => null;
-
-  @override
-  Future<void> clearReadModel(String scope) async {}
-
-  SharedPreferences? _prefs;
-
-  Future<SharedPreferences> _ready() async {
-    return _prefs ??= await SharedPreferences.getInstance();
-  }
-
-  @override
-  Future<void> saveSession(PersistedSession session) async {
-    final prefs = await _ready();
-    await prefs.setString(sessionTokenKey, session.token);
-    await prefs.setString(sessionRefreshKey, session.refreshToken ?? '');
-    await prefs.setString(sessionUserKey, jsonEncode(session.user.toJson()));
-  }
-
-  @override
-  Future<PersistedSession?> loadSession() async {
-    final prefs = await _ready();
-    final token = prefs.getString(sessionTokenKey);
-    final rawUser = prefs.getString(sessionUserKey);
-    if (token == null || token.isEmpty || rawUser == null || rawUser.isEmpty) {
-      return null;
-    }
-    try {
-      final decoded = jsonDecode(rawUser);
-      final user = AuthUser.fromJson(asMap(decoded));
-      final refresh = prefs.getString(sessionRefreshKey);
-      return PersistedSession(
-        token: token,
-        refreshToken: refresh == null || refresh.isEmpty ? null : refresh,
-        user: user,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  @override
-  Future<void> clearSession() async {
-    final prefs = await _ready();
-    await prefs.remove(sessionTokenKey);
-    await prefs.remove(sessionRefreshKey);
-    await prefs.remove(sessionUserKey);
-  }
-
-  @override
-  Future<List<QueuedCount>> loadQueuedCounts(String companyId, String userId) async {
-    final prefs = await _ready();
-    return decodeQueuedCounts(prefs.getString(scopedCountsKey(companyId, userId)));
-  }
-
-  @override
-  Future<void> saveQueuedCounts(List<QueuedCount> items, String companyId, String userId) async {
-    final prefs = await _ready();
-    await prefs.setString(scopedCountsKey(companyId, userId), encodeQueuedCounts(items));
-  }
-
-  @override
-  Future<List<QueuedAction>> loadQueuedActions(String companyId, String userId) async {
-    final prefs = await _ready();
-    return decodeQueuedActions(prefs.getString(scopedActionsKey(companyId, userId)));
-  }
-
-  @override
-  Future<void> saveQueuedActions(List<QueuedAction> items, String companyId, String userId) async {
-    final prefs = await _ready();
-    await prefs.setString(scopedActionsKey(companyId, userId), encodeQueuedActions(items));
-  }
-
-  @override
-  Future<void> adoptLegacyQueues(String companyId, String userId) async {
-    final prefs = await _ready();
-    final legacyCountRows = [
-      ...decodeQueuedCounts(prefs.getString(queuedCountsKeyFor(companyId))),
-      ...decodeQueuedCounts(prefs.getString(queuedCountsKey)),
-    ];
-    final legacyActionRows = decodeQueuedActions(prefs.getString(queuedActionsKey));
-    if (legacyCountRows.isEmpty && legacyActionRows.isEmpty) return;
-    final counts = [...await loadQueuedCounts(companyId, userId), ...legacyCountRows.map((row) => stampCount(row, userId))];
-    final actions = [...await loadQueuedActions(companyId, userId), ...legacyActionRows.map((row) => stampAction(row, companyId, userId))];
-    await saveQueuedCounts(counts, companyId, userId);
-    await saveQueuedActions(actions, companyId, userId);
-    await prefs.remove(queuedCountsKeyFor(companyId));
-    await prefs.remove(queuedCountsKey);
-    await prefs.remove(queuedActionsKey);
-  }
-
-  @override
-  Future<String> deviceId() async {
-    final prefs = await _ready();
-    final existing = prefs.getString(deviceIdKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-    final created = newDeviceId();
-    await prefs.setString(deviceIdKey, created);
-    return created;
-  }
-}
+// PrefsStore - the legacy SharedPreferences-backed LocalStore that kept the
+// session token and refresh token in plaintext preferences - was removed in
+// the 10/10 remediation (21 Oct 2026 audit). It was not wired anywhere:
+// production uses SecureLocalStore over DriftStore (tokens only in the
+// platform secure vault), and tests use MemoryStore above. Keeping a
+// plaintext credential store in production source was a landmine: a single
+// wiring change would have silently downgraded credential storage.
