@@ -129,7 +129,7 @@ router.get('/reports/count-accuracy-breakdown', async (req: Request, res: Respon
   for (const row of ledger) {
     const cost = lotUnitCost(row.lot.attributes as Record<string, unknown> | null);
     const entry = value.get(row.itemId) ?? { value: 0, costed: false };
-    entry.value += cost !== null ? row.onHand * cost : row.onHand;
+    entry.value += cost !== null ? Number(row.onHand) * cost : Number(row.onHand);
     entry.costed = entry.costed || cost !== null;
     value.set(row.itemId, entry);
   }
@@ -171,7 +171,7 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
   });
   const truncated = ledger.length > HEALTH_ROW_LIMIT;
   const rows = ledger.slice(0, HEALTH_ROW_LIMIT).map((row) => ({
-    itemId: row.itemId, code: row.item.code, name: row.item.name, category: row.item.category, onHand: row.onHand,
+    itemId: row.itemId, code: row.item.code, name: row.item.name, category: row.item.category, onHand: Number(row.onHand),
     unitCost: lotUnitCost(row.lot.attributes as Record<string, unknown> | null), lotCreatedAt: row.lot.createdAt,
   }));
 
@@ -236,10 +236,10 @@ router.get('/reports/in-transit', async (req: Request, res: Response) => {
   const byItem = new Map<string, { itemId: string; code: string; name: string; totalInTransit: number; locations: Array<{ locationId: string; locationName: string; inTransit: number }> }>();
   let totalInTransit = 0;
   for (const row of rows) {
-    totalInTransit += row.inTransit;
+    totalInTransit += Number(row.inTransit);
     const entry = byItem.get(row.itemId) ?? { itemId: row.itemId, code: row.item.code, name: row.item.name, totalInTransit: 0, locations: [] };
-    entry.totalInTransit += row.inTransit;
-    entry.locations.push({ locationId: row.location.id, locationName: row.location.name, inTransit: row.inTransit });
+    entry.totalInTransit += Number(row.inTransit);
+    entry.locations.push({ locationId: row.location.id, locationName: row.location.name, inTransit: Number(row.inTransit) });
     byItem.set(row.itemId, entry);
   }
   const items = [...byItem.values()].sort((a, b) => b.totalInTransit - a.totalInTransit);
