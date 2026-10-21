@@ -103,7 +103,8 @@ export async function persistTransferReceipt(input: {
         duplicate[0].id);
       const lines = await queryRaw<DbTransferLine[]>(tx,
         'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
-      return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, ...totals[0], lines };
+      const total = totals[0] ?? { receivedQty: 0, damagedQty: 0, shortageQty: 0, excessQty: 0 };
+      return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty), shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
     }
 
     const transfers = await queryRaw<Array<{ status: string }>>(tx,
@@ -189,6 +190,6 @@ export async function persistTransferReceipt(input: {
       status, '', `\n[RECEIPT ${receiptId}] Good: ${summary.receivedQty}, Damaged: ${summary.damagedQty}, Shortage: ${summary.shortageQty}, Excess: ${summary.excessQty}${input.notes ? `, Notes: ${input.notes}` : ''}`, input.transferId);
     const lines = await queryRaw<DbTransferLine[]>(tx,
       'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
-    return { duplicate: false, status, receiptId, ...summary, lines };
+    return { duplicate: false, status, receiptId, ...summary, lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
   }, { maxWait: 10_000, timeout: 60_000 });
 }
