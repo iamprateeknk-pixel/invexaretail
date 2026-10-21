@@ -4,7 +4,7 @@ import { clearControlSession, readControlSession, writeControlSession } from './
 
 export default function App() {
   const [session, setSession] = useState(() => readControlSession());
-  const [email, setEmail] = useState('superadmin@invexa.local');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
