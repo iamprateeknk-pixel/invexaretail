@@ -842,11 +842,11 @@ model StockLedger {
   version        Int      @default(0)
   lastUpdatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId      String   @default("default-company")
+  companyId      String
   @@index([tenantId])
   @@index([companyId])
 
-  @@unique([itemId, lotId, locationId])
+  @@unique([companyId, itemId, lotId, locationId])
   @@index([locationId, itemId])
 }
 
@@ -1693,7 +1693,7 @@ model StockBalance {
   version         Int      @default(0)
   lastPostedAt    DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId       String   @default("default-company")
+  companyId       String
   @@index([tenantId])
   @@index([companyId])
 
