@@ -4,7 +4,7 @@ export const OPERATIONAL_TENANT_TABLES = [
   'StockMovement', 'StockBalance', 'OpeningStockSnapshot', 'PurchaseOrder',
   'PurchaseOrderLine', 'Supplier', 'ReorderRule', 'SyncCheckpoint',
   'WebhookSubscription', 'WebhookDeliveryLog', 'ImportBatch', 'ImportRow',
-  'Order', 'OrderLine', 'AuditLog', 'Bin', 'PutawayTask', 'PickWave',
+  'Order', 'OrderLine', 'AuditLog', 'Bin', 'BinStock', 'BinMovement', 'PutawayTask', 'PickWave',
   'ExpiryAlert', 'ReplenishmentSuggestion', 'ExceptionCase', 'QcInspection',
   'AssetCheckout', 'Job', 'JobLine', 'CompanyProfile', 'SavedReport',
 ] as const;
