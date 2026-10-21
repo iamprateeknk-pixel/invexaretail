@@ -440,7 +440,7 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
       if (!line.lotId) continue;
       const locationId = line.fulfillmentLocationId || order.fulfillmentLocationId;
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId: order.companyId, itemId: line.itemId, lotId: line.lotId, locationId } },
       });
       if (!ledger || Number(ledger.onHand) < Number(line.requestedQty)) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
