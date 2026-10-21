@@ -758,6 +758,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
           });
           void persistBinStockDelta({
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             binId: STAGING_BIN_ID, qtyDelta: line.receivedQty,
           });
