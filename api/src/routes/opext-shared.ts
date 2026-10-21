@@ -53,3 +53,11 @@ export function requirePlatformOperator(req: Request, res: Response): boolean {
 export function expiryAlertId(itemId: string, lotId: string, locationId: string): string {
   return `expiry-${createHash('sha1').update(`${itemId}|${lotId}|${locationId}`).digest('hex').slice(0, 24)}`;
 }
+
+export function requirePacker(req: Request, res: Response): boolean {
+  if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
+    res.status(403).json({ message: 'Admin or Warehouse Picker access required.' });
+    return false;
+  }
+  return true;
+}
