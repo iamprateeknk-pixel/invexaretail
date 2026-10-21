@@ -22,6 +22,19 @@ export const RECOMMENDED_SECRET_LENGTH = 32;
 
 export type ProductionGuardResult = { ok: boolean; errors: string[]; warnings: string[] };
 
+/**
+ * Mirrors lib/db.ts resolveDatabaseUrl() against an explicit env record, so
+ * the production guard stays testable without touching process.env. Only the
+ * presence of a resolvable URL matters here, not its value.
+ */
+function databaseConfiguredIn(env: Record<string, string | undefined>): boolean {
+  if (env.DATABASE_URL?.trim()) return true;
+  const host = (env.PGHOST || env.DB_HOST || '').trim();
+  const user = (env.PGUSER || env.DB_USER || '').trim();
+  const database = (env.PGDATABASE || env.DB_NAME || '').trim();
+  return Boolean(host && user && database);
+}
+
 export function checkProductionSecrets(env: Record<string, string | undefined> = process.env): ProductionGuardResult {
   const result: ProductionGuardResult = { ok: true, errors: [], warnings: [] };
   if (env.NODE_ENV !== 'production') return result;
@@ -45,6 +58,18 @@ export function checkProductionSecrets(env: Record<string, string | undefined> =
   const seed = env.SEED_PASSWORD?.trim();
   if (seed && KNOWN_DEFAULT_PASSWORDS.includes(seed)) {
     result.errors.push('SEED_PASSWORD is the well-known default. Seeded accounts would be open to anyone who has read the repository.');
+  }
+
+  // R9: production must never boot in the in-memory demo mode by accident.
+  // Until now the database was only mandatory when someone remembered to set
+  // REQUIRE_DATABASE=true, so a production deploy that lost its DATABASE_URL
+  // silently degraded to seeded in-memory state. Production now fails closed
+  // by default; REQUIRE_DATABASE=false is the explicit opt-out, meant only
+  // for throwaway demo deployments.
+  if (env.REQUIRE_DATABASE === 'false') {
+    result.warnings.push('REQUIRE_DATABASE=false: this production process may boot without a database (in-memory demo mode).');
+  } else if (!databaseConfiguredIn(env)) {
+    result.errors.push('No database is configured (DATABASE_URL, or the PG*/DB* parts, are missing). Production refuses to boot in in-memory demo mode; set DATABASE_URL or, for an explicit demo only, REQUIRE_DATABASE=false.');
   }
 
   result.ok = result.errors.length === 0;
