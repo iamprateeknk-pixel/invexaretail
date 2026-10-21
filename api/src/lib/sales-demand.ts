@@ -47,8 +47,8 @@ export async function loadSalesEvents(input: {
     }).catch(() => []),
   ]);
   return [
-    ...current.map((row) => ({ itemId: row.itemId, qty: signedSalesQty(row.movementType, row.qtyDelta), timestamp: row.timestamp })),
-    ...legacy.map((row) => ({ itemId: row.itemId, qty: signedSalesQty(row.movementType, row.qtyDelta), timestamp: row.transactionAt })),
+    ...current.map((row) => ({ itemId: row.itemId, qty: signedSalesQty(row.movementType, Number(row.qtyDelta)), timestamp: row.timestamp })),
+    ...legacy.map((row) => ({ itemId: row.itemId, qty: signedSalesQty(row.movementType, Number(row.qtyDelta)), timestamp: row.transactionAt })),
   ];
 }
 
