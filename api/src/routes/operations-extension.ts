@@ -3,7 +3,6 @@ import { decimalsToNumbers, thresholdsAsNumbers } from '../lib/decimal-json.js';
 import { newDocumentNumber } from '../lib/document-number.js';
 import { type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
-
 import { prisma } from '../lib/db.js';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
@@ -12,14 +11,7 @@ import { planRuleReplenishment } from '../lib/replenishment.js';
 import { sellableQuantity, totalSellable } from '../lib/sellable-stock.js';
 import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib/expiry-alerts.js';
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
-import {
-  ExpiryWriteOffError,
-  buildLocationExpiryBoard,
-  listLocationExpiryAlerts,
-  setLotExpiryDate,
-  setLotSaleStatus,
-  writeOffExpiryLot,
-} from '../lib/expiry-lifecycle.js';
+import { ExpiryWriteOffError, buildLocationExpiryBoard, listLocationExpiryAlerts, setLotExpiryDate, setLotSaleStatus, writeOffExpiryLot } from '../lib/expiry-lifecycle.js';
 import { consumeJobLine, JobConsumeError } from '../lib/job-consumption-service.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { respondWhenMemoryUnavailable } from '../lib/memory-mode.js';
@@ -27,20 +19,11 @@ import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { buildReplenishmentIntelligence, listReorderRules } from '../lib/reorder-store.js';
 import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems, listLocations, listStockLedger, listStockLedgerForLocation, updateLotExpiry, updateLotStatus } from '../lib/repository.js';
 import { encryptWebhookSecret, WebhookValidationError } from '../lib/webhook-events.js';
-import { maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
+import { maybeEmitStockLow, replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
 import { createExceptionCase, applyExceptionDisposition, serializeExceptionCase } from '../lib/exceptions.js';
-import { createPutawayTask } from '../lib/putaway.js';
-import { createOrderWithReservation, fulfillOrder, cancelOrder, expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation, OrderShortageError, InsufficientStockError as OrderInsufficientStockError, listMemoryOrders } from '../lib/orders.js';
+import { createOrderWithReservation, fulfillOrder, cancelOrder, expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation, OrderShortageError, OrderInsufficientStockError, listMemoryOrders } from '../lib/orders.js';
 import { decideApprovalRequest } from '../lib/approval-rules.js';
-import {
-  recordQcInspection,
-  DEFAULT_QC_CHECKS,
-  type QcCheckResult,
-  listMemoryQcTemplates,
-  listMemoryQcInspections,
-  createMemoryQcTemplate,
-  patchMemoryQcTemplate,
-} from '../lib/qc-inspection.js';
+import { recordQcInspection, DEFAULT_QC_CHECKS, type QcCheckResult, listMemoryQcTemplates, listMemoryQcInspections, createMemoryQcTemplate, patchMemoryQcTemplate, findTemplateForCategory } from '../lib/qc-inspection.js';
 import { assertPutawayScan, assertGuidedWalkScan } from '../lib/scan-enforcement.js';
 import { persistBinStockDelta, moveBinStockPersisted, STAGING_BIN_ID, memoryBinStock, listMemoryBins, createMemoryBin } from '../lib/bin-stock.js';
 import { assertValidBinMove, BinMoveValidationError } from '../lib/bin-move.js';
@@ -50,93 +33,26 @@ import { getCarrierAdapter } from '../lib/carrier-adapter.js';
 import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, type ReturnAction } from '../lib/returns-rma.js';
 import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
-import { findTemplateForCategory } from '../lib/qc-inspection.js';
 import { censorStockoutDays, classifyDemandPattern, computeDemandStats, openingBalancesByDay, crostonDailyDemand, suggestReplenishment, xyzClass } from '../lib/demand-forecast.js';
 import { OPEN_PO_STATUSES } from '../lib/po-planning.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
-import {
-  buildExpiryActionRecommendations,
-  buildLotBlockRecommendations,
-  buildOverstockRecommendations,
-} from '../lib/intelligence-actions.js';
-import {
-  createConnector,
-  findConnector,
-  listConnectors,
-  mapMarketplaceOrder,
-  markConnectorIngested,
-  validateNormalizedOrder,
-  type ConnectorPlatform,
-} from '../lib/connectors.js';
-import {
-  findPlan,
-  listTenants,
-  provisionTenant,
-  SAAS_PLANS,
-  tenantAllows,
-} from '../lib/saas.js';
+import { buildExpiryActionRecommendations, buildLotBlockRecommendations, buildOverstockRecommendations } from '../lib/intelligence-actions.js';
+import { createConnector, findConnector, listConnectors, mapMarketplaceOrder, markConnectorIngested, validateNormalizedOrder, type ConnectorPlatform } from '../lib/connectors.js';
+import { findPlan, listTenants, provisionTenant, SAAS_PLANS, tenantAllows } from '../lib/saas.js';
 import { mobileHomeForRole } from '../lib/mobile-role.js';
 import { createCompany, createEnhancedUser, findUserByEmail } from '../lib/enterprise-repository.js';
 import { hashPassword, validatePassword } from '../lib/otp-auth.js';
 import { isKnownDefaultPassword } from '../lib/production-guard.js';
-import {
-  createWebhookSubscription,
-  listWebhookDeliveries,
-  listWebhookSubscriptions,
-  setWebhookSubscriptionStatus,
-} from '../lib/webhook-store.js';
-import { replayDelivery, retryDueDeliveries, WebhookReplayError } from '../lib/webhook-dispatcher.js';
-import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, ownerOfItem, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
+import { createWebhookSubscription, listWebhookDeliveries, listWebhookSubscriptions, setWebhookSubscriptionStatus } from '../lib/webhook-store.js';
+import { DEFAULT_COMPANY_ID, ownerOfItem } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction, NegativeStockBlockedError } from '../lib/inventory-posting-service.js';
-import type { TenantContext } from '../lib/tenant-context.js';
 import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
+import { createPutawayTask } from '../lib/putaway.js';
+import { tenantContextOf, canAccessLocation, requireAdmin, requirePlatformOperator, expiryAlertId } from './opext-shared.js';
 
 const router = Router();
 
-function tenantContextOf(req: Request): TenantContext {
-  return { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as TenantContext['role'] };
-}
 router.use(extractToken, requireAuth, enforcePermissionOverrides, respondWhenMemoryUnavailable);
-
-// Centralized fix (see docs/tenant-scope-coverage.md's bare-id call-site
-// migration, slice 5): the role-only check below let ADMIN/ADMIN_USER/
-// AUDITOR through for ANY locationId, including one belonging to a
-// different company - the root cause behind most of the cross-tenant
-// findings in slices 1-4. A location whose company ownership is known
-// (registered via registerLocationCompany, or hydrated at boot) and
-// mismatches the caller's own company is now always denied, before the
-// role check runs, same fail-safe-if-unknown pattern already trusted
-// globally by enforceOperationalCompanyScope. A location not yet tracked
-// in the in-memory ownership map falls through to the original role/
-// assignment check unchanged, so this closes the verified vulnerability
-// class without risking a false-deny on data the map hasn't seen yet.
-function canAccessLocation(req: Request, locationId: string): boolean {
-  if (req.companyId && ownerOfLocation(locationId) && !companyOwnsLocation(req.companyId, locationId)) {
-    return false;
-  }
-  return ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role) || (req.user!.locationIds ?? []).includes(locationId);
-}
-
-function requireAdmin(req: Request, res: Response): boolean {
-  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
-    res.status(403).json({ message: 'Admin access required.' });
-    return false;
-  }
-  return true;
-}
-
-// Listing every tenant and provisioning a new one (with its first Admin) are platform-operator actions, not
-// something any company's admin may do: an admin of company B could otherwise read the whole tenant list and
-// mint companies and Admin accounts. The operator is the Admin of the platform's own (default) company; the
-// separate Control Plane is where super admins work.
-function requirePlatformOperator(req: Request, res: Response): boolean {
-  const isOperator = req.user!.role === 'ADMIN' && (req.companyId ?? DEFAULT_COMPANY_ID) === DEFAULT_COMPANY_ID;
-  if (!isOperator) {
-    res.status(403).json({ message: 'Only the platform operator can manage tenants.' });
-    return false;
-  }
-  return true;
-}
 
 router.get('/asset-checkouts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
@@ -310,10 +226,6 @@ router.post('/jobs/:id/consume', async (req, res) => {
 function memoryLotOwnedByCompany(lotId: string, companyId: string): boolean {
   const item = listItems().find((candidate) => candidate.lots.some((lot) => lot.id === lotId));
   return Boolean(item && ownerOfItem(item.id) === companyId);
-}
-
-function expiryAlertId(itemId: string, lotId: string, locationId: string): string {
-  return `expiry-${createHash('sha1').update(`${itemId}|${lotId}|${locationId}`).digest('hex').slice(0, 24)}`;
 }
 
 router.patch('/lots/:id/manufactured', async (req, res) => {
