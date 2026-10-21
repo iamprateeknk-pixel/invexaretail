@@ -123,7 +123,7 @@ export async function getCountRecommendation(tenant: TenantContext, input: {
     // Repeated-variance (blueprint: "High-value or repeated-variance items
     // automatically require recount by another user"): 2 of the last 3
     // counts for this item/location (including this one) already varied.
-    const priorVarianceCount = recentCounts.filter((count) => Math.abs(count.physicalQty - count.bookQty) > 1e-8).length;
+    const priorVarianceCount = recentCounts.filter((count) => Math.abs(Number(count.physicalQty) - Number(count.bookQty)) > 1e-8).length;
     if (priorVarianceCount >= 1) {
       return {
         recommendRecount: true,
