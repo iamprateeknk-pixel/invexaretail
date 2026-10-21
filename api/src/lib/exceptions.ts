@@ -81,8 +81,8 @@ export async function estimateValueAtRisk(
  * underlying stock transaction just because the case log is unavailable.
  */
 /** valueAtRisk is a Decimal column; JSON.stringify would emit it as a string, so API responses carry a number. */
-export function serializeExceptionCase<T extends { valueAtRisk?: unknown }>(row: T): Omit<T, 'valueAtRisk'> & { valueAtRisk: number | null } {
-  return { ...row, valueAtRisk: row.valueAtRisk == null ? null : Number(row.valueAtRisk) };
+export function serializeExceptionCase<T extends { valueAtRisk?: unknown; quantity?: unknown }>(row: T): Omit<T, 'valueAtRisk' | 'quantity'> & { valueAtRisk: number | null; quantity: number | null } {
+  return { ...row, valueAtRisk: row.valueAtRisk == null ? null : Number(row.valueAtRisk), quantity: row.quantity == null ? null : Number(row.quantity) };
 }
 
 export async function createExceptionCase(input: CreateExceptionCaseInput) {
@@ -148,15 +148,16 @@ export async function applyExceptionDisposition(
   disposition: ExceptionDisposition,
   actorId: string,
 ): Promise<void> {
-  if (!exceptionCase.itemId || !exceptionCase.lotId || !exceptionCase.locationId || !exceptionCase.quantity) return;
+  const caseQty = exceptionCase.quantity == null ? 0 : Number(exceptionCase.quantity);
+  if (!exceptionCase.itemId || !exceptionCase.lotId || !exceptionCase.locationId || !caseQty) return;
   if (!RETURN_TO_STOCK.includes(disposition) && !REMOVE_FROM_STOCK.includes(disposition)) return;
   try {
     await prisma.$transaction(async (tx) => {
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: exceptionCase.itemId!, lotId: exceptionCase.lotId!, locationId: exceptionCase.locationId! } },
       });
-      if (!ledger || ledger.quarantine <= 0) return;
-      const moveQty = Math.min(Number(exceptionCase.quantity), ledger.quarantine);
+      if (!ledger || Number(ledger.quarantine) <= 0) return;
+      const moveQty = Math.min(caseQty, Number(ledger.quarantine));
       if (moveQty <= 0) return;
 
       const restock = RETURN_TO_STOCK.includes(disposition);
