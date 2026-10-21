@@ -294,7 +294,7 @@ router.get('/items/:itemId/periodic-review-policy', async (req, res) => {
     leadTimeDays: query.leadTimeDays, leadTimeStdDevDays, reviewPeriodDays, servicePercent: query.servicePercent,
   });
   const stock = await prisma.stockLedger.aggregate({ where: { itemId: req.params.itemId, locationId }, _sum: { onHand: true, reserved: true } });
-  const onHand = Math.max(0, (stock._sum.onHand ?? 0) - (stock._sum.reserved ?? 0));
+  const onHand = Math.max(0, Number(stock._sum.onHand ?? 0) - Number(stock._sum.reserved ?? 0));
   const simulation = projectPeriodicReview({
     onHand, avgDailyDemand: stats.averageDailyDemand, leadTimeDays: policy.leadTimeDays,
     reviewPeriodDays: policy.reviewPeriodDays, reorderPoint: policy.reorderPoint, orderUpToLevel: policy.orderUpToLevel,
@@ -612,7 +612,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
           });
           afterBalance = posted.balance.onHand;
         } else {
-          afterBalance = (await tx.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } } }))?.onHand ?? 0;
+          afterBalance = Number((await tx.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } } }))?.onHand ?? 0);
         }
         const ledger = { onHand: afterBalance };
         postedStock.push({
@@ -791,7 +791,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
     return totals;
   };
   // Cover = stock that can actually be sold: blocked, quarantined and expired lots are not cover (audit O-6).
-  const sellable = (rows: typeof ledger) => rows.map((row) => ({ ...sellableParts([row]), itemId: row.itemId }));
+  const sellable = (rows: typeof ledger) => rows.map((row) => ({ ...sellableParts([{ ...row, onHand: Number(row.onHand), reserved: Number(row.reserved) }]), itemId: row.itemId }));
   const onHand = sum(sellable(ledger), (row) => [row.itemId, row.onHand]);
   const reserved = sum(sellable(ledger), (row) => [row.itemId, row.reserved]);
   const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
