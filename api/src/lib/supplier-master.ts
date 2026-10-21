@@ -78,8 +78,8 @@ export function categoriesToList(stored: string | null | undefined): string[] {
 }
 
 /** A supplier row as the API returns it: categories as a list. */
-export function presentSupplier<T extends { categories?: string | null }>(row: T): Omit<T, 'categories'> & { categories: string[] } {
-  return { ...row, categories: categoriesToList(row.categories) };
+export function presentSupplier<T extends { categories?: string | null; moq?: unknown }>(row: T): Omit<T, 'categories' | 'moq'> & { categories: string[]; moq: number | null } {
+  return { ...row, categories: categoriesToList(row.categories), moq: row.moq == null ? null : Number(row.moq) };
 }
 
 export function canOrderFrom(status: string | null | undefined): boolean {
