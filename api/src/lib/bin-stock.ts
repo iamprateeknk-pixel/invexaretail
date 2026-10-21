@@ -116,7 +116,7 @@ export type BinMoveRecord = {
  * BinMovement ledger, transactionally. The caller must have already
  * validated the scans (assertValidBinMove) - this only persists.
  */
-export async function moveBinStockPersisted(input: BinStockKey & { toBinId: string; quantity: number; reference?: string | null; actorId?: string | null }): Promise<BinMoveRecord> {
+export async function moveBinStockPersisted(input: BinStockKey & { companyId: string; toBinId: string; quantity: number; reference?: string | null; actorId?: string | null }): Promise<BinMoveRecord> {
   const { prisma } = await import('./db.js');
   const { databaseEnabled } = await import('./persistence.js');
   const lotId = input.lotId ?? '';
@@ -132,23 +132,23 @@ export async function moveBinStockPersisted(input: BinStockKey & { toBinId: stri
     return { id: `mem-${memoryBinMovements.length}`, itemId: input.itemId, lotId, locationId: input.locationId, fromBinId: input.binId, toBinId: input.toBinId, quantity: input.quantity, reference: record.reference, actorId: record.actorId, createdAt: record.createdAt };
   }
   const [, , movement] = await prisma.$transaction(async (tx) => {
-    const fromKey = { itemId_lotId_locationId_binId: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId } };
+    const fromKey = { companyId_itemId_lotId_locationId_binId: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId } };
     const fromRow = await tx.binStock.findUnique({ where: fromKey });
     const fromOnHand = (fromRow ? Number(fromRow.onHand) : 0) - input.quantity;
     if (fromOnHand < -1e-8) throw new Error(`Bin ${input.binId} does not have ${input.quantity} of item ${input.itemId}.`);
     const fromUpdate = fromRow
       ? tx.binStock.update({ where: { id: fromRow.id }, data: { onHand: fromOnHand, version: { increment: 1 } } })
-      : tx.binStock.create({ data: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId, onHand: fromOnHand } });
+      : tx.binStock.create({ data: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId, onHand: fromOnHand } });
 
-    const toKey = { itemId_lotId_locationId_binId: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId } };
+    const toKey = { companyId_itemId_lotId_locationId_binId: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId } };
     const toRow = await tx.binStock.findUnique({ where: toKey });
     const toUpdate = toRow
       ? tx.binStock.update({ where: { id: toRow.id }, data: { onHand: Number(toRow.onHand) + input.quantity, version: { increment: 1 } } })
-      : tx.binStock.create({ data: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId, onHand: input.quantity } });
+      : tx.binStock.create({ data: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.toBinId, onHand: input.quantity } });
 
     const movementCreate = tx.binMovement.create({
       data: {
-        itemId: input.itemId, lotId, locationId: input.locationId,
+        companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId,
         fromBinId: input.binId, toBinId: input.toBinId, quantity: input.quantity,
         reference: input.reference ?? null, actorId: input.actorId ?? null,
       },
@@ -158,7 +158,7 @@ export async function moveBinStockPersisted(input: BinStockKey & { toBinId: stri
   return { ...movement, quantity: Number(movement.quantity) };
 }
 
-export async function persistBinStockDelta(input: BinStockKey & { qtyDelta: number }): Promise<void> {
+export async function persistBinStockDelta(input: BinStockKey & { companyId: string; qtyDelta: number }): Promise<void> {
   const { prisma } = await import('./db.js');
   const { databaseEnabled } = await import('./persistence.js');
   if (!databaseEnabled) {
@@ -167,12 +167,12 @@ export async function persistBinStockDelta(input: BinStockKey & { qtyDelta: numb
   }
   const lotId = input.lotId ?? '';
   const existing = await prisma.binStock.findUnique({
-    where: { itemId_lotId_locationId_binId: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId } },
+    where: { companyId_itemId_lotId_locationId_binId: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId } },
   }).catch(() => null);
   if (!existing) {
     if (input.qtyDelta < -1e-8) throw new Error(`Bin ${input.binId} does not have ${-input.qtyDelta} of item ${input.itemId}.`);
     await prisma.binStock.create({
-      data: { itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId, onHand: input.qtyDelta },
+      data: { companyId: input.companyId, itemId: input.itemId, lotId, locationId: input.locationId, binId: input.binId, onHand: input.qtyDelta },
     });
     return;
   }
