@@ -138,8 +138,8 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     itemId: row.itemId,
     lotId: row.lotId,
     locationId: row.locationId,
-    onHand: row.onHand,
-    quarantine: row.quarantine,
+    onHand: Number(row.onHand),
+    quarantine: Number(row.quarantine),
     version: row.version,
   })));
 
@@ -220,7 +220,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
       lotId: row.lotId ?? undefined,
       locationId: row.locationId,
       movementType: row.movementType,
-      qtyDelta: row.qtyDelta,
+      qtyDelta: Number(row.qtyDelta),
       transactionAt: row.transactionAt.toISOString(),
       sourceType: row.sourceType as DailyMovementRecord['sourceType'],
       sourceReference: row.sourceReference,
@@ -681,15 +681,15 @@ export async function listStockFromDatabase(locationId: string): Promise<Persist
     itemId: row.itemId,
     lotId: row.lotId,
     locationId: row.locationId,
-    bookQuantity: row.onHand,
-    physicalQuantity: row.onHand,
+    bookQuantity: Number(row.onHand),
+    physicalQuantity: Number(row.onHand),
     variance: 0,
     stockValue: 0,
-    quarantineQuantity: row.quarantine,
-    damagedQuantity: row.damaged,
-    reservedQuantity: row.reserved,
+    quarantineQuantity: Number(row.quarantine),
+    damagedQuantity: Number(row.damaged),
+    reservedQuantity: Number(row.reserved),
     // Blueprint §7.2: "Available = On Hand - Reserved."
-    availableQuantity: Math.max(0, row.onHand - row.reserved),
+    availableQuantity: Math.max(0, Number(row.onHand) - Number(row.reserved)),
   }));
 }
 
@@ -866,14 +866,14 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
         where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
       if (ledger) {
-        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, Number(ledger.reserved) - line.quantity), version: { increment: 1 } } });
       }
     }
     for (const line of transferReservationTotals(next).values()) {
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
-      const available = (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0);
+      const available = (ledger ? Number(ledger.onHand) : 0) - (ledger ? Number(ledger.reserved) : 0);
       if (!ledger || available < line.quantity - 1e-8) {
         throw new Error(`Only ${Math.max(0, available)} units are available for lot ${line.lotId} at this location - ${line.quantity} were requested.`);
       }
@@ -902,7 +902,7 @@ export async function persistTransferDeletion(transfer: TransferRecord, companyI
         where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
       if (ledger) {
-        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, ledger.reserved - line.quantity), version: { increment: 1 } } });
+        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, Number(ledger.reserved) - line.quantity), version: { increment: 1 } } });
       }
     }
     await tx.transferLine.deleteMany({ where: { transferId: transfer.id } });
@@ -975,7 +975,7 @@ export async function persistConfirmedPickAllocations(
       const ledger = await tx.stockLedger.findUnique({
         where: { itemId_lotId_locationId: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId } },
       });
-      if (!ledger || ledger.onHand < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
+      if (!ledger || Number(ledger.onHand) < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
       // Stock leaves the source through the canonical service, in this transaction.
       const outPost = await postInventoryMovementInTransaction(tx, {
         tenant,
