@@ -100,7 +100,7 @@ async function suggestBin(companyId: string, locationId: string, itemId: string,
     }),
   ]);
   const pendingQtyByBin = new Map(openCounts.map((row) => [row.suggestedBinId, row._sum.quantity ?? 0]));
-  const highVelocity = Math.abs(outboundMovements._sum.qtyDelta ?? 0) >= VELOCITY_THRESHOLD_UNITS;
+  const highVelocity = Math.abs(Number(outboundMovements._sum.qtyDelta ?? 0)) >= VELOCITY_THRESHOLD_UNITS;
 
   const candidates: BinCandidate[] = candidateBins.map((bin) => ({
     id: bin.id, capacity: bin.capacity, zone: bin.zone, pendingQty: pendingQtyByBin.get(bin.id) ?? 0,
