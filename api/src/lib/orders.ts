@@ -195,7 +195,7 @@ export async function expireStaleReservations(companyId: string): Promise<number
       try {
         await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
           itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: Number(line.requestedQty),
-        })));
+        })), { companyId: order.companyId });
         await transitionOrderStatus(order.id, order.companyId, order.status as never, 'EXPIRED', {
           actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed',
         }, { expiredAt: new Date() });
@@ -236,7 +236,7 @@ export async function retryBackorderAllocation(companyId: string, orderId: strin
       if (!allocation.allocations.length) continue;
       await reserveStockForTransfer(allocation.allocations.map((pick) => ({
         itemId: line.itemId, lotId: pick.lotId, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: pick.quantity,
-      })));
+      })), { companyId });
       const filledQty = allocation.allocations.reduce((sum, pick) => sum + pick.quantity, 0);
       await prisma.$transaction([
         ...allocation.allocations.map((pick) => prisma.orderLine.create({
@@ -376,7 +376,7 @@ async function createOrderInner(input: {
 
   await reserveStockForTransfer(resolved.map((line) => ({
     itemId: line.itemId, lotId: line.lotId, locationId: line.locationId, quantity: line.quantity,
-  })));
+  })), { companyId });
 
   const ttlMinutes = input.reservationTtlMinutes && input.reservationTtlMinutes > 0 ? input.reservationTtlMinutes : DEFAULT_RESERVATION_TTL_MINUTES;
   const status = backordered.length ? 'BACKORDERED' : 'RESERVED';
@@ -420,7 +420,7 @@ async function createOrderInner(input: {
   } catch (error) {
     await releaseReservedStock(resolved.map((line) => ({
       itemId: line.itemId, lotId: line.lotId, locationId: line.locationId, quantity: line.quantity,
-    })));
+    })), { companyId });
     throw error;
   }
 }
@@ -489,7 +489,7 @@ export async function cancelOrder(companyId: string, orderId: string, actorId: s
   await assertValidOrderTransition(order.status as never, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
   await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
     itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: Number(line.requestedQty),
-  })));
+  })), { companyId: order.companyId });
   await transitionOrderStatus(order.id, order.companyId, order.status as never, 'CANCELLED', { actorId, actorRole: 'SYSTEM' }, { cancelledAt: new Date() });
   await persistAudit(recordAudit({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
   return prisma.order.findFirst({ where: { id: order.id, companyId }, include: ORDER_INCLUDE });
