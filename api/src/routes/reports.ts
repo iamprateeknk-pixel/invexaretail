@@ -135,7 +135,7 @@ router.get('/reports/count-accuracy-breakdown', async (req: Request, res: Respon
   }
   const classes = classifyAbcItems([...value.entries()].map(([itemId, entry]) => ({ itemId, extendedValue: entry.value, valueSource: entry.costed ? 'purchase' as const : 'qty_proxy' as const })));
   const summary = summarizeCountAccuracyByClass(
-    counts.map((count) => ({ physicalQty: count.physicalQty, bookQty: count.bookQty, unitCost: lotUnitCost(count.lot?.attributes as Record<string, unknown> | null), abcClass: classes.get(count.itemId)?.abcClass ?? null })),
+    counts.map((count) => ({ physicalQty: Number(count.physicalQty), bookQty: Number(count.bookQty), unitCost: lotUnitCost(count.lot?.attributes as Record<string, unknown> | null), abcClass: classes.get(count.itemId)?.abcClass ?? null })),
     DEFAULT_TOLERANCE,
   );
   return res.json({ days, tolerance: DEFAULT_TOLERANCE, ...summary });
@@ -150,7 +150,7 @@ router.get('/reports/count-variance-reasons', async (req: Request, res: Response
     select: { physicalQty: true, bookQty: true, reasonCode: true },
     take: 20_000,
   });
-  return res.json({ days, reasons: summarizeVarianceReasons(rows) });
+  return res.json({ days, reasons: summarizeVarianceReasons(rows.map((row) => ({ ...row, physicalQty: Number(row.physicalQty), bookQty: Number(row.bookQty) }))) });
 });
 
 router.get('/reports/inventory-health', async (req: Request, res: Response) => {
