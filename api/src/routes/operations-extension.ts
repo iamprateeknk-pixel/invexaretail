@@ -46,9 +46,10 @@ import { isKnownDefaultPassword } from '../lib/production-guard.js';
 import { createWebhookSubscription, listWebhookDeliveries, listWebhookSubscriptions, setWebhookSubscriptionStatus } from '../lib/webhook-store.js';
 import { DEFAULT_COMPANY_ID, ownerOfItem } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction, NegativeStockBlockedError } from '../lib/inventory-posting-service.js';
-import { buildRecallTrace, planSerialMovement, type SerialStatus } from '../lib/serial-tracking.js';
-import { createPutawayTask } from '../lib/putaway.js';
 import { tenantContextOf, canAccessLocation, requireAdmin, requirePlatformOperator, expiryAlertId } from './opext-shared.js';
+import collabRouter from './opext-collab.ts';
+import serialsRouter from './opext-serials.ts';
+import { createPutawayTask } from '../lib/putaway.js';
 
 const router = Router();
 
@@ -324,86 +325,7 @@ router.patch('/lots/:id/expiry', async (req, res) => {
   return res.json({ lot: { ...lot, expiryDate: lot.expiryDate?.toISOString() ?? null } });
 });
 
-// P0-SEC-003: comments are company scoped, only known entity types are accepted, and the
-// entity must belong to the caller's company (a foreign entity id is indistinguishable from a
-// missing one). Add a resolver here when a new entity type gets a comment thread.
-const COMMENT_ENTITY_RESOLVERS: Record<string, (companyId: string, entityId: string) => Promise<boolean>> = {
-  item: async (companyId, id) => Boolean(await prisma.item.findFirst({ where: { id, companyId }, select: { id: true } })),
-  lot: async (companyId, id) => Boolean(await prisma.lot.findFirst({ where: { id, item: { companyId } }, select: { id: true } })),
-  location: async (companyId, id) => Boolean(await prisma.location.findFirst({ where: { id, companyId }, select: { id: true } })),
-  transfer: async (companyId, id) => Boolean(await prisma.transfer.findFirst({ where: { id, companyId }, select: { id: true } })),
-  order: async (companyId, id) => Boolean(await prisma.order.findFirst({ where: { id, companyId }, select: { id: true } })),
-  count: async (companyId, id) => Boolean(await prisma.stockCount.findFirst({ where: { id, companyId }, select: { id: true } })),
-  exception: async (companyId, id) => Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId }, select: { id: true } })),
-  'purchase-order': async (companyId, id) => Boolean(await prisma.purchaseOrder.findFirst({ where: { id, companyId }, select: { id: true } })),
-};
-
-async function resolveCommentTarget(req: Request, res: Response): Promise<{ companyId: string; entityType: string; entityId: string } | null> {
-  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
-  const entityType = String(req.params.entityType);
-  const entityId = String(req.params.entityId);
-  const resolver = COMMENT_ENTITY_RESOLVERS[entityType];
-  if (!resolver) {
-    res.status(400).json({ message: `Comments are not available for "${entityType}".` });
-    return null;
-  }
-  if (!(await resolver(companyId, entityId))) {
-    res.status(404).json({ message: 'Record not found.' });
-    return null;
-  }
-  return { companyId, entityType, entityId };
-}
-
-router.get('/comments/:entityType/:entityId', async (req, res) => {
-  const target = await resolveCommentTarget(req, res);
-  if (!target) return;
-  const comments = await prisma.contextComment.findMany({
-    where: { companyId: target.companyId, entityType: target.entityType, entityId: target.entityId },
-    orderBy: { createdAt: 'asc' },
-  });
-  return res.json({ comments });
-});
-
-router.post('/comments/:entityType/:entityId', async (req, res) => {
-  const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
-  if (!body) return res.status(400).json({ message: 'Comment cannot be empty.' });
-  const target = await resolveCommentTarget(req, res);
-  if (!target) return;
-  const mentions = [...body.matchAll(/@([\w.-]+)/g)].map((match) => match[1]);
-  const comment = await prisma.contextComment.create({ data: {
-    companyId: target.companyId,
-    entityType: target.entityType,
-    entityId: target.entityId,
-    authorId: req.user!.id,
-    authorName: req.user!.name || req.user!.email || req.user!.id,
-    body,
-    mentions,
-  } });
-  return res.status(201).json({ comment });
-});
-
-// P0-SEC-004: the inbox is company scoped. Role-wide and global (no user, no role) notices used
-// to be visible to every company.
-router.get('/notification-inbox', async (req, res) => {
-  const notifications = await prisma.userNotification.findMany({
-    where: {
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      OR: [{ userId: req.user!.id }, { role: req.user!.role }, { userId: null, role: null }],
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-  });
-  return res.json({ notifications });
-});
-
-router.patch('/notification-inbox/:id/read', async (req, res) => {
-  const notice = await prisma.userNotification.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!notice || (notice.userId && notice.userId !== req.user!.id) || (notice.role && notice.role !== req.user!.role)) {
-    return res.status(404).json({ message: 'Notification not found.' });
-  }
-  const notification = await prisma.userNotification.update({ where: { id: notice.id, companyId: notice.companyId }, data: { readAt: new Date() } });
-  return res.json({ notification });
-});
+router.use(collabRouter);
 
 router.get('/expiry-alerts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
@@ -1281,97 +1203,7 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
   return res.json({ task: updated, bin: { id: bin.id, code: bin.code } });
 });
 
-// ============================================================================
-// Serial tracking (blueprint P3 "Traceability 3.0")
-// ============================================================================
-
-router.post('/items/:itemId/serials', async (req, res) => {
-  const itemId = req.params.itemId;
-  const serial = typeof req.body.serial === 'string' ? req.body.serial.trim() : '';
-  if (!serial) return res.status(400).json({ message: 'Serial number is required.' });
-  const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
-  if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const item = await prisma.item.findFirst({ where: { id: itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!item) return res.status(404).json({ message: 'Item was not found.' });
-  const movement = planSerialMovement({
-    currentStatus: 'IN_STOCK',
-    toStatus: 'IN_STOCK',
-    movementType: 'RECEIVE',
-    toLocationId: locationId,
-    reference: typeof req.body.reference === 'string' ? req.body.reference : null,
-    actorId: req.user!.id,
-  });
-  try {
-    const created = await prisma.$transaction(async (tx) => {
-      const record = await tx.serialNumber.create({
-        data: {
-          itemId,
-          lotId: typeof req.body.lotId === 'string' ? req.body.lotId : null,
-          serial,
-          status: 'IN_STOCK',
-          currentLocationId: locationId,
-          warrantyEnd: req.body.warrantyEnd ? new Date(req.body.warrantyEnd) : null,
-          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-        },
-      });
-      await tx.serialMovement.create({ data: { serialNumberId: record.id, ...movement } });
-      return record;
-    });
-    return res.status(201).json({ serial: created });
-  } catch (error) {
-    return res.status(409).json({ message: error instanceof Error && error.message.includes('Unique') ? 'This serial is already registered for this item.' : 'Unable to register serial.' });
-  }
-});
-
-router.get('/items/:itemId/serials', async (req, res) => {
-  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-  const serials = await prisma.serialNumber.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: req.params.itemId, ...(status ? { status } : {}) },
-    orderBy: { receivedAt: 'desc' },
-  });
-  return res.json({ serials });
-});
-
-router.get('/serials/:serial', async (req, res) => {
-  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!record) return res.status(404).json({ message: 'Serial was not found.' });
-  const movements = await prisma.serialMovement.findMany({ where: { serialNumberId: record.id }, orderBy: { createdAt: 'asc' } });
-  return res.json({ serial: record, trace: buildRecallTrace(movements) });
-});
-
-router.post('/serials/:serial/move', async (req, res) => {
-  const record = await prisma.serialNumber.findFirst({ where: { serial: req.params.serial, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!record) return res.status(404).json({ message: 'Serial was not found.' });
-  const toLocationId = typeof req.body.toLocationId === 'string' ? req.body.toLocationId : null;
-  if (toLocationId && !canAccessLocation(req, toLocationId)) return res.status(403).json({ message: 'Location access denied.' });
-  let movement;
-  try {
-    movement = planSerialMovement({
-      currentStatus: record.status as SerialStatus,
-      toStatus: req.body.toStatus,
-      movementType: req.body.movementType,
-      fromLocationId: record.currentLocationId,
-      toLocationId,
-      reference: typeof req.body.reference === 'string' ? req.body.reference : null,
-      actorId: req.user!.id,
-    });
-  } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid serial transition.' });
-  }
-  const [, updated] = await prisma.$transaction([
-    prisma.serialMovement.create({ data: { serialNumberId: record.id, ...movement } }),
-    prisma.serialNumber.update({
-      where: { id: record.id },
-      data: {
-        status: movement.toStatus,
-        currentLocationId: toLocationId ?? record.currentLocationId,
-        soldAt: movement.toStatus === 'SOLD' ? new Date() : record.soldAt,
-        returnState: movement.toStatus === 'RETURNED' ? (req.body.returnState ?? record.returnState) : record.returnState,
-      },
-    }),
-  ]);
-  return res.json({ serial: updated });
-});
+router.use(serialsRouter);
 
 // ============================================================================
 // OMS ORDERS + ATP (blueprint Module G / section 13.3) - P7 starter
