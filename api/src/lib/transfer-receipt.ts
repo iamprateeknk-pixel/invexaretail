@@ -157,9 +157,9 @@ export async function persistTransferReceipt(input: {
       if (settledQty > 0) {
         await executeRaw(tx,
           `UPDATE "StockLedger" SET "inTransit"=GREATEST(0,"inTransit"-?), version=version+1, "lastUpdatedAt"=CURRENT_TIMESTAMP(3)
-           WHERE "itemId"=? AND "lotId"=? AND "locationId" IN (
-             SELECT "locationId" FROM "StockMovement" WHERE "sourceDocument"=? AND "itemId"=? AND "lotId"=? AND "movementType"='TRANSFER_OUT' AND (metadata->>'inTransit')='true')`,
-          settledQty, dbLine.itemId, dbLine.lotId, input.transferId, dbLine.itemId, dbLine.lotId);
+           WHERE "itemId"=? AND "lotId"=? AND "companyId"=? AND "locationId" IN (
+             SELECT "locationId" FROM "StockMovement" WHERE "sourceDocument"=? AND "itemId"=? AND "lotId"=? AND "companyId"=? AND "movementType"='TRANSFER_OUT' AND (metadata->>'inTransit')='true')`,
+          settledQty, dbLine.itemId, dbLine.lotId, input.tenant.companyId, input.transferId, dbLine.itemId, dbLine.lotId, input.tenant.companyId);
       }
       // Blueprint section 7.2 / Module H: damaged receiving stock is
       // physically on the shelf but not sellable - post it to the
@@ -168,10 +168,10 @@ export async function persistTransferReceipt(input: {
       // resolving that case is what eventually moves it out of quarantine.
       if (line.damagedQty > 0) {
         await executeRaw(tx,
-          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
-           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
-          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty);
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty, input.tenant.tenantId, input.tenant.companyId);
       }
       // Excess receipt: never silently absorbed into onHand. It is
       // physically present, so it also lands in quarantine pending an
@@ -179,10 +179,10 @@ export async function persistTransferReceipt(input: {
       // accept posts it to onHand, reject returns it to the vendor/source.
       if (excessQty > 0) {
         await executeRaw(tx,
-          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
-           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
-          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty);
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty, input.tenant.tenantId, input.tenant.companyId);
       }
     }
     await executeRaw(tx,

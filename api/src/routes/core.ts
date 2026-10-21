@@ -1771,7 +1771,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   };
   try {
-    await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })));
+    await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     // Commit first so a database failure cannot leave a phantom transfer in
     // the process mirror. The deterministic ID makes request retries safe.
     await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);

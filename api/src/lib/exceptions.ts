@@ -154,7 +154,7 @@ export async function applyExceptionDisposition(
   try {
     await prisma.$transaction(async (tx) => {
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: exceptionCase.itemId!, lotId: exceptionCase.lotId!, locationId: exceptionCase.locationId! } },
+        where: { companyId_itemId_lotId_locationId: { companyId: exceptionCase.companyId, itemId: exceptionCase.itemId!, lotId: exceptionCase.lotId!, locationId: exceptionCase.locationId! } },
       });
       if (!ledger || Number(ledger.quarantine) <= 0) return;
       const moveQty = Math.min(caseQty, Number(ledger.quarantine));

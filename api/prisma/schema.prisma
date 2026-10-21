@@ -842,11 +842,11 @@ model StockLedger {
   version        Int      @default(0)
   lastUpdatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId      String   @default("default-company")
+  companyId      String
   @@index([tenantId])
   @@index([companyId])
 
-  @@unique([itemId, lotId, locationId])
+  @@unique([companyId, itemId, lotId, locationId])
   @@index([locationId, itemId])
 }
 
@@ -1693,7 +1693,7 @@ model StockBalance {
   version         Int      @default(0)
   lastPostedAt    DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId       String   @default("default-company")
+  companyId       String
   @@index([tenantId])
   @@index([companyId])
 
@@ -2217,13 +2217,17 @@ model BinStock {
   locationId  String
   location    Location @relation(fields: [locationId], references: [id])
   binId       String
+  tenantId    String   @default("tenant-invexa")
+  companyId   String
   onHand      Decimal    @default(0) @db.Decimal(18, 3)
   reserved    Decimal    @default(0) @db.Decimal(18, 3)
   version     Int      @default(0)
   updatedAt   DateTime @updatedAt
 
-  @@unique([itemId, lotId, locationId, binId])
+  @@unique([companyId, itemId, lotId, locationId, binId])
   @@index([locationId, binId])
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 // Blueprint P4 "WMS 3.0: Bin moves": an explicit bin-to-bin transfer ledger,
@@ -2238,6 +2242,8 @@ model BinMovement {
   location    Location @relation(fields: [locationId], references: [id])
   fromBinId   String
   toBinId     String
+  tenantId    String   @default("tenant-invexa")
+  companyId   String
   quantity    Decimal @db.Decimal(18, 3)
   reference   String?
   actorId     String?
@@ -2245,6 +2251,8 @@ model BinMovement {
 
   @@index([locationId, createdAt])
   @@index([itemId])
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 // Blueprint P7 / P11: Amazon/Flipkart/website connectors that POST /orders.

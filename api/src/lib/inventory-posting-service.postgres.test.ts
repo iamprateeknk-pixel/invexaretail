@@ -1,6 +1,10 @@
 // ADR-001 / Week 6: the canonical InventoryPostingService, exercised
 // against real Postgres. Skipped unless TEST_DATABASE_URL is set (see
 // AGENTS.md "Required tests").
+//
+// Phase 2/3 updates: quantities come back as Prisma Decimals, so numeric
+// assertions go through Number(...); ledger lookups use the
+// tenant-qualified compound key (companyId first).
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -40,12 +44,12 @@ integration('posting an opening-stock movement creates the journal row and the S
   assert.equal(result.duplicate, false);
   assert.equal(result.balance.onHand, 10);
 
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  assert.equal(ledger?.onHand, 10);
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  assert.equal(Number(ledger?.onHand), 10);
   const movement = await prisma.stockMovement.findUnique({ where: { id: result.movement.id } });
-  assert.equal(movement?.qtyDelta, 10);
-  assert.equal(movement?.beforeBalance, 0);
-  assert.equal(movement?.afterBalance, 10);
+  assert.equal(Number(movement?.qtyDelta), 10);
+  assert.equal(Number(movement?.beforeBalance), 0);
+  assert.equal(Number(movement?.afterBalance), 10);
 });
 
 integration('a duplicate idempotency key returns the original result and does not post twice', async () => {
@@ -58,8 +62,8 @@ integration('a duplicate idempotency key returns the original result and does no
   assert.equal(second.duplicate, true);
   assert.equal(second.movement.id, first.movement.id);
 
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  assert.equal(ledger?.onHand, 5, 'onHand must reflect exactly one post, not two');
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  assert.equal(Number(ledger?.onHand), 5, 'onHand must reflect exactly one post, not two');
   const movementCount = await prisma.stockMovement.count({ where: { idempotencyKey: key } });
   assert.equal(movementCount, 1);
 });
@@ -75,11 +79,11 @@ integration('two concurrent posts to the same item/lot/location both succeed and
   assert.equal(a.duplicate, false);
   assert.equal(b.duplicate, false);
 
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  assert.equal(ledger?.onHand, 85, 'both concurrent deltas must be applied - neither write can silently overwrite the other');
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  assert.equal(Number(ledger?.onHand), 85, 'both concurrent deltas must be applied - neither write can silently overwrite the other');
 
   const movements = await prisma.stockMovement.findMany({ where: { itemId, lotId, locationId } });
-  const journalSum = movements.reduce((sum, m) => sum + m.qtyDelta, 0);
+  const journalSum = movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0);
   assert.equal(journalSum, 85, 'journal sum must equal the projection');
 });
 
@@ -90,8 +94,8 @@ integration('negative stock is blocked by default policy', async () => {
     () => postInventoryMovement({ tenant, itemId, lotId, locationId, movementType: 'SALES_DEDUCTION', qtyDelta: -10, reason: 'oversell attempt', idempotencyKey: randomUUID() }),
     NegativeStockBlockedError,
   );
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  assert.equal(ledger?.onHand, 3, 'a blocked post must not change the balance');
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  assert.equal(Number(ledger?.onHand), 3, 'a blocked post must not change the balance');
 });
 
 integration('reversal posts an equal-and-opposite movement and never edits the original', async () => {
@@ -100,15 +104,15 @@ integration('reversal posts an equal-and-opposite movement and never edits the o
 
   const reversed = await reverseInventoryMovement(tenant, posted.movement.id, 'undo the adjustment');
   assert.equal(reversed.duplicate, false);
-  assert.equal(reversed.movement.qtyDelta, -20);
+  assert.equal(Number(reversed.movement.qtyDelta), -20);
   assert.equal((reversed.movement.metadata as { reversalOf?: string } | null)?.reversalOf, posted.movement.id);
 
   const original = await prisma.stockMovement.findUnique({ where: { id: posted.movement.id } });
-  assert.equal(original?.qtyDelta, 20, 'the original movement row must be unchanged');
+  assert.equal(Number(original?.qtyDelta), 20, 'the original movement row must be unchanged');
   assert.equal(original?.metadata, null, 'the original movement is never edited to point at its reversal');
 
-  const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  assert.equal(ledger?.onHand, 0, 'the reversal must net the balance back to zero');
+  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  assert.equal(Number(ledger?.onHand), 0, 'the reversal must net the balance back to zero');
 
   await assert.rejects(() => reverseInventoryMovement(tenant, posted.movement.id, 'try again'), AlreadyReversedError);
 });
@@ -136,10 +140,10 @@ integration('lot and location keys stay isolated: posting for lot A never touche
   await postInventoryMovement({ tenant, itemId, lotId, locationId, movementType: 'OPENING_STOCK', qtyDelta: 10, reason: 'lot A', idempotencyKey: randomUUID() });
   await postInventoryMovement({ tenant, itemId, lotId: lotB.id, locationId, movementType: 'OPENING_STOCK', qtyDelta: 40, reason: 'lot B', idempotencyKey: randomUUID() });
 
-  const ledgerA = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId, locationId } } });
-  const ledgerB = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId, lotId: lotB.id, locationId } } });
-  assert.equal(ledgerA?.onHand, 10);
-  assert.equal(ledgerB?.onHand, 40);
+  const ledgerA = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
+  const ledgerB = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId: lotB.id, locationId } } });
+  assert.equal(Number(ledgerA?.onHand), 10);
+  assert.equal(Number(ledgerB?.onHand), 40);
 });
 
 integration('tenant isolation: an idempotency key is scoped per company, not global', async () => {
@@ -153,4 +157,21 @@ integration('tenant isolation: an idempotency key is scoped per company, not glo
   assert.equal(postedA.duplicate, false);
   assert.equal(postedB.duplicate, false, 'the same idempotency key under a different tenant must post independently');
   assert.notEqual(postedA.movement.id, postedB.movement.id);
+});
+
+integration('tenant-qualified ledger key: posting under company B creates its own row and never increments company A\'s', async () => {
+  const fixtureA = await makeFixture();
+  const fixtureB = await makeFixture();
+
+  await postInventoryMovement({ tenant: fixtureA.tenant, itemId: fixtureA.itemId, lotId: fixtureA.lotId, locationId: fixtureA.locationId, movementType: 'OPENING_STOCK', qtyDelta: 10, reason: 'A seed', idempotencyKey: randomUUID() });
+  await postInventoryMovement({ tenant: fixtureB.tenant, itemId: fixtureB.itemId, lotId: fixtureB.lotId, locationId: fixtureB.locationId, movementType: 'OPENING_STOCK', qtyDelta: 4, reason: 'B seed', idempotencyKey: randomUUID() });
+
+  const ledgerA = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: fixtureA.tenant.companyId, itemId: fixtureA.itemId, lotId: fixtureA.lotId, locationId: fixtureA.locationId } } });
+  const ledgerB = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: fixtureB.tenant.companyId, itemId: fixtureB.itemId, lotId: fixtureB.lotId, locationId: fixtureB.locationId } } });
+  assert.equal(Number(ledgerA?.onHand), 10, 'company A balance must be untouched by company B posting');
+  assert.equal(Number(ledgerB?.onHand), 4, 'company B must get its own ledger row, not an increment of A\'s');
+  assert.notEqual(ledgerA?.id, ledgerB?.id);
+
+  const crossLookup = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: fixtureB.tenant.companyId, itemId: fixtureA.itemId, lotId: fixtureA.lotId, locationId: fixtureA.locationId } } });
+  assert.equal(crossLookup, null, 'a lookup under the wrong company must find nothing, never the other company\'s row');
 });

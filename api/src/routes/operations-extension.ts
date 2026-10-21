@@ -1241,6 +1241,7 @@ router.post('/locations/:locationId/bin-transfers', async (req, res) => {
 
   try {
     const movement = await moveBinStockPersisted({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
       itemId, lotId: typeof req.body.lotId === 'string' ? req.body.lotId : null,
       locationId, binId: fromBin.id, toBinId: toBin.id, quantity,
       reference: typeof req.body.reference === 'string' ? req.body.reference : null,
@@ -1264,7 +1265,7 @@ router.get('/locations/:locationId/pick-face-replenishment', async (req, res) =>
 
   const suggestions: Array<{ itemId: string; lotId?: string; fromBinId: string; fromBinCode: string; toBinId: string; toBinCode: string; quantity: number }> = [];
   for (const bin of pickFaceBins) {
-    const pickFaceStock = await prisma.binStock.findMany({ where: { locationId, binId: bin.id } });
+    const pickFaceStock = await prisma.binStock.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId, binId: bin.id } });
     const min = bin.pickFaceMin ?? 0;
     const max = bin.pickFaceMax ?? min;
     // One decision per item in this pick face (its rows are per lot, and were suggested separately).
@@ -1272,7 +1273,7 @@ router.get('/locations/:locationId/pick-face-replenishment', async (req, res) =>
     for (const row of pickFaceStock) onHandByItem.set(row.itemId, (onHandByItem.get(row.itemId) ?? 0) + Number(row.onHand));
     for (const [itemId, onHand] of onHandByItem) {
       const reserveRows = await prisma.binStock.findMany({
-        where: { locationId, itemId, binId: { in: [...reserveBinCodeById.keys()] } },
+        where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId, itemId, binId: { in: [...reserveBinCodeById.keys()] } },
       });
       const lotIds = [...new Set(reserveRows.map((row) => row.lotId).filter(Boolean))];
       const lotInfo = new Map((lotIds.length ? await prisma.lot.findMany({ where: { id: { in: lotIds } }, select: { id: true, status: true, expiryDate: true } }) : []).map((lot) => [lot.id, lot]));
@@ -1353,10 +1354,10 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
   });
   try {
     await persistBinStockDelta({
-      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: STAGING_BIN_ID, qtyDelta: -Number(task.quantity),
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: STAGING_BIN_ID, qtyDelta: -Number(task.quantity),
     });
     await persistBinStockDelta({
-      itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: bin.id, qtyDelta: Number(task.quantity),
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: bin.id, qtyDelta: Number(task.quantity),
     });
   } catch (error) {
     console.error('bin stock putaway persist failed (non-blocking):', error instanceof Error ? error.message : error);
@@ -2550,7 +2551,7 @@ router.get('/locations/:locationId/bin-stock', async (req, res) => {
   };
   if (!databaseEnabled) return res.json({ bins: serializeMemory() });
   const rows = await prisma.binStock.findMany({
-    where: { locationId: req.params.locationId, onHand: { gt: 0 } },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId: req.params.locationId, onHand: { gt: 0 } },
     include: { item: { select: { id: true, code: true, name: true } }, location: { select: { id: true, name: true } } },
     orderBy: [{ binId: 'asc' }, { itemId: 'asc' }],
     take: 500,

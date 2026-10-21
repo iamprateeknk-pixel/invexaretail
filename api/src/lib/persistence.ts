@@ -508,7 +508,7 @@ export async function persistOpeningStockImport(
             ${importId('stock', `${item.id}|${lot.id}|${location.id}`)}, ${item.id}, ${lot.id}, ${location.id},
             ${row.quantity ?? 0}, 0, 0, 1, NOW(), ${companyId}
           )`))}
-          ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
+          ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET "onHand" = EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
         // The movement journal must explain this balance too (lib/import-journal-sync.ts).
         await syncJournalToBalances(tx, chunk.map(({ item, lot, location }) => ({ itemId: item.id, lotId: lot.id, locationId: location.id })), {
@@ -619,7 +619,7 @@ export async function persistDailyMovementImport(input: { batchId: string; impor
             ${importId('stock', `${movement.itemId}|${movement.lotId}|${movement.locationId}`)},
             ${movement.itemId}, ${movement.lotId!}, ${movement.locationId}, ${movement.qtyDelta}, 0, 0, 1, NOW(), ${companyId}
           )`))}
-          ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
+          ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET "onHand" = "StockLedger"."onHand" + EXCLUDED."onHand", version = "StockLedger".version + 1, "lastUpdatedAt" = NOW()
         `);
         // Journal the net effect of this chunk (lib/import-journal-sync.ts); a re-sent file adds nothing.
         await syncJournalToBalances(tx, ledgerRows.map((movement) => ({ itemId: movement.itemId, lotId: movement.lotId!, locationId: movement.locationId })), {
@@ -753,7 +753,7 @@ export async function persistCountReview(count: CountRecord, companyId: string):
     if (count.status === 'APPROVED') {
       const variance = count.physicalQuantity - count.bookQty;
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: count.itemId, lotId: count.lotId, locationId: count.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId } },
       });
       // Posted through the canonical service in this same transaction (journal + ledger +
       // audit + outbox with the review). A count with no ledger row yet establishes stock
@@ -863,7 +863,7 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
   await prisma.$transaction(async (tx) => {
     for (const line of transferReservationTotals(current).values()) {
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId, itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
       if (ledger) {
         await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, Number(ledger.reserved) - line.quantity), version: { increment: 1 } } });
@@ -871,7 +871,7 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
     }
     for (const line of transferReservationTotals(next).values()) {
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId, itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
       const available = (ledger ? Number(ledger.onHand) : 0) - (ledger ? Number(ledger.reserved) : 0);
       if (!ledger || available < line.quantity - 1e-8) {
@@ -899,7 +899,7 @@ export async function persistTransferDeletion(transfer: TransferRecord, companyI
   await prisma.$transaction(async (tx) => {
     for (const line of transferReservationTotals(transfer).values()) {
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId, itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
       });
       if (ledger) {
         await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, Number(ledger.reserved) - line.quantity), version: { increment: 1 } } });
@@ -973,7 +973,7 @@ export async function persistConfirmedPickAllocations(
     }
     for (const allocation of allocations) {
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId } },
       });
       if (!ledger || Number(ledger.onHand) < allocation.quantity) throw new Error(`Insufficient current stock for lot ${allocation.lotId}.`);
       // Stock leaves the source through the canonical service, in this transaction.
@@ -990,7 +990,7 @@ export async function persistConfirmedPickAllocations(
       // Skipped when this confirm was already applied (duplicate idempotent post), so a replay cannot double it.
       if (!outPost.duplicate) {
         await tx.stockLedger.updateMany({
-          where: { itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId },
+          where: { companyId: tenant.companyId, itemId: allocation.itemId, lotId: allocation.lotId, locationId: allocation.locationId },
           data: { inTransit: { increment: allocation.quantity } },
         });
       }
