@@ -170,7 +170,7 @@ export async function persistTransferReceipt(input: {
         await executeRaw(tx,
           `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
            VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
           `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty, input.tenant.tenantId, input.tenant.companyId);
       }
       // Excess receipt: never silently absorbed into onHand. It is
@@ -181,7 +181,7 @@ export async function persistTransferReceipt(input: {
         await executeRaw(tx,
           `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
            VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
           `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty, input.tenant.tenantId, input.tenant.companyId);
       }
     }
