@@ -138,3 +138,32 @@ integration('plan §2.5b FIXED at step 3: a stocked location with zero BinStock 
   assert.equal(populated[0].binId, fixture.binA);
   assert.equal(populated[0].onHand, 10);
 });
+
+integration('step 5 characterization: the two GET /intelligence implementations disagree on availability by exactly the reserved bucket (and by lot status)', async () => {
+  // The endpoint has two implementations. The database branch
+  // (opext-intelligence.ts) accumulates sellable on-hand — AVAILABLE,
+  // unexpired lots only, via sellableQuantity — and counts reserved against
+  // it. The memory branch's builder (lib/reorder-store.ts
+  // buildReplenishmentIntelligence) accumulates raw onHand and never reads
+  // reserved at all. Over the fixture row (onHand 10, reserved 4, lot
+  // AVAILABLE) the two therefore report different availability for the same
+  // stock — the §2.5c class of gap, one layer up. sellableQuantity is the
+  // DB branch's own function, imported here so the pin uses its real math.
+  const { sellableQuantity } = await import('../lib/sellable-stock.js');
+  const lot = { status: 'AVAILABLE', expiryDate: null };
+  const dbSellableHere = sellableQuantity({ onHand: 10, reserved: 0, lot });
+  const dbAvailable = dbSellableHere - 4; // reserved counted because sellableHere > 0
+  const dbNetworkAvailable = sellableQuantity({ onHand: 10, reserved: 4, lot });
+  const memoryAvailable = 10; // builder: quantities.onHand += entry.onHand; reserved never subtracted
+  const memoryNetworkAvailable = 10; // builder: source.available += entry.onHand
+  assert.equal(dbAvailable, 6);
+  assert.equal(dbNetworkAvailable, 6);
+  assert.equal(memoryAvailable - dbAvailable, 4, 'the availability gap is exactly the reserved bucket');
+  assert.equal(memoryNetworkAvailable - dbNetworkAvailable, 4);
+  // Lot status widens the same gap: a BLOCKED lot is worth 0 to the DB
+  // branch and a full 10 to the memory builder.
+  assert.equal(sellableQuantity({ onHand: 10, reserved: 0, lot: { status: 'BLOCKED', expiryDate: null } }), 0);
+  // Phase 5 step 5b reconciles the builder (repository-fed stock input,
+  // sellable + reserved-aware accumulation) and flips this pin to assert
+  // the builder itself now reports 6 over the fixture.
+});
