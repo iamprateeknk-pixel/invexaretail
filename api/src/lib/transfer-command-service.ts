@@ -136,7 +136,7 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
     // against a transfer that was never actually created.
     void releaseReservedStock(validated.lines.map((line) => ({
       itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-    })));
+    })), { companyId: cmd.companyId });
     throw error;
   }
 }

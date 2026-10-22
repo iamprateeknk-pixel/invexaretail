@@ -166,7 +166,7 @@ integration('POST /purchase-orders/:id/receive posts a journal row atomically wi
   assert.equal(movements[0].qtyDelta, 8);
   assert.equal(movements[0].afterBalance, 8);
   assert.equal(movements[0].companyId, a.companyId);
-  assert.equal(movements.reduce((sum, m) => sum + m.qtyDelta, 0), ledger[0].onHand, 'journal sum equals the projection');
+  assert.equal(movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0), Number(ledger[0].onHand), 'journal sum equals the projection');
 });
 
 integration('a failing receipt leaves neither a journal row nor a ledger change (atomic)', async () => {

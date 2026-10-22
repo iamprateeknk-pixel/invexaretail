@@ -56,7 +56,7 @@ integration('transfer receipt posts a TRANSFER_IN journal row that matches the l
   assert.equal(rows[0].movementType, 'TRANSFER_IN');
   assert.equal(rows[0].qtyDelta, 7);
   assert.equal(rows[0].companyId, f.tenant.companyId);
-  assert.equal(rows.reduce((sum, r) => sum + r.qtyDelta, 0), ledger[0].onHand, 'journal sum equals projection');
+  assert.equal(rows.reduce((sum, r) => sum + Number(r.qtyDelta), 0), Number(ledger[0].onHand), 'journal sum equals projection');
 });
 
 integration('a second partial receipt adds a second journal row and the journal still sums to on-hand', async () => {
@@ -69,7 +69,7 @@ integration('a second partial receipt adds a second journal row and the journal 
   assert.equal(ledger.onHand, 10);
   const rows = await journal(f.item.id, f.dst.id);
   assert.equal(rows.length, 2);
-  assert.equal(rows.reduce((sum, r) => sum + r.qtyDelta, 0), 10);
+  assert.equal(rows.reduce((sum, r) => sum + Number(r.qtyDelta), 0), 10);
 });
 
 integration('a receipt that fails validation leaves no journal row, ledger row or receipt behind', async () => {

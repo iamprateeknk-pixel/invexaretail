@@ -87,8 +87,8 @@ export async function reverseImportBatch(input: {
     if (batch.status === 'REVERSED') return { duplicate: true, reversedMovements: 0, plan: [] };
     if (batch.status !== 'POSTED') throw new Error(`Only POSTED imports can be reversed; this batch is ${batch.status}.`);
 
-    const fromMovements = buildReversalPlan(batch.inventoryMovements);
-    const fromSnapshots = buildOpeningSnapshotReversalPlan(batch.openingSnapshots);
+    const fromMovements = buildReversalPlan(batch.inventoryMovements.map((movement) => ({ ...movement, qtyDelta: Number(movement.qtyDelta) })));
+    const fromSnapshots = buildOpeningSnapshotReversalPlan(batch.openingSnapshots.map((snapshot) => ({ ...snapshot, qty: Number(snapshot.qty) })));
     const plan = fromMovements.length ? fromMovements : fromSnapshots;
     if (!plan.length) {
       throw new Error('This import has no lot stock rows to reverse. Re-import is still possible after an admin clears leftover ledger rows.');

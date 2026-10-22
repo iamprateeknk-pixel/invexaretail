@@ -206,6 +206,7 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   if (!line) return res.status(404).json({ message: 'Return line was not found.' });
   if (!isPendingDisposition(line.disposition)) return res.status(409).json({ message: `This line was already dispositioned as ${line.disposition}.` });
 
+  const lineQty = Number(line.quantity);
   const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, [line.itemId]);
   const plan = planReturnLine({ requested: String(req.body.disposition ?? ''), qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
   if ('message' in plan) return res.status(400).json({ message: plan.message });
@@ -214,21 +215,21 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   const locationId = returnRequest.order.fulfillmentLocationId;
   const lot = await returnLot(returnRequest.id, line.itemId);
   const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } } });
-  if (!ledger || Number(ledger.quarantine) + 1e-8 < line.quantity) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
+  if (!ledger || Number(ledger.quarantine) + 1e-8 < lineQty) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
   const restock = plan.action === 'RESTOCK';
   await prisma.$transaction(async (tx) => {
     await tx.stockLedger.update({
       where: { id: ledger.id },
       data: {
-        quarantine: { decrement: line.quantity },
-        ...(plan.action === 'SCRAP' ? { damaged: { increment: line.quantity } } : {}),
+        quarantine: { decrement: lineQty },
+        ...(plan.action === 'SCRAP' ? { damaged: { increment: lineQty } } : {}),
         version: { increment: 1 },
       },
     });
     if (restock) {
       await postInventoryMovementInTransaction(tx, {
         tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
-        movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+        movementType: 'SALES_RETURN', qtyDelta: lineQty,
         idempotencyKey: `return-disposition:${returnRequest.id}:${line.id}`,
         reason: `Return disposition: ${plan.disposition}`, sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
       });
@@ -239,14 +240,14 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
           itemId: line.itemId, lotId: lot.id, locationId, movementType: plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
           qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
           sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-          reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -line.quantity },
+          reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -lineQty },
           companyId: req.companyId ?? DEFAULT_COMPANY_ID,
         } as never,
       });
     }
   });
-  adjustQuarantineLedger(line.itemId, lot.id, locationId, -line.quantity);
-  if (restock) adjustStockLedger(line.itemId, lot.id, locationId, line.quantity);
+  adjustQuarantineLedger(line.itemId, lot.id, locationId, -lineQty);
+  if (restock) adjustStockLedger(line.itemId, lot.id, locationId, lineQty);
   await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
   // The quarantine case opened at receipt is decided by this action.
   await prisma.exceptionCase.updateMany({
