@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { listReorderRules } from './reorder-store.js';
-import { listStockLedger } from './repository.js';
+import { listStockForLocation } from './repositories/stock-repository.js';
+import type { TenantContext } from './tenant-context.js';
 import { databaseEnabled } from './persistence.js';
 import { prisma } from './db.js';
 import {
@@ -331,16 +332,19 @@ export function emitTransferUpdated(transfer: {
   });
 }
 
-export function itemOnHand(itemId: string, locationId: string): number {
-  return listStockLedger()
-    .filter((row) => row.itemId === itemId && row.locationId === locationId)
+export async function itemOnHand(ctx: TenantContext, itemId: string, locationId: string): Promise<number> {
+  // Phase 5 step 10: the low-stock check reads the stock the database
+  // holds now (repository), not the snapshot — the snapshot could still
+  // show pre-approval quantities and suppress a genuine low-stock event.
+  return (await listStockForLocation(ctx, locationId))
+    .filter((row) => row.itemId === itemId)
     .reduce((sum, row) => sum + row.onHand, 0);
 }
 
-export function maybeEmitStockLow(itemId: string, locationId: string, beforeOnHand: number): void {
+export async function maybeEmitStockLow(ctx: TenantContext, itemId: string, locationId: string, beforeOnHand: number): Promise<void> {
   const rule = listReorderRules(locationId).find((entry) => entry.itemId === itemId);
   if (!rule) return;
-  const afterOnHand = itemOnHand(itemId, locationId);
+  const afterOnHand = await itemOnHand(ctx, itemId, locationId);
   if (afterOnHand > rule.minQty || beforeOnHand <= rule.minQty) return;
   void emitWebhookEvent({
     type: 'stock.low',

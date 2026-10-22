@@ -449,7 +449,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
         reviewReason,
       },
     });
-    if (status === 'APPROVED') maybeEmitStockLow(updated.itemId, updated.locationId, updated.bookQty);
+    if (status === 'APPROVED') void maybeEmitStockLow(tenantContext(req), updated.itemId, updated.locationId, updated.bookQty);
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
     publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [updated.locationId] });
     await reconcileCampaignQuietly(reviewedCampaignId);
