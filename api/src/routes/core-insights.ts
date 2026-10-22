@@ -6,7 +6,9 @@ import { type Request, type Response, Router } from 'express';
 import * as enterpriseRepo from '../lib/enterprise-repository.js';
 import { DEFAULT_COMPANY_ID, companyOwnsLocation, itemsForCompany } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation } from '../lib/inventory.js';
-import { findUserById, listCounts, listItems, listStockLedger, listStockLedgerForLocation, listTransfers, locations, type CountRecord } from '../lib/repository.js';
+import { findUserById, listCounts, listItems, listTransfers, locations, type CountRecord } from '../lib/repository.js';
+import { listStockForCompany, listStockForLocation } from '../lib/repositories/stock-repository.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { buildDashboardSummary, buildReportSummary } from '../lib/dashboard.js';
 import { buildExpiryDashboard } from '../lib/expiry.js';
 import { listAuditEvents } from '../lib/audit.js';
@@ -21,9 +23,15 @@ const router = Router();
 // DASHBOARD & AUDIT
 // ============================================
 
-router.get('/dashboard', (req: Request, res: Response) => {
+router.get('/dashboard', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const companyId = context.companyId ?? DEFAULT_COMPANY_ID;
+  // Phase 5 step 4: the stock input is DB-first (tenant-scoped repository);
+  // counts/transfers/items still come from the snapshot — their conversions
+  // are the document-read follow-on, so this response deliberately joins
+  // current stock with snapshot documents until that phase. The builder is
+  // unchanged; only its stock provenance moved.
+  const ctx: TenantContext = { ...tenantContext(req), companyId };
   const summary = buildDashboardSummary({
     counts: listCounts().filter((count) => canAccessLocation(context, count.locationId)),
     transfers: listTransfers().filter((transfer) =>
@@ -31,7 +39,7 @@ router.get('/dashboard', (req: Request, res: Response) => {
     ),
     items: itemsForCompany(companyId, listItems()),
     // Expiry KPIs count only lots that still hold stock in a location this user can see.
-    stock: listStockLedger().filter((row) => canAccessLocation(context, row.locationId)),
+    stock: (await listStockForCompany(ctx)).filter((row) => canAccessLocation(context, row.locationId)),
   });
   return res.json({ dashboard: summary });
 });
@@ -119,7 +127,7 @@ export const insightsReportsRouter = Router();
 // Expiry dashboard and reports
 // ---------------------------------------------------------------------------
 
-router.get('/expiry-dashboard', (req: Request, res: Response) => {
+router.get('/expiry-dashboard', async (req: Request, res: Response) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : undefined;
   const context = accessContext(req.user!);
   if ((!locationId || locationId === 'all') && !['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(context.role)) {
@@ -131,9 +139,20 @@ router.get('/expiry-dashboard', (req: Request, res: Response) => {
   const filter = typeof req.query.filter === 'string' ? req.query.filter : 'all';
 
   const expiryCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  // Phase 5 step 4: stock input via the tenant-scoped repository. NOTE the
+  // 'all' case: the snapshot accessor it replaces exact-matched the
+  // location id, so 'all' (and an omitted locationId) silently received
+  // ZERO stock rows and the all-location expiry view was always empty.
+  // The repository conversion feeds it the company's rows, which is what
+  // the role gate above exists to protect — a deliberate, documented
+  // behaviour fix inside this conversion, not a regression.
+  const ctx: TenantContext = { ...tenantContext(req), companyId: expiryCompanyId };
+  const stockRows = !locationId || locationId === 'all'
+    ? await listStockForCompany(ctx)
+    : await listStockForLocation(ctx, locationId);
   const dashboard = buildExpiryDashboard(
     itemsForCompany(expiryCompanyId, listItems()),
-    listStockLedgerForLocation(locationId ?? 'all').filter((row) => companyOwnsLocation(expiryCompanyId, row.locationId)),
+    stockRows.filter((row) => companyOwnsLocation(expiryCompanyId, row.locationId)),
   );
 
   if (filter === 'expired') dashboard.allExpiringItems = dashboard.expiredItems;

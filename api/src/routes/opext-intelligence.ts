@@ -10,11 +10,13 @@ import { planRuleReplenishment } from '../lib/replenishment.js';
 import { sellableQuantity, totalSellable } from '../lib/sellable-stock.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { buildReplenishmentIntelligence, listReorderRules } from '../lib/reorder-store.js';
-import { listItems, listLocations, listStockLedger } from '../lib/repository.js';
+import { listItems, listLocations } from '../lib/repository.js';
+import { listStockForCompany } from '../lib/repositories/stock-repository.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { censorStockoutDays, classifyDemandPattern, computeDemandStats, openingBalancesByDay, crostonDailyDemand, suggestReplenishment, xyzClass } from '../lib/demand-forecast.js';
 import { OPEN_PO_STATUSES } from '../lib/po-planning.js';
 import { buildExpiryActionRecommendations, buildLotBlockRecommendations, buildOverstockRecommendations } from '../lib/intelligence-actions.js';
-import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation } from './opext-shared.js';
 
 const router = Router();
@@ -123,7 +125,16 @@ router.get('/intelligence/:locationId', async (req, res) => {
     const locationId = req.params.locationId;
     const items = listItems();
     const locations = listLocations();
-    const ledger = listStockLedger();
+    // Phase 5 step 5: the memory branch's stock input also comes through
+    // the stock repository (its memory implementation), so both branches
+    // of this endpoint now draw stock from one place and the builder below
+    // reconciles with the database branch's math (see reorder-store.ts).
+    const ledger = await listStockForCompany({
+      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+      tenantId: DEFAULT_TENANT_ID,
+      userId: req.user!.id,
+      role: req.user!.role as TenantContext['role'],
+    });
     const lotInputs = ledger.filter((row) => row.locationId === locationId && row.onHand > 0).map((row) => {
       const item = items.find((entry) => entry.id === row.itemId);
       const lot = item?.lots.find((entry) => entry.id === row.lotId);
@@ -157,7 +168,7 @@ router.get('/intelligence/:locationId', async (req, res) => {
     });
     return res.json({
       intelligence: {
-        ...buildReplenishmentIntelligence(locationId),
+        ...buildReplenishmentIntelligence(locationId, ledger),
         lotBlocks: buildLotBlockRecommendations(lotInputs),
         expiryActions: buildExpiryActionRecommendations(lotInputs),
         overstock: buildOverstockRecommendations(overstockRows, locationId),

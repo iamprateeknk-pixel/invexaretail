@@ -17,7 +17,7 @@ test('SET stock import prepares missing item, branch and separate lot rows for u
     ['DRY FRUIT FARM TEST', 'TEST COMPANY', 'UNIQUE IMPORT ITEM', '415', '31/03/2027', 2],
   ];
   const preview = await parseStockImport(csvBuffer(rows), 'stock.csv');
-  const plan = planStockUpdate(preview, 'SET');
+  const plan = await planStockUpdate(preview, 'SET');
 
   assert.equal(plan.errors.length, 0);
   assert.equal(plan.prepared.length, 3);
@@ -33,7 +33,7 @@ test('SET stock import accepts a negative closing-stock balance from the source 
     ['DRY FRUIT FARM TEST', 'TEST COMPANY', 'NEGATIVE LOT ITEM', '999', '31/01/2027', -0.255],
   ];
   const preview = await parseStockImport(csvBuffer(rows), 'stock.csv');
-  const plan = planStockUpdate(preview, 'SET');
+  const plan = await planStockUpdate(preview, 'SET');
 
   assert.equal(plan.errors.length, 0);
   assert.equal(plan.prepared.length, 1);
@@ -46,8 +46,8 @@ test('ADD/REMOVE stock import still rejects a non-positive quantity on an existi
     ['Main Store', 'TEST COMPANY', 'Rice 5kg', 'LOT-01', -1],
   ];
   const preview = await parseStockImport(csvBuffer(rows), 'stock.csv');
-  const addPlan = planStockUpdate(preview, 'ADD');
-  const removePlan = planStockUpdate(preview, 'REMOVE');
+  const addPlan = await planStockUpdate(preview, 'ADD');
+  const removePlan = await planStockUpdate(preview, 'REMOVE');
 
   assert.match(addPlan.errors[0]?.message ?? '', /positive number/);
   assert.match(removePlan.errors[0]?.message ?? '', /positive number/);
@@ -58,7 +58,7 @@ test('ADD stock import still rejects unknown item masters', async () => {
     ['BRANCH NAME', 'COMPANY NAME', 'ITEM NAME', 'LOT CODE', 'CLOSING STOCK'],
     ['UNKNOWN BRANCH FOR ADD', 'TEST COMPANY', 'UNKNOWN ITEM FOR ADD', 'L1', 1],
   ]), 'stock.csv');
-  const plan = planStockUpdate(preview, 'ADD');
+  const plan = await planStockUpdate(preview, 'ADD');
 
   assert.equal(plan.prepared.length, 0);
   assert.match(plan.errors[0]?.message ?? '', /Unknown item/);

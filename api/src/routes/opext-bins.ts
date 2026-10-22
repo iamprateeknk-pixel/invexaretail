@@ -14,7 +14,9 @@ import { persistBinStockDelta, moveBinStockPersisted, STAGING_BIN_ID, memoryBinS
 import { assertValidBinMove, BinMoveValidationError } from '../lib/bin-move.js';
 import { planPickFaceReplenishment } from '../lib/pick-face-replenishment.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
-import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
+import { listBinStockForLocation, type BinStockRow } from '../lib/repositories/stock-repository.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { canAccessLocation, requireAdmin } from './opext-shared.js';
 
 const router = Router();
@@ -261,14 +263,21 @@ router.get('/locations/:locationId/bin-stock', async (req, res) => {
     }));
   };
   if (!databaseEnabled) return res.json({ bins: serializeMemory() });
-  const rows = await prisma.binStock.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId: req.params.locationId, onHand: { gt: 0 } },
-    include: { item: { select: { id: true, code: true, name: true } }, location: { select: { id: true, name: true } } },
-    orderBy: [{ binId: 'asc' }, { itemId: 'asc' }],
-    take: 500,
-  }).catch(() => []);
-  if (rows.length) return res.json({ bins: rows.map((row) => ({ ...row, onHand: Number(row.onHand), reserved: Number(row.reserved) })) });
-  return res.json({ bins: serializeMemory() });
+  // Phase 5 step 3: the database branch is the tenant-scoped repository
+  // read, full stop. It used to fall back to serializeMemory() when
+  // BinStock came back empty — serving snapshot-seeded staging rows in
+  // database mode and mutating memory inside a GET (plan §2.5b). An empty
+  // BinStock now answers { bins: [] }: "no bins configured yet" is a real
+  // answer, and locations whose putaway never populated BinStock will show
+  // it instead of being masked by the snapshot. The catch keeps the old
+  // resilience to a pending BinStock migration.
+  const rows = await listBinStockForLocation({
+    companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    userId: req.user!.id,
+    role: req.user!.role as TenantContext['role'],
+  }, req.params.locationId).catch(() => [] as BinStockRow[]);
+  return res.json({ bins: rows });
 });
 
 router.post('/pick-waves/:id/scan', async (req, res) => {

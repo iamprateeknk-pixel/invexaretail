@@ -13,13 +13,14 @@ import {
   listCounts,
   listItems,
   listLocations,
-  listStockLedgerForLocation,
   updateCountAssignment,
   type CountAssignmentRecord,
 } from './repository.js';
+import { listStockForLocation } from './repositories/stock-repository.js';
+import type { TenantContext } from './tenant-context.js';
 import { findUserById as findEnterpriseUserById } from './enterprise-repository.js';
 import { isOperationalItem } from './item-master.js';
-import { companyOwnsLocation } from './saas/tenant-scope.js';
+import { companyOwnsLocation, DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
 import {
   DEFAULT_CAMPAIGN_TIMEZONE,
   assertCampaignTransition,
@@ -105,13 +106,20 @@ type Eligible = {
   nearestExpiry: Map<string, string>;
 };
 
+/** Service-level stock context: campaign flows are company-scoped bookkeeping, not a user request. */
+function stockContext(companyId: string): TenantContext {
+  return { companyId, tenantId: DEFAULT_TENANT_ID, userId: 'campaign-service', role: 'ADMIN' };
+}
+
 /**
  * Current positive-stock items at the branch. Eligibility is the item's net
  * on-hand across all its lots: zero or negative stock is never assigned, even
- * when one lot is positive and another negative.
+ * when one lot is positive and another negative. Phase 5 step 8: reads the
+ * current stock through the repository (Postgres in database mode) — the
+ * snapshot could carry a reconcile-stale picture of what is countable.
  */
-function eligibleAt(locationId: string): Eligible {
-  const ledger = listStockLedgerForLocation(locationId);
+async function eligibleAt(ctx: TenantContext, locationId: string): Promise<Eligible> {
+  const ledger = await listStockForLocation(ctx, locationId);
   const netOnHand = new Map<string, number>();
   for (const row of ledger) netOnHand.set(row.itemId, (netOnHand.get(row.itemId) ?? 0) + row.onHand);
   const aggregated = aggregateLocationStock(listItems().filter(isOperationalItem), ledger)
@@ -299,7 +307,7 @@ export async function activateCampaign(id: string, actor: CampaignActor, company
   if (campaign.status !== 'DRAFT') throw new CampaignError('Only a draft campaign can be activated.', 409);
 
   const nowIso = now.toISOString();
-  const eligible = eligibleAt(campaign.locationId);
+  const eligible = await eligibleAt(stockContext(companyId), campaign.locationId);
   const history = lastApprovedCountAt(campaign.locationId);
   const rows = [...eligible.itemIds].map((itemId) => newItem(campaign.id, itemId, history.get(itemId), nowIso));
   saveCampaignItems(rows);
@@ -483,7 +491,7 @@ export async function runCampaignDay(
   if (!users.length) return { ...emptyRun('NO_ACTIVE_USERS'), date: today };
 
   const nowIso = now.toISOString();
-  const eligible = eligibleAt(campaign.locationId);
+  const eligible = await eligibleAt(stockContext(companyId), campaign.locationId);
   const queue = await syncQueue(campaign, eligible, nowIso);
   const items = listCampaignItems(id);
 

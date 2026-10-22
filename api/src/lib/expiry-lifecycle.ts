@@ -6,13 +6,14 @@ import {
   adjustStockLedger,
   findStockLedgerEntry,
   listItems,
-  listStockLedgerForLocation,
   stockMovements,
   updateLotExpiry,
   updateLotStatus,
   type LotRecord,
   type Role,
 } from './repository.js';
+import { listStockForLocation } from './repositories/stock-repository.js';
+import type { TenantContext } from './tenant-context.js';
 import type { StockMovementRecord } from './stock-ledger.js';
 
 export class ExpiryWriteOffError extends Error {
@@ -40,9 +41,11 @@ export function parseWriteOffReason(value: unknown): string {
   return reason;
 }
 
-export function buildLocationExpiryBoard(locationId: string, now = new Date()): ExpiryBoard {
+export async function buildLocationExpiryBoard(ctx: TenantContext, locationId: string, now = new Date()): Promise<ExpiryBoard> {
   const items = listItems();
-  const stock = listStockLedgerForLocation(locationId);
+  // Phase 5 step 11: board stock comes through the stock repository
+  // (tenant-scoped in both modes), not the raw snapshot accessor.
+  const stock = await listStockForLocation(ctx, locationId);
   return buildExpiryBoard({
     items,
     lots: items.flatMap((item) => item.lots),
@@ -56,10 +59,10 @@ export function buildLocationExpiryBoard(locationId: string, now = new Date()): 
   });
 }
 
-export function listLocationExpiryAlerts(locationId: string, now = new Date()) {
+export async function listLocationExpiryAlerts(ctx: TenantContext, locationId: string, now = new Date()) {
   const items = listItems();
   const itemMap = new Map(items.map((item) => [item.id, item]));
-  return listStockLedgerForLocation(locationId)
+  return (await listStockForLocation(ctx, locationId))
     .filter((row) => row.onHand > 0)
     .map((row) => {
       const item = itemMap.get(row.itemId);

@@ -1,10 +1,11 @@
 import { planRuleReplenishment } from './replenishment.js';
+import { sellableQuantity } from './sellable-stock.js';
 import {
   listCounts,
   listItems,
   listLocations,
-  listStockLedger,
   listTransfers,
+  type StockLedgerRecord,
 } from './repository.js';
 import { seedReorderRules } from './seed.js';
 import { replaceContents } from './array-utils.js';
@@ -69,19 +70,32 @@ export function upsertReorderRule(input: { itemId: string; locationId: string; m
   return { ...created };
 }
 
-export function buildReplenishmentIntelligence(locationId: string) {
+export function buildReplenishmentIntelligence(locationId: string, ledger: StockLedgerRecord[]) {
   const locationRules = listReorderRules(locationId);
   const items = listItems();
   const locations = listLocations();
-  const ledger = listStockLedger();
   const counts = listCounts().filter((count) => count.locationId === locationId);
   const quantities = new Map<string, { onHand: number; reserved: number; inTransit: number }>();
   const network = new Map<string, Map<string, { locationId: string; locationName: string; locationType: string; available: number }>>();
 
+  // Phase 5 step 5: the stock input arrives from the caller, loaded through
+  // the tenant-scoped stock repository — this builder no longer reads the
+  // snapshot ledger itself. The accumulation mirrors the database branch of
+  // GET /intelligence/:locationId exactly (sellable lots only; reserved
+  // counted against rows that are sellable): before this, the builder used
+  // raw on-hand and never read reserved at all, so the two implementations
+  // of the same endpoint disagreed on availability by exactly the reserved
+  // bucket (see the step 5 characterization pin).
   for (const entry of ledger) {
+    const item = items.find((row) => row.id === entry.itemId);
+    const lot = item?.lots.find((row) => row.id === entry.lotId);
+    const lotInput = lot ? { status: lot.status, expiryDate: lot.expiryDate } : null;
+    const sellableHere = sellableQuantity({ onHand: entry.onHand, reserved: 0, lot: lotInput });
     if (entry.locationId === locationId) {
       const current = quantities.get(entry.itemId) ?? { onHand: 0, reserved: 0, inTransit: 0 };
-      current.onHand += entry.onHand;
+      current.onHand += sellableHere;
+      current.reserved += sellableHere > 0 ? (entry.reserved ?? 0) : 0;
+      current.inTransit += entry.inTransit ?? 0;
       quantities.set(entry.itemId, current);
     }
     const location = locations.find((row) => row.id === entry.locationId);
@@ -92,7 +106,7 @@ export function buildReplenishmentIntelligence(locationId: string) {
       locationType: location?.type ?? 'store',
       available: 0,
     };
-    source.available += entry.onHand;
+    source.available += sellableQuantity({ onHand: entry.onHand, reserved: entry.reserved ?? 0, lot: lotInput });
     byLocation.set(entry.locationId, source);
     network.set(entry.itemId, byLocation);
   }

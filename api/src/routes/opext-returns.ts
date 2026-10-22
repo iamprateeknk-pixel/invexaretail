@@ -5,7 +5,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems } from '../lib/repository.js';
+import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { createExceptionCase } from '../lib/exceptions.js';
 import { expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation } from '../lib/orders.js';
 import { listMemoryQcTemplates, listMemoryQcInspections, findTemplateForCategory } from '../lib/qc-inspection.js';
@@ -156,7 +156,9 @@ router.patch('/returns/:id/status', async (req, res) => {
           idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
           reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
         }));
-        adjustStockLedger(line.itemId, lot.id, locationId, line.quantity);
+        // Phase 5 step 14: the canonical posting above is the stock
+        // write; the snapshot mirror that followed it is retired (this
+        // router is database-only — returns have no memory-mode flow).
       } else if (plan.action === 'HOLD') {
         // Physically back in the building but not sellable: quarantine until a disposition is decided.
         await prisma.stockLedger.upsert({
@@ -164,7 +166,6 @@ router.patch('/returns/:id/status', async (req, res) => {
           update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
           create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
         });
-        adjustQuarantineLedger(line.itemId, lot.id, locationId, line.quantity);
         void createExceptionCase({
           type: plan.disposition === 'QC_FAILED' ? 'QC_FAIL' : 'QUARANTINE',
           title: plan.disposition === 'QC_FAILED' ? 'Returned goods failed QC' : 'Returned goods awaiting inspection',
@@ -246,8 +247,6 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
       });
     }
   });
-  adjustQuarantineLedger(line.itemId, lot.id, locationId, -lineQty);
-  if (restock) adjustStockLedger(line.itemId, lot.id, locationId, lineQty);
   await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
   // The quarantine case opened at receipt is decided by this action.
   await prisma.exceptionCase.updateMany({

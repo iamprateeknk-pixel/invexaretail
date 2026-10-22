@@ -143,7 +143,6 @@ export async function deleteItemPermanently(ctx: TenantContext, itemId: string):
         prisma.expiryAlert.deleteMany({ where: { itemId, companyId } }),
         prisma.replenishmentSuggestion.deleteMany({ where: { itemId } }),
         prisma.binStock.deleteMany({ where: { itemId, companyId } }),
-        prisma.stockBalance.deleteMany({ where: { itemId, companyId } }),
         prisma.stockLedger.deleteMany({ where: { itemId, companyId } }),
         prisma.putawayTask.deleteMany({ where: { itemId } }),
         prisma.serialNumber.deleteMany({ where: { itemId } }),

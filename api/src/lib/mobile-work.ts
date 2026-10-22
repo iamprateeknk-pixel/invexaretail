@@ -12,9 +12,10 @@ import { isOperationalItem } from './item-master.js';
 import { itemRowToRecord } from './item-record-mapper.js';
 import { listMyOpenAssignments } from './repositories/count-assignment-repository.js';
 import {
-  findStockLedgerEntry, items as memoryItems, listCountAssignmentsFor, listTransfers,
+  items as memoryItems, listCountAssignmentsFor, listTransfers,
   type CountAssignmentRecord, type ItemRecord,
 } from './repository.js';
+import { listStockForLocation } from './repositories/stock-repository.js';
 import type { TenantContext } from './tenant-context.js';
 
 // The database enum only has PARTIAL_RECEIVED; the in-memory record type also allows the legacy PARTIALLY_RECEIVED.
@@ -111,11 +112,22 @@ async function loadFromDatabase(ctx: TenantContext, context: AccessContext, isCo
   };
 }
 
-function loadFromSnapshot(userId: string, isCounter: boolean, canReceive: boolean): MobileWorkFacts {
+async function loadFromSnapshot(ctx: TenantContext, isCounter: boolean, canReceive: boolean): Promise<MobileWorkFacts> {
+  const assignments = isCounter ? listCountAssignmentsFor(ctx.userId) : [];
+  // Phase 5 step 11: on-hand comes through the stock repository (its memory
+  // branch here — the same tenant-scoped read the database loader's SQL
+  // mirrors), pre-loaded per assignment location into the lookup the pure
+  // builder consumes.
+  const stock = new Map<string, number>();
+  for (const locationId of new Set(assignments.map((assignment) => assignment.locationId))) {
+    for (const row of await listStockForLocation(ctx, locationId)) {
+      stock.set(`${row.itemId}|${row.lotId}|${row.locationId}`, row.onHand);
+    }
+  }
   return {
-    assignments: isCounter ? listCountAssignmentsFor(userId) : [],
+    assignments,
     itemsById: new Map(memoryItems.map((item) => [item.id, item])),
-    onHand: (itemId, lotId, locationId) => findStockLedgerEntry(itemId, lotId, locationId)?.onHand ?? 0,
+    onHand: (itemId, lotId, locationId) => stock.get(`${itemId}|${lotId}|${locationId}`) ?? 0,
     transfers: canReceive
       ? listTransfers()
         .filter((transfer) => RECEIVABLE_STATUSES.includes(transfer.status))
@@ -139,12 +151,12 @@ export async function loadMobileWork(ctx: TenantContext, context: AccessContext)
   const canReceive = RECEIVER_ROLES.includes(context.role);
   const facts = databaseEnabled
     ? await loadFromDatabase(ctx, context, isCounter, canReceive)
-    : loadFromSnapshot(ctx.userId, isCounter, canReceive);
+    : await loadFromSnapshot(ctx, isCounter, canReceive);
   return buildMobileWork(context, facts);
 }
 
 /** The snapshot path on its own, for parity tests that run with the database enabled. */
-export function loadMobileWorkFromSnapshot(ctx: TenantContext, context: AccessContext) {
+export async function loadMobileWorkFromSnapshot(ctx: TenantContext, context: AccessContext) {
   const isCounter = isCountWorkerRole(context.role);
-  return buildMobileWork(context, loadFromSnapshot(ctx.userId, isCounter, RECEIVER_ROLES.includes(context.role)));
+  return buildMobileWork(context, await loadFromSnapshot(ctx, isCounter, RECEIVER_ROLES.includes(context.role)));
 }

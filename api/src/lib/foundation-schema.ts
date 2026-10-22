@@ -1,7 +1,7 @@
 export const OPERATIONAL_TENANT_TABLES = [
   'Lot', 'StockLedger', 'StockCount', 'CountAssignment', 'Transfer', 'TransferLine',
   'TransferReceipt', 'TransferReceiptLine', 'TransferCarton', 'InventoryMovement',
-  'StockMovement', 'StockBalance', 'OpeningStockSnapshot', 'PurchaseOrder',
+  'StockMovement', 'OpeningStockSnapshot', 'PurchaseOrder',
   'PurchaseOrderLine', 'Supplier', 'ReorderRule', 'SyncCheckpoint',
   'WebhookSubscription', 'WebhookDeliveryLog', 'ImportBatch', 'ImportRow',
   'Order', 'OrderLine', 'AuditLog', 'Bin', 'BinStock', 'BinMovement', 'PutawayTask', 'PickWave',
