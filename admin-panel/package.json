@@ -7,8 +7,5 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test src/*.test.js"
-  },
-  "dependencies": {
-    "vite": "^8.3.0"
   }
 }

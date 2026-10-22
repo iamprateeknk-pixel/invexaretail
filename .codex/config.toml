@@ -1,3 +1,8 @@
+# SECURITY: this repository is PUBLIC. Never commit a real API key in this file.
+# A key previously committed here was exposed publicly and must be treated as
+# compromised: revoke/rotate it in Google Cloud Console. Keep your real key in
+# your local Codex configuration only, never in this repo.
+
 [mcp_servers.shadcn]
 command = "npx"
 args = [
@@ -9,4 +14,4 @@ args = [
 url = "https://stitch.googleapis.com/mcp"
 
 [mcp_servers.stitch.http_headers]
-X-Goog-Api-Key = "AQ.Ab8RN6LgcYsGqgmT1ElVAlCfeC9jDUmcK1gFiGecxkTDYGcl7Q"
+X-Goog-Api-Key = "REPLACE_WITH_YOUR_OWN_KEY"

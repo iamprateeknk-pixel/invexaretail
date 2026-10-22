@@ -13,6 +13,7 @@ import { mutationIdempotency } from './lib/mutation-idempotency.js';
 import { RepositoryReconciler, reconcileIntervalMs, setActiveReconciler } from './lib/repository-reconciler.js';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
 import enterpriseManagementRouter from './routes/enterprise-management.js';
 import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
@@ -324,6 +325,23 @@ app.use('/api/v1', coreRouter);
 app.use('/api/v1', catalogProcurementRouter);
 
 app.use('/api/v1', operationsExtensionRouter);
+
+// Upload boundary: multer reports oversize or malformed uploads as a
+// MulterError passed down the error chain. Without a dedicated handler the
+// last-resort boundary below would collapse those into a bare 500, so
+// translate them here into clean client-facing statuses — 413 for the
+// 15 MB file-size cap (routes/core-shared.ts), 400 for every other
+// MulterError. Anything that is not a MulterError passes through untouched.
+app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (error instanceof multer.MulterError) {
+    if (res.headersSent) return next(error);
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ message: 'Uploaded file is too large. The limit is 15 MB per file.' });
+    }
+    return res.status(400).json({ message: error.message });
+  }
+  return next(error);
+});
 
 // Last-resort boundary for unexpected errors. Route handlers may return
 // user-friendly validation messages, but uncaught failures must never leak
