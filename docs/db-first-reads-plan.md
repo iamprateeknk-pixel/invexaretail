@@ -1,12 +1,13 @@
 # Database-first reads: where it stands and how to do it safely
 
-Tracker row A: "Database-first reads, drop in-memory snapshot" - **open, deliberately not started in code.**
+Tracker row A: "Database-first reads, drop in-memory snapshot" - **in progress: slices 1-9 done (documents below), stock done as slices 10-11 (Phase 5); the remaining snapshot reads are document lists (transfers, counts) and the catalogue-adjacent joins, sequenced as follow-on work.**
 This note records why, measures the work, and fixes the order so the next person can start without redoing the survey.
 
 ## What the snapshot is
 
-In database mode the API still answers most reads from process memory (`lib/repository.ts`: items with lots,
-locations, stock ledger, counts, transfers, daily movements, ...). It is loaded at start by hydration
+In database mode the API still answers some reads from process memory (`lib/repository.ts`: items with lots,
+locations, counts, transfers, daily movements, ...). Stock quantities are no longer among them (slice 10-11).
+The snapshot is loaded at start by hydration
 (`lib/persistence.ts`) and kept fresh by `lib/repository-reconciler.ts` (background reconcile; health at
 `GET /ops/metrics` -> `reconciliation`). Mutations write Postgres first and then mirror into memory.
 
@@ -163,3 +164,35 @@ Run each file on its own, as CI does: running them together against one database
   still need picking (Postgres in database mode), and `buildPickerTasks` is the pure access/assignment filter shared by both
   modes (a transfer assigned to another picker leaves a picker's queue; an admin sees all). Isolation, status filter,
   assignment rule and parity with the hydrated snapshot are in `picker-tasks.postgres.test.ts`.
+
+- **Slice 10 done: every stock-quantity read (Phase 5, R1/R4).** All stock reads now go through
+  `lib/repositories/stock-repository.ts` (`listStockForLocation`, `findStockEntry`, `listStockForCompany`,
+  `listBinStockForLocation`, `listRecentMovementItemIds`, `listRecentMovements`), tenant-scoped in the query itself
+  and dual-branch so memory mode (REQUIRE_DATABASE=false) keeps working off the snapshot through the same functions.
+  Converted, in order: `GET /stock/:locationId` (the old `listStockFromDatabase` had no companyId filter at all -
+  a cross-tenant exposure held back only by a route-level check; the function is deleted), bin-stock GET (it used
+  to fall back to memory on empty BinStock and *seed bins inside the GET*; an empty BinStock now answers
+  `{ bins: [] }`), `/dashboard` and `/expiry-dashboard`, `GET /intelligence` (the memory builder and the database
+  branch disagreed on availability by exactly the reserved bucket - onHand 10 with reserved 4 reported 10 vs 6;
+  the builder now takes the ledger as a parameter and mirrors the database branch's sellable math), picker detail /
+  allocation preview / pick slips and the replenishment transfer, count book quantities and the cycle-count
+  planner's recency signals (they read `repository.stockMovements`, which hydration never loaded, so the signals
+  silently died on every restart - they now read the journal), campaign eligibility, the import planners and
+  stock-take flows, the low-stock webhook check, the mobile-work snapshot loader and the expiry boards. The
+  row-to-record mapping is one function (`lib/stock-ledger-mapper.ts`) shared by hydration and the repository, and
+  the snapshot record type now carries reserved/inTransit/damaged. Parity, tenant isolation and post-boot
+  visibility are proven in `stock-repository.postgres.test.ts` and `stock-characterization.postgres.test.ts`
+  over a shared two-company fixture (`lib/repositories/stock-parity-harness.ts`).
+- **Slice 11 done: stock mirror writes retired, hydration slimmed, StockBalance dropped.** Every DB-mode stock
+  mutation is now exactly one canonical posting: the `adjustStockLedger` / `adjustQuarantineLedger` mirrors that
+  used to trail the database writes in transfers, imports, returns, procurement, jobs and expiry are removed (or,
+  in the dual-mode flows, guarded to memory mode only, where the snapshot is still the store). The enterprise
+  repository's private write-only `stockLedger` array is gone. `StockBalance` - a second stock table with no
+  writer and no reader - is retired (model, back-relations, tenant-table entry, one defensive `deleteMany`, and a
+  `DROP TABLE` migration whose header carries the pre-deploy gate: `SELECT count(*) FROM "StockBalance"` must be
+  0, else export as OPENING_STOCK history first). Hydration no longer loads StockLedger into the snapshot, so in
+  database mode the snapshot holds no stock at all; the reconciler keeps refreshing the remaining document arrays
+  and `/ops/metrics` reports on those. A closing census re-run over the converted clusters plus the plausible
+  stock-touching files finds zero snapshot stock readers and zero DB-mode mirror writes outside verified
+  memory-mode-only paths (the orders memory branch, the expiry write-off's memory flow). What remains on the
+  snapshot by design: document reads (transfer/count lists and their joins) - the follow-on slices.
