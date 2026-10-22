@@ -5,10 +5,17 @@
 // original registration positions.
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { createHash } from 'node:crypto';
-import { DEFAULT_COMPANY_ID, companyOwnsItem, itemsForCompany, scopedImportKey, locationsForCompany, registerItemCompany } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, companyOwnsItem, itemsForCompany, scopedImportKey, locationsForCompany, registerItemCompany } from '../lib/saas/tenant-scope.js';
 import { controlPlane } from '../lib/saas/control-plane.js';
 import { assertCountLocationAccess, canManageCountWork, isCountWorkerRole, parseCountPriority, parseOptionalDueDate } from '../lib/count-lifecycle.js';
-import { createCountAssignment, createTransferRecord, adjustStockLedger, ensureLotRecord, findStockLedgerEntry, findUserById, listItems, listLocations, listStockLedgerForLocation, locations, recordDailyMovement, upsertSyncCheckpoint, upsertItemRecord, type LocationRecord, type TransferRecord } from '../lib/repository.js';
+import { createCountAssignment, createTransferRecord, adjustStockLedger, ensureLotRecord, findUserById, listItems, listLocations, locations, recordDailyMovement, upsertSyncCheckpoint, upsertItemRecord, type LocationRecord, type StockLedgerRecord, type TransferRecord } from '../lib/repository.js';
+import { findStockEntry, listStockForLocation } from '../lib/repositories/stock-repository.js';
+import type { TenantContext } from '../lib/tenant-context.js';
+
+/** Service-level stock context for the import planners (company-scoped planning, no user request). */
+function importStockContext(companyId: string): TenantContext {
+  return { companyId, tenantId: DEFAULT_TENANT_ID, userId: 'import-planner', role: 'ADMIN' };
+}
 import { checkApprovalGate } from '../lib/approval-rules.js';
 import { estimateValueAtRisk } from '../lib/exceptions.js';
 import { recordAudit } from '../lib/audit.js';
@@ -58,7 +65,19 @@ function stockUpdateDelta(mode: StockUpdateMode, quantity: number, current: numb
   return delta;
 }
 
-export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMode, companyId: string = DEFAULT_COMPANY_ID) {
+export async function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMode, companyId: string = DEFAULT_COMPANY_ID) {
+  // Phase 5 step 9: "current quantity" comes from the stock repository
+  // (Postgres in database mode), cached per location for the plan — an
+  // import must plan against what the database holds now, not the snapshot.
+  const stockCtx = importStockContext(companyId);
+  const ledgerByLocation = new Map<string, StockLedgerRecord[]>();
+  const ledgerFor = async (locationId: string): Promise<StockLedgerRecord[]> => {
+    const cached = ledgerByLocation.get(locationId);
+    if (cached) return cached;
+    const rows = await listStockForLocation(stockCtx, locationId);
+    ledgerByLocation.set(locationId, rows);
+    return rows;
+  };
   const errors = [...preview.errors];
   const prepared: Array<{ row: StockImportPreview['validRows'][number]; item: ReturnType<typeof listItems>[number]; location: LocationRecord; lotId: string; lotNo: string; expiryDate?: string | null; isNewLot: boolean; isNewItem: boolean; isNewLocation: boolean; currentQty: number; qtyDelta: number; resultingQty: number }> = [];
   // The company's own items and locations only: a file must never match, and then adjust, another company's.
@@ -117,7 +136,7 @@ export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMo
     const lotId = existingLot?.id ?? (mode === 'SET'
       ? stockImportId('lot-erp', `${item.id}|${lotNo}`)
       : `lot-update-${item.id}-${lotNo.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`.slice(0, 190));
-    const currentQty = findStockLedgerEntry(item.id, lotId, location.id)?.onHand ?? 0;
+    const currentQty = (await ledgerFor(location.id)).find((stock) => stock.itemId === item.id && stock.lotId === lotId)?.onHand ?? 0;
     try {
       const qtyDelta = stockUpdateDelta(mode, Number(row.quantity), currentQty);
       prepared.push({ row, item, location, lotId, lotNo, expiryDate: row.expiryDate, isNewLot: !existingLot, isNewItem, isNewLocation, currentQty, qtyDelta, resultingQty: currentQty + qtyDelta });
@@ -126,7 +145,7 @@ export function planStockUpdate(preview: StockImportPreview, mode: StockUpdateMo
   return { errors, prepared, newItems: newItemIds.size, newLocations: newLocationIds.size };
 }
 
-function stockUpdatePreviewResponse(preview: StockImportPreview, plan: ReturnType<typeof planStockUpdate>) {
+function stockUpdatePreviewResponse(preview: StockImportPreview, plan: Awaited<ReturnType<typeof planStockUpdate>>) {
   return { sheetName: preview.sheetName, headerRow: preview.headerRow, totalRows: preview.totalRows, validRows: plan.prepared.length, invalidRows: plan.errors.length, duplicateRows: preview.duplicateRows, newItems: plan.newItems, newLocations: plan.newLocations, branches: preview.branches, errors: plan.errors.slice(0, 100), sample: plan.prepared.slice(0, 20).map((entry) => ({ rowNumber: entry.row.rowNumber, itemCode: entry.item.code, itemName: entry.item.name, locationName: entry.location.name, lotNo: entry.lotNo, currentQty: entry.currentQty, qtyDelta: entry.qtyDelta, resultingQty: entry.resultingQty, willCreateItem: entry.isNewItem, willCreateLocation: entry.isNewLocation })) };
 }
 
@@ -402,7 +421,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     const lotNo = String(req.body.lotNo ?? '').trim() || item.lots[0]?.lotNo || 'LOT-DEFAULT';
     const existingLot = item.lots.find((candidate) => candidate.lotNo.trim().toLowerCase() === lotNo.toLowerCase());
     const lotId = existingLot?.id ?? `lot-update-${item.id}-${lotNo.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`.slice(0, 190);
-    const currentQty = findStockLedgerEntry(item.id, lotId, location.id)?.onHand ?? 0;
+    const currentQty = (await findStockEntry(tenantContext(req), item.id, lotId, location.id))?.onHand ?? 0;
     const qtyDelta = stockUpdateDelta(mode, Number(req.body.quantity), currentQty);
     const requestId = String(req.body.requestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -438,7 +457,7 @@ router.post('/stock-adjustments/import/preview', upload.single('file'), async (r
     const fileHash = computeFileHash(req.file!.buffer);
     const existing = await findDuplicateBatch({ companyId: req.companyId ?? DEFAULT_COMPANY_ID, type: `ADJUSTMENT_${mode}`, fileHash, branchId: null, sourceDateFrom: preview.snapshotAt, sourceDateTo: preview.snapshotAt });
     if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
-    const plan = planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
+    const plan = await planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
     const staged = stageStockAdjustment(preview, plan, mode);
     const batch = await createPreviewBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -466,7 +485,7 @@ router.post('/stock-adjustments/import/commit', upload.single('file'), async (re
   try {
     const mode = validatedStockUpdateMode(req.body.mode);
     const preview = await readUploadedStockFile(req);
-    const plan = planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
+    const plan = await planStockUpdate(preview, mode, req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid rows before confirming.', preview: stockUpdatePreviewResponse(preview, plan) });
     if (mode === 'SET') {
       const result = await persistOpeningStockImport(preview, req.file.originalname, req.user!.id, { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
@@ -561,7 +580,17 @@ function inactiveImportMessage(item: { code: string; status?: string }): string 
   return `Item ${item.code} is ${String(item.status ?? 'inactive').toLowerCase()} and cannot be imported.`;
 }
 
-function planDailyImport(preview: DailyImportPreview, importedBy: string, companyId: string = DEFAULT_COMPANY_ID, destination?: ReturnType<typeof requestedPurchaseDestination>) {
+async function planDailyImport(preview: DailyImportPreview, importedBy: string, companyId: string = DEFAULT_COMPANY_ID, destination?: ReturnType<typeof requestedPurchaseDestination>) {
+  // Phase 5 step 9: sale-lot allocation reads current stock via the repository (cached per location).
+  const stockCtx = importStockContext(companyId);
+  const ledgerByLocation = new Map<string, StockLedgerRecord[]>();
+  const ledgerFor = async (locationId: string): Promise<StockLedgerRecord[]> => {
+    const cached = ledgerByLocation.get(locationId);
+    if (cached) return cached;
+    const rows = await listStockForLocation(stockCtx, locationId);
+    ledgerByLocation.set(locationId, rows);
+    return rows;
+  };
   const errors = [...preview.errors]; const warehouse = destination ?? configuredPurchaseWarehouse(companyId); const prepared: Array<{ row: DailyStockRow; item: ReturnType<typeof listItems>[number]; locationId: string; lotId: string; qtyDelta: number; newLot?: ReturnType<typeof ensureLotRecord> }> = [];
   if (preview.importType === 'PURCHASE' && !warehouse) errors.push({ rowNumber: 0, message: 'Choose where to receive the purchase, or set one warehouse as H.O. Basni.' });
   for (const row of preview.validRows) {
@@ -573,7 +602,7 @@ function planDailyImport(preview: DailyImportPreview, importedBy: string, compan
     if (preview.importType === 'PURCHASE' && !destination && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
     let lot = row.lotNo ? item.lots.find((entry) => normalName(entry.lotNo) === normalName(row.lotNo!)) : undefined;
     if (!lot && row.movementType === 'SALE_OUT') {
-      const available = item.lots.map((entry) => ({ lot: entry, qty: listStockLedgerForLocation(location.id).find((stock) => stock.itemId === item.id && stock.lotId === entry.id)?.onHand ?? 0 })).filter((entry) => entry.qty > 0).sort((a, b) => new Date(a.lot.expiryDate ?? '9999-12-31').getTime() - new Date(b.lot.expiryDate ?? '9999-12-31').getTime());
+      const available = item.lots.map((entry) => ({ lot: entry, qty: (await ledgerFor(location.id)).find((stock) => stock.itemId === item.id && stock.lotId === entry.id)?.onHand ?? 0 })).filter((entry) => entry.qty > 0).sort((a, b) => new Date(a.lot.expiryDate ?? '9999-12-31').getTime() - new Date(b.lot.expiryDate ?? '9999-12-31').getTime());
       let remaining = row.quantity;
       for (const candidate of available) { if (remaining <= 0) break; const quantity = Math.min(remaining, candidate.qty); prepared.push({ row, item, locationId: location.id, lotId: candidate.lot.id, qtyDelta: -quantity }); remaining -= quantity; }
       if (remaining > 0) errors.push({ rowNumber: row.rowNumber, message: `${item.code} has insufficient stock at ${location.name}; ${remaining} cannot be deducted.` });
@@ -809,7 +838,7 @@ async function previewDailyImport(req: Request, res: Response, importType: 'SALE
       sourceDateTo: preview.transactionTo ?? null,
     });
     if (existing) return duplicateFileResponse(res, req.companyId ?? DEFAULT_COMPANY_ID, existing.id);
-    const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
+    const plan = await planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
     const staged = stageDailyImport(preview, plan);
     const batch = await createPreviewBatch({
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -855,7 +884,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
   if (!req.file) return res.status(400).json({ message: 'Select an Excel or CSV file.' });
   try {
     const requestedDestination = importType === 'PURCHASE' ? requestedPurchaseDestination(req.companyId ?? DEFAULT_COMPANY_ID, req.body?.destinationLocationId) : undefined;
-    const warehouse = requestedDestination ?? configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
+    const warehouse = requestedDestination ?? configuredPurchaseWarehouse(req.companyId ?? DEFAULT_COMPANY_ID); const preview = await parseDailyStockImport(req.file.buffer, req.file.originalname, importType, { purchaseLocationName: warehouse?.name ?? 'H.O BASNI', purchaseTime: String(req.body.purchaseTime || '12:00') }, controlPlane.getImportProfile(req.companyId ?? DEFAULT_COMPANY_ID, importType)); const plan = await planDailyImport(preview, req.user!.id, req.companyId ?? DEFAULT_COMPANY_ID, requestedDestination);
     if (plan.errors.length || !plan.prepared.length) return res.status(400).json({ message: 'Fix all invalid or unmapped rows before confirming.', errors: plan.errors.slice(0, 100) });
     const batchId = `imp-${importType.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movements = plan.prepared.map((entry, index) => ({ id: `move-${batchId}-${index}`, dedupeKey: `${entry.row.dedupeKey}|${entry.lotId}`, itemId: entry.item.id, lotId: entry.lotId, locationId: entry.locationId, movementType: entry.row.movementType, qtyDelta: entry.qtyDelta, transactionAt: entry.row.transactionAt, sourceType: importType, sourceReference: entry.row.reference, importBatchId: batchId, createdById: req.user!.id, metadata: { lineNo: entry.row.lineNo, sourceItemName: entry.row.itemName, rate: entry.row.rate, amount: entry.row.amount, timeAssumed: entry.row.timeAssumed, rowSource: entry.row.rowSource } }));
@@ -892,9 +921,9 @@ function exactItemMatch(itemCode: string | undefined, itemName: string | undefin
   return resolveItemByIdentity(itemsForCompany(companyId, listItems()), itemCode ? { code: itemCode } : { name: itemName }).item;
 }
 
-function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
+async function transferImportPlan(preview: Awaited<ReturnType<typeof parseTransferImport>>, sourceLocationId: string, destinationLocationId: string, mergeDuplicates: boolean, companyId: string = DEFAULT_COMPANY_ID) {
   const errors = [...preview.errors];
-  const sourceLedger = listStockLedgerForLocation(sourceLocationId);
+  const sourceLedger = await listStockForLocation(importStockContext(companyId), sourceLocationId);
   const destination = locationsForCompany(companyId, listLocations()).find((location) => location.id === destinationLocationId);
   const rows = mergeDuplicates
     ? [...preview.validRows.reduce((map, row) => {
@@ -947,7 +976,7 @@ router.post('/transfers/import/preview', upload.single('file'), async (req: Requ
   if (!req.file || !req.body.sourceLocationId || !req.body.destinationLocationId) return res.status(400).json({ message: 'File, source and destination are required.' });
   try {
     const preview = await parseTransferImport(req.file.buffer, req.file.originalname);
-    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
+    const plan = await transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
     return res.json({ preview: {
       sheetName: preview.sheetName, headerRow: preview.headerRow, totalRows: preview.totalRows,
       validRows: plan.mapped.length, invalidRows: plan.errors.length, duplicateRows: preview.duplicateRows,
@@ -965,7 +994,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
   if (req.body.sourceLocationId === req.body.destinationLocationId) return res.status(400).json({ message: 'Source and destination must differ.' });
   try {
     const preview = await parseTransferImport(req.file.buffer, req.file.originalname);
-    const plan = transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
+    const plan = await transferImportPlan(preview, req.body.sourceLocationId, req.body.destinationLocationId, req.body.mergeDuplicates !== 'false', req.companyId ?? DEFAULT_COMPANY_ID);
     if (plan.errors.length || !plan.mapped.length) return res.status(400).json({ message: 'Fix all unmapped or insufficient-stock rows before confirming.', errors: plan.errors.slice(0, 100) });
     const transfer: TransferRecord = {
       id: `transfer-${Math.random().toString(36).slice(2, 10)}`,
@@ -988,7 +1017,7 @@ router.post('/transfers/import/commit', upload.single('file'), async (req: Reque
   }
 });
 
-router.post('/stock-takes/preview-by-filters', (req: Request, res: Response) => {
+router.post('/stock-takes/preview-by-filters', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Only admins and branch managers can prepare bulk stock take.' });
   const { locationId, category = 'all', subcategory = 'all', company = 'all', search = '' } = req.body;
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
@@ -997,7 +1026,7 @@ router.post('/stock-takes/preview-by-filters', (req: Request, res: Response) => 
   } catch {
     return res.status(403).json({ message: 'This user cannot prepare a stock take at the selected location.' });
   }
-  const ledger = listStockLedgerForLocation(locationId);
+  const ledger = await listStockForLocation(tenantContext(req), locationId);
   const quantityByItem = new Map<string, number>();
   for (const row of ledger) quantityByItem.set(row.itemId, (quantityByItem.get(row.itemId) ?? 0) + row.onHand);
   // The filter choices and the zero-stock count come from the caller's own company's items only; the process-wide list
@@ -1027,7 +1056,7 @@ router.post('/stock-takes/import/preview', upload.single('file'), async (req: Re
     if (header < 0) throw new Error('Item Code or Item Name header was not found.');
     const normalized = rows[header].map((cell) => String(cell ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ''));
     const codeIndex = normalized.indexOf('itemcode'); const nameIndex = normalized.indexOf('itemname');
-    const ledger = listStockLedgerForLocation(req.body.locationId); const seen = new Set<string>(); const items = []; const errors = [];
+    const ledger = await listStockForLocation(tenantContext(req), req.body.locationId); const seen = new Set<string>(); const items = []; const errors = [];
     for (let index = header + 1; index < rows.length; index += 1) {
       const code = codeIndex >= 0 ? String(rows[index][codeIndex] ?? '').trim() : '';
       const name = nameIndex >= 0 ? String(rows[index][nameIndex] ?? '').trim() : '';
@@ -1065,7 +1094,7 @@ router.post('/stock-takes/bulk-assign', async (req: Request, res: Response) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid assignment payload.' });
   }
-  const ledger = listStockLedgerForLocation(locationId); const deduped = [...new Set(itemIds)]; const excluded = []; const eligible = [];
+  const ledger = await listStockForLocation(tenantContext(req), locationId); const deduped = [...new Set(itemIds)]; const excluded = []; const eligible = [];
   for (const itemId of deduped) {
     const available = ledger.filter((row) => row.itemId === itemId).reduce((sum, row) => sum + row.onHand, 0);
     if (available <= 0 || inactiveItemMessage([itemId])) excluded.push(itemId); else eligible.push(itemId);
