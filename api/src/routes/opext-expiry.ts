@@ -10,7 +10,6 @@ import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
 import { ExpiryWriteOffError, buildLocationExpiryBoard, listLocationExpiryAlerts, writeOffExpiryLot } from '../lib/expiry-lifecycle.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { adjustStockLedger } from '../lib/repository.js';
 import { maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
@@ -167,11 +166,9 @@ router.post('/expiry-write-off', async (req, res) => {
       } });
       return { alertId, movementId: movement.id, quantity, beforeBalance: Number(ledger.onHand), afterBalance };
     });
-    try {
-      adjustStockLedger(itemId, lotId, locationId, -result.quantity);
-    } catch {
-      // Hydrated ledger may not contain this row in isolated API use.
-    }
+    // Phase 5 step 14: the transaction above is the stock write; the
+    // snapshot mirror that used to trail it is retired (stock reads are
+    // database-first now, so nothing consumes the mirrored copy).
     void maybeEmitStockLow(tenantContextOf(req), itemId, locationId, result.beforeBalance);
     return res.json({ success: true, result });
   } catch (error) {
