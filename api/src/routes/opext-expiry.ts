@@ -23,7 +23,7 @@ router.get('/expiry-alerts', async (req, res) => {
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
   if (!canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (!databaseEnabled) {
-    return res.json({ alerts: listLocationExpiryAlerts(locationId) });
+    return res.json({ alerts: await listLocationExpiryAlerts(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
     where: { locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
@@ -61,7 +61,7 @@ router.get('/expiry-board', async (req, res) => {
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
   if (!canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (!databaseEnabled) {
-    return res.json({ board: buildLocationExpiryBoard(locationId) });
+    return res.json({ board: await buildLocationExpiryBoard(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
     where: { locationId, onHand: { gt: 0 } },
@@ -111,7 +111,7 @@ router.post('/expiry-write-off', async (req, res) => {
         entityType: 'ExpiryAlert', entityId: result.alertId,
         metadata: { quantity: result.quantity, beforeBalance: result.beforeBalance, afterBalance: result.afterBalance, movementId: result.movementId, reason, itemId, lotId, locationId },
       }));
-      maybeEmitStockLow(itemId, locationId, result.beforeBalance);
+      void maybeEmitStockLow(tenantContextOf(req), itemId, locationId, result.beforeBalance);
       return res.json({ success: true, result });
     } catch (error) {
       const status = error instanceof ExpiryWriteOffError ? error.status : 400;
@@ -172,7 +172,7 @@ router.post('/expiry-write-off', async (req, res) => {
     } catch {
       // Hydrated ledger may not contain this row in isolated API use.
     }
-    maybeEmitStockLow(itemId, locationId, result.beforeBalance);
+    void maybeEmitStockLow(tenantContextOf(req), itemId, locationId, result.beforeBalance);
     return res.json({ success: true, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Expiry write-off failed.';

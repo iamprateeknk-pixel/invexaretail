@@ -10,11 +10,14 @@ import {
   writeOffExpiryLot,
 } from './expiry-lifecycle.js';
 import { adjustStockLedger, findStockLedgerEntry, updateLotExpiry, updateLotStatus } from './repository.js';
+import type { TenantContext } from './tenant-context.js';
+
+const seedCtx: TenantContext = { companyId: 'default-company', tenantId: 'tenant-invexa', userId: 'user-admin-1', role: 'ADMIN' };
 
 const now = new Date('2026-09-14T12:00:00');
 
-test('expiry board surfaces expired, critical and missing-date lots', () => {
-  const board = buildLocationExpiryBoard('loc-1', now);
+test('expiry board surfaces expired, critical and missing-date lots', async () => {
+  const board = await buildLocationExpiryBoard(seedCtx, 'loc-1', now);
   const horizons = new Map(board.lots.map((lot) => [lot.lotNo, lot.horizon]));
   assert.equal(horizons.get('LOT-EXP'), 'EXPIRED');
   assert.equal(horizons.get('LOT-SOON'), 'CRITICAL');
@@ -24,8 +27,8 @@ test('expiry board surfaces expired, critical and missing-date lots', () => {
   assert.ok(board.summary.criticalLots >= 1);
 });
 
-test('expiry alerts rank soonest dated lots first and skip missing dates', () => {
-  const alerts = listLocationExpiryAlerts('loc-1', now);
+test('expiry alerts rank soonest dated lots first and skip missing dates', async () => {
+  const alerts = await listLocationExpiryAlerts(seedCtx, 'loc-1', now);
   assert.ok(alerts.some((alert) => alert.lot.lotNo === 'LOT-EXP'));
   assert.ok(!alerts.some((alert) => alert.lot.lotNo === 'LOT-ND'));
   assert.ok(alerts[0].daysUntilExpiry <= alerts[alerts.length - 1].daysUntilExpiry);

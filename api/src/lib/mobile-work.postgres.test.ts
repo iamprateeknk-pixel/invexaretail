@@ -58,7 +58,7 @@ integration('count tasks keep only stocked, available lots; receive tasks list o
 
   await hydrateRepositoryFromDatabase();
   const fromDb = await loadMobileWork(tenantOf(a), accessOf(a));
-  const fromSnapshot = loadMobileWorkFromSnapshot(tenantOf(a), accessOf(a));
+  const fromSnapshot = await loadMobileWorkFromSnapshot(tenantOf(a), accessOf(a));
 
   assert.equal(fromDb.countTasks.length, 1, 'the unstocked item is dropped');
   assert.deepEqual(fromDb.countTasks[0].lots.map((lot) => lot.lotNo), ['STOCKED'], 'empty and blocked lots are dropped');
