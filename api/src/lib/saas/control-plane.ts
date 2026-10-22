@@ -8,6 +8,7 @@ import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, DEFAULT_TABLE_COLUMN
 import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
 import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
 import { ControlPlaneBilling } from './control-plane-billing.js';
+import { ControlPlaneIntegrations } from './control-plane-integrations.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -387,10 +388,12 @@ export class ControlPlane {
 
   readonly store: ControlPlaneStore;
   private readonly billingSvc: ControlPlaneBilling;
+  private readonly integrationsSvc: ControlPlaneIntegrations;
 
   constructor() {
     this.store = createControlPlaneStore(this);
     this.billingSvc = new ControlPlaneBilling(this.store, this);
+    this.integrationsSvc = new ControlPlaneIntegrations(this.store, this);
     this.seed();
   }
 
@@ -1567,198 +1570,47 @@ export class ControlPlane {
   }
 
   createApiKey(scope: ScopeContext, name: string, scopes: string[]): { id: string; token: string; prefix: string } {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertFeature(companyId, 'INTEGRATIONS');
-    this.assertFeature(companyId, 'api_access');
-    const token = `invx_${randomBytes(16).toString('hex')}`;
-    const id = randomUUID();
-    const prefix = token.slice(0, 12);
-    this.apiKeys.set(id, {
-      id,
-      companyId,
-      name,
-      prefix,
-      hash: createHmac('sha256', jwtSecret()).update(token).digest('hex'),
-      scopes,
-      status: 'active',
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_CREATED',
-      entityType: 'api_key',
-      entityId: id,
-      before: null,
-      after: { prefix, scopes },
-    });
-    return { id, token, prefix };
+    return this.integrationsSvc.createApiKey(scope, name, scopes);
   }
 
   verifyApiKey(token: string): PublicApiKey | null {
-    if (!token.startsWith('invx_')) return null;
-    const expected = createHmac('sha256', jwtSecret()).update(token).digest('hex');
-    let matched: { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' } | null = null;
-    for (const key of this.apiKeys.values()) {
-      if (key.hash.length !== expected.length || !timingSafeEqual(key.hash, expected)) continue;
-      matched = key;
-      break;
-    }
-    if (!matched) return null;
-    if (matched.status !== 'active') {
-      throw new ControlPlaneError('API key is revoked', 'API_KEY_REVOKED', 401);
-    }
-    if (!this.isFeatureEnabled(matched.companyId, 'INTEGRATIONS') || !this.isFeatureEnabled(matched.companyId, 'api_access')) {
-      throw new ControlPlaneError('Feature is not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
-    const { hash: _hash, ...publicKey } = matched;
-    return publicKey;
+    return this.integrationsSvc.verifyApiKey(token);
   }
 
   revokeApiKey(scope: ScopeContext, keyId: string): PublicApiKey {
-    const companyId = this.requireLockedCompany(scope);
-    const key = this.apiKeys.get(keyId);
-    if (!key || key.companyId !== companyId) {
-      throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
-    }
-    key.status = 'revoked';
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_REVOKED',
-      entityType: 'api_key',
-      entityId: key.id,
-      before: { status: 'active' },
-      after: { status: 'revoked' },
-    });
-    const { hash: _hash, ...publicKey } = key;
-    return publicKey;
+    return this.integrationsSvc.revokeApiKey(scope, keyId);
   }
-
-  /**
-   * Issues a replacement key with the same name and scopes and revokes the old
-   * one in a single step, so a leaked or aging key can be replaced without a gap
-   * in which two keys are valid. The new token is returned once and never again;
-   * the audit record names both key ids, never a token.
-   */
   rotateApiKey(scope: ScopeContext, keyId: string): { id: string; token: string; prefix: string; rotatedFrom: string } {
-    const companyId = this.requireLockedCompany(scope);
-    const old = this.apiKeys.get(keyId);
-    if (!old || old.companyId !== companyId) {
-      throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
-    }
-    if (old.status !== 'active') {
-      throw new ControlPlaneError('Only an active API key can be rotated', 'API_KEY_REVOKED', 409);
-    }
-    const created = this.createApiKey(scope, old.name, [...old.scopes]);
-    old.status = 'revoked';
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_ROTATED',
-      entityType: 'api_key',
-      entityId: old.id,
-      before: { status: 'active' },
-      after: { status: 'revoked', replacedBy: created.id },
-    });
-    return { ...created, rotatedFrom: old.id };
+    return this.integrationsSvc.rotateApiKey(scope, keyId);
   }
 
   createWebhook(scope: ScopeContext, url: string, events: string[], name = 'Ops webhook'): { id: string; signingSecret: string; name: string; url: string; events: string[] } {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertFeature(companyId, 'INTEGRATIONS');
-    const parsedEvents = parseWebhookEvents(events);
-    const parsedUrl = parseWebhookEndpoint(url);
-    const id = randomUUID();
-    const signingSecret = randomBytes(32).toString('hex');
-    this.webhooks.set(id, {
-      id,
-      companyId,
-      name: parseWebhookName(name),
-      url: parsedUrl.toString(),
-      events: parsedEvents,
-      status: 'active',
-      signingSecret,
-      createdAt: nowIso(),
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'WEBHOOK_CREATED',
-      entityType: 'webhook',
-      entityId: id,
-      before: null,
-      after: { url: parsedUrl.toString(), events: parsedEvents },
-    });
-    return { id, signingSecret, name: parseWebhookName(name), url: parsedUrl.toString(), events: parsedEvents };
+    return this.integrationsSvc.createWebhook(scope, url, events, name);
   }
 
   publicWebhooks(companyId: string): PublicControlPlaneWebhook[] {
-    return [...this.webhooks.values()]
-      .filter((hook) => hook.companyId === companyId)
-      .map(({ signingSecret: _secret, ...hook }) => hook);
+    return this.integrationsSvc.publicWebhooks(companyId);
   }
 
   upsertConnector(scope: ScopeContext, type: string, status: 'healthy' | 'degraded' | 'down' = 'healthy'): { id: string } {
-    const companyId = this.requireLockedCompany(scope);
-    const id = randomUUID();
-    this.connectors.set(id, { id, companyId, type, status });
-    return { id };
+    return this.integrationsSvc.upsertConnector(scope, type, status);
   }
 
   recordUsage(companyId: string, meter: string, increment = 1): void {
-    const usage = this.usage.get(companyId) ?? {};
-    usage[meter] = (usage[meter] ?? 0) + increment;
-    this.usage.set(companyId, usage);
+    this.integrationsSvc.recordUsage(companyId, meter, increment);
   }
 
   health() {
-    return {
-      ok: true,
-      service: 'invexa-control-plane',
-      persistence: 'snapshot',
-      companies: this.companies.size,
-      sessions: [...this.sessions.values()].filter((session) => session.status === 'active').length,
-      queueLag: this.outbox.length,
-      syncPending: [...this.mutations.values()].filter((mutation) => mutation.status === 'pending_sync' || mutation.status === 'retry_scheduled').length,
-      pastDueCompanies: [...this.billing.entries()].filter(([, billing]) => billing.subscription === 'past_due').map(([companyId]) => companyId),
-      suspendedCompanies: [...this.companies.values()].filter((company) => company.status === 'suspended').map((company) => company.id),
-      killSwitches: Object.fromEntries(this.safety.entries()),
-    };
+    return this.integrationsSvc.health();
   }
 
   billingSnapshot(companyId: string) {
-    return {
-      companyId,
-      planId: this.requireCompany(companyId).planId,
-      billing: this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 },
-      usage: this.usage.get(companyId) ?? {},
-      limits: this.effectiveLimits(companyId),
-      invoices: this.listInvoices(companyId),
-    };
+    return this.integrationsSvc.billingSnapshot(companyId);
   }
 
   publicCompany(company: CompanyRecord) {
-    return {
-      ...company,
-      planId: company.planId,
-      entitlements: this.entitlements.get(company.id) ?? {},
-      limits: this.effectiveLimits(company.id),
-      usage: this.usage.get(company.id) ?? {},
-    };
+    return this.integrationsSvc.publicCompany(company);
   }
-}
 
 export const controlPlane = new ControlPlane();
 export { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY, signControlToken, verifyControlToken };
