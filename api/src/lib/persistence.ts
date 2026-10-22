@@ -70,20 +70,6 @@ export async function authenticateUser(email: string, password: string, requeste
   };
 }
 
-export type PersistedStockRow = {
-  itemId: string;
-  lotId: string;
-  locationId: string;
-  bookQuantity: number;
-  physicalQuantity: number;
-  variance: number;
-  stockValue: number;
-  quarantineQuantity: number;
-  damagedQuantity: number;
-  reservedQuantity: number;
-  availableQuantity: number;
-};
-
 function requireDatabase(): void {
   if (!databaseEnabled) {
     throw new Error('Database persistence is disabled. Set DATABASE_URL to the Postgres database.');
@@ -666,25 +652,6 @@ export async function persistCount(count: CountRecord, companyId: string): Promi
       companyId,
     } as never,
   });
-}
-
-export async function listStockFromDatabase(locationId: string): Promise<PersistedStockRow[]> {
-  requireDatabase();
-  const rows = await prisma.stockLedger.findMany({ where: { locationId } });
-  return rows.map((row) => ({
-    itemId: row.itemId,
-    lotId: row.lotId,
-    locationId: row.locationId,
-    bookQuantity: Number(row.onHand),
-    physicalQuantity: Number(row.onHand),
-    variance: 0,
-    stockValue: 0,
-    quarantineQuantity: Number(row.quarantine),
-    damagedQuantity: Number(row.damaged),
-    reservedQuantity: Number(row.reserved),
-    // Blueprint §7.2: "Available = On Hand - Reserved."
-    availableQuantity: Math.max(0, Number(row.onHand) - Number(row.reserved)),
-  }));
 }
 
 /**

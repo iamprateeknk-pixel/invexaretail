@@ -15,9 +15,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prisma } from '../lib/db.js';
-import { hydrateRepositoryFromDatabase, listStockFromDatabase } from '../lib/persistence.js';
+import { hydrateRepositoryFromDatabase } from '../lib/persistence.js';
 import { findStockLedgerEntry, listStockLedger, listStockLedgerForLocation } from '../lib/repository.js';
-import { canonicalLedgerRows, diffJson, seedStockParityFixture, type StockParityFixture } from '../lib/repositories/stock-parity-harness.js';
+import { canonicalLedgerRows, diffJson, seedStockParityFixture, stockParityCtx, type StockParityFixture } from '../lib/repositories/stock-parity-harness.js';
+import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -37,8 +38,23 @@ integration('step 0 fixture seeds (shared by every Phase 5 stock suite)', async 
   assert.equal(rows.length, 4);
 });
 
-integration('GET /stock/:locationId DB branch: listStockFromDatabase returns the pinned row shape', async () => {
-  const rows = await listStockFromDatabase(fixture.locationA);
+integration('GET /stock/:locationId: the repository rows map to the pinned response shape (route field mapping, step 2)', async () => {
+  // The route maps stock-repository records through exactly this field
+  // mapping; pinning it here keeps the response contract under test at the
+  // layer the Postgres suites can reach.
+  const rows = (await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA)).map((row) => ({
+    itemId: row.itemId,
+    lotId: row.lotId,
+    locationId: row.locationId,
+    bookQuantity: row.onHand,
+    physicalQuantity: row.onHand,
+    variance: 0,
+    stockValue: 0,
+    quarantineQuantity: row.quarantine,
+    damagedQuantity: row.damaged ?? 0,
+    reservedQuantity: row.reserved ?? 0,
+    availableQuantity: Math.max(0, row.onHand - (row.reserved ?? 0)),
+  }));
   const sorted = [...rows].sort((a, b) => a.itemId.localeCompare(b.itemId));
   assert.deepEqual(sorted, [
     {
@@ -56,15 +72,18 @@ integration('GET /stock/:locationId DB branch: listStockFromDatabase returns the
   ]);
 });
 
-integration('KNOWN-DIVERGENCE (plan §2.5a): listStockFromDatabase takes no company — the query is not tenant-scoped', async () => {
-  // The only thing standing between companies today is the route's
-  // canAccessLocation check over the in-memory ownership map. Phase 5 step 2
-  // deletes this function and routes GET /stock through the tenant-scoped
-  // stock repository; this pin is removed in that commit.
-  const foreign = await listStockFromDatabase(fixture.locationB);
-  assert.equal(foreign.length, 1);
-  assert.equal(foreign[0].itemId, fixture.itemB1);
-  assert.equal(foreign[0].reservedQuantity, 1);
+integration('plan §2.5a FIXED at step 2: the stock read behind GET /stock is tenant-scoped in the query itself', async () => {
+  // Was a KNOWN-DIVERGENCE pin at step 0: listStockFromDatabase filtered by
+  // location alone and the only barrier between companies was the route's
+  // canAccessLocation check over the in-memory ownership map. That function
+  // is deleted; the route now reads through listStockForLocation, whose
+  // query carries the caller's companyId.
+  assert.deepEqual(await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationB), []);
+  assert.deepEqual(await listStockForLocation(stockParityCtx(fixture.companyB), fixture.locationA), []);
+  const own = await listStockForLocation(stockParityCtx(fixture.companyB), fixture.locationB);
+  assert.equal(own.length, 1);
+  assert.equal(own[0].itemId, fixture.itemB1);
+  assert.equal(own[0].reserved, 1);
 });
 
 integration('plan §2.5c FIXED at step 1: the hydrated snapshot now carries reserved/inTransit/damaged via the shared mapper', async () => {
