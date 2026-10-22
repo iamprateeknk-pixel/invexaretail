@@ -15,7 +15,7 @@ import { getActiveWorkflow, getIndustryPack, isSerialFieldName } from '../lib/in
 import { respondWhenMemoryUnavailable } from '../lib/memory-mode.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { listReorderRules, upsertReorderRule, validateReorderQuantities } from '../lib/reorder-store.js';
-import { adjustQuarantineLedger, adjustStockLedger, ensureLotRecord, listItems } from '../lib/repository.js';
+import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { emitWebhookEvent } from '../lib/webhook-dispatcher.js';
 import { allocateLandedCost, type LandedCostMethod } from '../lib/landed-cost.js';
 import { computeVendorScore, computePriceVariance, supplierLeadTimeStats } from '../lib/vendor-score.js';
@@ -648,8 +648,6 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     } catch {
       // Item may not be in the in-memory catalogue during isolated tests.
     }
-    if (receipt.quantity > 0) adjustStockLedger(receipt.itemId, receipt.lotId, order.locationId, receipt.quantity);
-    if (receipt.quarantined > 0) adjustQuarantineLedger(receipt.itemId, receipt.lotId, order.locationId, receipt.quarantined);
   }
   // Damage and excess are cases to resolve, not silent balance changes (blueprint §26).
   for (const posting of postings) {
