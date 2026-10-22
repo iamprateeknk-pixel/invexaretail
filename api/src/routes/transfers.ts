@@ -544,7 +544,11 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
 
   try {
     await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
-    for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
+    // Phase 5 step 14: in database mode the canonical posting inside
+    // persistConfirmedPickAllocations is the stock write — the snapshot
+    // mirror that used to follow it is retired. Memory mode (where the
+    // persist call no-ops) still writes the snapshot directly.
+    if (!databaseEnabled) for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
     const updated = updateTransferStatus(transfer.id, 'CONFIRMED');
     // Stock has just physically left the source (decremented above); the
     // request-time reservation for this transfer's full original quantity
@@ -707,11 +711,11 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
         itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
         receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
       })));
-      if (!persisted.duplicate) for (const line of receiptLines) {
-        if (line.receivedQty > 0) adjustStockLedger(line.itemId, line.lotId, transfer.destinationLocationId, line.receivedQty);
-        if (line.damagedQty > 0) adjustQuarantineLedger(line.itemId, line.lotId, transfer.destinationLocationId, line.damagedQty);
-        if (Number(line.excessQty ?? 0) > 0) adjustQuarantineLedger(line.itemId, line.lotId, transfer.destinationLocationId, Number(line.excessQty));
-      }
+      // Phase 5 step 14: this branch runs only when the receipt was
+      // persisted (database mode) — the canonical posting inside
+      // persistTransferReceipt already moved the stock, so the snapshot
+      // mirror writes that used to run here are retired. (The else branch
+      // below is the memory-mode flow and still writes the snapshot.)
     } else {
       summary = validateReceiptLines(transfer.lines, receiptLines);
       status = summary.complete && !summary.hasDiscrepancy ? 'RECEIVED' : 'PARTIAL_RECEIVED';
