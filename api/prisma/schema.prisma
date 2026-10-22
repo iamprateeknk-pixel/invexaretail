@@ -261,7 +261,6 @@ model Location {
   updatedAt             DateTime @updatedAt
 
   stock                 StockLedger[]
-  stockBalance          StockBalance[]
   counts                StockCount[]
   transfers             Transfer[] @relation("TransferLocation")
   countAssignments      CountAssignment[]
@@ -749,7 +748,6 @@ model Item {
 
   lots                    Lot[]
   stock                   StockLedger[]
-  stockBalance            StockBalance[]
   counts                  StockCount[]
   transferLines           TransferLine[]
   countAssignments        CountAssignment[]
@@ -799,7 +797,6 @@ model Lot {
   updatedAt  DateTime @updatedAt
 
   stock                   StockLedger[]
-  stockBalance            StockBalance[]
   counts                  StockCount[]
   transfers               TransferLine[]
   openingSnapshots        OpeningStockSnapshot[]
@@ -1678,29 +1675,6 @@ model StockMovement {
   @@index([timestamp])
 }
 
-model StockBalance {
-  id              String   @id @default(cuid())
-  itemId          String
-  item            Item     @relation(fields: [itemId], references: [id])
-  lotId           String?
-  lot             Lot?     @relation(fields: [lotId], references: [id])
-  locationId      String
-  location        Location @relation(fields: [locationId], references: [id])
-  onHand          Decimal    @default(0) @db.Decimal(18, 3)
-  reserved        Decimal    @default(0) @db.Decimal(18, 3)
-  inTransit       Decimal    @default(0) @db.Decimal(18, 3)
-  available       Decimal    @default(0) @db.Decimal(18, 3)
-  version         Int      @default(0)
-  lastPostedAt    DateTime @updatedAt
-  tenantId    String   @default("tenant-invexa")
-  companyId       String
-  @@index([tenantId])
-  @@index([companyId])
-
-
-  @@unique([itemId, lotId, locationId])
-  @@index([locationId, available])
-}
 
 // RBAC: Permission & Role Configuration
 model Permission {
