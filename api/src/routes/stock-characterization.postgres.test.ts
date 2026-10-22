@@ -18,7 +18,7 @@ import { prisma } from '../lib/db.js';
 import { hydrateRepositoryFromDatabase } from '../lib/persistence.js';
 import { findStockLedgerEntry, listStockLedger, listStockLedgerForLocation } from '../lib/repository.js';
 import { canonicalLedgerRows, diffJson, seedStockParityFixture, stockParityCtx, type StockParityFixture } from '../lib/repositories/stock-parity-harness.js';
-import { listStockForLocation } from '../lib/repositories/stock-repository.js';
+import { listBinStockForLocation, listStockForLocation } from '../lib/repositories/stock-repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -119,22 +119,22 @@ integration('snapshot stock inputs for /dashboard, /expiry-dashboard, /intellige
   ]);
 });
 
-integration('KNOWN-DIVERGENCE (plan §2.5b): bin-stock GET fallback precondition — a stocked location with zero BinStock rows is served from memory in DB mode today', async () => {
+integration('plan §2.5b FIXED at step 3: a stocked location with zero BinStock rows now answers [] in DB mode — no memory fallback, no seeding', async () => {
   await hydrateRepositoryFromDatabase();
-  // The DB side of the precondition: no BinStock rows at locationA2…
+  // The precondition is unchanged: no BinStock rows at locationA2, while
+  // the snapshot still holds onHand 6 there.
   const binRows = await prisma.binStock.findMany({ where: { companyId: fixture.companyA, locationId: fixture.locationA2 } });
   assert.deepEqual(binRows, []);
-  // …while the snapshot holds onHand 6 there — exactly what the handler's
-  // serializeMemory() seeds into the staging bin inside the GET today.
-  // Phase 5 step 3 removes the DB-mode fallback; an empty BinStock then
-  // answers { bins: [] } and this pin is flipped in that commit.
   const seedRows = listStockLedgerForLocation(fixture.locationA2).filter((row) => row.onHand > 0);
-  assert.deepEqual(seedRows.map((row) => ({ itemId: row.itemId, lotId: row.lotId, onHand: row.onHand })), [
-    { itemId: fixture.itemA1, lotId: fixture.lotA1, onHand: 6 },
-  ]);
-  // And the populated location's DB branch input, pinned for step 3's repository function.
-  const populated = await prisma.binStock.findMany({ where: { companyId: fixture.companyA, locationId: fixture.locationA, onHand: { gt: 0 } } });
+  assert.equal(seedRows.length, 1);
+  // Was a KNOWN-DIVERGENCE pin at step 0: the handler's serializeMemory()
+  // seeded those snapshot rows into the staging bin inside the GET and
+  // served them as if they were bin stock. The route's database branch is
+  // now exactly this repository read, so the GET answers { bins: [] }.
+  assert.deepEqual(await listBinStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA2), []);
+  // And the populated location still serves its real bin rows.
+  const populated = await listBinStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA);
   assert.equal(populated.length, 1);
   assert.equal(populated[0].binId, fixture.binA);
-  assert.equal(Number(populated[0].onHand), 10);
+  assert.equal(populated[0].onHand, 10);
 });
