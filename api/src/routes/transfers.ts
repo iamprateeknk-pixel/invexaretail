@@ -30,7 +30,8 @@ import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
 import { savedPickSlips } from '../lib/transfer-pick-slips.js';
-import { listStockLedgerForLocation, adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger, listTransfers } from '../lib/repository.js';
+import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger, listTransfers } from '../lib/repository.js';
+import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { isPooledPick, allocatePick, isPickableLot } from '../lib/kg-pick.js';
 import { validatePickInput, PICK_EXCEPTION_REASONS } from '../lib/warehouse-workflow.js';
 import { createExceptionCase, estimateValueAtRisk } from '../lib/exceptions.js';
@@ -335,7 +336,8 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker access denied.' });
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
-  const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
+  // Phase 5 step 6: picker-facing stock reads are DB-first (stock repository).
+  const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
   const itemsById = new Map(listItems().map((item) => [item.id, item]));
   const slips = await savedPickSlips(transferId);
   const picked = new Map<string, number>();
@@ -361,7 +363,7 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
 });
 
 // Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
-async function pooledPickState(transfer: TransferRecord, itemId: string) {
+async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, itemId: string) {
   const item = listItems().find((candidate) => candidate.id === itemId);
   if (!item) throw new Error('Item was not found.');
   if (!isPooledPick(item)) throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
@@ -373,7 +375,7 @@ async function pooledPickState(transfer: TransferRecord, itemId: string) {
     if (line.itemId === itemId) pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
   }
   const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
-  const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
+  const ledger = await listStockForLocation(ctx, transfer.sourceLocationId);
   const lots = item.lots.map((lot) => ({
     lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
     available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
@@ -388,7 +390,7 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
   try {
     const quantity = Number(req.body?.quantity);
-    const state = await pooledPickState(transfer, String(req.body?.itemId ?? ''));
+    const state = await pooledPickState(tenantContext(req), transfer, String(req.body?.itemId ?? ''));
     if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8) throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
     const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
     return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
@@ -415,7 +417,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
   if (!lines.length && !exceptions.length) return res.status(400).json({ message: 'At least one picked line or exception is required.' });
   const itemMap = new Map(listItems().map((item) => [item.id, item]));
-  const ledger = listStockLedgerForLocation(transfer.sourceLocationId);
+  const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
   const priorPicked = new Map<string, number>();
   for (const slip of prior) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`; priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
@@ -426,7 +428,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     for (const line of lines) {
       const item = itemMap.get(line.itemId);
       if (item && isPooledPick(item) && !line.lotId) {
-        const state = await pooledPickState(transfer, line.itemId);
+        const state = await pooledPickState(tenantContext(req), transfer, line.itemId);
         const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
         const { allocations, shortfall } = allocatePick({
           requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
