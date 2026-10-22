@@ -6,6 +6,8 @@ import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, DEFAULT_TABLE_COLUMNS, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
 import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
+import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
+import { ControlPlaneBilling } from './control-plane-billing.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -289,7 +291,7 @@ export type ControlTokenPayload = {
   tokenType: 'access' | 'refresh';
 };
 
-function nowIso(): string {
+export function nowIso(): string {
   return new Date().toISOString();
 }
 
@@ -383,7 +385,12 @@ export class ControlPlane {
   seedPassword = process.env.SEED_PASSWORD ?? 'ChangeMe123!';
   private seedPasswordHash = hashPassword(this.seedPassword);
 
+  readonly store: ControlPlaneStore;
+  private readonly billingSvc: ControlPlaneBilling;
+
   constructor() {
+    this.store = createControlPlaneStore(this);
+    this.billingSvc = new ControlPlaneBilling(this.store, this);
     this.seed();
   }
 
@@ -803,306 +810,67 @@ export class ControlPlane {
   }
 
   listPlans(): PlanTemplate[] {
-    return [...this.plans.values()].map((plan) => ({ ...plan, limits: { ...plan.limits }, modules: { ...plan.modules } }));
+    return this.billingSvc.listPlans();
   }
 
   createCompany(scope: ScopeContext, input: { name: string; planId: string; adminEmail: string; adminName: string }): { company: CompanyRecord; temporaryPassword: string } {
-    if (scope.sessionType !== 'platform' || scope.companyId) {
-      throw new ControlPlaneError('Unlocked platform session required to create companies', 'SESSION_REQUIRED', 401);
-    }
-    const name = input.name.trim();
-    const adminEmail = input.adminEmail.trim().toLowerCase();
-    const adminName = input.adminName.trim() || 'Company Admin';
-    if (name.length < 2) throw new ControlPlaneError('Company name is required', 'INVALID_COMPANY_NAME', 400);
-    if (!adminEmail.includes('@')) throw new ControlPlaneError('Admin email is required', 'INVALID_EMAIL', 400);
-    if ([...this.companyUsers.values()].some((user) => user.email === adminEmail)) {
-      throw new ControlPlaneError('Email already in use', 'EMAIL_IN_USE', 409);
-    }
-    const plan = this.plans.get(input.planId);
-    if (!plan) throw new ControlPlaneError('Unknown plan', 'PLAN_NOT_FOUND', 404);
-    const id = `company-${randomBytes(4).toString('hex')}`;
-    const adminId = `user-${randomBytes(4).toString('hex')}`;
-    const temporaryPassword = `Invexa${randomBytes(3).toString('hex')}9A`;
-    const company: CompanyRecord = {
-      id,
-      tenantId: this.tenantId,
-      name,
-      status: 'active',
-      planId: input.planId,
-      primaryAdminId: adminId,
-      createdAt: nowIso(),
-    };
-    this.companies.set(id, company);
-    this.companyUsers.set(adminId, {
-      id: adminId,
-      companyId: id,
-      email: adminEmail,
-      name: adminName,
-      role: 'ADMIN',
-      status: 'active',
-      passwordHash: hashPassword(temporaryPassword),
-      isPrimaryAdmin: true,
-      createdAt: nowIso(),
-    });
-    this.entitlements.set(id, { ...plan.modules });
-    this.usage.set(id, { users: 1, company_admins: 1, api_requests: 0 });
-    const published = this.blankConfig(id, scope.actorId, 1, 'published');
-    this.published.set(id, published);
-    this.versions.set(id, [published]);
-    this.billing.set(id, {
-      subscription: PLAN_PRICES[input.planId] > 0 ? 'active' : 'trial',
-      cycle: 'monthly',
-      amount: PLAN_PRICES[input.planId] ?? 0,
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId: id,
-      sessionId: scope.companySessionId,
-      action: 'COMPANY_CREATED',
-      entityType: 'company',
-      entityId: id,
-      before: null,
-      after: company,
-    });
-    return { company, temporaryPassword };
+    return this.billingSvc.createCompany(scope, input);
   }
 
   setCompanyStatus(scope: ScopeContext, companyId: string, status: CompanyStatus, reason: string): CompanyRecord {
-    if (scope.sessionType !== 'platform' || scope.companyId) {
-      this.assertCompanyScope(scope, companyId);
-    }
-    const company = this.requireCompany(companyId);
-    const before = company.status;
-    company.status = status;
-    if (status === 'suspended') {
-      for (const session of this.sessions.values()) {
-        if (session.companyId === companyId && session.status === 'active') {
-          session.status = 'closed';
-        }
-      }
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: company.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: status === 'suspended' ? 'COMPANY_SUSPENDED' : 'COMPANY_ACTIVATED',
-      entityType: 'company',
-      entityId: companyId,
-      before: { status: before },
-      after: { status },
-      reason,
-    });
-    return company;
+    return this.billingSvc.setCompanyStatus(scope, companyId, status, reason);
   }
 
   assignPlan(scope: ScopeContext, companyId: string, planId: string, reason: string): { company: CompanyRecord; downgradePolicy?: string } {
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, companyId);
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(planId);
-    if (!plan) throw new ControlPlaneError('Unknown plan', 'PLAN_NOT_FOUND', 404);
-    const previous = company.planId;
-    company.planId = planId;
-    const current = this.entitlements.get(companyId) ?? {};
-    this.entitlements.set(companyId, { ...plan.modules });
-    const billing = this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 };
-    billing.amount = PLAN_PRICES[planId] ?? billing.amount;
-    if (billing.amount > 0 && billing.subscription === 'trial') billing.subscription = 'active';
-    this.billing.set(companyId, billing);
-    const usage = this.usage.get(companyId) ?? {};
-    let downgradePolicy: string | undefined;
-    if ((usage.users ?? 0) > plan.limits.max_users) {
-      downgradePolicy = 'block_new_creation';
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: company.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'PLAN_ASSIGNED',
-      entityType: 'company',
-      entityId: companyId,
-      before: { planId: previous, entitlements: current },
-      after: { planId, entitlements: this.entitlements.get(companyId), downgradePolicy },
-      reason,
-    });
-    return { company, downgradePolicy };
+    return this.billingSvc.assignPlan(scope, companyId, planId, reason);
   }
 
   overrideEntitlement(scope: ScopeContext, companyId: string, featureKey: string, enabled: boolean, reason: string): void {
-    const overrides = this.entitlementOverrides(companyId);
-    overrides[featureKey] = enabled;
-    this.limitOverrides.set(companyId, { ...this.limitOverrides.get(companyId) });
-    this.entitlements.set(companyId, { ...(this.entitlements.get(companyId) ?? {}), [featureKey]: enabled });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'ENTITLEMENT_OVERRIDE',
-      entityType: 'entitlement',
-      entityId: featureKey,
-      before: null,
-      after: { enabled },
-      reason,
-    });
+    this.billingSvc.overrideEntitlement(scope, companyId, featureKey, enabled, reason);
   }
 
   private entitlementOverrides(companyId: string): Record<string, boolean> {
-    const record = this.entitlements.get(companyId) ?? {};
-    return { ...record };
+    return this.billingSvc.entitlementOverrides(companyId);
   }
 
   effectiveLimits(companyId: string): Record<string, number> {
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(company.planId)!;
-    return { ...plan.limits, ...(this.limitOverrides.get(companyId) ?? {}) };
+    return this.billingSvc.effectiveLimits(companyId);
   }
 
   isFeatureEnabled(companyId: string, featureKey: string): boolean {
-    if (this.safety.get(featureKey) === false) return false;
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(company.planId)!;
-    const fromPlan = plan.modules[featureKey] ?? plan.capabilities[featureKey] ?? false;
-    const companyValue = this.entitlements.get(companyId)?.[featureKey];
-    if (this.safety.get(featureKey) === false) return false;
-    return companyValue ?? fromPlan;
+    return this.billingSvc.isFeatureEnabled(companyId, featureKey);
   }
 
   assertFeature(companyId: string, featureKey: string): void {
-    if (this.safety.get(featureKey) === false) {
-      throw new ControlPlaneError(`${featureKey} is disabled by a platform kill switch`, 'KILL_SWITCH', 403);
-    }
-    if (!this.isFeatureEnabled(companyId, featureKey)) {
-      throw new ControlPlaneError('Feature is not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
+    this.billingSvc.assertFeature(companyId, featureKey);
   }
 
   assertLimit(companyId: string, limitKey: string, nextCount: number): void {
-    const limits = this.effectiveLimits(companyId);
-    const max = limits[limitKey];
-    if (typeof max === 'number' && nextCount > max) {
-      throw new ControlPlaneError(`Plan limit reached for ${limitKey}`, 'PLAN_LIMIT_REACHED', 403);
-    }
+    this.billingSvc.assertLimit(companyId, limitKey, nextCount);
   }
 
   assertBillingWritable(companyId: string): void {
-    const company = this.requireCompany(companyId);
-    if (company.status === 'suspended') {
-      throw new ControlPlaneError('Company is suspended', 'COMPANY_SUSPENDED', 403);
-    }
-    if (this.billing.get(companyId)?.subscription === 'past_due') {
-      throw new ControlPlaneError('Billing is past due; mutating control-plane actions are on hold', 'BILLING_HOLD', 402);
-    }
+    this.billingSvc.assertBillingWritable(companyId);
   }
 
   issueInvoice(scope: ScopeContext, companyId: string): BillingInvoice {
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, companyId);
-    const billing = this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 };
-    const invoice: BillingInvoice = {
-      id: randomUUID(),
-      companyId,
-      amount: billing.amount,
-      cycle: billing.cycle,
-      status: 'open',
-      issuedAt: nowIso(),
-      paidAt: null,
-    };
-    this.invoices.set(invoice.id, invoice);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_ISSUED',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: null,
-      after: { amount: invoice.amount, status: invoice.status },
-    });
-    return invoice;
+    return this.billingSvc.issueInvoice(scope, companyId);
   }
 
   payInvoice(scope: ScopeContext, invoiceId: string): BillingInvoice {
-    const invoice = this.invoices.get(invoiceId);
-    if (!invoice) throw new ControlPlaneError('Invoice not found', 'INVOICE_NOT_FOUND', 404);
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, invoice.companyId);
-    if (invoice.status === 'paid') return invoice;
-    invoice.status = 'paid';
-    invoice.paidAt = nowIso();
-    const remainingPastDue = [...this.invoices.values()].some(
-      (entry) =>
-        entry.companyId === invoice.companyId
-        && entry.id !== invoice.id
-        && entry.status === 'past_due',
-    );
-    const billing = this.billing.get(invoice.companyId);
-    if (billing && !remainingPastDue) {
-      billing.subscription = billing.amount > 0 ? 'active' : 'trial';
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId: invoice.companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_PAID',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: { status: 'open' },
-      after: { status: 'paid' },
-    });
-    return invoice;
+    return this.billingSvc.payInvoice(scope, invoiceId);
   }
 
   markInvoicePastDue(scope: ScopeContext, invoiceId: string): BillingInvoice {
-    const invoice = this.invoices.get(invoiceId);
-    if (!invoice) throw new ControlPlaneError('Invoice not found', 'INVOICE_NOT_FOUND', 404);
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, invoice.companyId);
-    invoice.status = 'past_due';
-    const billing = this.billing.get(invoice.companyId) ?? { subscription: 'past_due', cycle: invoice.cycle, amount: invoice.amount };
-    billing.subscription = 'past_due';
-    this.billing.set(invoice.companyId, billing);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId: invoice.companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_PAST_DUE',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: null,
-      after: { status: 'past_due' },
-    });
-    return invoice;
+    return this.billingSvc.markInvoicePastDue(scope, invoiceId);
   }
 
   listInvoices(companyId: string): BillingInvoice[] {
-    return [...this.invoices.values()].filter((invoice) => invoice.companyId === companyId);
+    return this.billingSvc.listInvoices(companyId);
   }
 
   setKillSwitch(scope: ScopeContext, featureKey: string, enabled: boolean, reason: string): void {
-    this.safety.set(featureKey, enabled);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId: null,
-      sessionId: scope.companySessionId,
-      action: 'KILL_SWITCH',
-      entityType: 'safety',
-      entityId: featureKey,
-      before: null,
-      after: { enabled },
-      reason,
-    });
+    this.billingSvc.setKillSwitch(scope, featureKey, enabled, reason);
   }
 
   listCompanyUsers(companyId: string): Array<Omit<CompanyUser, 'passwordHash'>> {
