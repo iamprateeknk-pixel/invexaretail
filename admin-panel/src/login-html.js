@@ -73,7 +73,7 @@ export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT
           <form id="login-form">
             <label for="control-email">
               Email
-              <input id="control-email" name="email" type="email" autocomplete="username" required placeholder="superadmin@invexa.local" />
+              <input id="control-email" name="email" type="email" autocomplete="username" required />
             </label>
             <label for="control-password">
               Password
