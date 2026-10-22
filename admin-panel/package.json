@@ -5,15 +5,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "node scripts/build.mjs",
-    "preview": "vite preview --port 4174",
     "test": "node --test src/*.test.js"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^6.1.1",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
     "vite": "^8.3.0"
   }
 }
