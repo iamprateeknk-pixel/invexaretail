@@ -11,6 +11,7 @@ import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
 import { itemRowToRecord } from './item-record-mapper.js';
+import { ledgerRowToRecord } from './stock-ledger-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
@@ -134,14 +135,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
   // The role is not stored on StockCount; the snapshot keeps its historical placeholder (see lib/repositories/count-repository.ts).
   replaceContents(counts, dbCounts.map((count) => countRowToRecord(count, 'STORE_USER')));
 
-  replaceContents(stockLedger, dbStockLedger.map((row) => ({
-    itemId: row.itemId,
-    lotId: row.lotId,
-    locationId: row.locationId,
-    onHand: Number(row.onHand),
-    quarantine: Number(row.quarantine),
-    version: row.version,
-  })));
+  replaceContents(stockLedger, dbStockLedger.map(ledgerRowToRecord));
 
   replaceContents(users, dbUsers.map((user) => ({
     id: user.id,

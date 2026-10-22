@@ -67,36 +67,36 @@ integration('KNOWN-DIVERGENCE (plan §2.5a): listStockFromDatabase takes no comp
   assert.equal(foreign[0].reservedQuantity, 1);
 });
 
-integration('KNOWN-DIVERGENCE (plan §2.5c): the hydrated snapshot drops reserved/inTransit/damaged, so snapshot-fed screens fabricate them', async () => {
+integration('plan §2.5c FIXED at step 1: the hydrated snapshot now carries reserved/inTransit/damaged via the shared mapper', async () => {
   await hydrateRepositoryFromDatabase();
   const entry = findStockLedgerEntry(fixture.itemA1, fixture.lotA1, fixture.locationA);
   assert.ok(entry, 'the fixture row must be in the hydrated snapshot');
   assert.equal(entry.onHand, 10);
   assert.equal(entry.quarantine, 1);
-  // The DB row carries reserved 4 / inTransit 2 / damaged 1; the snapshot
-  // record shape has no fields for them at all (repository.ts StockLedgerRecord
-  // pre-Phase-5). Phase 5 step 1's shared mapper flips this pin.
-  const raw = entry as unknown as Record<string, unknown>;
-  assert.equal(raw.reserved, undefined);
-  assert.equal(raw.inTransit, undefined);
-  assert.equal(raw.damaged, undefined);
+  // Was a KNOWN-DIVERGENCE pin at step 0: hydration mapped only
+  // onHand/quarantine/version, so the DB row's reserved 4 / inTransit 2 /
+  // damaged 1 were invisible to every snapshot-fed screen. Hydration and
+  // the stock repository now share lib/stock-ledger-mapper.ts.
+  assert.equal(entry.reserved, 4);
+  assert.equal(entry.inTransit, 2);
+  assert.equal(entry.damaged, 1);
 });
 
 integration('snapshot stock inputs for /dashboard, /expiry-dashboard, /intelligence and picker detail are pinned (steps 4-6 convert these reads)', async () => {
   await hydrateRepositoryFromDatabase();
   // Per-location input (dashboard reports, picker transfer detail).
   assert.deepEqual(canonicalLedgerRows(listStockLedgerForLocation(fixture.locationA)), [
-    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: null, inTransit: null, quarantine: 1, damaged: null, version: 3 },
-    { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: null, inTransit: null, quarantine: 0, damaged: null, version: 0 },
+    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: 4, inTransit: 2, quarantine: 1, damaged: 1, version: 3 },
+    { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 0 },
   ]);
   // Whole-snapshot input (dashboard totals, intelligence memory branch, webhook low-stock).
   const fixtureLocations = new Set([fixture.locationA, fixture.locationA2, fixture.locationB]);
   const mine = canonicalLedgerRows(listStockLedger().filter((row) => fixtureLocations.has(row.locationId)));
   assert.deepEqual(mine, [
-    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: null, inTransit: null, quarantine: 1, damaged: null, version: 3 },
-    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA2, onHand: 6, reserved: null, inTransit: null, quarantine: 0, damaged: null, version: 1 },
-    { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: null, inTransit: null, quarantine: 0, damaged: null, version: 0 },
-    { itemId: fixture.itemB1, lotId: fixture.lotB1, locationId: fixture.locationB, onHand: 5, reserved: null, inTransit: null, quarantine: 0, damaged: null, version: 2 },
+    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: 4, inTransit: 2, quarantine: 1, damaged: 1, version: 3 },
+    { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA2, onHand: 6, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 1 },
+    { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 0 },
+    { itemId: fixture.itemB1, lotId: fixture.lotB1, locationId: fixture.locationB, onHand: 5, reserved: 1, inTransit: 0, quarantine: 0, damaged: 0, version: 2 },
   ]);
 });
 
