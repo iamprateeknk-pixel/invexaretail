@@ -7,7 +7,7 @@ import { prisma } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { listLocations } from '../lib/repository.js';
-import { createOrderWithReservation, fulfillOrder, cancelOrder, expireStaleReservations, retryBackorderedOrders, OrderShortageError, OrderInsufficientStockError, listMemoryOrders } from '../lib/orders.js';
+import { createOrderWithReservation, fulfillOrder, cancelOrder, expireStaleReservations, retryBackorderedOrders, OrderShortageError, InsufficientStockError as OrderInsufficientStockError, listMemoryOrders } from '../lib/orders.js';
 import { verifyPackScan } from '../lib/pack-verification.js';
 import { getCarrierAdapter } from '../lib/carrier-adapter.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';

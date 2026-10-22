@@ -91,7 +91,7 @@ integration('POST /items/:itemId/adjust posts once for two identical requests wi
     assert.equal(second.body.duplicate, true);
     assert.equal(second.body.movement.id, first.body.movement.id);
 
-    const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } } });
+    const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } });
     assert.equal(ledger?.onHand, 10, 'a retried adjustment must not double-post');
   });
 });
@@ -126,7 +126,7 @@ integration('a reversal posts an equal-and-opposite movement and retrying the re
     const again = await call('POST', `/items/${fixture.itemId}/movements/${posted.body.movement.id}/reverse`, fixture.token, { reason: 'undo again' });
     assert.equal(again.status, 409, 'reversing an already-reversed movement must fail, not silently double-reverse');
 
-    const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } } });
+    const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } });
     assert.equal(ledger?.onHand, 0);
   });
 });
@@ -145,7 +145,7 @@ integration('tenant isolation: adjusting an item that belongs to a different ten
     // the correct and stronger outcome.
     assert.equal(response.status, 403);
 
-    const ledger = await prisma.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: fixtureA.itemId, lotId: fixtureA.lotId, locationId: fixtureA.locationId } } });
+    const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixtureA.itemId, lotId: fixtureA.lotId, locationId: fixtureA.locationId } });
     assert.equal(ledger, null, 'tenant B must not be able to create a StockLedger row against tenant A\'s item');
   });
 });

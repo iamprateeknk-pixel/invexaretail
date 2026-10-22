@@ -30,7 +30,7 @@ export async function listPickableTransfers(ctx: TenantContext): Promise<Pickabl
       id: row.id,
       sourceLocationId: row.sourceLocationId,
       // Same line shape snapshot hydration builds.
-      lines: row.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty, receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty ?? 0 })),
+      lines: row.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty ?? 0) })),
       ...(row.assignedPickerId ? { assignedPickerId: row.assignedPickerId } : {}),
     }));
   }

@@ -44,7 +44,7 @@ integration('two different consume actions at the same time both apply: stock an
   assert.equal(line.issuedQty, 7);
   assert.equal(line.usedQty, 7);
   const movements = await prisma.stockMovement.findMany({ where: { sourceLineId: f.line.id } });
-  assert.equal(movements.reduce((sum, m) => sum + m.qtyDelta, 0), -7, 'the journal sums to exactly what the line says was used');
+  assert.equal(movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0), -7, 'the journal sums to exactly what the line says was used');
 });
 
 integration('a client retry of the same action (same requestId) after success consumes nothing more', async () => {

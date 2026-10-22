@@ -100,7 +100,7 @@ integration('reserving against a lot with no StockLedger row at all fails closed
   await assert.rejects(() => reserveStockForTransfer([{ itemId, lotId: lot.id, locationId, quantity: 1 }], { companyId }), InsufficientStockError);
 });
 
-integration('a reservation under another company can neither see nor release this company's stock', async () => {
+integration('a reservation under another company can neither see nor release this company stock', async () => {
   const a = await makeFixture(10);
   const b = await makeFixture(10);
 
@@ -117,7 +117,7 @@ integration('a reservation under another company can neither see nor release thi
   await reserveStockForTransfer([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: a.companyId });
   await releaseReservedStock([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: b.companyId });
   const afterForeignRelease = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: a.companyId, itemId: a.itemId, lotId: a.lotId, locationId: a.locationId } } });
-  assert.equal(Number(afterForeignRelease?.reserved), 4, 'a foreign company release must not decrement this company's reservation');
+  assert.equal(Number(afterForeignRelease?.reserved), 4, 'a foreign company release must not decrement this company reservation');
 
   await releaseReservedStock([{ itemId: a.itemId, lotId: a.lotId, locationId: a.locationId, quantity: 4 }], { companyId: a.companyId });
   const afterOwnRelease = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: a.companyId, itemId: a.itemId, lotId: a.lotId, locationId: a.locationId } } });

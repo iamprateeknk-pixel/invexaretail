@@ -49,7 +49,7 @@ integration('an order for 4 kits reserves 8 rice and 12 dal; fulfilling it takes
     channel: 'WEB', externalReference: `bundle-${randomUUID()}`, createdById: f.userId, companyId: f.companyId,
     fulfillmentLocationId: f.locationId, lines: [{ itemId: f.kitId, quantity: 4 }],
   });
-  const quantities = Object.fromEntries(order.lines.map((line: { itemId: string; requestedQty: number }) => [line.itemId, line.requestedQty]));
+  const quantities = Object.fromEntries(order.lines.map((line) => [line.itemId, Number(line.requestedQty)]));
   assert.deepEqual(quantities, { [f.riceId]: 8, [f.dalId]: 12 }, 'the kit line is replaced by component lines');
   assert.equal(order.lines.some((line: { itemId: string }) => line.itemId === f.kitId), false, 'no line may reference the kit itself');
   assert.equal((await ledger(f.riceId, f.locationId)).reserved, 8);

@@ -596,7 +596,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
         // the journal row, ledger, audit and outbox commit with the receipt or not at all.
         if (quarantined > 0) {
           await tx.stockLedger.upsert({
-            where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } },
+            where: { companyId_itemId_lotId_locationId: { companyId: order.companyId, itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } },
             update: { quarantine: { increment: quarantined }, version: { increment: 1 } },
             create: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId, onHand: 0, quarantine: quarantined, version: 1, companyId: order.companyId },
           });
@@ -612,7 +612,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
           });
           afterBalance = posted.balance.onHand;
         } else {
-          afterBalance = Number((await tx.stockLedger.findUnique({ where: { itemId_lotId_locationId: { itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } } }))?.onHand ?? 0);
+          afterBalance = Number((await tx.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: order.companyId, itemId: posting.itemId, lotId: lot.id, locationId: order.locationId } } }))?.onHand ?? 0);
         }
         const ledger = { onHand: afterBalance };
         postedStock.push({
@@ -795,7 +795,7 @@ router.get('/purchase-orders/plan', async (req, res) => {
   const onHand = sum(sellable(ledger), (row) => [row.itemId, row.onHand]);
   const reserved = sum(sellable(ledger), (row) => [row.itemId, row.reserved]);
   const open = sum(openLines, (row) => [row.itemId, Math.max(0, row.quantity - row.receivedQty)]);
-  const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, row.requestedQty - row.receivedQty - row.damagedQty - row.shortageQty)]);
+  const inTransit = sum(transfers.flatMap((transfer) => transfer.lines), (row) => [row.itemId, Math.max(0, Number(row.requestedQty) - Number(row.receivedQty) - Number(row.damagedQty) - Number(row.shortageQty))]);
   const sold = sum(sales, (row) => [row.itemId, row.qty]);
   // The supplier an item was last bought from is the default; the buyer can change it in the draft.
   const lastSupplier = new Map<string, { supplierId: string; unitCost: number }>();

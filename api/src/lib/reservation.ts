@@ -62,7 +62,7 @@ export type ReserveOptions = {
  * behind. DB-backed only: memory-mode deployments are single-process
  * demo/dev use and have no real concurrent requests to race.
  */
-export async function reserveStockForTransfer(lines: ReserveLine[], options: ReserveOptions = {}): Promise<void> {
+export async function reserveStockForTransfer(lines: ReserveLine[], options: ReserveOptions): Promise<void> {
   if (!databaseEnabled || !lines.length) return;
   const traceId = options.traceId ?? newTraceId();
   const ordered = [...lines].sort((a, b) =>

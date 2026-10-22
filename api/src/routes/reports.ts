@@ -214,7 +214,7 @@ router.get('/reports/inventory-health', async (req: Request, res: Response) => {
     select: { status: true, lines: { select: { requestedQty: true, fulfilledQty: true } } },
     take: 20_000,
   });
-  return res.json({ ...health, service: summarizeServiceLevel(orders), locationId, truncated, note: soldRows.length === 0 ? 'No sales movements were recorded in this window (neither order/staged-import nor legacy daily imports): turns and cover are unknown and items are reported as NO_DATA rather than dead.' : undefined });
+  return res.json({ ...health, service: summarizeServiceLevel(orders.map((order) => ({ status: order.status, lines: order.lines.map((line) => ({ requestedQty: Number(line.requestedQty), fulfilledQty: Number(line.fulfilledQty) })) }))), locationId, truncated, note: soldRows.length === 0 ? 'No sales movements were recorded in this window (neither order/staged-import nor legacy daily imports): turns and cover are unknown and items are reported as NO_DATA rather than dead.' : undefined });
 });
 
 // Network-wide in-transit view (audit O-7): pick-confirm now posts dispatched transfer stock to
