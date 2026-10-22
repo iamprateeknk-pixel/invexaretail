@@ -4,6 +4,13 @@ import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
 import { profileKey, type ImportKind, type ImportProfile } from '../import-profile.js';
 import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
+import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, DEFAULT_TABLE_COLUMNS, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
+import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
+import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
+import { ControlPlaneBilling } from './control-plane-billing.js';
+import { ControlPlaneIntegrations } from './control-plane-integrations.js';
+import { ControlPlaneStudio } from './control-plane-studio.js';
+import { ControlPlaneSync } from './control-plane-sync.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -287,163 +294,12 @@ export type ControlTokenPayload = {
   tokenType: 'access' | 'refresh';
 };
 
-const DEFAULT_STOCK_PAGE: PageDefinition = {
-  pageKey: 'inventory.stock',
-  title: 'Stock by item',
-  route: '/inventory',
-  columns: [
-    { key: 'item_code', label: 'Item code & name', type: 'text', source: 'core', visible: true, exportEnabled: true, mobileEnabled: true },
-    { key: 'company', label: 'Company', type: 'text', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'category', label: 'Category', type: 'text', source: 'core', visible: true, exportEnabled: true, mobileEnabled: true },
-    { key: 'pack_size', label: 'Pack/Size', type: 'text', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'lot_coverage', label: 'Lot coverage', type: 'text', source: 'core', visible: true, exportEnabled: false, mobileEnabled: true },
-    { key: 'physical', label: 'Total physical', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: true },
-    { key: 'book', label: 'Total book', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'variance', label: 'Variance', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'quarantine', label: 'Quarantine', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'reserved', label: 'Reserved', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-    { key: 'available', label: 'Available', type: 'number', source: 'core', visible: true, exportEnabled: true, mobileEnabled: true },
-    { key: 'value', label: 'Value', type: 'currency', source: 'core', visible: true, exportEnabled: true, mobileEnabled: false },
-  ],
-  actions: [
-    { key: 'export', label: 'Export', enabled: true, placement: 'header', visibleRoles: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'] },
-    { key: 'scan', label: 'Scan item', enabled: true, placement: 'header' },
-    { key: 'daily_import', label: 'Daily sales / purchase', enabled: true, placement: 'header', visibleRoles: ['ADMIN', 'ADMIN_USER'] },
-  ],
-  widgets: [
-    { key: 'stock_table', label: 'Stock table', order: 1 },
-    { key: 'lots', label: 'Lots', order: 2 },
-  ],
-  tabs: [
-    { key: 'stock', label: 'Stock', order: 1 },
-    { key: 'lots', label: 'Lots', order: 2 },
-    { key: 'movements', label: 'Movements', order: 3 },
-  ],
-};
-
-const MODULE_REGISTRY: Record<string, { name: string; dependencies: string[]; entitlementKey: string }> = {
-  CATALOG: { name: 'Catalog', dependencies: [], entitlementKey: 'module.catalog' },
-  LOCATIONS: { name: 'Locations', dependencies: [], entitlementKey: 'module.locations' },
-  INVENTORY: { name: 'Inventory', dependencies: ['CATALOG', 'LOCATIONS'], entitlementKey: 'module.inventory' },
-  WMS: { name: 'Warehouse', dependencies: ['INVENTORY'], entitlementKey: 'module.wms' },
-  OMS: { name: 'Orders', dependencies: ['INVENTORY'], entitlementKey: 'module.oms' },
-  PURCHASING: { name: 'Purchasing', dependencies: ['INVENTORY'], entitlementKey: 'module.purchasing' },
-  ANALYTICS: { name: 'Analytics', dependencies: ['INVENTORY'], entitlementKey: 'module.analytics' },
-  ADVANCED_WORKFLOW: { name: 'Advanced workflow', dependencies: ['INVENTORY'], entitlementKey: 'module.advanced_workflow' },
-  INTEGRATIONS: { name: 'Integrations', dependencies: [], entitlementKey: 'module.integrations' },
-  MOBILE_OFFLINE: { name: 'Mobile offline', dependencies: ['INVENTORY'], entitlementKey: 'module.mobile_offline' },
-};
-
-const ACTION_REGISTRY: Record<string, { handlerKey: string; permission: string }> = {
-  CREATE_TRANSFER: { handlerKey: 'transfers.create', permission: 'inventory.create' },
-  APPROVE_TRANSFER: { handlerKey: 'transfers.approve', permission: 'inventory.approve' },
-  POST_STOCK_ADJUSTMENT: { handlerKey: 'inventory.adjust', permission: 'inventory.adjust' },
-  CREATE_PO: { handlerKey: 'purchasing.create', permission: 'purchasing.create' },
-  BLOCK_LOT: { handlerKey: 'inventory.block_lot', permission: 'inventory.edit' },
-  CREATE_TASK: { handlerKey: 'tasks.create', permission: 'inventory.create' },
-  SEND_NOTIFICATION: { handlerKey: 'notify.send', permission: 'inventory.view' },
-  CALL_WEBHOOK: { handlerKey: 'integrations.webhook', permission: 'integrations.edit' },
-};
-
-function nowIso(): string {
+export function nowIso(): string {
   return new Date().toISOString();
-}
-
-function jwtSecret(): string {
-  const configured = process.env.JWT_SECRET?.trim();
-  if (configured) return configured;
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('JWT_SECRET must be configured in production.');
-  }
-  return 'dev-secret-key-change-in-production';
-}
-
-export function signControlToken(payload: Omit<ControlTokenPayload, 'issuedAt' | 'expiresAt' | 'tokenType'> & {
-  ttlSeconds?: number;
-  tokenType?: 'access' | 'refresh';
-}): string {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const tokenType = payload.tokenType ?? 'access';
-  const ttlSeconds = payload.ttlSeconds ?? (tokenType === 'refresh' ? 60 * 60 * 24 * 7 : 60 * 60);
-  const body: ControlTokenPayload = {
-    ...payload,
-    issuedAt,
-    expiresAt: issuedAt + ttlSeconds,
-    tokenType,
-  };
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const encoded = Buffer.from(JSON.stringify(body)).toString('base64url');
-  const signature = createHmac('sha256', jwtSecret()).update(`${header}.${encoded}`).digest('base64url');
-  return `${header}.${encoded}.${signature}`;
-}
-
-export function verifyControlToken(token: string, expectedType: 'access' | 'refresh' = 'access'): ControlTokenPayload {
-  const parts = token.split('.');
-  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
-    throw new ControlPlaneError('Invalid control token', 'INVALID_TOKEN', 401);
-  }
-  const [header, encoded, signature] = parts;
-  const expected = createHmac('sha256', jwtSecret()).update(`${header}.${encoded}`).digest('base64url');
-  if (expected.length !== signature.length || !timingSafeEqual(expected, signature)) {
-    throw new ControlPlaneError('Invalid control token', 'INVALID_TOKEN', 401);
-  }
-  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as ControlTokenPayload;
-  if (payload.expiresAt < Math.floor(Date.now() / 1000)) {
-    throw new ControlPlaneError('Control token expired', 'TOKEN_EXPIRED', 401);
-  }
-  if ((payload.tokenType ?? 'access') !== expectedType) {
-    throw new ControlPlaneError('Wrong token type', 'INVALID_TOKEN', 401);
-  }
-  return payload;
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  if (left.length !== right.length) return false;
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export type TableKey = 'stock' | 'lots' | 'itemLots';
 export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots', 'itemLots'];
-
-const col = (key: string, label: string, type = 'text'): ColumnDefinition =>
-  ({ key, label, type, source: 'core', visible: true, exportEnabled: true, mobileEnabled: true });
-
-// The Lots & expiry table. `item_lot` and `open` (the row action) cannot be hidden.
-const DEFAULT_LOT_COLUMNS: ColumnDefinition[] = [
-  col('item_lot', 'Item / lot'),
-  col('quantity', 'Qty', 'number'),
-  col('expiry', 'Expiry', 'date'),
-  col('risk', 'Risk'),
-  col('recommended_action', 'Recommended action'),
-  col('open', 'Open'),
-];
-
-// The "Lot Details" list inside the item detail dialog. `lot_no` and `print` (the label button) cannot be hidden.
-const DEFAULT_ITEM_LOT_COLUMNS: ColumnDefinition[] = [
-  col('lot_no', 'Lot'),
-  col('expiry', 'Expires', 'date'),
-  col('batch', 'Batch'),
-  col('purchase_value', 'Purchase', 'currency'),
-  col('sale_value', 'Sale', 'currency'),
-  col('status', 'Status'),
-  col('print', 'Print label'),
-];
-
-const DEFAULT_TABLE_COLUMNS: Record<Exclude<TableKey, 'stock'>, ColumnDefinition[]> = {
-  lots: DEFAULT_LOT_COLUMNS,
-  itemLots: DEFAULT_ITEM_LOT_COLUMNS,
-};
-
-/** Per table: columns that must stay visible, built-in columns that may hold a formula, and the numbers a formula may use. */
-const TABLE_RULES: Record<TableKey, { locked: string[]; formulaFields: readonly string[]; overridable: string[] }> = {
-  stock: { locked: ['item_code'], formulaFields: STOCK_FORMULA_FIELDS, overridable: ['available'] },
-  lots: { locked: ['item_lot', 'open'], formulaFields: ['quantity', 'days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
-  itemLots: { locked: ['lot_no', 'print'], formulaFields: ['days_to_expiry', 'purchase_value', 'sale_value'], overridable: [] },
-};
-
-export const COLUMN_ROLES = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'] as const;
 
 /**
  * Which roles may see a column. No list (or every role) = everyone. ADMIN is always included so a layout
@@ -472,31 +328,8 @@ export function pageTableColumns(page: PageDefinition, table: TableKey): ColumnD
   return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_TABLE_COLUMNS[table])) as ColumnDefinition[]);
 }
 
-function clonePage(page: PageDefinition): PageDefinition {
+export function clonePage(page: PageDefinition): PageDefinition {
   return JSON.parse(JSON.stringify(page)) as PageDefinition;
-}
-
-const COMPARATOR_SUFFIXES = ['Gte', 'Lte', 'Gt', 'Lt'] as const;
-
-function ruleConditionMatches(condition: Record<string, unknown>, context: Record<string, unknown>): boolean {
-  return Object.entries(condition).every(([key, expected]) => {
-    const comparator = COMPARATOR_SUFFIXES.find((suffix) => key.endsWith(suffix));
-    if (!comparator) return context[key] === expected;
-    const field = key.slice(0, -comparator.length);
-    const actual = Number(context[field]);
-    const threshold = Number(expected);
-    if (Number.isNaN(actual) || Number.isNaN(threshold)) return false;
-    if (comparator === 'Gt') return actual > threshold;
-    if (comparator === 'Gte') return actual >= threshold;
-    if (comparator === 'Lt') return actual < threshold;
-    return actual <= threshold;
-  });
-}
-
-function ruleOutcomeAction(outcome: Record<string, unknown>): string {
-  if (typeof outcome.action === 'string') return outcome.action;
-  const [first] = Object.values(outcome);
-  return String(first ?? '');
 }
 
 export class ControlPlane {
@@ -532,7 +365,18 @@ export class ControlPlane {
   seedPassword = process.env.SEED_PASSWORD ?? 'ChangeMe123!';
   private seedPasswordHash = hashPassword(this.seedPassword);
 
+  readonly store: ControlPlaneStore;
+  private readonly billingSvc: ControlPlaneBilling;
+  private readonly integrationsSvc: ControlPlaneIntegrations;
+  private readonly studioSvc: ControlPlaneStudio;
+  private readonly syncSvc: ControlPlaneSync;
+
   constructor() {
+    this.store = createControlPlaneStore(this);
+    this.billingSvc = new ControlPlaneBilling(this.store, this);
+    this.integrationsSvc = new ControlPlaneIntegrations(this.store, this);
+    this.studioSvc = new ControlPlaneStudio(this.store, this);
+    this.syncSvc = new ControlPlaneSync(this.store, this);
     this.seed();
   }
 
@@ -609,7 +453,7 @@ export class ControlPlane {
       admin: { id: 'user-jaipur-admin', email: 'admin@jaipur.local', name: 'Jaipur Admin', role: 'ADMIN' },
     });
 
-    this.ledger.set(this.ledgerKey('default-company', 'item-1'), 10);
+    this.ledger.set(this.syncSvc.ledgerKey('default-company', 'item-1'), 10);
     this.billing.set('default-company', { subscription: 'active', cycle: 'monthly', amount: 4999 });
     this.billing.set('company-jaipur', { subscription: 'trial', cycle: 'monthly', amount: 0 });
   }
@@ -952,306 +796,67 @@ export class ControlPlane {
   }
 
   listPlans(): PlanTemplate[] {
-    return [...this.plans.values()].map((plan) => ({ ...plan, limits: { ...plan.limits }, modules: { ...plan.modules } }));
+    return this.billingSvc.listPlans();
   }
 
   createCompany(scope: ScopeContext, input: { name: string; planId: string; adminEmail: string; adminName: string }): { company: CompanyRecord; temporaryPassword: string } {
-    if (scope.sessionType !== 'platform' || scope.companyId) {
-      throw new ControlPlaneError('Unlocked platform session required to create companies', 'SESSION_REQUIRED', 401);
-    }
-    const name = input.name.trim();
-    const adminEmail = input.adminEmail.trim().toLowerCase();
-    const adminName = input.adminName.trim() || 'Company Admin';
-    if (name.length < 2) throw new ControlPlaneError('Company name is required', 'INVALID_COMPANY_NAME', 400);
-    if (!adminEmail.includes('@')) throw new ControlPlaneError('Admin email is required', 'INVALID_EMAIL', 400);
-    if ([...this.companyUsers.values()].some((user) => user.email === adminEmail)) {
-      throw new ControlPlaneError('Email already in use', 'EMAIL_IN_USE', 409);
-    }
-    const plan = this.plans.get(input.planId);
-    if (!plan) throw new ControlPlaneError('Unknown plan', 'PLAN_NOT_FOUND', 404);
-    const id = `company-${randomBytes(4).toString('hex')}`;
-    const adminId = `user-${randomBytes(4).toString('hex')}`;
-    const temporaryPassword = `Invexa${randomBytes(3).toString('hex')}9A`;
-    const company: CompanyRecord = {
-      id,
-      tenantId: this.tenantId,
-      name,
-      status: 'active',
-      planId: input.planId,
-      primaryAdminId: adminId,
-      createdAt: nowIso(),
-    };
-    this.companies.set(id, company);
-    this.companyUsers.set(adminId, {
-      id: adminId,
-      companyId: id,
-      email: adminEmail,
-      name: adminName,
-      role: 'ADMIN',
-      status: 'active',
-      passwordHash: hashPassword(temporaryPassword),
-      isPrimaryAdmin: true,
-      createdAt: nowIso(),
-    });
-    this.entitlements.set(id, { ...plan.modules });
-    this.usage.set(id, { users: 1, company_admins: 1, api_requests: 0 });
-    const published = this.blankConfig(id, scope.actorId, 1, 'published');
-    this.published.set(id, published);
-    this.versions.set(id, [published]);
-    this.billing.set(id, {
-      subscription: PLAN_PRICES[input.planId] > 0 ? 'active' : 'trial',
-      cycle: 'monthly',
-      amount: PLAN_PRICES[input.planId] ?? 0,
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId: id,
-      sessionId: scope.companySessionId,
-      action: 'COMPANY_CREATED',
-      entityType: 'company',
-      entityId: id,
-      before: null,
-      after: company,
-    });
-    return { company, temporaryPassword };
+    return this.billingSvc.createCompany(scope, input);
   }
 
   setCompanyStatus(scope: ScopeContext, companyId: string, status: CompanyStatus, reason: string): CompanyRecord {
-    if (scope.sessionType !== 'platform' || scope.companyId) {
-      this.assertCompanyScope(scope, companyId);
-    }
-    const company = this.requireCompany(companyId);
-    const before = company.status;
-    company.status = status;
-    if (status === 'suspended') {
-      for (const session of this.sessions.values()) {
-        if (session.companyId === companyId && session.status === 'active') {
-          session.status = 'closed';
-        }
-      }
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: company.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: status === 'suspended' ? 'COMPANY_SUSPENDED' : 'COMPANY_ACTIVATED',
-      entityType: 'company',
-      entityId: companyId,
-      before: { status: before },
-      after: { status },
-      reason,
-    });
-    return company;
+    return this.billingSvc.setCompanyStatus(scope, companyId, status, reason);
   }
 
   assignPlan(scope: ScopeContext, companyId: string, planId: string, reason: string): { company: CompanyRecord; downgradePolicy?: string } {
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, companyId);
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(planId);
-    if (!plan) throw new ControlPlaneError('Unknown plan', 'PLAN_NOT_FOUND', 404);
-    const previous = company.planId;
-    company.planId = planId;
-    const current = this.entitlements.get(companyId) ?? {};
-    this.entitlements.set(companyId, { ...plan.modules });
-    const billing = this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 };
-    billing.amount = PLAN_PRICES[planId] ?? billing.amount;
-    if (billing.amount > 0 && billing.subscription === 'trial') billing.subscription = 'active';
-    this.billing.set(companyId, billing);
-    const usage = this.usage.get(companyId) ?? {};
-    let downgradePolicy: string | undefined;
-    if ((usage.users ?? 0) > plan.limits.max_users) {
-      downgradePolicy = 'block_new_creation';
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: company.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'PLAN_ASSIGNED',
-      entityType: 'company',
-      entityId: companyId,
-      before: { planId: previous, entitlements: current },
-      after: { planId, entitlements: this.entitlements.get(companyId), downgradePolicy },
-      reason,
-    });
-    return { company, downgradePolicy };
+    return this.billingSvc.assignPlan(scope, companyId, planId, reason);
   }
 
   overrideEntitlement(scope: ScopeContext, companyId: string, featureKey: string, enabled: boolean, reason: string): void {
-    const overrides = this.entitlementOverrides(companyId);
-    overrides[featureKey] = enabled;
-    this.limitOverrides.set(companyId, { ...this.limitOverrides.get(companyId) });
-    this.entitlements.set(companyId, { ...(this.entitlements.get(companyId) ?? {}), [featureKey]: enabled });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'ENTITLEMENT_OVERRIDE',
-      entityType: 'entitlement',
-      entityId: featureKey,
-      before: null,
-      after: { enabled },
-      reason,
-    });
+    this.billingSvc.overrideEntitlement(scope, companyId, featureKey, enabled, reason);
   }
 
   private entitlementOverrides(companyId: string): Record<string, boolean> {
-    const record = this.entitlements.get(companyId) ?? {};
-    return { ...record };
+    return this.billingSvc.entitlementOverrides(companyId);
   }
 
   effectiveLimits(companyId: string): Record<string, number> {
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(company.planId)!;
-    return { ...plan.limits, ...(this.limitOverrides.get(companyId) ?? {}) };
+    return this.billingSvc.effectiveLimits(companyId);
   }
 
   isFeatureEnabled(companyId: string, featureKey: string): boolean {
-    if (this.safety.get(featureKey) === false) return false;
-    const company = this.requireCompany(companyId);
-    const plan = this.plans.get(company.planId)!;
-    const fromPlan = plan.modules[featureKey] ?? plan.capabilities[featureKey] ?? false;
-    const companyValue = this.entitlements.get(companyId)?.[featureKey];
-    if (this.safety.get(featureKey) === false) return false;
-    return companyValue ?? fromPlan;
+    return this.billingSvc.isFeatureEnabled(companyId, featureKey);
   }
 
   assertFeature(companyId: string, featureKey: string): void {
-    if (this.safety.get(featureKey) === false) {
-      throw new ControlPlaneError(`${featureKey} is disabled by a platform kill switch`, 'KILL_SWITCH', 403);
-    }
-    if (!this.isFeatureEnabled(companyId, featureKey)) {
-      throw new ControlPlaneError('Feature is not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
+    this.billingSvc.assertFeature(companyId, featureKey);
   }
 
   assertLimit(companyId: string, limitKey: string, nextCount: number): void {
-    const limits = this.effectiveLimits(companyId);
-    const max = limits[limitKey];
-    if (typeof max === 'number' && nextCount > max) {
-      throw new ControlPlaneError(`Plan limit reached for ${limitKey}`, 'PLAN_LIMIT_REACHED', 403);
-    }
+    this.billingSvc.assertLimit(companyId, limitKey, nextCount);
   }
 
   assertBillingWritable(companyId: string): void {
-    const company = this.requireCompany(companyId);
-    if (company.status === 'suspended') {
-      throw new ControlPlaneError('Company is suspended', 'COMPANY_SUSPENDED', 403);
-    }
-    if (this.billing.get(companyId)?.subscription === 'past_due') {
-      throw new ControlPlaneError('Billing is past due; mutating control-plane actions are on hold', 'BILLING_HOLD', 402);
-    }
+    this.billingSvc.assertBillingWritable(companyId);
   }
 
   issueInvoice(scope: ScopeContext, companyId: string): BillingInvoice {
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, companyId);
-    const billing = this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 };
-    const invoice: BillingInvoice = {
-      id: randomUUID(),
-      companyId,
-      amount: billing.amount,
-      cycle: billing.cycle,
-      status: 'open',
-      issuedAt: nowIso(),
-      paidAt: null,
-    };
-    this.invoices.set(invoice.id, invoice);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_ISSUED',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: null,
-      after: { amount: invoice.amount, status: invoice.status },
-    });
-    return invoice;
+    return this.billingSvc.issueInvoice(scope, companyId);
   }
 
   payInvoice(scope: ScopeContext, invoiceId: string): BillingInvoice {
-    const invoice = this.invoices.get(invoiceId);
-    if (!invoice) throw new ControlPlaneError('Invoice not found', 'INVOICE_NOT_FOUND', 404);
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, invoice.companyId);
-    if (invoice.status === 'paid') return invoice;
-    invoice.status = 'paid';
-    invoice.paidAt = nowIso();
-    const remainingPastDue = [...this.invoices.values()].some(
-      (entry) =>
-        entry.companyId === invoice.companyId
-        && entry.id !== invoice.id
-        && entry.status === 'past_due',
-    );
-    const billing = this.billing.get(invoice.companyId);
-    if (billing && !remainingPastDue) {
-      billing.subscription = billing.amount > 0 ? 'active' : 'trial';
-    }
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId: invoice.companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_PAID',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: { status: 'open' },
-      after: { status: 'paid' },
-    });
-    return invoice;
+    return this.billingSvc.payInvoice(scope, invoiceId);
   }
 
   markInvoicePastDue(scope: ScopeContext, invoiceId: string): BillingInvoice {
-    const invoice = this.invoices.get(invoiceId);
-    if (!invoice) throw new ControlPlaneError('Invoice not found', 'INVOICE_NOT_FOUND', 404);
-    if (scope.sessionType !== 'platform' || scope.companyId) this.assertCompanyScope(scope, invoice.companyId);
-    invoice.status = 'past_due';
-    const billing = this.billing.get(invoice.companyId) ?? { subscription: 'past_due', cycle: invoice.cycle, amount: invoice.amount };
-    billing.subscription = 'past_due';
-    this.billing.set(invoice.companyId, billing);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: scope.actorType,
-      tenantId: scope.tenantId,
-      companyId: invoice.companyId,
-      sessionId: scope.companySessionId,
-      action: 'INVOICE_PAST_DUE',
-      entityType: 'invoice',
-      entityId: invoice.id,
-      before: null,
-      after: { status: 'past_due' },
-    });
-    return invoice;
+    return this.billingSvc.markInvoicePastDue(scope, invoiceId);
   }
 
   listInvoices(companyId: string): BillingInvoice[] {
-    return [...this.invoices.values()].filter((invoice) => invoice.companyId === companyId);
+    return this.billingSvc.listInvoices(companyId);
   }
 
   setKillSwitch(scope: ScopeContext, featureKey: string, enabled: boolean, reason: string): void {
-    this.safety.set(featureKey, enabled);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: this.tenantId,
-      companyId: null,
-      sessionId: scope.companySessionId,
-      action: 'KILL_SWITCH',
-      entityType: 'safety',
-      entityId: featureKey,
-      before: null,
-      after: { enabled },
-      reason,
-    });
+    this.billingSvc.setKillSwitch(scope, featureKey, enabled, reason);
   }
 
   listCompanyUsers(companyId: string): Array<Omit<CompanyUser, 'passwordHash'>> {
@@ -1337,809 +942,175 @@ export class ControlPlane {
   }
 
   ensureDraft(scope: ScopeContext): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    const existing = this.drafts.get(companyId);
-    if (existing) return existing;
-    const published = this.published.get(companyId) ?? this.blankConfig(companyId, scope.actorId, 1, 'published');
-    const draft = {
-      ...JSON.parse(JSON.stringify(published)) as ConfigurationVersion,
-      id: randomUUID(),
-      version: published.version + 1,
-      status: 'draft' as const,
-      authorId: scope.actorId,
-      parentVersion: published.version,
-      publishedAt: null,
-      createdAt: nowIso(),
-    };
-    this.drafts.set(companyId, draft);
-    return draft;
+    return this.studioSvc.ensureDraft(scope);
   }
 
   requireLockedCompany(scope: ScopeContext): string {
-    if (scope.sessionType !== 'control' || !scope.companyId || !scope.companySessionId) {
-      throw new ControlPlaneError('Hard-locked company control session required', 'SESSION_REQUIRED', 401);
-    }
-    const session = this.sessions.get(scope.companySessionId);
-    if (!session || session.status !== 'active' || session.companyId !== scope.companyId) {
-      throw new ControlPlaneError('Company control session is closed', 'SESSION_CLOSED', 401);
-    }
-    return scope.companyId;
+    return this.studioSvc.requireLockedCompany(scope);
   }
 
   addStockColumn(scope: ScopeContext, input: {
-    name: string;
-    key: string;
-    type: string;
-    required?: boolean;
-    defaultValue?: unknown;
-    placement?: string;
-    visibleRoles?: string[];
-    editableRoles?: string[];
-  }): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    this.assertFeature(companyId, 'INVENTORY');
-    if (!this.plans.get(this.requireCompany(companyId).planId)?.capabilities.custom_fields) {
-      throw new ControlPlaneError('Custom fields are not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
-    const draft = this.ensureDraft(scope);
-    if (draft.page.columns.some((column) => column.key === input.key) || input.key === 'item_code') {
-      throw new ControlPlaneError('Reserved or duplicate field key', 'RESERVED_FIELD', 400);
-    }
-    const field: FieldDefinition = {
-      id: randomUUID(),
-      companyId,
-      entityType: 'stock',
-      fieldKey: input.key,
-      label: input.name,
-      dataType: input.type,
-      required: Boolean(input.required),
-      defaultValue: input.defaultValue ?? 0,
-      placement: input.placement ?? 'after:available',
-      visibleRoles: input.visibleRoles ?? ['ADMIN', 'BRANCH_MANAGER'],
-      editableRoles: input.editableRoles ?? ['ADMIN'],
-      sortFilter: true,
-      exportEnabled: true,
-      mobileEnabled: true,
-      status: 'active',
-    };
-    draft.fields.push(field);
-    const column: ColumnDefinition = {
-      key: input.key,
-      label: input.name,
-      type: input.type,
-      source: 'custom',
-      visible: true,
-      exportEnabled: true,
-      mobileEnabled: true,
-      visibleRoles: field.visibleRoles,
-    };
-    const afterIndex = draft.page.columns.findIndex((entry) => entry.key === 'available');
-    if (afterIndex >= 0) draft.page.columns.splice(afterIndex + 1, 0, column);
-    else draft.page.columns.push(column);
-    return draft;
+    return this.studioSvc.addStockColumn(scope, input);
   }
-
-  // Generic Field Builder (blueprint §16 "Field builder"): works across any
-  // entity type, not only the stock page. addStockColumn() above is kept
-  // as-is for backward compatibility (it also mirrors into page.columns,
-  // which only the stock page renders today) - this is the path for
-  // fields on entities that don't have a page-rendering surface yet.
   addField(scope: ScopeContext, input: {
-    entityType: string;
-    key: string;
-    name: string;
-    type: string;
-    required?: boolean;
-    defaultValue?: unknown;
-    visibleRoles?: string[];
-    editableRoles?: string[];
-    // true = edit the existing field with this entity + key instead of refusing the duplicate.
-    replace?: boolean;
-  }): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    if (!this.plans.get(this.requireCompany(companyId).planId)?.capabilities.custom_fields) {
-      throw new ControlPlaneError('Custom fields are not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
-    if (!/^[a-z][a-z0-9_]{0,59}$/.test(input.key)) throw new ControlPlaneError('Field key must be lowercase letters, numbers and _', 'INVALID_FIELD_KEY', 400);
-    if (!input.name.trim()) throw new ControlPlaneError('Every field needs a name', 'INVALID_FIELD_NAME', 400);
-    const draft = this.ensureDraft(scope);
-    const existing = draft.fields.findIndex((entry) => entry.entityType === input.entityType && entry.fieldKey === input.key);
-    if (existing >= 0 && !input.replace) {
-      throw new ControlPlaneError('Duplicate field key for this entity', 'RESERVED_FIELD', 400);
-    }
-    const field: FieldDefinition = {
-      id: randomUUID(),
-      companyId,
-      entityType: input.entityType,
-      fieldKey: input.key,
-      label: input.name,
-      dataType: input.type,
-      required: Boolean(input.required),
-      defaultValue: input.defaultValue ?? null,
-      visibleRoles: input.visibleRoles ?? ['ADMIN', 'BRANCH_MANAGER'],
-      editableRoles: input.editableRoles ?? ['ADMIN'],
-      sortFilter: true,
-      exportEnabled: true,
-      mobileEnabled: true,
-      status: 'active',
-    };
-    if (existing >= 0) draft.fields[existing] = { ...field, id: draft.fields[existing].id };
-    else draft.fields.push(field);
-    return draft;
+    return this.studioSvc.addField(scope, input);
   }
 
   private tableColumnsOf(draft: ConfigurationVersion, table: TableKey): ColumnDefinition[] {
-    return pageTableColumns(draft.page, table);
+    return this.studioSvc.tableColumnsOf(draft, table);
   }
 
   private setTableColumnsOf(draft: ConfigurationVersion, table: TableKey, columns: ColumnDefinition[]): void {
-    if (table === 'stock') draft.page.columns = columns;
-    else {
-      draft.page.tables ??= {};
-      draft.page.tables[table] = columns;
-    }
+    this.studioSvc.setTableColumnsOf(draft, table, columns);
   }
-
-  /** The draft's columns for one table (created from the built-in defaults if never edited). */
   getDraftColumns(scope: ScopeContext, table: TableKey = 'stock'): ColumnDefinition[] {
-    this.requireLockedCompany(scope);
-    return this.tableColumnsOf(this.ensureDraft(scope), table);
+    return this.studioSvc.getDraftColumns(scope, table);
   }
-
-  /**
-   * Reorders, renames and shows/hides a table's columns (core and custom) in the draft.
-   * `layout` lists column keys in the wanted order; columns left out keep their relative order
-   * after the listed ones. Essential columns (item name, row action) can be renamed and moved but never hidden.
-   */
   setStockColumnLayout(scope: ScopeContext, layout: Array<{ key: string; label?: string; visible?: boolean; visibleRoles?: string[] | null }>, table: TableKey = 'stock'): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    const draft = this.ensureDraft(scope);
-    const current = this.tableColumnsOf(draft, table);
-    const byKey = new Map(current.map((column) => [column.key, column]));
-    const seen = new Set<string>();
-    const ordered: ColumnDefinition[] = [];
-    for (const entry of layout) {
-      const column = byKey.get(String(entry?.key ?? ''));
-      if (!column) throw new ControlPlaneError(`Unknown column "${String(entry?.key ?? '')}"`, 'COLUMN_NOT_FOUND', 404);
-      if (seen.has(column.key)) throw new ControlPlaneError(`Column "${column.label}" is listed twice`, 'DUPLICATE_COLUMN', 400);
-      seen.add(column.key);
-      if (entry.label !== undefined) {
-        const label = String(entry.label).replace(/\p{Cc}/gu, ' ').trim().slice(0, 60);
-        if (!label) throw new ControlPlaneError('Every column needs a name', 'INVALID_COLUMN_LABEL', 400);
-        column.label = label;
-      }
-      if (entry.visible !== undefined) {
-        if (TABLE_RULES[table].locked.includes(column.key) && entry.visible === false) {
-          throw new ControlPlaneError(`The "${column.label}" column cannot be hidden`, 'COLUMN_REQUIRED', 400);
-        }
-        column.visible = Boolean(entry.visible);
-      }
-      if (entry.visibleRoles !== undefined) {
-        const roles = normalizeColumnRoles(entry.visibleRoles);
-        if (roles && TABLE_RULES[table].locked.includes(column.key)) {
-          throw new ControlPlaneError(`The "${column.label}" column must stay visible to every role`, 'COLUMN_REQUIRED', 400);
-        }
-        if (roles) column.visibleRoles = roles;
-        else delete column.visibleRoles;
-      }
-      ordered.push(column);
-    }
-    this.setTableColumnsOf(draft, table, [...ordered, ...current.filter((column) => !seen.has(column.key))]);
-    return draft;
+    return this.studioSvc.setStockColumnLayout(scope, layout, table);
   }
-
-  /**
-   * Adds or updates a calculated column in the draft. New columns are keyed `calc_*`; some built-in
-   * columns (stock: `available`) can also be given a formula (clear it to restore the standard one).
-   */
   setStockFormulaColumn(scope: ScopeContext, input: { key?: string; label: string; formula: string; type?: string }, table: TableKey = 'stock'): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60);
-    if (!label) throw new ControlPlaneError('Give the column a name', 'INVALID_COLUMN_LABEL', 400);
-    const formula = String(input.formula ?? '').trim();
-    try {
-      validateFormula(formula, TABLE_RULES[table].formulaFields);
-    } catch (error) {
-      if (error instanceof FormulaError) throw new ControlPlaneError(error.message, 'INVALID_FORMULA', 400);
-      throw error;
-    }
-    const draft = this.ensureDraft(scope);
-    const columns = this.tableColumnsOf(draft, table);
-    const type = input.type === 'currency' ? 'currency' : 'number';
-    const requestedKey = String(input.key ?? '').trim();
-    if (requestedKey && TABLE_RULES[table].overridable.includes(requestedKey)) {
-      const target = columns.find((column) => column.key === requestedKey);
-      if (!target) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
-      target.formula = formula;
-      target.label = label;
-      return draft;
-    }
-    if (requestedKey && !/^calc_[a-z0-9_]{1,30}$/.test(requestedKey)) {
-      throw new ControlPlaneError('Only calculated columns can hold a formula', 'INVALID_COLUMN_KEY', 400);
-    }
-    const existing = requestedKey ? columns.find((column) => column.key === requestedKey) : undefined;
-    if (requestedKey && !existing) throw new ControlPlaneError('Unknown calculated column', 'COLUMN_NOT_FOUND', 404);
-    if (existing) {
-      existing.label = label;
-      existing.formula = formula;
-      existing.type = type;
-      return draft;
-    }
-    if (columns.filter((column) => column.source === 'formula').length >= 12) {
-      throw new ControlPlaneError('A maximum of 12 calculated columns is allowed', 'TOO_MANY_FORMULAS', 400);
-    }
-    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'column';
-    let key = `calc_${slug}`;
-    for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `calc_${slug}_${n}`;
-    columns.push({
-      key, label, type, source: 'formula', formula, visible: true, exportEnabled: true, mobileEnabled: true,
-    });
-    return draft;
+    return this.studioSvc.setStockFormulaColumn(scope, input, table);
   }
-
-  /** Adds a table column that shows one of the company's item custom fields (by name). */
   addItemFieldColumn(scope: ScopeContext, input: { fieldName: string; label?: string }, table: TableKey = 'stock'): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    const fieldName = String(input.fieldName ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 80);
-    if (!fieldName) throw new ControlPlaneError('Choose an item field', 'INVALID_ITEM_FIELD', 400);
-    const draft = this.ensureDraft(scope);
-    const columns = this.tableColumnsOf(draft, table);
-    if (columns.some((column) => column.itemField === fieldName)) {
-      throw new ControlPlaneError('This item field is already a column', 'DUPLICATE_COLUMN', 400);
-    }
-    if (columns.filter((column) => column.source === 'itemField').length >= 12) {
-      throw new ControlPlaneError('A maximum of 12 item field columns is allowed', 'TOO_MANY_ITEM_FIELDS', 400);
-    }
-    const label = String(input.label ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 60) || fieldName;
-    const slug = fieldName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'field';
-    let key = `field_${slug}`;
-    for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
-    columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
-    return draft;
+    return this.studioSvc.addItemFieldColumn(scope, input, table);
   }
-
-  /** Removes a calculated / item-field column, or restores the standard formula of a built-in one. */
   clearStockFormula(scope: ScopeContext, key: string, table: TableKey = 'stock'): ConfigurationVersion {
-    this.requireLockedCompany(scope);
-    const draft = this.ensureDraft(scope);
-    const columns = this.tableColumnsOf(draft, table);
-    const column = columns.find((entry) => entry.key === key);
-    if (!column) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
-    if (column.source === 'formula' || column.source === 'itemField') this.setTableColumnsOf(draft, table, columns.filter((entry) => entry.key !== key));
-    else if (column.formula) {
-      delete column.formula;
-      if (column.key === 'available') column.label = 'Available';
-    } else throw new ControlPlaneError('This column has no formula', 'NO_FORMULA', 400);
-    return draft;
+    return this.studioSvc.clearStockFormula(scope, key, table);
   }
 
   setActionEnabled(scope: ScopeContext, actionKey: string, enabled: boolean): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const action = draft.page.actions.find((entry) => entry.key === actionKey);
-    if (!action) throw new ControlPlaneError('Unknown action', 'ACTION_NOT_FOUND', 404);
-    action.enabled = enabled;
-    return draft;
+    return this.studioSvc.setActionEnabled(scope, actionKey, enabled);
   }
 
   moveTab(scope: ScopeContext, tabKey: string, order: number): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const tab = draft.page.tabs.find((entry) => entry.key === tabKey);
-    if (!tab) throw new ControlPlaneError('Unknown tab', 'TAB_NOT_FOUND', 404);
-    tab.order = order;
-    draft.page.tabs.sort((left, right) => left.order - right.order);
-    return draft;
+    return this.studioSvc.moveTab(scope, tabKey, order);
   }
 
   preview(scope: ScopeContext, input: { role: string; device: 'desktop' | 'tablet' | 'mobile' }): {
-    role: string;
-    device: string;
-    page: PageDefinition;
-    version: number;
-  } {
-    const draft = this.ensureDraft(scope);
-    const page = clonePage(draft.page);
-    page.columns = page.columns.filter((column) => !column.visibleRoles || column.visibleRoles.includes(input.role));
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(input.role)));
-    if (input.device === 'mobile') {
-      page.columns = page.columns.filter((column) => column.mobileEnabled);
-    }
-    return { role: input.role, device: input.device, page, version: draft.version };
+    return this.studioSvc.preview(scope, input);
   }
 
   diff(companyId: string): Array<{ op: '+' | '-' | '~'; path: string; from?: unknown; to?: unknown }> {
-    const published = this.published.get(companyId);
-    const draft = this.drafts.get(companyId);
-    if (!published || !draft) return [];
-    const changes: Array<{ op: '+' | '-' | '~'; path: string; from?: unknown; to?: unknown }> = [];
-    const publishedKeys = new Set(published.page.columns.map((column) => column.key));
-    for (const column of draft.page.columns) {
-      if (!publishedKeys.has(column.key)) changes.push({ op: '+', path: `columns.${column.key}`, to: column.label });
-    }
-    for (const action of draft.page.actions) {
-      const previous = published.page.actions.find((entry) => entry.key === action.key);
-      if (previous && previous.enabled !== action.enabled) {
-        changes.push({ op: action.enabled ? '+' : '-', path: `actions.${action.key}`, from: previous.enabled, to: action.enabled });
-      }
-    }
-    return changes;
+    return this.studioSvc.diff(companyId);
   }
 
   publish(scope: ScopeContext): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    const draft = this.ensureDraft(scope);
-    draft.status = 'published';
-    draft.publishedAt = nowIso();
-    this.published.set(companyId, JSON.parse(JSON.stringify(draft)) as ConfigurationVersion);
-    const history = this.versions.get(companyId) ?? [];
-    history.push(JSON.parse(JSON.stringify(draft)) as ConfigurationVersion);
-    this.versions.set(companyId, history);
-    this.drafts.delete(companyId);
-    this.outbox.push({ id: randomUUID(), event: 'config.published', payload: { companyId, version: draft.version }, createdAt: nowIso() });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'CONFIG_PUBLISHED',
-      entityType: 'configuration',
-      entityId: String(draft.version),
-      before: { parent: draft.parentVersion },
-      after: { version: draft.version, diff: this.diff(companyId) },
-    });
-    return draft;
+    return this.studioSvc.publish(scope);
   }
 
   rollback(scope: ScopeContext, version: number): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    const history = this.versions.get(companyId) ?? [];
-    const target = history.find((entry) => entry.version === version && entry.status === 'published');
-    if (!target) throw new ControlPlaneError('Version not found', 'VERSION_NOT_FOUND', 404);
-    const restored = {
-      ...JSON.parse(JSON.stringify(target)) as ConfigurationVersion,
-      id: randomUUID(),
-      version: (this.published.get(companyId)?.version ?? version) + 1,
-      parentVersion: this.published.get(companyId)?.version ?? version,
-      authorId: scope.actorId,
-      publishedAt: nowIso(),
-      createdAt: nowIso(),
-      status: 'published' as const,
-    };
-    this.published.set(companyId, restored);
-    history.push(restored);
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'CONFIG_ROLLBACK',
-      entityType: 'configuration',
-      entityId: String(restored.version),
-      before: { restoredFrom: version },
-      after: { version: restored.version },
-    });
-    return restored;
+    return this.studioSvc.rollback(scope, version);
   }
 
   runtimeConfig(companyId: string, role = 'ADMIN'): {
-    companyId: string;
-    version: number;
-    page: PageDefinition;
-    modules: Record<string, boolean>;
-    killSwitches: Record<string, boolean>;
-    mobilePolicy?: MobilePolicy;
-  } {
-    const published = this.published.get(companyId) ?? this.blankConfig(companyId, 'system', 1, 'published');
-    const page = clonePage(published.page);
-    page.columns = page.columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    for (const [key, columns] of Object.entries(page.tables ?? {})) {
-      page.tables![key] = columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    }
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
-    return {
-      companyId,
-      version: published.version,
-      page,
-      modules: Object.fromEntries(
-        Object.keys(MODULE_REGISTRY).map((key) => [key, this.isFeatureEnabled(companyId, key)]),
-      ),
-      killSwitches: Object.fromEntries(this.safety.entries()),
-      mobilePolicy: published.mobilePolicies.find((policy) => policy.role === role),
-    };
+    return this.studioSvc.runtimeConfig(companyId, role);
   }
 
   moduleRegistry() {
-    return { modules: MODULE_REGISTRY, actions: ACTION_REGISTRY };
+    return this.studioSvc.moduleRegistry();
   }
 
   setCompanyModule(scope: ScopeContext, moduleKey: string, enabled: boolean): void {
-    const companyId = this.requireLockedCompany(scope);
-    if (enabled && this.safety.get(moduleKey) === false) {
-      throw new ControlPlaneError('Platform safety policy forbids enabling this feature', 'SAFETY_FLOOR', 403);
-    }
-    const planAllows = this.plans.get(this.requireCompany(companyId).planId)?.modules[moduleKey] === true;
-    if (enabled && !planAllows && this.entitlements.get(companyId)?.[moduleKey] !== true) {
-      throw new ControlPlaneError('Feature is not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
-    const entitlements = this.entitlements.get(companyId) ?? {};
-    entitlements[moduleKey] = enabled;
-    this.entitlements.set(companyId, entitlements);
-    const draft = this.ensureDraft(scope);
-    draft.modules[moduleKey] = enabled;
+    this.studioSvc.setCompanyModule(scope, moduleKey, enabled);
   }
 
   upsertWorkflow(scope: ScopeContext, workflow: WorkflowDefinition): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const index = draft.workflows.findIndex((entry) => entry.key === workflow.key);
-    if (index >= 0) draft.workflows[index] = workflow;
-    else draft.workflows.push(workflow);
-    return draft;
+    return this.studioSvc.upsertWorkflow(scope, workflow);
   }
 
   simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }): { outcome: string; pinnedVersion: number } {
-    const published = this.published.get(companyId);
-    const workflow = published?.workflows.find((entry) => entry.key === workflowKey);
-    if (!workflow) throw new ControlPlaneError('Workflow not found', 'WORKFLOW_NOT_FOUND', 404);
-    const thresholdNode = workflow.graph.nodes.find((node) => node.type === 'condition');
-    const amount = Number(thresholdNode?.config.amount ?? 100000);
-    return {
-      outcome: context.value <= amount ? 'auto_approve' : 'manager_approval',
-      pinnedVersion: workflow.version,
-    };
+    return this.studioSvc.simulateWorkflow(companyId, workflowKey, context);
   }
-
-  // Generic condition/outcome evaluator: no rule key is special-cased, so a
-  // rule created through the Studio Rule Builder fires the same way as a
-  // seeded one. Condition keys ending in Gt/Gte/Lt/Lte compare a context
-  // field numerically (e.g. `adjustmentValueGt: 10000` reads
-  // `context.adjustmentValue`); every other key is an equality check. All
-  // conditions on a rule must match (AND). This is deterministic on
-  // purpose, per the blueprint's "do not hide behind AI" rule (§13).
   evaluateRule(companyId: string, context: Record<string, unknown>): string[] {
-    const published = this.published.get(companyId);
-    const outcomes: string[] = [];
-    for (const rule of published?.rules ?? []) {
-      if (ruleConditionMatches(rule.condition, context)) {
-        outcomes.push(ruleOutcomeAction(rule.outcome));
-      }
-    }
-    return outcomes;
+    return this.studioSvc.evaluateRule(companyId, context);
   }
 
   upsertRule(scope: ScopeContext, rule: RuleDefinition): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const index = draft.rules.findIndex((entry) => entry.key === rule.key);
-    if (index >= 0) draft.rules[index] = rule;
-    else draft.rules.push(rule);
-    return draft;
+    return this.studioSvc.upsertRule(scope, rule);
   }
 
   upsertReport(scope: ScopeContext, report: ReportDefinition): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const index = draft.reports.findIndex((entry) => entry.key === report.key);
-    if (index >= 0) draft.reports[index] = report;
-    else draft.reports.push(report);
-    return draft;
+    return this.studioSvc.upsertReport(scope, report);
   }
 
   upsertAutomation(scope: ScopeContext, automation: AutomationDefinition): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const index = draft.automations.findIndex((entry) => entry.key === automation.key);
-    if (index >= 0) draft.automations[index] = automation;
-    else draft.automations.push(automation);
-    return draft;
+    return this.studioSvc.upsertAutomation(scope, automation);
   }
 
   upsertMobilePolicy(scope: ScopeContext, policy: MobilePolicy): ConfigurationVersion {
-    const draft = this.ensureDraft(scope);
-    const index = draft.mobilePolicies.findIndex((entry) => entry.role === policy.role);
-    const normalized: MobilePolicy = { ...policy, encryptedLocalStore: true };
-    if (index >= 0) draft.mobilePolicies[index] = normalized;
-    else draft.mobilePolicies.push(normalized);
-    return draft;
+    return this.studioSvc.upsertMobilePolicy(scope, policy);
   }
-
-  /**
-   * Removes one entry from the draft: a field (key = "entityType:fieldKey"), workflow, rule,
-   * report, automation, or a role's mobile policy (key = role). Takes effect on the next publish.
-   */
   removeDraftEntry(scope: ScopeContext, kind: DraftEntryKind, key: string): ConfigurationVersion {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertBillingWritable(companyId);
-    const draft = this.ensureDraft(scope);
-    const before = draft[kind].length;
-    if (kind === 'fields') {
-      const [entityType, fieldKey] = key.split(':');
-      draft.fields = draft.fields.filter((entry) => !(entry.entityType === entityType && entry.fieldKey === fieldKey));
-    } else if (kind === 'mobilePolicies') {
-      draft.mobilePolicies = draft.mobilePolicies.filter((entry) => entry.role !== key);
-    } else {
-      (draft as unknown as Record<string, Array<{ key: string }>>)[kind] = (draft[kind] as Array<{ key: string }>).filter((entry) => entry.key !== key);
-    }
-    if (draft[kind].length === before) throw new ControlPlaneError('That entry was not found in the draft', 'DRAFT_ENTRY_NOT_FOUND', 404);
-    return draft;
+    return this.studioSvc.removeDraftEntry(scope, kind, key);
   }
 
   enqueueMutation(input: Omit<SyncMutation, 'status' | 'retryCount' | 'lastError' | 'result' | 'serverAckAt' | 'createdAt'> & { status?: MutationStatus }): SyncMutation {
-    this.assertBillingWritable(input.companyId);
-    if (input.entityType === 'inventory' || input.actionType === 'STOCK_ADJUST' || input.actionType === 'POST_STOCK_ADJUSTMENT') {
-      this.assertFeature(input.companyId, 'INVENTORY');
-    }
-    const existing = this.mutations.get(input.mutationId);
-    if (existing) return existing;
-    const mutation: SyncMutation = {
-      ...input,
-      status: input.status ?? 'pending_sync',
-      retryCount: 0,
-      lastError: null,
-      result: null,
-      createdAt: nowIso(),
-      serverAckAt: null,
-    };
-    this.mutations.set(mutation.mutationId, mutation);
-    return this.processMutation(mutation.mutationId);
+    return this.syncSvc.enqueueMutation(input);
   }
 
   processMutation(mutationId: string): SyncMutation {
-    const mutation = this.mutations.get(mutationId);
-    if (!mutation) throw new ControlPlaneError('Mutation not found', 'MUTATION_NOT_FOUND', 404);
-    if (mutation.status === 'synced') return mutation;
-    mutation.status = 'syncing';
-    if (mutation.actionType === 'STOCK_ADJUST' || mutation.actionType === 'POST_STOCK_ADJUSTMENT') {
-      const itemId = String(mutation.payload.itemId ?? 'item-1');
-      const delta = Number(mutation.payload.delta);
-      if (!Number.isFinite(delta)) {
-        mutation.status = 'rejected';
-        mutation.lastError = 'Stock mutations must submit a movement delta, not a final quantity.';
-        return mutation;
-      }
-      if (mutation.payload.quantity !== undefined && mutation.payload.delta === undefined) {
-        mutation.status = 'rejected';
-        mutation.lastError = 'NEVER_LAST_WRITE_WINS_STOCK';
-        return mutation;
-      }
-      const key = this.ledgerKey(mutation.companyId, itemId);
-      this.ledger.set(key, (this.ledger.get(key) ?? 0) + delta);
-      mutation.result = { itemId, onHand: this.ledger.get(key) };
-      mutation.status = 'synced';
-      mutation.serverAckAt = nowIso();
-      return mutation;
-    }
-    if (mutation.actionType === 'TASK_COMPLETE' && mutation.payload.alreadyCompleted) {
-      mutation.status = 'conflict';
-      mutation.lastError = 'Task already completed elsewhere';
-      return mutation;
-    }
-    if (mutation.payload.permissionRevoked) {
-      mutation.status = 'rejected';
-      mutation.lastError = 'Permission revoked while offline';
-      return mutation;
-    }
-    mutation.status = 'synced';
-    mutation.serverAckAt = nowIso();
-    mutation.result = { ok: true };
-    return mutation;
+    return this.syncSvc.processMutation(mutationId);
   }
 
   stockOnHand(companyId: string, itemId: string): number {
-    return this.ledger.get(this.ledgerKey(companyId, itemId)) ?? 0;
+    return this.syncSvc.stockOnHand(companyId, itemId);
   }
 
   private ledgerKey(companyId: string, itemId: string): string {
-    return `${companyId}:${itemId}`;
+    return this.syncSvc.ledgerKey(companyId, itemId);
   }
 
   registerDevice(input: { companyId: string; userId: string; appVersion: string }): { id: string; status: string } {
-    const id = `device-${randomBytes(4).toString('hex')}`;
-    this.devices.set(id, { id, companyId: input.companyId, userId: input.userId, status: 'trusted', appVersion: input.appVersion });
-    return { id, status: 'trusted' };
+    return this.syncSvc.registerDevice(input);
   }
 
   revokeDevice(deviceId: string): void {
-    const device = this.devices.get(deviceId);
-    if (device) device.status = 'revoked';
+    this.syncSvc.revokeDevice(deviceId);
   }
 
   createApiKey(scope: ScopeContext, name: string, scopes: string[]): { id: string; token: string; prefix: string } {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertFeature(companyId, 'INTEGRATIONS');
-    this.assertFeature(companyId, 'api_access');
-    const token = `invx_${randomBytes(16).toString('hex')}`;
-    const id = randomUUID();
-    const prefix = token.slice(0, 12);
-    this.apiKeys.set(id, {
-      id,
-      companyId,
-      name,
-      prefix,
-      hash: createHmac('sha256', jwtSecret()).update(token).digest('hex'),
-      scopes,
-      status: 'active',
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_CREATED',
-      entityType: 'api_key',
-      entityId: id,
-      before: null,
-      after: { prefix, scopes },
-    });
-    return { id, token, prefix };
+    return this.integrationsSvc.createApiKey(scope, name, scopes);
   }
 
   verifyApiKey(token: string): PublicApiKey | null {
-    if (!token.startsWith('invx_')) return null;
-    const expected = createHmac('sha256', jwtSecret()).update(token).digest('hex');
-    let matched: { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' } | null = null;
-    for (const key of this.apiKeys.values()) {
-      if (key.hash.length !== expected.length || !timingSafeEqual(key.hash, expected)) continue;
-      matched = key;
-      break;
-    }
-    if (!matched) return null;
-    if (matched.status !== 'active') {
-      throw new ControlPlaneError('API key is revoked', 'API_KEY_REVOKED', 401);
-    }
-    if (!this.isFeatureEnabled(matched.companyId, 'INTEGRATIONS') || !this.isFeatureEnabled(matched.companyId, 'api_access')) {
-      throw new ControlPlaneError('Feature is not entitled', 'FEATURE_NOT_ENTITLED', 403);
-    }
-    const { hash: _hash, ...publicKey } = matched;
-    return publicKey;
+    return this.integrationsSvc.verifyApiKey(token);
   }
 
   revokeApiKey(scope: ScopeContext, keyId: string): PublicApiKey {
-    const companyId = this.requireLockedCompany(scope);
-    const key = this.apiKeys.get(keyId);
-    if (!key || key.companyId !== companyId) {
-      throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
-    }
-    key.status = 'revoked';
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_REVOKED',
-      entityType: 'api_key',
-      entityId: key.id,
-      before: { status: 'active' },
-      after: { status: 'revoked' },
-    });
-    const { hash: _hash, ...publicKey } = key;
-    return publicKey;
+    return this.integrationsSvc.revokeApiKey(scope, keyId);
   }
-
-  /**
-   * Issues a replacement key with the same name and scopes and revokes the old
-   * one in a single step, so a leaked or aging key can be replaced without a gap
-   * in which two keys are valid. The new token is returned once and never again;
-   * the audit record names both key ids, never a token.
-   */
   rotateApiKey(scope: ScopeContext, keyId: string): { id: string; token: string; prefix: string; rotatedFrom: string } {
-    const companyId = this.requireLockedCompany(scope);
-    const old = this.apiKeys.get(keyId);
-    if (!old || old.companyId !== companyId) {
-      throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
-    }
-    if (old.status !== 'active') {
-      throw new ControlPlaneError('Only an active API key can be rotated', 'API_KEY_REVOKED', 409);
-    }
-    const created = this.createApiKey(scope, old.name, [...old.scopes]);
-    old.status = 'revoked';
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'API_KEY_ROTATED',
-      entityType: 'api_key',
-      entityId: old.id,
-      before: { status: 'active' },
-      after: { status: 'revoked', replacedBy: created.id },
-    });
-    return { ...created, rotatedFrom: old.id };
+    return this.integrationsSvc.rotateApiKey(scope, keyId);
   }
 
   createWebhook(scope: ScopeContext, url: string, events: string[], name = 'Ops webhook'): { id: string; signingSecret: string; name: string; url: string; events: string[] } {
-    const companyId = this.requireLockedCompany(scope);
-    this.assertFeature(companyId, 'INTEGRATIONS');
-    const parsedEvents = parseWebhookEvents(events);
-    const parsedUrl = parseWebhookEndpoint(url);
-    const id = randomUUID();
-    const signingSecret = randomBytes(32).toString('hex');
-    this.webhooks.set(id, {
-      id,
-      companyId,
-      name: parseWebhookName(name),
-      url: parsedUrl.toString(),
-      events: parsedEvents,
-      status: 'active',
-      signingSecret,
-      createdAt: nowIso(),
-    });
-    this.auditEvent({
-      actorUserId: scope.actorId,
-      actorType: 'platform',
-      tenantId: scope.tenantId,
-      companyId,
-      sessionId: scope.companySessionId,
-      action: 'WEBHOOK_CREATED',
-      entityType: 'webhook',
-      entityId: id,
-      before: null,
-      after: { url: parsedUrl.toString(), events: parsedEvents },
-    });
-    return { id, signingSecret, name: parseWebhookName(name), url: parsedUrl.toString(), events: parsedEvents };
+    return this.integrationsSvc.createWebhook(scope, url, events, name);
   }
 
   publicWebhooks(companyId: string): PublicControlPlaneWebhook[] {
-    return [...this.webhooks.values()]
-      .filter((hook) => hook.companyId === companyId)
-      .map(({ signingSecret: _secret, ...hook }) => hook);
+    return this.integrationsSvc.publicWebhooks(companyId);
   }
 
   upsertConnector(scope: ScopeContext, type: string, status: 'healthy' | 'degraded' | 'down' = 'healthy'): { id: string } {
-    const companyId = this.requireLockedCompany(scope);
-    const id = randomUUID();
-    this.connectors.set(id, { id, companyId, type, status });
-    return { id };
+    return this.integrationsSvc.upsertConnector(scope, type, status);
   }
 
   recordUsage(companyId: string, meter: string, increment = 1): void {
-    const usage = this.usage.get(companyId) ?? {};
-    usage[meter] = (usage[meter] ?? 0) + increment;
-    this.usage.set(companyId, usage);
+    this.integrationsSvc.recordUsage(companyId, meter, increment);
   }
 
   health() {
-    return {
-      ok: true,
-      service: 'invexa-control-plane',
-      persistence: 'snapshot',
-      companies: this.companies.size,
-      sessions: [...this.sessions.values()].filter((session) => session.status === 'active').length,
-      queueLag: this.outbox.length,
-      syncPending: [...this.mutations.values()].filter((mutation) => mutation.status === 'pending_sync' || mutation.status === 'retry_scheduled').length,
-      pastDueCompanies: [...this.billing.entries()].filter(([, billing]) => billing.subscription === 'past_due').map(([companyId]) => companyId),
-      suspendedCompanies: [...this.companies.values()].filter((company) => company.status === 'suspended').map((company) => company.id),
-      killSwitches: Object.fromEntries(this.safety.entries()),
-    };
+    return this.integrationsSvc.health();
   }
 
   billingSnapshot(companyId: string) {
-    return {
-      companyId,
-      planId: this.requireCompany(companyId).planId,
-      billing: this.billing.get(companyId) ?? { subscription: 'trial', cycle: 'monthly', amount: 0 },
-      usage: this.usage.get(companyId) ?? {},
-      limits: this.effectiveLimits(companyId),
-      invoices: this.listInvoices(companyId),
-    };
+    return this.integrationsSvc.billingSnapshot(companyId);
   }
 
   publicCompany(company: CompanyRecord) {
-    return {
-      ...company,
-      planId: company.planId,
-      entitlements: this.entitlements.get(company.id) ?? {},
-      limits: this.effectiveLimits(company.id),
-      usage: this.usage.get(company.id) ?? {},
-    };
+    return this.integrationsSvc.publicCompany(company);
   }
-}
 
 export const controlPlane = new ControlPlane();
-export { DEFAULT_STOCK_PAGE, MODULE_REGISTRY, ACTION_REGISTRY };
+export { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY, signControlToken, verifyControlToken };

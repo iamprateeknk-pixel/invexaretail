@@ -1,14 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useControlSession } from './use-control-session';
+import { OverviewSection } from './sections/OverviewSection';
+import { StudioSection } from './sections/StudioSection';
+import { UsersSection } from './sections/UsersSection';
+import { WorkflowSection } from './sections/WorkflowSection';
+import { MobileSection } from './sections/MobileSection';
+import { IntegrationsSection } from './sections/IntegrationsSection';
+import { BillingSection } from './sections/BillingSection';
+import { HealthSection } from './sections/HealthSection';
 import {
   Activity,
   ArrowLeft,
   Building2,
   CreditCard,
   KeyRound,
-  LayoutDashboard,
   Lock,
   LogOut,
-  PauseCircle,
   Shield,
   SlidersHorizontal,
   Smartphone,
@@ -22,31 +29,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Toaster } from '@/components/ui/sonner';
-import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
-import { clearControlSession, exchangeSessionHandoff, handoffCodeFromHash, controlRequest, readControlSession, writeControlSession } from './control-api';
+import { clearControlSession, controlRequest } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
-import { FormulaBuilder } from './FormulaBuilder';
-import { ImportColumnsEditor } from './ImportColumnsEditor';
-import { StockColumnsLayoutEditor } from './StockColumnsLayoutEditor';
-import { AutomationsEditor, FieldsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, StockExtraColumnCard, WorkflowsEditor } from './StudioEditors';
-import { Advanced, ModeSwitch, StudioModeProvider } from './studio-mode';
-import { labelOf, MOBILE_SCREENS, ROLE_OPTIONS } from './studio-catalog';
+import { ModeSwitch, StudioModeProvider } from './studio-mode';
 
-function stripeSessionFromLocation() {
-  const hash = String(globalThis.location?.hash ?? '');
-  const query = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : String(globalThis.location?.search ?? '').replace(/^\?/, '');
-  return new URLSearchParams(query).get('stripeSession') ?? '';
-}
-
-function clearStripeSessionFromLocation() {
-  const hash = String(globalThis.location?.hash ?? '');
-  if (!hash.includes('stripeSession=')) return;
-  const nextHash = hash.split('?')[0];
-  globalThis.history?.replaceState?.(null, '', `${globalThis.location.pathname}${globalThis.location.search}${nextHash}`);
-}
 
 const NAV = [
   { id: 'overview', label: 'Company', icon: Building2 },
@@ -68,214 +55,74 @@ export function ControlPlaneApp() {
 }
 
 function ControlPlaneWorkspace() {
-  const [session, setSession] = useState(() => readControlSession());
-  const [exchanging, setExchanging] = useState(() => Boolean(handoffCodeFromHash()));
-  useEffect(() => {
-    if (!exchanging) return;
-    let cancelled = false;
-    exchangeSessionHandoff().then((next) => {
-      if (cancelled) return;
-      if (next) { setSession(next); setCompanies(next.companies ?? []); }
-      setExchanging(false);
-    });
-    return () => { cancelled = true; };
-  }, [exchanging]);
-  const [email, setEmail] = useState('superadmin@invexa.local');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [companies, setCompanies] = useState(session?.companies ?? []);
-  const [section, setSection] = useState('overview');
-  const [draft, setDraft] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [runtime, setRuntime] = useState(null);
-  const [health, setHealth] = useState(null);
-  const [billing, setBilling] = useState(null);
-  const [integrations, setIntegrations] = useState(null);
-  const [userEmail, setUserEmail] = useState('');
-  const [userName, setUserName] = useState('');
-  const [userRole, setUserRole] = useState('STORE_USER');
-  const [previewRole, setPreviewRole] = useState('ADMIN');
-  const [newCompanyName, setNewCompanyName] = useState('');
-  const [newCompanyPlan, setNewCompanyPlan] = useState('starter');
-  const [newAdminName, setNewAdminName] = useState('');
-  const [newAdminEmail, setNewAdminEmail] = useState('');
-  const [createdTenant, setCreatedTenant] = useState(null);
-  const [auditEvents, setAuditEvents] = useState([]);
-  const [nextPlanId, setNextPlanId] = useState(session?.company?.planId ?? 'pro');
-  const [createdApiKey, setCreatedApiKey] = useState(null);
-  const [webhookUrl, setWebhookUrl] = useState('https://example.com/invexa-hooks');
-  const [webhookEvents, setWebhookEvents] = useState(['stock.low']);
-  const [createdWebhook, setCreatedWebhook] = useState(null);
-
-  const platformToken = session?.platformToken;
-  const controlToken = session?.controlToken;
-  const company = session?.company;
-
-  function persist(next) {
-    writeControlSession(next);
-    setSession(next);
-  }
-
-  async function handleLogin(event) {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const login = await controlRequest('/control/v1/auth/login', {
-        method: 'POST',
-        body: { email: email.trim().toLowerCase(), password },
-      });
-      persist({
-        platformToken: login.token,
-        user: login.user,
-        companies: login.companies,
-      });
-      setCompanies(login.companies);
-      setPassword('');
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Login failed');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function selectCompany(companyId) {
-    setLoading(true);
-    setError('');
-    try {
-      const selected = await controlRequest('/control/v1/sessions/select-company', {
-        token: platformToken,
-        method: 'POST',
-        body: { companyId },
-      });
-      persist({
-        ...session,
-        controlToken: selected.token,
-        company: selected.company,
-        controlSession: selected.session,
-      });
-      setSection('overview');
-      setNextPlanId(selected.company.planId);
-      toast.success(`Locked to ${selected.company.name}`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Company lock failed');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function exitCompany() {
-    try {
-      if (controlToken) {
-        await controlRequest('/control/v1/sessions/exit', { token: controlToken, method: 'POST' });
-      }
-    } catch {
-      // Local unlock must succeed even if the session was already closed.
-    }
-    persist({
-      platformToken,
-      user: session.user,
-      companies,
-    });
-    toast.message('Company session closed. Re-select to continue.');
-  }
-
-  async function refreshLocked() {
-    if (!controlToken) return;
-    const [draftResult, usersResult, runtimeResult, billingResult, integrationsResult, healthResult, auditResult] = await Promise.allSettled([
-      controlRequest('/studio/v1/draft', { token: controlToken }),
-      controlRequest('/control/v1/users', { token: controlToken }),
-      controlRequest('/studio/v1/runtime', { token: controlToken }),
-      controlRequest('/control/v1/billing', { token: controlToken }),
-      controlRequest('/control/v1/integrations', { token: controlToken }),
-      controlRequest('/control/v1/health'),
-      controlRequest('/control/v1/audit', { token: controlToken }),
-    ]);
-    if (draftResult.status === 'fulfilled') setDraft(draftResult.value.draft);
-    if (usersResult.status === 'fulfilled') setUsers(usersResult.value.users);
-    if (runtimeResult.status === 'fulfilled') setRuntime(runtimeResult.value.runtime);
-    if (billingResult.status === 'fulfilled') setBilling(billingResult.value);
-    if (integrationsResult.status === 'fulfilled') setIntegrations(integrationsResult.value);
-    if (healthResult.status === 'fulfilled') setHealth(healthResult.value);
-    if (auditResult.status === 'fulfilled') setAuditEvents(Array.isArray(auditResult.value.events) ? auditResult.value.events : []);
-    const firstFailure = [draftResult, usersResult, runtimeResult, billingResult, integrationsResult, healthResult]
-      .find((result) => result.status === 'rejected');
-    if (firstFailure) {
-      throw firstFailure.reason;
-    }
-  }
-
-  // The company list used to be whatever the LOGIN response carried, saved in the session and never asked
-  // for again: a platform session that was already signed in kept showing a stale list (a company registered
-  // since then never appeared) until the operator signed out and in. Ask the server whenever the company
-  // picker is what is on screen.
-  useEffect(() => {
-    if (!platformToken || controlToken) return undefined;
-    let cancelled = false;
-    controlRequest('/control/v1/companies', { token: platformToken })
-      .then((result) => {
-        if (cancelled || !Array.isArray(result?.companies)) return;
-        setCompanies(result.companies);
-        const current = readControlSession();
-        if (current?.platformToken) writeControlSession({ ...current, companies: result.companies });
-      })
-      .catch(() => {
-        // Keep the list we already have; the picker still works with what login returned.
-      });
-    return () => { cancelled = true; };
-  }, [platformToken, controlToken]);
-
-  useEffect(() => {
-    if (!controlToken) return;
-    refreshLocked().catch((caught) => setError(caught.message));
-  }, [controlToken]);
-
-  useEffect(() => {
-    if (!controlToken) return;
-    let cancelled = false;
-    async function confirmStripeFromHash() {
-      const sessionId = stripeSessionFromLocation();
-      if (!sessionId) return;
-      try {
-        const confirmed = await controlRequest('/control/v1/billing/stripe/confirm', {
-          token: controlToken,
-          method: 'POST',
-          body: { sessionId },
-        });
-        if (cancelled) return;
-        setBilling(confirmed);
-        setSection('billing');
-        setError('');
-        toast.success('Stripe payment confirmed');
-        clearStripeSessionFromLocation();
-        await refreshLocked().catch((caught) => {
-          if (!cancelled) setError(caught.message);
-        });
-      } catch (caught) {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : 'Stripe confirm failed');
-      }
-    }
-    confirmStripeFromHash();
-    globalThis.addEventListener?.('hashchange', confirmStripeFromHash);
-    return () => {
-      cancelled = true;
-      globalThis.removeEventListener?.('hashchange', confirmStripeFromHash);
-    };
-  }, [controlToken]);
-
-  useEffect(() => {
-    if (!controlToken || section !== 'integrations') return;
-    controlRequest('/control/v1/integrations', { token: controlToken })
-      .then(setIntegrations)
-      .catch((caught) => setError(caught.message));
-  }, [section, controlToken]);
-
-  useEffect(() => {
-    controlRequest('/control/v1/health')
-      .then(setHealth)
-      .catch(() => setHealth(null));
-  }, [company?.id]);
+  const cp = useControlSession();
+  const {
+    session,
+    setSession,
+    exchanging,
+    email,
+    setEmail,
+    password,
+    setPassword,
+    error,
+    setError,
+    loading,
+    setLoading,
+    companies,
+    setCompanies,
+    section,
+    setSection,
+    draft,
+    setDraft,
+    users,
+    setUsers,
+    runtime,
+    setRuntime,
+    health,
+    setHealth,
+    billing,
+    setBilling,
+    integrations,
+    setIntegrations,
+    userEmail,
+    setUserEmail,
+    userName,
+    setUserName,
+    userRole,
+    setUserRole,
+    previewRole,
+    setPreviewRole,
+    newCompanyName,
+    setNewCompanyName,
+    newCompanyPlan,
+    setNewCompanyPlan,
+    newAdminName,
+    setNewAdminName,
+    newAdminEmail,
+    setNewAdminEmail,
+    createdTenant,
+    setCreatedTenant,
+    auditEvents,
+    setAuditEvents,
+    nextPlanId,
+    setNextPlanId,
+    createdApiKey,
+    setCreatedApiKey,
+    webhookUrl,
+    setWebhookUrl,
+    webhookEvents,
+    setWebhookEvents,
+    createdWebhook,
+    setCreatedWebhook,
+    platformToken,
+    controlToken,
+    company,
+    persist,
+    handleLogin,
+    selectCompany,
+    exitCompany,
+    refreshLocked,
+  } = cp;
 
   const lockBadge = useMemo(() => (
     company ? (
@@ -498,550 +345,21 @@ function ControlPlaneWorkspace() {
         </div>
         {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
 
-        {section === 'overview' && (
-          <div className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <CardHeader><CardTitle className="text-sm">Plan</CardTitle></CardHeader>
-              <CardContent className="grid gap-3">
-                <p className="text-2xl font-semibold capitalize">{company.planId}</p>
-                <div className="flex flex-wrap items-end gap-2">
-                  <Select value={nextPlanId} onValueChange={setNextPlanId}>
-                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {['starter', 'pro', 'enterprise'].map((planId) => (
-                        <SelectItem key={planId} value={planId}>{planId}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button disabled={loading || nextPlanId === company.planId} onClick={async () => {
-                    try {
-                      const result = await controlRequest(`/control/v1/companies/${company.id}/plan`, {
-                        token: platformToken,
-                        method: 'PUT',
-                        body: { planId: nextPlanId, reason: 'operator-plan-change' },
-                      });
-                      const nextCompany = { ...company, ...result.company };
-                      const nextCompanies = companies.map((entry) => (
-                        entry.id === company.id ? { ...entry, ...result.company } : entry
-                      ));
-                      setCompanies(nextCompanies);
-                      persist({ ...session, company: nextCompany, companies: nextCompanies });
-                      toast.success(`Plan set to ${result.company.planId}`);
-                      await refreshLocked().catch((caught) => setError(caught.message));
-                    } catch (caught) {
-                      setError(caught instanceof Error ? caught.message : 'Plan change failed');
-                    }
-                  }}>Change plan</Button>
-                </div>
-              </CardContent>
-            </Card>
-            <Card><CardHeader><CardTitle className="text-sm">Users</CardTitle></CardHeader><CardContent className="text-2xl font-semibold">{billing?.usage?.users ?? users.length}</CardContent></Card>
-            <Card><CardHeader><CardTitle className="text-sm">Config version</CardTitle></CardHeader><CardContent className="text-2xl font-semibold">{runtime?.version ?? '—'}</CardContent></Card>
-            <Card className="md:col-span-3">
-              <CardHeader><CardTitle className="text-base">Entitlements</CardTitle></CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {Object.entries(company.entitlements ?? runtime?.modules ?? {}).map(([key, enabled]) => (
-                  <Badge key={key} variant={enabled ? 'success' : 'secondary'}>{key}: {enabled ? 'on' : 'off'}</Badge>
-                ))}
-              </CardContent>
-            </Card>
-            <Card className="md:col-span-3">
-              <CardHeader><CardTitle className="text-base">Tenant access</CardTitle></CardHeader>
-              <CardContent className="grid gap-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <Badge variant={company.status === 'active' ? 'success' : 'destructive'}>{company.status}</Badge>
-                  <span className="text-muted-foreground">
-                    Items {billing?.usage?.items ?? '—'} / {billing?.limits?.max_items ?? '—'} · Locations {billing?.limits?.max_branches ?? '—'} · Users {billing?.usage?.users ?? users.length} / {billing?.limits?.max_users ?? '—'} · API {billing?.usage?.api_requests ?? 0} / {billing?.limits?.api_requests_per_day ?? '—'}
-                  </span>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Suspend freezes tenant login and operational APIs until Super Admin activates the company. Plan limits block new items, locations, and users. Starter hides OMS, analytics, and integrations until the plan is raised.
-                </p>
-                <Button variant="destructive" className="w-fit" onClick={async () => {
-                  try {
-                    await controlRequest(`/control/v1/companies/${company.id}/suspend`, {
-                      token: controlToken,
-                      method: 'POST',
-                      body: { reason: 'operator-suspend' },
-                    });
-                    const nextCompanies = companies.map((entry) => (
-                      entry.id === company.id ? { ...entry, status: 'suspended' } : entry
-                    ));
-                    setCompanies(nextCompanies);
-                    try {
-                      if (controlToken) {
-                        await controlRequest('/control/v1/sessions/exit', { token: controlToken, method: 'POST' });
-                      }
-                    } catch {
-                      // Suspend already closes the locked session.
-                    }
-                    persist({ platformToken, user: session.user, companies: nextCompanies });
-                    toast.message('Company suspended — tenant login and API are frozen');
-                  } catch (caught) {
-                    const message = caught instanceof Error ? caught.message : 'Suspend failed';
-                    setError(message);
-                    toast.error(message);
-                  }
-                }}><PauseCircle className="size-4" />Suspend company</Button>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+        {section === 'overview' && <OverviewSection {...cp} />}
 
-        {section === 'studio' && (
-          <Tabs defaultValue="columns">
-            <TabsList className="h-auto flex-wrap justify-start">
-              <TabsTrigger value="columns">Stock columns</TabsTrigger>
-              <TabsTrigger value="import-columns">Import columns</TabsTrigger>
-              <TabsTrigger value="formulas">Formulas</TabsTrigger>
-              <TabsTrigger value="fields">Extra fields</TabsTrigger>
-              <TabsTrigger value="rules">Rules</TabsTrigger>
-              <TabsTrigger value="reports">Reports</TabsTrigger>
-              <TabsTrigger value="automations">Automations</TabsTrigger>
-              <TabsTrigger value="mobile-policy">Mobile app</TabsTrigger>
-              <TabsTrigger value="preview">Publish</TabsTrigger>
-            </TabsList>
-            <TabsContent value="formulas" className="grid gap-4">
-              <FormulaBuilder controlToken={controlToken} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="import-columns" className="grid gap-4">
-              <ImportColumnsEditor controlToken={controlToken} />
-            </TabsContent>
-            <TabsContent value="columns" className="grid gap-4">
-              <StockColumnsLayoutEditor controlToken={controlToken} onSaved={refreshLocked} />
-              <StockExtraColumnCard controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-              <Advanced label="Advanced: raw draft columns">
-              <Card>
-                <CardHeader className="flex-row items-center justify-between">
-                  <CardTitle className="text-base">Draft columns</CardTitle>
-                  <Button variant="outline" onClick={async () => {
-                    await controlRequest('/studio/v1/draft/actions/export', { token: controlToken, method: 'POST', body: { enabled: false } });
-                    await refreshLocked();
-                    toast.message('Export disabled in draft');
-                  }}>Disable export</Button>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Label</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {(draft?.page?.columns ?? []).map((column) => (
-                        <TableRow key={column.key}><TableCell>{column.key}</TableCell><TableCell>{column.label}</TableCell><TableCell>{column.source}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-              </Advanced>
-            </TabsContent>
-            <TabsContent value="fields" className="grid gap-4">
-              <FieldsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="rules" className="grid gap-4">
-              <RulesEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="reports" className="grid gap-4">
-              <ReportsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="automations" className="grid gap-4">
-              <AutomationsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="mobile-policy" className="grid gap-4">
-              <MobilePolicyEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-            </TabsContent>
-            <TabsContent value="preview" className="grid gap-4">
-              <div className="flex flex-wrap gap-2">
-                <Select value={previewRole} onValueChange={setPreviewRole}>
-                  <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['ADMIN', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'].map((role) => (
-                      <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" onClick={async () => {
-                  const preview = await controlRequest('/studio/v1/preview', { token: controlToken, method: 'POST', body: { role: previewRole, device: 'desktop' } });
-                  toast.success(`${labelOf(ROLE_OPTIONS, previewRole)} would see ${preview.preview.page.columns.length} stock columns`);
-                }}>See what this role gets</Button>
-                <Button onClick={async () => {
-                  try {
-                    await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST' });
-                    await refreshLocked().catch((caught) => setError(caught.message));
-                    setError('');
-                    toast.success('Published');
-                  } catch (caught) {
-                    const message = caught instanceof Error ? caught.message : 'Publish failed';
-                    setError(message);
-                    toast.error(message);
-                  }
-                }}>Publish</Button>
-              </div>
-              <Card>
-                <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  Published version {runtime?.version ?? '—'} · stock columns: {(runtime?.page?.columns ?? []).map((column) => column.label).join(' · ')}
-                  <p className="mt-2">Items & stock in the grocery workspace uses this published page: custom columns and enabled header actions.</p>
-                </CardContent>
-              </Card>
-              <Advanced label="Advanced: undo">
-                <div>
-                  <Button variant="outline" onClick={async () => {
-                  await controlRequest('/studio/v1/rollback', { token: controlToken, method: 'POST', body: { version: 1 } });
-                  await refreshLocked();
-                  toast.message('Rolled back to version 1');
-                }}>Go back to version 1</Button>
-                </div>
-              </Advanced>
-            </TabsContent>
-          </Tabs>
-        )}
+        {section === 'studio' && <StudioSection {...cp} />}
 
-        {section === 'users' && (
-          <Card>
-            <CardHeader><CardTitle className="text-base">Company users</CardTitle></CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="grid gap-3 md:grid-cols-4">
-                <Input placeholder="Name" value={userName} onChange={(event) => setUserName(event.target.value)} />
-                <Input placeholder="Email" value={userEmail} onChange={(event) => setUserEmail(event.target.value)} />
-                <Select value={userRole} onValueChange={setUserRole}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER', 'AUDITOR', 'ADMIN'].map((role) => (
-                      <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button onClick={async () => {
-                  await controlRequest('/control/v1/users', { token: controlToken, method: 'POST', body: { name: userName, email: userEmail, role: userRole } });
-                  setUserEmail('');
-                  setUserName('');
-                  await refreshLocked();
-                  toast.success('User created');
-                }}>Create user</Button>
-              </div>
-              <Table>
-                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                <TableBody>
-                  {users.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell>{user.name}</TableCell>
-                      <TableCell>{user.email}</TableCell>
-                      <TableCell>{labelOf(ROLE_OPTIONS, user.role)}{user.isPrimaryAdmin ? ' · main admin' : ''}</TableCell>
-                      <TableCell>{user.status === 'active' ? 'Active' : 'Inactive'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        )}
+        {section === 'users' && <UsersSection {...cp} />}
 
-        {section === 'workflow' && (
-          <WorkflowsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-        )}
+        {section === 'workflow' && <WorkflowSection {...cp} />}
 
-        {section === 'mobile' && (
-          <div className="grid gap-4">
-            <p className="text-sm text-muted-foreground">What each role gets in the phone app. Change it in Studio → Mobile app, then publish.</p>
-            {(draft?.mobilePolicies ?? []).length === 0 && <p className="text-sm text-muted-foreground">No role has mobile settings yet.</p>}
-            {(draft?.mobilePolicies ?? []).map((policy) => (
-              <Card key={policy.role}>
-                <CardHeader><CardTitle className="text-base">{labelOf(ROLE_OPTIONS, policy.role)}</CardTitle></CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  Screens: {policy.navigation.map((screen) => labelOf(MOBILE_SCREENS, screen)).join(', ') || '—'} · works offline up to {policy.offlineMaxHours} hours · phone data is encrypted
-                </CardContent>
-              </Card>
-            ))}
-            <Advanced label="Advanced: sync test">
-              <div>
-                <Button variant="outline" onClick={async () => {
-                  const result = await controlRequest('/sync/v1/mutations', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: { mutationId: crypto.randomUUID(), companyId: company.id, userId: session.user.id, deviceId: 'control-demo', actionType: 'STOCK_ADJUST', payload: { itemId: 'item-1', delta: -1 } },
-                  });
-                  toast.success(`Sync ${result.mutation.status}`);
-                }}>Post sample stock movement</Button>
-              </div>
-            </Advanced>
-          </div>
-        )}
+        {section === 'mobile' && <MobileSection {...cp} />}
 
-        {section === 'integrations' && (
-          <div className="grid gap-4">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">API keys & connectors</CardTitle>
-              <Button onClick={async () => {
-                const key = await controlRequest('/control/v1/integrations/api-keys', { token: controlToken, method: 'POST', body: { name: 'POS', scopes: ['inventory.read'] } });
-                setCreatedApiKey(key);
-                toast.success(`Key ${key.prefix}… shown once`);
-                await refreshLocked();
-              }}>Create API key</Button>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              {createdApiKey?.token && (
-                <Alert>
-                  <AlertDescription className="grid gap-2">
-                    <span>Copy this key now. Invexa will not show it again.</span>
-                    <code className="break-all font-mono text-xs">{createdApiKey.token}</code>
-                    <Button size="sm" variant="outline" className="w-fit" onClick={async () => {
-                      try {
-                        await globalThis.navigator?.clipboard?.writeText(createdApiKey.token);
-                        toast.success('API key copied');
-                      } catch {
-                        toast.message('Copy the key from the box above');
-                      }
-                    }}>Copy key</Button>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <p className="text-muted-foreground">
-                Bearer invx_ keys authenticate `/api/v1`. Read keys list catalog; write scopes are required to mutate.
-              </p>
-              {(integrations?.apiKeys ?? []).map((key) => (
-                <div key={key.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                  <div className="grid gap-1">
-                    <span className="font-medium">{key.name}</span>
-                    <span className="font-mono text-xs text-muted-foreground">{key.prefix}… · {(key.scopes ?? []).join(', ')} · {key.status}</span>
-                  </div>
-                  {key.status !== 'revoked' && (
-                    <Button size="sm" variant="ghost" onClick={async () => {
-                      await controlRequest(`/control/v1/integrations/api-keys/${key.id}/revoke`, { token: controlToken, method: 'POST' });
-                      if (createdApiKey?.id === key.id) setCreatedApiKey(null);
-                      toast.message('API key revoked');
-                      await refreshLocked().catch((caught) => setError(caught.message));
-                    }}>Revoke</Button>
-                  )}
-                </div>
-              ))}
-              <p className="text-muted-foreground">Connectors: {(integrations?.connectors ?? []).length}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">Operational webhooks</CardTitle>
-              <Button onClick={async () => {
-                try {
-                  const created = await controlRequest('/control/v1/integrations/webhooks', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: { name: 'Ops hook', url: webhookUrl, events: webhookEvents },
-                  });
-                  const webhook = created.webhook ?? created;
-                  setCreatedWebhook(webhook);
-                  setIntegrations((current) => ({
-                    ...(current ?? {}),
-                    webhooks: [
-                      ...(current?.webhooks ?? []).filter((hook) => hook.id !== webhook.id),
-                      {
-                        id: webhook.id,
-                        name: webhook.name,
-                        url: webhook.url,
-                        events: webhook.events,
-                        status: webhook.status || 'active',
-                        createdAt: webhook.createdAt,
-                      },
-                    ],
-                  }));
-                  toast.success('Webhook registered');
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                } catch (caught) {
-                  setError(caught.message);
-                  toast.error(caught.message);
-                }
-              }}>Create webhook</Button>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              <div className="grid gap-2">
-                <Label>HTTPS endpoint</Label>
-                <Input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {WEBHOOK_EVENT_OPTIONS.map((option) => {
-                  const active = webhookEvents.includes(option.value);
-                  return (
-                    <Button
-                      key={option.value}
-                      size="sm"
-                      variant={active ? 'default' : 'outline'}
-                      onClick={() => setWebhookEvents((current) => (
-                        current.includes(option.value)
-                          ? current.filter((event) => event !== option.value)
-                          : [...current, option.value]
-                      ))}
-                    >
-                      {option.label}
-                    </Button>
-                  );
-                })}
-              </div>
-              {createdWebhook?.signingSecret && (
-                <Alert>
-                  <AlertDescription className="grid gap-2">
-                    <span>Copy this signing secret now. Invexa will not show it again.</span>
-                    <code className="break-all font-mono text-xs">{createdWebhook.signingSecret}</code>
-                    <Button size="sm" variant="outline" className="w-fit" onClick={async () => {
-                      try {
-                        await globalThis.navigator?.clipboard?.writeText(createdWebhook.signingSecret);
-                        toast.success('Signing secret copied');
-                      } catch {
-                        toast.message('Copy the secret from the box above');
-                      }
-                    }}>Copy secret</Button>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <p className="text-muted-foreground">
-                Stock, transfer, PO and count events for this company POST to the HTTPS URL with X-Invexa-Signature.
-              </p>
-              <p className="font-medium">Registered webhooks ({(integrations?.webhooks ?? []).length})</p>
-              {(integrations?.webhooks ?? []).length === 0 && (
-                <p className="text-muted-foreground">No operational webhooks for this company yet.</p>
-              )}
-              {(integrations?.webhooks ?? []).map((hook) => (
-                <div key={hook.id} className="rounded-lg border px-3 py-2">
-                  <p className="font-medium">{hook.name || hook.url}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{hook.url} · {(hook.events ?? []).join(', ')} · {hook.status}</p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-          </div>
-        )}
+        {section === 'integrations' && <IntegrationsSection {...cp} />}
 
-        {section === 'billing' && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <CardTitle className="text-base">Usage vs limits</CardTitle>
-                <Badge variant="outline">{billing?.adapter ?? billing?.provider ?? 'manual'}</Badge>
-                {billing?.adapter === 'stripe' && <Badge>Stripe live</Badge>}
-                {billing?.adapter === 'local' && <Badge>Stripe local</Badge>}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={async () => {
-                  const issued = await controlRequest('/control/v1/billing/invoices', { token: controlToken, method: 'POST' });
-                  setBilling(issued);
-                  toast.success('Invoice issued');
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                }}>Issue invoice</Button>
-                <Button onClick={async () => {
-                  const checkout = await controlRequest('/control/v1/billing/checkout', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: {
-                      successUrl: globalThis.location?.href,
-                      cancelUrl: globalThis.location?.href,
-                    },
-                  });
-                  setBilling(checkout);
-                  if (checkout.mode === 'checkout' && checkout.url) {
-                    if (checkout.adapter === 'local') {
-                      const nextHash = String(checkout.url).split('#')[1];
-                      if (nextHash) globalThis.location.hash = nextHash;
-                      else globalThis.location.assign(checkout.url);
-                      toast.success('Local Stripe checkout ready');
-                    } else {
-                      globalThis.open?.(checkout.url, '_blank', 'noopener');
-                      toast.success('Stripe checkout opened');
-                    }
-                  } else {
-                    toast.message('Manual billing — record payment when the transfer clears');
-                  }
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                }}>Collect payment</Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm">
-              <p>Subscription: {billing?.billing?.subscription}</p>
-              <p>Users {billing?.usage?.users ?? 0} / {billing?.limits?.max_users ?? '—'}</p>
-              <p>API requests {billing?.usage?.api_requests ?? 0} / {billing?.limits?.api_requests_per_day ?? '—'}</p>
-              {(Array.isArray(billing?.invoices) ? billing.invoices : []).map((invoice) => (
-                <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                  <div className="grid gap-1">
-                    <span className="font-mono text-xs">{String(invoice.id).slice(0, 8)}</span>
-                    <span>Amount {invoice.amount} · <Badge variant={invoice.status === 'past_due' ? 'destructive' : 'secondary'}>{invoice.status}</Badge></span>
-                  </div>
-                  <div className="flex gap-2">
-                    {invoice.status === 'open' && (
-                      <Button size="sm" variant="ghost" onClick={async () => {
-                        const updated = await controlRequest(`/control/v1/billing/invoices/${invoice.id}/past-due`, { token: controlToken, method: 'POST' });
-                        setBilling(updated);
-                        toast.message('Invoice marked past due — Studio publish is on hold');
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>Mark past due</Button>
-                    )}
-                    {invoice.status !== 'paid' && (
-                      <Button size="sm" variant="outline" onClick={async () => {
-                        const updated = await controlRequest(`/control/v1/billing/invoices/${invoice.id}/pay`, { token: controlToken, method: 'POST' });
-                        setBilling(updated);
-                        setError('');
-                        toast.success('Payment recorded');
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>Record payment</Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
+        {section === 'billing' && <BillingSection {...cp} />}
 
-        {section === 'health' && (
-          <Card>
-            <CardHeader><CardTitle className="text-base">System health</CardTitle></CardHeader>
-            <CardContent className="grid gap-4 text-sm">
-              <div className="flex flex-wrap items-center gap-3">
-                <LayoutDashboard className="size-4" />
-                <span>{health?.ok ? 'Control plane healthy' : 'Unavailable'}</span>
-                <Badge variant="secondary">{health?.companies ?? 0} companies</Badge>
-                <Badge variant="outline">{health?.persistence ?? 'snapshot'}</Badge>
-                {(health?.pastDueCompanies ?? []).length > 0 && (
-                  <Badge variant="destructive">{health.pastDueCompanies.length} past due</Badge>
-                )}
-                {(health?.suspendedCompanies ?? []).length > 0 && (
-                  <Badge variant="destructive">{health.suspendedCompanies.length} suspended</Badge>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <p className="text-muted-foreground">Platform kill switches freeze mutations across every company. Reads stay available.</p>
-                {['INVENTORY', 'WMS', 'OMS'].map((feature) => {
-                  const enabled = health?.killSwitches?.[feature] !== false;
-                  return (
-                    <div key={feature} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                      <div>
-                        <p className="font-medium">{feature}</p>
-                        <p className="text-xs text-muted-foreground">{enabled ? 'Mutations allowed' : 'Mutations blocked'}</p>
-                      </div>
-                      <Button size="sm" variant={enabled ? 'destructive' : 'outline'} onClick={async () => {
-                        const result = await controlRequest('/control/v1/safety/kill-switches', {
-                          token: controlToken,
-                          method: 'POST',
-                          body: { featureKey: feature, enabled: !enabled, reason: enabled ? 'incident' : 'restore' },
-                        });
-                        setHealth((current) => ({ ...(current ?? { ok: true }), killSwitches: result.safety }));
-                        toast.message(enabled ? `${feature} kill switch on` : `${feature} restored`);
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>{enabled ? 'Kill' : 'Restore'}</Button>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="grid gap-2">
-                <p className="text-muted-foreground">Recent control-plane audit events for this company.</p>
-                {(Array.isArray(auditEvents) ? auditEvents.slice(-8).reverse() : []).map((event) => (
-                  <div key={event.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                    <span className="font-mono text-xs">{event.action}</span>
-                    <span className="text-xs text-muted-foreground">{event.companyId ?? 'platform'}</span>
-                  </div>
-                ))}
-                {(!Array.isArray(auditEvents) || auditEvents.length === 0) && (
-                  <p className="text-xs text-muted-foreground">No audit events yet.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {section === 'health' && <HealthSection {...cp} />}
       </main>
     </div>
   );
