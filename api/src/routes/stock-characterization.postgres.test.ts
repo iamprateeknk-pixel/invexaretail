@@ -18,7 +18,7 @@ import { prisma } from '../lib/db.js';
 import { hydrateRepositoryFromDatabase } from '../lib/persistence.js';
 import { findStockLedgerEntry, listStockLedger, listStockLedgerForLocation } from '../lib/repository.js';
 import { canonicalLedgerRows, diffJson, seedStockParityFixture, stockParityCtx, type StockParityFixture } from '../lib/repositories/stock-parity-harness.js';
-import { listBinStockForLocation, listStockForCompany, listStockForLocation } from '../lib/repositories/stock-repository.js';
+import { findStockEntry, listBinStockForLocation, listStockForCompany, listStockForLocation } from '../lib/repositories/stock-repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -86,47 +86,52 @@ integration('plan §2.5a FIXED at step 2: the stock read behind GET /stock is te
   assert.equal(own[0].reserved, 1);
 });
 
-integration('plan §2.5c FIXED at step 1: the hydrated snapshot now carries reserved/inTransit/damaged via the shared mapper', async () => {
+integration('plan §2.5c RESOLVED at step 15: hydration no longer loads stock into the snapshot at all', async () => {
   await hydrateRepositoryFromDatabase();
-  const entry = findStockLedgerEntry(fixture.itemA1, fixture.lotA1, fixture.locationA);
-  assert.ok(entry, 'the fixture row must be in the hydrated snapshot');
-  assert.equal(entry.onHand, 10);
-  assert.equal(entry.quarantine, 1);
-  // Was a KNOWN-DIVERGENCE pin at step 0: hydration mapped only
-  // onHand/quarantine/version, so the DB row's reserved 4 / inTransit 2 /
-  // damaged 1 were invisible to every snapshot-fed screen. Hydration and
-  // the stock repository now share lib/stock-ledger-mapper.ts.
-  assert.equal(entry.reserved, 4);
-  assert.equal(entry.inTransit, 2);
-  assert.equal(entry.damaged, 1);
+  // History of this pin: at step 0 the snapshot record had no fields for
+  // reserved/inTransit/damaged (KNOWN-DIVERGENCE); step 1 fixed the mapper
+  // so the buckets survived hydration; step 15 removes the snapshot from
+  // the stock read path entirely — after hydration it holds no stock rows,
+  // and the only way to read stock is the tenant-scoped repository.
+  assert.equal(findStockLedgerEntry(fixture.itemA1, fixture.lotA1, fixture.locationA), undefined);
+  const entry = await findStockEntry(stockParityCtx(fixture.companyA), fixture.itemA1, fixture.lotA1, fixture.locationA);
+  assert.equal(entry?.onHand, 10);
+  assert.equal(entry?.quarantine, 1);
+  assert.equal(entry?.reserved, 4);
+  assert.equal(entry?.inTransit, 2);
+  assert.equal(entry?.damaged, 1);
 });
 
-integration('snapshot stock inputs for /dashboard, /expiry-dashboard, /intelligence and picker detail are pinned (steps 4-6 convert these reads)', async () => {
+integration('stock inputs for /dashboard, /expiry-dashboard, /intelligence and picker detail, post-step-15: snapshot empty, repository serves the pinned rows', async () => {
   await hydrateRepositoryFromDatabase();
-  // Per-location input (dashboard reports, picker transfer detail).
-  assert.deepEqual(canonicalLedgerRows(listStockLedgerForLocation(fixture.locationA)), [
+  // The inputs these surfaces used to take from the snapshot (converted at
+  // steps 4-6) no longer exist there: hydration loads no stock (step 15).
+  assert.deepEqual(listStockLedgerForLocation(fixture.locationA), []);
+  const fixtureLocations = new Set([fixture.locationA, fixture.locationA2, fixture.locationB]);
+  assert.deepEqual(listStockLedger().filter((row) => fixtureLocations.has(row.locationId)), []);
+  // The same pinned rows, now served by the repository reads the routes use.
+  assert.deepEqual(canonicalLedgerRows(await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA)), [
     { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: 4, inTransit: 2, quarantine: 1, damaged: 1, version: 3 },
     { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 0 },
   ]);
-  // Whole-snapshot input (dashboard totals, intelligence memory branch, webhook low-stock).
-  const fixtureLocations = new Set([fixture.locationA, fixture.locationA2, fixture.locationB]);
-  const mine = canonicalLedgerRows(listStockLedger().filter((row) => fixtureLocations.has(row.locationId)));
-  assert.deepEqual(mine, [
+  assert.deepEqual(canonicalLedgerRows(await listStockForCompany(stockParityCtx(fixture.companyA))), [
     { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA, onHand: 10, reserved: 4, inTransit: 2, quarantine: 1, damaged: 1, version: 3 },
     { itemId: fixture.itemA1, lotId: fixture.lotA1, locationId: fixture.locationA2, onHand: 6, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 1 },
     { itemId: fixture.itemA2, lotId: fixture.lotA2, locationId: fixture.locationA, onHand: 0, reserved: 0, inTransit: 0, quarantine: 0, damaged: 0, version: 0 },
-    { itemId: fixture.itemB1, lotId: fixture.lotB1, locationId: fixture.locationB, onHand: 5, reserved: 1, inTransit: 0, quarantine: 0, damaged: 0, version: 2 },
   ]);
 });
 
 integration('plan §2.5b FIXED at step 3: a stocked location with zero BinStock rows now answers [] in DB mode — no memory fallback, no seeding', async () => {
   await hydrateRepositoryFromDatabase();
   // The precondition is unchanged: no BinStock rows at locationA2, while
-  // the snapshot still holds onHand 6 there.
+  // the database holds onHand 6 there. (Post-step-15 the snapshot no longer
+  // holds the row at all — hydration slimming — so the old serializeMemory()
+  // seeding source is gone twice over; the snapshot assertion pins that.)
   const binRows = await prisma.binStock.findMany({ where: { companyId: fixture.companyA, locationId: fixture.locationA2 } });
   assert.deepEqual(binRows, []);
-  const seedRows = listStockLedgerForLocation(fixture.locationA2).filter((row) => row.onHand > 0);
+  const seedRows = (await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA2)).filter((row) => row.onHand > 0);
   assert.equal(seedRows.length, 1);
+  assert.deepEqual(listStockLedgerForLocation(fixture.locationA2), []);
   // Was a KNOWN-DIVERGENCE pin at step 0: the handler's serializeMemory()
   // seeded those snapshot rows into the staging bin inside the GET and
   // served them as if they were bin stock. The route's database branch is

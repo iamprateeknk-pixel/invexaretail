@@ -1,10 +1,11 @@
 // Phase 5 (DB-first stock reads, R1/R4) — step 1: the stock repository.
-// Proves (a) parity: repository output equals the hydrated snapshot for the
-// same company now that both use lib/stock-ledger-mapper.ts, (b) tenant
-// isolation: another company's rows are invisible under every function,
-// (c) post-boot visibility: a row written after hydration is read back
-// without rehydrating — the property the snapshot never had, and the reason
-// this repository exists. Fixture: lib/repositories/stock-parity-harness.ts.
+// Proves (a) correctness against the canonical database rows (the step-1
+// snapshot-parity oracle was retired at step 15, when hydration stopped
+// loading stock into the snapshot at all), (b) tenant isolation: another
+// company's rows are invisible under every function, (c) post-boot
+// visibility: a row written after hydration is read back without
+// rehydrating — the property the snapshot never had, and the reason this
+// repository exists. Fixture: lib/repositories/stock-parity-harness.ts.
 // Skipped unless TEST_DATABASE_URL is set (see AGENTS.md "Required tests").
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -55,14 +56,17 @@ integration('listStockForCompany is bounded to the caller\'s company', async () 
   ]);
 });
 
-integration('parity: the repository equals the hydrated snapshot for the same company', async () => {
+integration('step 15: hydration no longer loads stock into the snapshot — the repository is the only stock read', async () => {
   await hydrateRepositoryFromDatabase();
+  // Hydration slimming: the snapshot's stock accessors see nothing for the
+  // fixture locations, so no code path can mistake a stale in-memory copy
+  // for stock truth.
+  assert.deepEqual(listStockLedgerForLocation(fixture.locationA), []);
+  assert.deepEqual(listStockLedger().filter((row) => [fixture.locationA, fixture.locationA2].includes(row.locationId)), []);
+  // The repository still serves the full rows from the database.
   const fromDb = await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA);
-  const fromSnapshot = listStockLedgerForLocation(fixture.locationA);
-  assert.deepEqual(canonicalLedgerRows(fromDb), canonicalLedgerRows(fromSnapshot));
-  const companyFromDb = await listStockForCompany(stockParityCtx(fixture.companyA));
-  const companyFromSnapshot = listStockLedger().filter((row) => [fixture.locationA, fixture.locationA2].includes(row.locationId));
-  assert.deepEqual(canonicalLedgerRows(companyFromDb), canonicalLedgerRows(companyFromSnapshot));
+  assert.equal(fromDb.length, 2);
+  assert.equal((await listStockForCompany(stockParityCtx(fixture.companyA))).length, 3);
 });
 
 integration('a row written after boot is visible to the repository without rehydration', async () => {
