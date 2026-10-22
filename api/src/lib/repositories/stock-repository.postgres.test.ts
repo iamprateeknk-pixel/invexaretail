@@ -13,7 +13,7 @@ import { prisma } from '../db.js';
 import { hydrateRepositoryFromDatabase } from '../persistence.js';
 import { listStockLedger, listStockLedgerForLocation } from '../repository.js';
 import { canonicalLedgerRows, seedStockParityFixture, stockParityCtx, type StockParityFixture } from './stock-parity-harness.js';
-import { findStockEntry, listBinStockForLocation, listRecentMovementItemIds, listStockForCompany, listStockForLocation } from './stock-repository.js';
+import { findStockEntry, listBinStockForLocation, listRecentMovementItemIds, listRecentMovements, listStockForCompany, listStockForLocation } from './stock-repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -112,4 +112,23 @@ integration('listRecentMovementItemIds reads the journal, scoped and time-filter
   const receipts = await listRecentMovementItemIds(stockParityCtx(fixture.companyA), { locationId: fixture.locationA, movementType: 'PURCHASE_RECEIPT' });
   assert.deepEqual(receipts, [], 'no receipts were seeded');
   assert.deepEqual(await listRecentMovementItemIds(stockParityCtx(fixture.companyB), { locationId: fixture.locationA }), [], "company B sees none of A's journal");
+});
+
+integration('listRecentMovements returns signed journal rows, type/time filtered and tenant-scoped', async () => {
+  const now = new Date();
+  const move = (itemId: string, lotId: string, movementType: 'SALES_DEDUCTION' | 'SALES_RETURN', qtyDelta: number, timestamp: Date) =>
+    prisma.stockMovement.create({
+      data: { companyId: fixture.companyA, itemId, lotId, locationId: fixture.locationA2, movementType, qtyDelta, beforeBalance: 6, afterBalance: 6 + qtyDelta, timestamp },
+    });
+  await move(fixture.itemA1, fixture.lotA1, 'SALES_DEDUCTION', -3, now);
+  await move(fixture.itemA1, fixture.lotA1, 'SALES_RETURN', 1, new Date(now.getTime() + 60_000));
+  await move(fixture.itemA1, fixture.lotA1, 'SALES_DEDUCTION', -2, new Date(now.getTime() - 40 * 24 * 3600_000));
+
+  const rows = await listRecentMovements(stockParityCtx(fixture.companyA), {
+    locationId: fixture.locationA2,
+    movementTypes: ['SALES_DEDUCTION', 'SALES_RETURN'],
+    since: new Date(now.getTime() - 24 * 3600_000),
+  });
+  assert.deepEqual(rows.map((row) => [row.movementType, row.qtyDelta]), [['SALES_DEDUCTION', -3], ['SALES_RETURN', 1]]);
+  assert.deepEqual(await listRecentMovements(stockParityCtx(fixture.companyB), { locationId: fixture.locationA2 }), []);
 });

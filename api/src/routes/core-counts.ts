@@ -13,7 +13,9 @@ import { buildCycleCountPlan, cycleCountInstructions, parseAbcClasses, selectEli
 import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import { signedSalesQty } from '../lib/sales-demand.js';
 import { submitStockCount } from '../lib/store.js';
-import { createCountAssignment, deleteCountAssignment, createCountRecord, removeCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findStockLedgerEntry, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listStockMovements, listLocations, listStockLedgerForLocation, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment, users } from '../lib/repository.js';
+import { createCountAssignment, deleteCountAssignment, createCountRecord, removeCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment, users } from '../lib/repository.js';
+import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listStockForLocation } from '../lib/repositories/stock-repository.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { getCountRecommendation } from '../lib/count-tolerance.js';
 import { isDomainError, statusForErrorCode } from '../lib/errors.js';
@@ -124,6 +126,7 @@ function countResponse(role: string, count: { id: string; itemId: string; lotId:
 }
 
 type LotCountArgs = {
+  ctx: TenantContext;
   userId: string;
   userRole: string;
   role: Role;
@@ -143,7 +146,14 @@ type LotCountArgs = {
 /** Records one lot's count: memory + database + audit, and the assignment/campaign bookkeeping. */
 async function commitLotCount(args: LotCountArgs) {
   const { item, lot, assignment } = args;
-  const bookQty = findStockLedgerEntry(item.id, lot.id, args.locationId)?.onHand ?? 0;
+  // Phase 5 step 7: the book quantity a count is compared against is the
+  // current database row (stock repository), not the snapshot — the
+  // snapshot's "as of last reconcile" figure could bless or condemn a
+  // count on stale data. One repository read serves the book quantity and
+  // the assignment's required-lots check below.
+  const ledger = await listStockForLocation(args.ctx, args.locationId);
+  const onHandOf = (lotId: string) => ledger.find((row) => row.itemId === item.id && row.lotId === lotId)?.onHand ?? 0;
+  const bookQty = onHandOf(lot.id);
   const saved = submitStockCount({
     itemId: item.id,
     lotId: lot.id,
@@ -178,7 +188,7 @@ async function commitLotCount(args: LotCountArgs) {
   ];
   if (assignment && args.closeAssignment === 'auto') {
     const requiredLotIds = item.lots
-      .filter((candidate) => (findStockLedgerEntry(item.id, candidate.id, args.locationId)?.onHand ?? 0) !== 0)
+      .filter((candidate) => onHandOf(candidate.id) !== 0)
       .map((candidate) => candidate.id);
     const countedLotIds = new Set(
       listCounts()
@@ -228,7 +238,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     // Blueprint v4 §7: operational users never act on a zero-stock lot.
-    if (hidesZeroStockForRole(context.role) && (findStockLedgerEntry(item.id, lot.id, validated.locationId)?.onHand ?? 0) <= 0) {
+    if (hidesZeroStockForRole(context.role) && ((await findStockEntry(tenantContext(req), item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
       return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });
     }
 
@@ -244,6 +254,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     const { saved, bookQty } = await commitLotCount({
+      ctx: tenantContext(req),
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -300,9 +311,10 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       if (!assignment) return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
     }
 
+    const weightLedger = await listStockForLocation(tenantContext(req), locationId);
     const lots = item.lots.map((lot) => ({
       lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
-      bookQty: findStockLedgerEntry(item.id, lot.id, locationId)?.onHand ?? 0,
+      bookQty: weightLedger.find((row) => row.itemId === item.id && row.lotId === lot.id)?.onHand ?? 0,
     }));
     const allocation = allocateWeightCount(total, lots, item.allocationStrategy ?? 'FEFO');
     if (allocation.some((row) => findPendingCountForLot(req.user!.id, item.id, row.lotId, locationId))) {
@@ -319,6 +331,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       for (const row of allocation) {
         const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
         saved.push(await commitLotCount({
+          ctx: tenantContext(req),
           userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
           physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
           companyId: req.companyId ?? DEFAULT_COMPANY_ID,
@@ -666,14 +679,12 @@ router.get('/count-assignments', async (req: Request, res: Response) => {
 
 const CYCLE_COUNT_DEMAND_WINDOW_DAYS = 90;
 
-/** Net units sold at a location in the last `windowDays` (audit C-4: usage-value ABC ranking), from the same two in-memory movement sources `recentlySoldItemIds` below already reads - order/import movements and the legacy daily sales import. */
-function unitsSoldByItemForLocation(locationId: string, windowDays: number, now: Date): Map<string, number> {
+/** Net units sold at a location in the last `windowDays` (audit C-4: usage-value ABC ranking), from the journal via the stock repository (Phase 5 step 7 — the snapshot's stockMovements array it used before is never hydrated, so this silently emptied on every restart) plus the legacy daily sales import. */
+async function unitsSoldByItemForLocation(ctx: TenantContext, locationId: string, windowDays: number, now: Date): Promise<Map<string, number>> {
   const since = now.getTime() - windowDays * 86_400_000;
   const totals = new Map<string, number>();
   const add = (itemId: string, delta: number) => totals.set(itemId, (totals.get(itemId) ?? 0) + delta);
-  for (const m of listStockMovements({ locationId })) {
-    if (!['SALES_DEDUCTION', 'SALES_RETURN'].includes(m.movementType)) continue;
-    if (new Date(m.timestamp).getTime() < since) continue;
+  for (const m of await listRecentMovements(ctx, { locationId, movementTypes: ['SALES_DEDUCTION', 'SALES_RETURN'], since: new Date(since) })) {
     add(m.itemId, signedSalesQty(m.movementType, m.qtyDelta));
   }
   for (const m of listDailyMovements()) {
@@ -684,25 +695,26 @@ function unitsSoldByItemForLocation(locationId: string, windowDays: number, now:
   return totals;
 }
 
-function cycleCountPlanForLocation(locationId: string, companyId: string, now = new Date()) {
+async function cycleCountPlanForLocation(ctx: TenantContext, locationId: string, companyId: string, now = new Date()) {
   // Usage-value ranking (audit C-4) needs at least one sale in the window to mean anything - with
   // none at all (a brand-new location, or nothing has moved in 90 days) there is no usage signal,
   // so buildCycleCountPlan falls back to stock-value ranking rather than every item defaulting to
   // class C for lack of data (same "unknown is not zero" rule as gmroi/turns elsewhere).
-  const unitsSoldByItem = unitsSoldByItemForLocation(locationId, CYCLE_COUNT_DEMAND_WINDOW_DAYS, now);
+  const unitsSoldByItem = await unitsSoldByItemForLocation(ctx, locationId, CYCLE_COUNT_DEMAND_WINDOW_DAYS, now);
   return buildCycleCountPlan({
     locationId,
     items: listItems(),
-    stock: listStockLedgerForLocation(locationId),
+    stock: await listStockForLocation(ctx, locationId),
     assignments: listCountAssignments(),
     counts: listCounts(),
     // Audit C-4: cadence is a per-company setting now, not the fixed ABC_CADENCE constant; ABC
     // ranks by usage value (units sold x cost), not stock value on hand.
     cadenceDays: cadenceForCompany(companyId),
     ...(unitsSoldByItem.size > 0 ? { unitsSoldByItem, demandWindowDays: CYCLE_COUNT_DEMAND_WINDOW_DAYS } : {}),
-    // Items sold at this location in the last 30 days: order/import movements and the legacy daily sales import.
+    // Items sold at this location in the last 30 days: journal movements (stock repository,
+    // Phase 5 step 7) and the legacy daily sales import.
     recentlySoldItemIds: new Set([
-      ...listStockMovements({ locationId }).filter((m) => m.movementType === 'SALES_DEDUCTION' && now.getTime() - new Date(m.timestamp).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
+      ...(await listRecentMovementItemIds(ctx, { locationId, movementType: 'SALES_DEDUCTION', since: new Date(now.getTime() - 30 * 86_400_000) })),
       ...listDailyMovements().filter((m) => m.locationId === locationId && m.sourceType === 'SALES' && m.qtyDelta < 0 && now.getTime() - new Date(m.transactionAt).getTime() <= 30 * 86_400_000).map((m) => m.itemId),
     ]),
     // Items received into this location with damaged, short or excess quantities in the last 14 days.
@@ -713,7 +725,7 @@ function cycleCountPlanForLocation(locationId: string, companyId: string, now = 
   });
 }
 
-router.get('/cycle-counts/:locationId', (req: Request, res: Response) => {
+router.get('/cycle-counts/:locationId', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins and branch managers can view the cycle-count planner.' });
   }
@@ -725,7 +737,7 @@ router.get('/cycle-counts/:locationId', (req: Request, res: Response) => {
   } catch {
     return res.status(403).json({ message: 'This user cannot manage counts at the selected location.' });
   }
-  return res.json({ plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID) });
+  return res.json({ plan: await cycleCountPlanForLocation(tenantContext(req), locationId, req.companyId ?? DEFAULT_COMPANY_ID) });
 });
 
 router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Response) => {

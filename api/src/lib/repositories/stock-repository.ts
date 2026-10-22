@@ -104,6 +104,45 @@ export async function listRecentMovementItemIds(
   return [...ids];
 }
 
+export type RecentMovementRow = { itemId: string; movementType: string; qtyDelta: number; timestamp: string };
+
+/**
+ * Journal rows at a location (oldest first), optionally narrowed by type
+ * and start time — the quantity-bearing sibling of
+ * listRecentMovementItemIds, for callers like the cycle-count planner that
+ * sum signed sales quantities. Same contract: the journal, never the
+ * snapshot's never-hydrated array.
+ */
+export async function listRecentMovements(
+  ctx: TenantContext,
+  filter: { locationId: string; movementTypes?: string[]; since?: Date },
+): Promise<RecentMovementRow[]> {
+  if (databaseEnabled) {
+    const rows = await prisma.stockMovement.findMany({
+      where: {
+        companyId: ctx.companyId,
+        locationId: filter.locationId,
+        ...(filter.movementTypes?.length ? { movementType: { in: filter.movementTypes as StockMovementType[] } } : {}),
+        ...(filter.since ? { timestamp: { gte: filter.since } } : {}),
+      },
+      select: { itemId: true, movementType: true, qtyDelta: true, timestamp: true },
+      orderBy: [{ timestamp: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map((row) => ({
+      itemId: row.itemId,
+      movementType: row.movementType as string,
+      qtyDelta: Number(row.qtyDelta),
+      timestamp: row.timestamp.toISOString(),
+    }));
+  }
+  if (!companyOwnsLocation(ctx.companyId, filter.locationId)) return [];
+  const sinceIso = filter.since?.toISOString();
+  return listStockMovements({ locationId: filter.locationId })
+    .filter((movement) => !filter.movementTypes?.length || filter.movementTypes.includes(movement.movementType))
+    .filter((movement) => !sinceIso || movement.timestamp >= sinceIso)
+    .map((movement) => ({ itemId: movement.itemId, movementType: movement.movementType, qtyDelta: movement.qtyDelta, timestamp: movement.timestamp }));
+}
+
 export type BinStockRow = {
   itemId: string;
   lotId: string | null;
