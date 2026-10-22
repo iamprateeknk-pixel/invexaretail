@@ -21,7 +21,7 @@ import { estimateValueAtRisk } from '../lib/exceptions.js';
 import { recordAudit } from '../lib/audit.js';
 import { applyLateMovementsQuietly } from '../lib/late-movement-service.js';
 import { isOperationalItem, resolveItemByIdentity } from '../lib/item-master.js';
-import { persistAudit, persistCountAssignment, persistItem, persistOpeningStockImport, persistDailyMovementImport, persistTransfer, saveImportedCustomValuesSafely } from '../lib/persistence.js';
+import { databaseEnabled, persistAudit, persistCountAssignment, persistItem, persistOpeningStockImport, persistDailyMovementImport, persistTransfer, saveImportedCustomValuesSafely } from '../lib/persistence.js';
 import { importTemplateCsv, type ImportKind } from '../lib/import-profile.js';
 import { aggregateOpeningStock, importPreviewResponse, parseStockImport, readTabularFile, type StockImportPreview } from '../lib/stock-import.js';
 import { allocateLots, parseTransferImport } from '../lib/warehouse-workflow.js';
@@ -272,8 +272,12 @@ router.post('/imports/:batchId/reverse', async (req: Request, res: Response) => 
       reason: typeof req.body.reason === 'string' ? req.body.reason : '',
     });
     if (!result.duplicate) {
+      // Phase 5 step 14: reversal is database-only (reverseImportBatch
+      // throws in memory mode) and its transaction already posts the
+      // reversing ledger movements — the snapshot mirror is retired. The
+      // daily-movement record below stays (that store is hydrated in both
+      // modes and is not the stock ledger).
       for (const line of result.plan) {
-        adjustStockLedger(line.itemId, line.lotId, line.locationId, line.qtyDelta);
         recordDailyMovement({
           id: `reversal-memory-${batchId}-${line.itemId}-${line.lotId}-${line.locationId}`,
           dedupeKey: `reversal-memory:${batchId}:${line.itemId}:${line.lotId}:${line.locationId}`,
@@ -443,7 +447,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     const newLots = existingLot ? [] : [{ id: lotId, itemId: item.id, lotNo, expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate).toISOString() : null, attributes: { source: 'manual-stock-update' } }];
     const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: 'Manual stock update', importedBy: req.user!.id, totalRows: 1, invalidRows: 0, duplicateRows: 0, movements: [movement], lots: newLots, checkpoints: [], companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     if (newLots[0]) ensureLotRecord(item.id, lotNo, newLots[0].expiryDate, newLots[0].attributes, lotId);
-    if (result.committedRows) { recordDailyMovement(movement); adjustStockLedger(item.id, lotId, location.id, qtyDelta); }
+    if (result.committedRows) { recordDailyMovement(movement); if (!databaseEnabled) adjustStockLedger(item.id, lotId, location.id, qtyDelta); }
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_MANUALLY_UPDATED', entityType: 'StockLedger', entityId: `${item.id}|${lotId}|${location.id}`, metadata: movement.metadata }));
     return res.status(201).json({ message: result.committedRows ? `Stock updated from ${currentQty} to ${currentQty + qtyDelta}.` : 'This stock update was already applied.', itemId: item.id, lotId, locationId: location.id, previousQty: currentQty, qtyDelta, resultingQty: result.committedRows ? currentQty + qtyDelta : currentQty });
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to update stock.' }); }
@@ -499,7 +503,7 @@ router.post('/stock-adjustments/import/commit', upload.single('file'), async (re
     const lots = plan.prepared.filter((entry) => entry.isNewLot).map((entry) => ({ id: entry.lotId, itemId: entry.item.id, lotNo: entry.lotNo, expiryDate: entry.expiryDate ?? null, attributes: { source: 'bulk-stock-update' } }));
     const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, movements, lots, checkpoints: [], companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     for (const lot of lots) ensureLotRecord(lot.itemId, lot.lotNo, lot.expiryDate, lot.attributes, lot.id);
-    if (result.committedRows) for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
+    if (result.committedRows) for (const movement of movements) { recordDailyMovement(movement); if (!databaseEnabled) adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_UPDATE_FILE_IMPORTED', entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, mode, rows: result.committedRows, fileHash } }));
     return res.status(201).json({ message: result.committedRows ? `Updated ${result.committedRows} branch/item/lot stock rows.` : 'This exact file and mode were already applied; stock was not changed again.', batchId, committedRows: result.committedRows });
   } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to commit stock update.' }); }
@@ -637,7 +641,7 @@ async function applyDailyLedger(movements: DailyMovementRecord[], lots: LotRecor
   for (const lot of lots) ensureLotRecord(lot.itemId, lot.lotNo, lot.expiryDate, lot.attributes, lot.id);
   for (const movement of movements) {
     recordDailyMovement(movement);
-    if (movement.lotId) adjustStockLedger(movement.itemId, movement.lotId, movement.locationId, movement.qtyDelta);
+    if (movement.lotId && !databaseEnabled) adjustStockLedger(movement.itemId, movement.lotId, movement.locationId, movement.qtyDelta);
   }
   for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);
 }
@@ -892,7 +896,7 @@ async function commitDailyImport(req: Request, res: Response, importType: 'SALES
     const checkpoints = [...latestByLocation.entries()].map(([locationId, syncedThroughAt]) => ({ locationId, sourceType: importType, syncedThroughAt, lastImportBatchId: batchId }));
     const persisted = await persistDailyMovementImport({ batchId, importType, fileName: req.file.originalname, importedBy: req.user!.id, totalRows: preview.totalRows, invalidRows: preview.errors.length, duplicateRows: preview.duplicateRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, movements, lots: plan.prepared.flatMap((entry) => entry.newLot ? [entry.newLot] : []), checkpoints, companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     for (const entry of plan.prepared) if (entry.newLot) ensureLotRecord(entry.newLot.itemId, entry.newLot.lotNo, entry.newLot.expiryDate, entry.newLot.attributes, entry.newLot.id);
-    for (const movement of movements) { recordDailyMovement(movement); adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
+    for (const movement of movements) { recordDailyMovement(movement); if (!databaseEnabled) adjustStockLedger(movement.itemId, movement.lotId!, movement.locationId, movement.qtyDelta); }
     for (const checkpoint of checkpoints) upsertSyncCheckpoint(checkpoint);
     await applyLateMovementsQuietly(movements, req.user!.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: `${importType}_IMPORT_COMMITTED`, entityType: 'ImportBatch', entityId: batchId, metadata: { fileName: req.file.originalname, rows: persisted.committedRows, transactionFrom: preview.transactionFrom, transactionTo: preview.transactionTo, purchaseWarehouse: warehouse?.name } }));
