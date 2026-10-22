@@ -5,13 +5,15 @@ import { StudioSection } from './sections/StudioSection';
 import { UsersSection } from './sections/UsersSection';
 import { WorkflowSection } from './sections/WorkflowSection';
 import { MobileSection } from './sections/MobileSection';
+import { IntegrationsSection } from './sections/IntegrationsSection';
+import { BillingSection } from './sections/BillingSection';
+import { HealthSection } from './sections/HealthSection';
 import {
   Activity,
   ArrowLeft,
   Building2,
   CreditCard,
   KeyRound,
-  LayoutDashboard,
   Lock,
   LogOut,
   Shield,
@@ -28,7 +30,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Toaster } from '@/components/ui/sonner';
-import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
 import { clearControlSession, controlRequest } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
 import { ModeSwitch, StudioModeProvider } from './studio-mode';
@@ -354,282 +355,11 @@ function ControlPlaneWorkspace() {
 
         {section === 'mobile' && <MobileSection {...cp} />}
 
-        {section === 'integrations' && (
-          <div className="grid gap-4">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">API keys & connectors</CardTitle>
-              <Button onClick={async () => {
-                const key = await controlRequest('/control/v1/integrations/api-keys', { token: controlToken, method: 'POST', body: { name: 'POS', scopes: ['inventory.read'] } });
-                setCreatedApiKey(key);
-                toast.success(`Key ${key.prefix}… shown once`);
-                await refreshLocked();
-              }}>Create API key</Button>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              {createdApiKey?.token && (
-                <Alert>
-                  <AlertDescription className="grid gap-2">
-                    <span>Copy this key now. Invexa will not show it again.</span>
-                    <code className="break-all font-mono text-xs">{createdApiKey.token}</code>
-                    <Button size="sm" variant="outline" className="w-fit" onClick={async () => {
-                      try {
-                        await globalThis.navigator?.clipboard?.writeText(createdApiKey.token);
-                        toast.success('API key copied');
-                      } catch {
-                        toast.message('Copy the key from the box above');
-                      }
-                    }}>Copy key</Button>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <p className="text-muted-foreground">
-                Bearer invx_ keys authenticate `/api/v1`. Read keys list catalog; write scopes are required to mutate.
-              </p>
-              {(integrations?.apiKeys ?? []).map((key) => (
-                <div key={key.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                  <div className="grid gap-1">
-                    <span className="font-medium">{key.name}</span>
-                    <span className="font-mono text-xs text-muted-foreground">{key.prefix}… · {(key.scopes ?? []).join(', ')} · {key.status}</span>
-                  </div>
-                  {key.status !== 'revoked' && (
-                    <Button size="sm" variant="ghost" onClick={async () => {
-                      await controlRequest(`/control/v1/integrations/api-keys/${key.id}/revoke`, { token: controlToken, method: 'POST' });
-                      if (createdApiKey?.id === key.id) setCreatedApiKey(null);
-                      toast.message('API key revoked');
-                      await refreshLocked().catch((caught) => setError(caught.message));
-                    }}>Revoke</Button>
-                  )}
-                </div>
-              ))}
-              <p className="text-muted-foreground">Connectors: {(integrations?.connectors ?? []).length}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">Operational webhooks</CardTitle>
-              <Button onClick={async () => {
-                try {
-                  const created = await controlRequest('/control/v1/integrations/webhooks', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: { name: 'Ops hook', url: webhookUrl, events: webhookEvents },
-                  });
-                  const webhook = created.webhook ?? created;
-                  setCreatedWebhook(webhook);
-                  setIntegrations((current) => ({
-                    ...(current ?? {}),
-                    webhooks: [
-                      ...(current?.webhooks ?? []).filter((hook) => hook.id !== webhook.id),
-                      {
-                        id: webhook.id,
-                        name: webhook.name,
-                        url: webhook.url,
-                        events: webhook.events,
-                        status: webhook.status || 'active',
-                        createdAt: webhook.createdAt,
-                      },
-                    ],
-                  }));
-                  toast.success('Webhook registered');
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                } catch (caught) {
-                  setError(caught.message);
-                  toast.error(caught.message);
-                }
-              }}>Create webhook</Button>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              <div className="grid gap-2">
-                <Label>HTTPS endpoint</Label>
-                <Input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {WEBHOOK_EVENT_OPTIONS.map((option) => {
-                  const active = webhookEvents.includes(option.value);
-                  return (
-                    <Button
-                      key={option.value}
-                      size="sm"
-                      variant={active ? 'default' : 'outline'}
-                      onClick={() => setWebhookEvents((current) => (
-                        current.includes(option.value)
-                          ? current.filter((event) => event !== option.value)
-                          : [...current, option.value]
-                      ))}
-                    >
-                      {option.label}
-                    </Button>
-                  );
-                })}
-              </div>
-              {createdWebhook?.signingSecret && (
-                <Alert>
-                  <AlertDescription className="grid gap-2">
-                    <span>Copy this signing secret now. Invexa will not show it again.</span>
-                    <code className="break-all font-mono text-xs">{createdWebhook.signingSecret}</code>
-                    <Button size="sm" variant="outline" className="w-fit" onClick={async () => {
-                      try {
-                        await globalThis.navigator?.clipboard?.writeText(createdWebhook.signingSecret);
-                        toast.success('Signing secret copied');
-                      } catch {
-                        toast.message('Copy the secret from the box above');
-                      }
-                    }}>Copy secret</Button>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <p className="text-muted-foreground">
-                Stock, transfer, PO and count events for this company POST to the HTTPS URL with X-Invexa-Signature.
-              </p>
-              <p className="font-medium">Registered webhooks ({(integrations?.webhooks ?? []).length})</p>
-              {(integrations?.webhooks ?? []).length === 0 && (
-                <p className="text-muted-foreground">No operational webhooks for this company yet.</p>
-              )}
-              {(integrations?.webhooks ?? []).map((hook) => (
-                <div key={hook.id} className="rounded-lg border px-3 py-2">
-                  <p className="font-medium">{hook.name || hook.url}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{hook.url} · {(hook.events ?? []).join(', ')} · {hook.status}</p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-          </div>
-        )}
+        {section === 'integrations' && <IntegrationsSection {...cp} />}
 
-        {section === 'billing' && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <CardTitle className="text-base">Usage vs limits</CardTitle>
-                <Badge variant="outline">{billing?.adapter ?? billing?.provider ?? 'manual'}</Badge>
-                {billing?.adapter === 'stripe' && <Badge>Stripe live</Badge>}
-                {billing?.adapter === 'local' && <Badge>Stripe local</Badge>}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={async () => {
-                  const issued = await controlRequest('/control/v1/billing/invoices', { token: controlToken, method: 'POST' });
-                  setBilling(issued);
-                  toast.success('Invoice issued');
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                }}>Issue invoice</Button>
-                <Button onClick={async () => {
-                  const checkout = await controlRequest('/control/v1/billing/checkout', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: {
-                      successUrl: globalThis.location?.href,
-                      cancelUrl: globalThis.location?.href,
-                    },
-                  });
-                  setBilling(checkout);
-                  if (checkout.mode === 'checkout' && checkout.url) {
-                    if (checkout.adapter === 'local') {
-                      const nextHash = String(checkout.url).split('#')[1];
-                      if (nextHash) globalThis.location.hash = nextHash;
-                      else globalThis.location.assign(checkout.url);
-                      toast.success('Local Stripe checkout ready');
-                    } else {
-                      globalThis.open?.(checkout.url, '_blank', 'noopener');
-                      toast.success('Stripe checkout opened');
-                    }
-                  } else {
-                    toast.message('Manual billing — record payment when the transfer clears');
-                  }
-                  await refreshLocked().catch((caught) => setError(caught.message));
-                }}>Collect payment</Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm">
-              <p>Subscription: {billing?.billing?.subscription}</p>
-              <p>Users {billing?.usage?.users ?? 0} / {billing?.limits?.max_users ?? '—'}</p>
-              <p>API requests {billing?.usage?.api_requests ?? 0} / {billing?.limits?.api_requests_per_day ?? '—'}</p>
-              {(Array.isArray(billing?.invoices) ? billing.invoices : []).map((invoice) => (
-                <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                  <div className="grid gap-1">
-                    <span className="font-mono text-xs">{String(invoice.id).slice(0, 8)}</span>
-                    <span>Amount {invoice.amount} · <Badge variant={invoice.status === 'past_due' ? 'destructive' : 'secondary'}>{invoice.status}</Badge></span>
-                  </div>
-                  <div className="flex gap-2">
-                    {invoice.status === 'open' && (
-                      <Button size="sm" variant="ghost" onClick={async () => {
-                        const updated = await controlRequest(`/control/v1/billing/invoices/${invoice.id}/past-due`, { token: controlToken, method: 'POST' });
-                        setBilling(updated);
-                        toast.message('Invoice marked past due — Studio publish is on hold');
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>Mark past due</Button>
-                    )}
-                    {invoice.status !== 'paid' && (
-                      <Button size="sm" variant="outline" onClick={async () => {
-                        const updated = await controlRequest(`/control/v1/billing/invoices/${invoice.id}/pay`, { token: controlToken, method: 'POST' });
-                        setBilling(updated);
-                        setError('');
-                        toast.success('Payment recorded');
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>Record payment</Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
+        {section === 'billing' && <BillingSection {...cp} />}
 
-        {section === 'health' && (
-          <Card>
-            <CardHeader><CardTitle className="text-base">System health</CardTitle></CardHeader>
-            <CardContent className="grid gap-4 text-sm">
-              <div className="flex flex-wrap items-center gap-3">
-                <LayoutDashboard className="size-4" />
-                <span>{health?.ok ? 'Control plane healthy' : 'Unavailable'}</span>
-                <Badge variant="secondary">{health?.companies ?? 0} companies</Badge>
-                <Badge variant="outline">{health?.persistence ?? 'snapshot'}</Badge>
-                {(health?.pastDueCompanies ?? []).length > 0 && (
-                  <Badge variant="destructive">{health.pastDueCompanies.length} past due</Badge>
-                )}
-                {(health?.suspendedCompanies ?? []).length > 0 && (
-                  <Badge variant="destructive">{health.suspendedCompanies.length} suspended</Badge>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <p className="text-muted-foreground">Platform kill switches freeze mutations across every company. Reads stay available.</p>
-                {['INVENTORY', 'WMS', 'OMS'].map((feature) => {
-                  const enabled = health?.killSwitches?.[feature] !== false;
-                  return (
-                    <div key={feature} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                      <div>
-                        <p className="font-medium">{feature}</p>
-                        <p className="text-xs text-muted-foreground">{enabled ? 'Mutations allowed' : 'Mutations blocked'}</p>
-                      </div>
-                      <Button size="sm" variant={enabled ? 'destructive' : 'outline'} onClick={async () => {
-                        const result = await controlRequest('/control/v1/safety/kill-switches', {
-                          token: controlToken,
-                          method: 'POST',
-                          body: { featureKey: feature, enabled: !enabled, reason: enabled ? 'incident' : 'restore' },
-                        });
-                        setHealth((current) => ({ ...(current ?? { ok: true }), killSwitches: result.safety }));
-                        toast.message(enabled ? `${feature} kill switch on` : `${feature} restored`);
-                        await refreshLocked().catch((caught) => setError(caught.message));
-                      }}>{enabled ? 'Kill' : 'Restore'}</Button>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="grid gap-2">
-                <p className="text-muted-foreground">Recent control-plane audit events for this company.</p>
-                {(Array.isArray(auditEvents) ? auditEvents.slice(-8).reverse() : []).map((event) => (
-                  <div key={event.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                    <span className="font-mono text-xs">{event.action}</span>
-                    <span className="text-xs text-muted-foreground">{event.companyId ?? 'platform'}</span>
-                  </div>
-                ))}
-                {(!Array.isArray(auditEvents) || auditEvents.length === 0) && (
-                  <p className="text-xs text-muted-foreground">No audit events yet.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {section === 'health' && <HealthSection {...cp} />}
       </main>
     </div>
   );
