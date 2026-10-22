@@ -9,7 +9,7 @@ import { ExpiryWriteOffError, setLotExpiryDate, setLotSaleStatus } from '../lib/
 import { consumeJobLine, JobConsumeError } from '../lib/job-consumption-service.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { adjustStockLedger, listItems, updateLotExpiry, updateLotStatus } from '../lib/repository.js';
+import { listItems, updateLotExpiry, updateLotStatus } from '../lib/repository.js';
 import { DEFAULT_COMPANY_ID, ownerOfItem } from '../lib/saas/tenant-scope.js';
 import { NegativeStockBlockedError } from '../lib/inventory-posting-service.js';
 import { tenantContextOf, canAccessLocation, requireAdmin } from './opext-shared.js';
@@ -168,11 +168,10 @@ router.post('/jobs/:id/consume', async (req, res) => {
       strategy: getActiveWorkflow(req.companyId ?? DEFAULT_COMPANY_ID).allocationStrategy,
       canAccessLocation: (locationId) => canAccessLocation(req, locationId),
     });
-    // The in-memory stock view is only a read cache: keep it in step for the screens that read it,
-    // once per real consume (a replay changes nothing).
-    if (!result.duplicate) {
-      for (const pick of result.allocations) adjustStockLedger(result.itemId, pick.lotId, result.locationId, -pick.quantity);
-    }
+    // Phase 5 step 14: consumeJobLine's canonical posting is the stock
+    // write. The snapshot mirror that used to follow it is retired —
+    // every stock screen now reads the database (steps 2-11), so there
+    // is no in-memory stock view left to keep in step.
     const company = jobCompany(req);
     const refreshed = await prisma.job.findFirst({ where: { id: req.params.id, companyId: company }, include: { lines: true } });
     const line = refreshed?.lines.find((entry) => entry.id === lineId) ?? null;
