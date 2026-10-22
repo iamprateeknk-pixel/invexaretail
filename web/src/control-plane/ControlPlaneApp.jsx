@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import { useControlSession } from './use-control-session';
 import { OverviewSection } from './sections/OverviewSection';
 import { StudioSection } from './sections/StudioSection';
+import { UsersSection } from './sections/UsersSection';
+import { WorkflowSection } from './sections/WorkflowSection';
+import { MobileSection } from './sections/MobileSection';
 import {
   Activity,
   ArrowLeft,
@@ -24,14 +27,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Toaster } from '@/components/ui/sonner';
 import { WEBHOOK_EVENT_OPTIONS } from '../lib/webhook-events';
 import { clearControlSession, controlRequest } from './control-api';
 import { isControlPlaneDeployment } from './control-route';
-import { WorkflowsEditor } from './StudioEditors';
-import { Advanced, ModeSwitch, StudioModeProvider } from './studio-mode';
-import { labelOf, MOBILE_SCREENS, ROLE_OPTIONS } from './studio-catalog';
+import { ModeSwitch, StudioModeProvider } from './studio-mode';
 
 
 const NAV = [
@@ -348,76 +348,11 @@ function ControlPlaneWorkspace() {
 
         {section === 'studio' && <StudioSection {...cp} />}
 
-        {section === 'users' && (
-          <Card>
-            <CardHeader><CardTitle className="text-base">Company users</CardTitle></CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="grid gap-3 md:grid-cols-4">
-                <Input placeholder="Name" value={userName} onChange={(event) => setUserName(event.target.value)} />
-                <Input placeholder="Email" value={userEmail} onChange={(event) => setUserEmail(event.target.value)} />
-                <Select value={userRole} onValueChange={setUserRole}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['STORE_USER', 'WAREHOUSE_PICKER', 'BRANCH_MANAGER', 'AUDITOR', 'ADMIN'].map((role) => (
-                      <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button onClick={async () => {
-                  await controlRequest('/control/v1/users', { token: controlToken, method: 'POST', body: { name: userName, email: userEmail, role: userRole } });
-                  setUserEmail('');
-                  setUserName('');
-                  await refreshLocked();
-                  toast.success('User created');
-                }}>Create user</Button>
-              </div>
-              <Table>
-                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                <TableBody>
-                  {users.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell>{user.name}</TableCell>
-                      <TableCell>{user.email}</TableCell>
-                      <TableCell>{labelOf(ROLE_OPTIONS, user.role)}{user.isPrimaryAdmin ? ' · main admin' : ''}</TableCell>
-                      <TableCell>{user.status === 'active' ? 'Active' : 'Inactive'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        )}
+        {section === 'users' && <UsersSection {...cp} />}
 
-        {section === 'workflow' && (
-          <WorkflowsEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
-        )}
+        {section === 'workflow' && <WorkflowSection {...cp} />}
 
-        {section === 'mobile' && (
-          <div className="grid gap-4">
-            <p className="text-sm text-muted-foreground">What each role gets in the phone app. Change it in Studio → Mobile app, then publish.</p>
-            {(draft?.mobilePolicies ?? []).length === 0 && <p className="text-sm text-muted-foreground">No role has mobile settings yet.</p>}
-            {(draft?.mobilePolicies ?? []).map((policy) => (
-              <Card key={policy.role}>
-                <CardHeader><CardTitle className="text-base">{labelOf(ROLE_OPTIONS, policy.role)}</CardTitle></CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  Screens: {policy.navigation.map((screen) => labelOf(MOBILE_SCREENS, screen)).join(', ') || '—'} · works offline up to {policy.offlineMaxHours} hours · phone data is encrypted
-                </CardContent>
-              </Card>
-            ))}
-            <Advanced label="Advanced: sync test">
-              <div>
-                <Button variant="outline" onClick={async () => {
-                  const result = await controlRequest('/sync/v1/mutations', {
-                    token: controlToken,
-                    method: 'POST',
-                    body: { mutationId: crypto.randomUUID(), companyId: company.id, userId: session.user.id, deviceId: 'control-demo', actionType: 'STOCK_ADJUST', payload: { itemId: 'item-1', delta: -1 } },
-                  });
-                  toast.success(`Sync ${result.mutation.status}`);
-                }}>Post sample stock movement</Button>
-              </div>
-            </Advanced>
-          </div>
-        )}
+        {section === 'mobile' && <MobileSection {...cp} />}
 
         {section === 'integrations' && (
           <div className="grid gap-4">
