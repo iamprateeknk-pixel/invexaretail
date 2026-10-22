@@ -2,8 +2,10 @@
 // (lib/persistence.ts) and by the database-first count repository, so the two cannot drift apart.
 import type { CountRecord } from './repository.js';
 
+import type { Prisma } from '@prisma/client';
+
 type StockCountRow = {
-  id: string; itemId: string; lotId: string; locationId: string; physicalQty: number; bookQty: number; mode: string;
+  id: string; itemId: string; lotId: string; locationId: string; physicalQty: number | Prisma.Decimal; bookQty: number | Prisma.Decimal; mode: string;
   submittedById: string; createdAt: Date; reviewStatus: string; approvedById: string | null; approvedAt: Date | null;
   reviewReason: string | null; parentCountId: string | null;
 };
@@ -15,8 +17,8 @@ export function countRowToRecord(row: StockCountRow, role: CountRecord['role']):
     itemId: count.itemId,
     lotId: count.lotId,
     locationId: count.locationId,
-    physicalQuantity: count.physicalQty,
-    bookQty: count.bookQty,
+    physicalQuantity: Number(count.physicalQty),
+    bookQty: Number(count.bookQty),
     mode: count.mode as 'scan' | 'manual' | 'weight',
     submittedBy: count.submittedById,
     role,
@@ -31,8 +33,8 @@ export function countRowToRecord(row: StockCountRow, role: CountRecord['role']):
     reconciliationRequired: (count.reconciliationRequired as boolean | undefined) ?? false,
     reconciliationNote: (count.reconciliationNote as string | null | undefined) ?? undefined,
     reconciliationAt: (count.reconciliationAt as Date | null | undefined)?.toISOString(),
-    bookQtyOriginal: (count.bookQtyOriginal as number | null | undefined) ?? undefined,
-    lateDelta: (count.lateDelta as number | undefined) ?? 0,
+    bookQtyOriginal: count.bookQtyOriginal == null ? undefined : Number(count.bookQtyOriginal as number | Prisma.Decimal),
+    lateDelta: count.lateDelta == null ? 0 : Number(count.lateDelta as number | Prisma.Decimal),
     lateMovementKeys: Array.isArray(count.lateMovementKeys) ? (count.lateMovementKeys as string[]) : undefined,
   };
 }

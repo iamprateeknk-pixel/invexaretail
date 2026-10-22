@@ -103,7 +103,8 @@ export async function persistTransferReceipt(input: {
         duplicate[0].id);
       const lines = await queryRaw<DbTransferLine[]>(tx,
         'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
-      return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, ...totals[0], lines };
+      const total = totals[0] ?? { receivedQty: 0, damagedQty: 0, shortageQty: 0, excessQty: 0 };
+      return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty), shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
     }
 
     const transfers = await queryRaw<Array<{ status: string }>>(tx,
@@ -156,9 +157,9 @@ export async function persistTransferReceipt(input: {
       if (settledQty > 0) {
         await executeRaw(tx,
           `UPDATE "StockLedger" SET "inTransit"=GREATEST(0,"inTransit"-?), version=version+1, "lastUpdatedAt"=CURRENT_TIMESTAMP(3)
-           WHERE "itemId"=? AND "lotId"=? AND "locationId" IN (
-             SELECT "locationId" FROM "StockMovement" WHERE "sourceDocument"=? AND "itemId"=? AND "lotId"=? AND "movementType"='TRANSFER_OUT' AND (metadata->>'inTransit')='true')`,
-          settledQty, dbLine.itemId, dbLine.lotId, input.transferId, dbLine.itemId, dbLine.lotId);
+           WHERE "itemId"=? AND "lotId"=? AND "companyId"=? AND "locationId" IN (
+             SELECT "locationId" FROM "StockMovement" WHERE "sourceDocument"=? AND "itemId"=? AND "lotId"=? AND "companyId"=? AND "movementType"='TRANSFER_OUT' AND (metadata->>'inTransit')='true')`,
+          settledQty, dbLine.itemId, dbLine.lotId, input.tenant.companyId, input.transferId, dbLine.itemId, dbLine.lotId, input.tenant.companyId);
       }
       // Blueprint section 7.2 / Module H: damaged receiving stock is
       // physically on the shelf but not sellable - post it to the
@@ -167,10 +168,10 @@ export async function persistTransferReceipt(input: {
       // resolving that case is what eventually moves it out of quarantine.
       if (line.damagedQty > 0) {
         await executeRaw(tx,
-          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
-           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
-          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty);
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, line.damagedQty, input.tenant.tenantId, input.tenant.companyId);
       }
       // Excess receipt: never silently absorbed into onHand. It is
       // physically present, so it also lands in quarantine pending an
@@ -178,10 +179,10 @@ export async function persistTransferReceipt(input: {
       // accept posts it to onHand, reject returns it to the vendor/source.
       if (excessQty > 0) {
         await executeRaw(tx,
-          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt")
-           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3))
-           ON CONFLICT ("itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
-          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty);
+          `INSERT INTO "StockLedger" (id,"itemId","lotId","locationId","onHand",reserved,"inTransit",quarantine,version,"lastUpdatedAt","tenantId","companyId")
+           VALUES (?,?,?,?,0,0,0,?,1,CURRENT_TIMESTAMP(3),?,?)
+           ON CONFLICT ("companyId","itemId","lotId","locationId") DO UPDATE SET quarantine="StockLedger".quarantine+EXCLUDED.quarantine,version="StockLedger".version+1,"lastUpdatedAt"=CURRENT_TIMESTAMP(3)`,
+          `ledger-${randomUUID()}`, dbLine.itemId, dbLine.lotId, input.destinationLocationId, excessQty, input.tenant.tenantId, input.tenant.companyId);
       }
     }
     await executeRaw(tx,
@@ -189,6 +190,6 @@ export async function persistTransferReceipt(input: {
       status, '', `\n[RECEIPT ${receiptId}] Good: ${summary.receivedQty}, Damaged: ${summary.damagedQty}, Shortage: ${summary.shortageQty}, Excess: ${summary.excessQty}${input.notes ? `, Notes: ${input.notes}` : ''}`, input.transferId);
     const lines = await queryRaw<DbTransferLine[]>(tx,
       'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id', input.transferId);
-    return { duplicate: false, status, receiptId, ...summary, lines };
+    return { duplicate: false, status, receiptId, ...summary, lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
   }, { maxWait: 10_000, timeout: 60_000 });
 }

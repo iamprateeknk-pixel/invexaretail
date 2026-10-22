@@ -2,11 +2,19 @@
 // Prisma as Decimal objects, which JSON.stringify turns into strings. These helpers convert at the
 // boundary so the API keeps returning JSON numbers and threshold comparisons stay plain numbers.
 
-type WithThreshold = { valueThreshold?: unknown };
+type WithThreshold = { valueThreshold?: unknown; quantityThreshold?: unknown };
 
-export function thresholdsAsNumbers<T extends WithThreshold>(rule: T): Omit<T, 'valueThreshold'> & { valueThreshold: number | null } {
+export function thresholdsAsNumbers<T extends WithThreshold>(rule: T): Omit<T, 'valueThreshold' | 'quantityThreshold'> & { valueThreshold: number | null; quantityThreshold: number | null } {
   const raw = rule.valueThreshold;
-  return { ...rule, valueThreshold: raw === null || raw === undefined ? null : Number(raw) };
+  const converted: Record<string, unknown> = { ...rule, valueThreshold: raw === null || raw === undefined ? null : Number(raw) };
+  // Slice 2: EvidenceRule.quantityThreshold is Decimal too. Convert only when
+  // the key exists - ApprovalRule/ToleranceRule rows do not carry it and must
+  // not gain it in API responses.
+  if ('quantityThreshold' in rule) {
+    const rawQty = rule.quantityThreshold;
+    converted.quantityThreshold = rawQty === null || rawQty === undefined ? null : Number(rawQty);
+  }
+  return converted as Omit<T, 'valueThreshold' | 'quantityThreshold'> & { valueThreshold: number | null; quantityThreshold: number | null };
 }
 
 // ---- whole-row conversion ------------------------------------------------------------------

@@ -234,7 +234,7 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
     if (!wasTerminal && (TERMINAL_TRANSFER_STATUSES as readonly string[]).includes(nextStatus) && nextStatus !== 'CONFIRMED') {
       void releaseReservedStock(transfer.lines.map((line) => ({
         itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: line.quantity,
-      })));
+      })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     }
     await persistAudit(recordAudit({
       actorId: req.user!.id,
@@ -549,7 +549,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
     // is no longer needed, picked-in-full or not.
     void releaseReservedStock(transfer.lines.map((line) => ({
       itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: line.quantity,
-    })));
+    })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_CONFIRMED', entityType: 'Transfer', entityId: transfer.id, metadata: { allocations: [...allocations.values()] } }));
     void emitTransferUpdated(updated);
     return res.json({ message: 'Transfer confirmed and lot-level stock deducted.', transfer: updated });
@@ -758,6 +758,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
             quantity: line.receivedQty, sourceDocument: transferId, sourceLineId: line.lineId,
           });
           void persistBinStockDelta({
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
             itemId: line.itemId, lotId: line.lotId || null, locationId: transfer.destinationLocationId,
             binId: STAGING_BIN_ID, qtyDelta: line.receivedQty,
           });

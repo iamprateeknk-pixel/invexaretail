@@ -93,16 +93,16 @@ export async function getStockDetail(ctx: TenantContext, itemId: string, movemen
       damaged: 0,
       available: 0,
     };
-    existing.onHand += row.onHand;
-    existing.reserved += row.reserved;
-    existing.quarantine += row.quarantine;
-    existing.damaged += row.damaged;
+    existing.onHand += Number(row.onHand);
+    existing.reserved += Number(row.reserved);
+    existing.quarantine += Number(row.quarantine);
+    existing.damaged += Number(row.damaged);
     existing.available = existing.onHand - existing.reserved;
     branchByLocation.set(row.locationId, existing);
   }
 
   const onHandByLot = new Map<string, number>();
-  for (const row of ledgerRows) onHandByLot.set(row.lotId, (onHandByLot.get(row.lotId) ?? 0) + row.onHand);
+  for (const row of ledgerRows) onHandByLot.set(row.lotId, (onHandByLot.get(row.lotId) ?? 0) + Number(row.onHand));
 
   const lotDetails: LotDetail[] = lots.map((lot) => ({
     lotId: lot.id,
@@ -115,9 +115,9 @@ export async function getStockDetail(ctx: TenantContext, itemId: string, movemen
   const movementRows: MovementRow[] = movements.map((movement) => ({
     id: movement.id,
     movementType: movement.movementType,
-    qtyDelta: movement.qtyDelta,
-    beforeBalance: movement.beforeBalance,
-    afterBalance: movement.afterBalance,
+    qtyDelta: Number(movement.qtyDelta),
+    beforeBalance: Number(movement.beforeBalance),
+    afterBalance: Number(movement.afterBalance),
     locationId: movement.locationId,
     lotId: movement.lotId,
     reason: movement.reason,
@@ -133,9 +133,9 @@ export async function getStockDetail(ctx: TenantContext, itemId: string, movemen
         where: { itemId, lotId: row.lotId, locationId: row.locationId, companyId: ctx.companyId },
         _sum: { qtyDelta: true },
       });
-      const journalSum = sums._sum.qtyDelta ?? 0;
-      const delta = row.onHand - journalSum;
-      return { explained: Math.abs(delta) <= TOLERANCE, journalSum, onHand: row.onHand, delta };
+      const journalSum = Number(sums._sum.qtyDelta ?? 0);
+      const delta = Number(row.onHand) - journalSum;
+      return { explained: Math.abs(delta) <= TOLERANCE, journalSum, onHand: Number(row.onHand), delta };
     }),
   );
 

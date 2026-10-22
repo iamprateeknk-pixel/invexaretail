@@ -70,7 +70,7 @@ export async function consumeJobLine(input: JobConsumeInput): Promise<JobConsume
     if (prior.length) {
       return {
         duplicate: true, locationId: job.locationId, itemId: line.itemId,
-        allocations: prior.map((movement) => ({ lotId: movement.lotId, lotNo: movement.lot?.lotNo ?? movement.lotId, quantity: -movement.qtyDelta })),
+        allocations: prior.map((movement) => ({ lotId: movement.lotId, lotNo: movement.lot?.lotNo ?? movement.lotId, quantity: -Number(movement.qtyDelta) })),
       };
     }
 
@@ -89,7 +89,7 @@ export async function consumeJobLine(input: JobConsumeInput): Promise<JobConsume
         expiryDate: row.lot.expiryDate ? row.lot.expiryDate.toISOString() : null,
         manufacturedAt: row.lot.manufacturedAt ? row.lot.manufacturedAt.toISOString() : null,
         createdAt: row.lot.createdAt.toISOString(),
-        available: Math.max(0, row.onHand - row.reserved - row.quarantine),
+        available: Math.max(0, Number(row.onHand) - Number(row.reserved) - Number(row.quarantine)),
         status: (row.lot.status ?? 'AVAILABLE') as FefoLot['status'],
       }));
     const allocation = allocateLots(candidates, quantity, input.strategy);

@@ -342,7 +342,7 @@ model PutawayTask {
   lot             Lot?      @relation(fields: [lotId], references: [id])
   locationId      String
   location        Location  @relation(fields: [locationId], references: [id])
-  quantity        Float
+  quantity        Decimal @db.Decimal(18, 3)
   suggestedBinId  String?
   suggestedBin    Bin?      @relation("PutawaySuggestedBin", fields: [suggestedBinId], references: [id])
   confirmedBinId  String?
@@ -481,7 +481,7 @@ model PackedLine {
   packSession   PackSession @relation(fields: [packSessionId], references: [id])
   itemId        String
   lotId         String?
-  quantity      Float
+  quantity      Decimal @db.Decimal(18, 3)
   scannedById   String
   scannedAt     DateTime    @default(now())
 
@@ -524,7 +524,7 @@ model ReturnLine {
   orderLine       OrderLine     @relation(fields: [orderLineId], references: [id])
   itemId          String
   item            Item          @relation(fields: [itemId], references: [id])
-  quantity        Float
+  quantity        Decimal @db.Decimal(18, 3)
   disposition     String?
   createdAt       DateTime      @default(now())
 
@@ -568,8 +568,8 @@ model OrderLine {
   item         Item     @relation(fields: [itemId], references: [id])
   lotId        String?
   lot          Lot?     @relation(fields: [lotId], references: [id])
-  requestedQty Float
-  fulfilledQty Float    @default(0)
+  requestedQty Decimal @db.Decimal(18, 3)
+  fulfilledQty Decimal    @default(0) @db.Decimal(18, 3)
   fulfillmentLocationId String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -651,7 +651,7 @@ model EvidenceRule {
   category          String?
   branchId          String?
   branch            Branch?  @relation(fields: [branchId], references: [id])
-  quantityThreshold Float?
+  quantityThreshold Decimal? @db.Decimal(18, 3)
   valueThreshold    Decimal? @db.Decimal(14, 2)
   active            Boolean  @default(true)
   createdById       String
@@ -827,9 +827,9 @@ model StockLedger {
   lot            Lot      @relation(fields: [lotId], references: [id])
   locationId     String
   location       Location @relation(fields: [locationId], references: [id])
-  onHand         Float    @default(0)
-  reserved       Float    @default(0)
-  inTransit      Float    @default(0)
+  onHand         Decimal    @default(0) @db.Decimal(18, 3)
+  reserved       Decimal    @default(0) @db.Decimal(18, 3)
+  inTransit      Decimal    @default(0) @db.Decimal(18, 3)
   // Blueprint section 7.2 inventory state model: physical stock that is on
   // hand but not sellable. Quarantine = received/counted but blocked
   // pending a QC/exception disposition (Exception Inbox); Damaged = the
@@ -837,16 +837,16 @@ model StockLedger {
   // write-off/vendor-return. Neither bucket is part of `onHand` availability
   // math done elsewhere - they are tracked here so quarantined stock is
   // visible instead of silently vanishing from the ledger.
-  quarantine     Float    @default(0)
-  damaged        Float    @default(0)
+  quarantine     Decimal    @default(0) @db.Decimal(18, 3)
+  damaged        Decimal    @default(0) @db.Decimal(18, 3)
   version        Int      @default(0)
   lastUpdatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId      String   @default("default-company")
+  companyId      String
   @@index([tenantId])
   @@index([companyId])
 
-  @@unique([itemId, lotId, locationId])
+  @@unique([companyId, itemId, lotId, locationId])
   @@index([locationId, itemId])
 }
 
@@ -858,8 +858,8 @@ model StockCount {
   lot             Lot      @relation(fields: [lotId], references: [id])
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
-  physicalQty     Float
-  bookQty         Float    @default(0)
+  physicalQty     Decimal @db.Decimal(18, 3)
+  bookQty         Decimal    @default(0) @db.Decimal(18, 3)
   mode            String   @default("manual")
   submittedById   String
   submittedBy     User     @relation(fields: [submittedById], references: [id])
@@ -883,8 +883,8 @@ model StockCount {
   reconciliationRequired Boolean   @default(false)
   reconciliationNote     String?   @db.Text
   reconciliationAt       DateTime?
-  bookQtyOriginal        Float?
-  lateDelta              Float     @default(0)
+  bookQtyOriginal        Decimal? @db.Decimal(18, 3)
+  lateDelta              Decimal     @default(0) @db.Decimal(18, 3)
   lateMovementKeys       Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -976,15 +976,15 @@ model TransferLine {
   item          Item     @relation(fields: [itemId], references: [id])
   lotId         String
   lot           Lot      @relation(fields: [lotId], references: [id])
-  requestedQty  Float
-  pickedQty     Float    @default(0)
-  receivedQty   Float    @default(0)
-  damagedQty    Float    @default(0)
-  shortageQty    Float    @default(0)
+  requestedQty  Decimal @db.Decimal(18, 3)
+  pickedQty     Decimal    @default(0) @db.Decimal(18, 3)
+  receivedQty   Decimal    @default(0) @db.Decimal(18, 3)
+  damagedQty    Decimal    @default(0) @db.Decimal(18, 3)
+  shortageQty    Decimal    @default(0) @db.Decimal(18, 3)
   // Blueprint Module H: received quantity beyond what was requested. Never
   // auto-absorbed into receivedQty - held in StockLedger.quarantine behind
   // an explicit EXCESS_RECEIPT Exception Inbox accept/reject decision.
-  excessQty      Float    @default(0)
+  excessQty      Decimal    @default(0) @db.Decimal(18, 3)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1016,10 +1016,10 @@ model TransferReceiptLine {
   transferLineId String
   itemId         String
   lotId          String
-  receivedQty    Float           @default(0)
-  damagedQty     Float           @default(0)
-  shortageQty    Float           @default(0)
-  excessQty      Float           @default(0)
+  receivedQty    Decimal           @default(0) @db.Decimal(18, 3)
+  damagedQty     Decimal           @default(0) @db.Decimal(18, 3)
+  shortageQty    Decimal           @default(0) @db.Decimal(18, 3)
+  excessQty      Decimal           @default(0) @db.Decimal(18, 3)
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
 
@@ -1115,7 +1115,7 @@ model Supplier {
   // Blueprint v4 §22 supplier master.
   contactName  String?
   leadTimeDays Int?
-  moq          Float?
+  moq          Decimal? @db.Decimal(18, 3)
   paymentTerms String?
   categories   String? @db.Text
   status       String  @default("ACTIVE")
@@ -1226,7 +1226,7 @@ model SupplierPriceBreak {
   supplier  Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   itemId    String
   item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  minQty    Float
+  minQty    Decimal @db.Decimal(18, 3)
   // Money: Decimal, not Float (prohibited pattern #3).
   unitCost  Decimal  @db.Decimal(18, 4)
   companyId String   @default("default-company")
@@ -1262,7 +1262,7 @@ model SupplierInvoiceLine {
   supplierInvoiceId String
   supplierInvoice   SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
   itemId            String
-  invoicedQty       Float
+  invoicedQty       Decimal @db.Decimal(18, 3)
   unitCost          Decimal  @db.Decimal(18, 4)
   @@index([supplierInvoiceId])
 }
@@ -1301,10 +1301,10 @@ model ReorderRule {
   itemId     String
   item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
   locationId String
-  minQty     Float    @default(0)
-  targetQty  Float    @default(0)
+  minQty     Decimal    @default(0) @db.Decimal(18, 3)
+  targetQty  Decimal    @default(0) @db.Decimal(18, 3)
   // Audit O-4: case pack; suggested order quantities round up to a multiple of this.
-  orderMultiple Float?
+  orderMultiple Decimal? @db.Decimal(18, 3)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
@@ -1577,7 +1577,7 @@ model InventoryMovement {
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
   movementType    String
-  qtyDelta        Float
+  qtyDelta        Decimal @db.Decimal(18, 3)
   transactionAt   DateTime
   importedAt      DateTime @default(now())
   sourceType      String
@@ -1621,7 +1621,7 @@ model OpeningStockSnapshot {
   lot           Lot      @relation(fields: [lotId], references: [id])
   locationId    String
   location      Location @relation(fields: [locationId], references: [id])
-  qty           Float
+  qty           Decimal @db.Decimal(18, 3)
   snapshotAt    DateTime
   createdAt     DateTime @default(now())
   tenantId    String   @default("tenant-invexa")
@@ -1646,9 +1646,9 @@ model StockMovement {
   location          Location @relation(fields: [locationId], references: [id])
   binId             String?
   movementType      StockMovementType
-  qtyDelta          Float
-  beforeBalance     Float
-  afterBalance      Float
+  qtyDelta          Decimal @db.Decimal(18, 3)
+  beforeBalance     Decimal @db.Decimal(18, 3)
+  afterBalance      Decimal @db.Decimal(18, 3)
   sourceDocument    String?
   sourceLineId      String?
   actor             String?
@@ -1686,14 +1686,14 @@ model StockBalance {
   lot             Lot?     @relation(fields: [lotId], references: [id])
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
-  onHand          Float    @default(0)
-  reserved        Float    @default(0)
-  inTransit       Float    @default(0)
-  available       Float    @default(0)
+  onHand          Decimal    @default(0) @db.Decimal(18, 3)
+  reserved        Decimal    @default(0) @db.Decimal(18, 3)
+  inTransit       Decimal    @default(0) @db.Decimal(18, 3)
+  available       Decimal    @default(0) @db.Decimal(18, 3)
   version         Int      @default(0)
   lastPostedAt    DateTime @updatedAt
   tenantId    String   @default("tenant-invexa")
-  companyId       String   @default("default-company")
+  companyId       String
   @@index([tenantId])
   @@index([companyId])
 
@@ -1913,7 +1913,7 @@ model ExceptionCase {
   location        Location? @relation(fields: [locationId], references: [id])
   branchId        String?
   branch          Branch?  @relation(fields: [branchId], references: [id])
-  quantity        Float?
+  quantity        Decimal? @db.Decimal(18, 3)
   // Decimal migration slice 2 (docs/decimal-migration-plan.md): money, Decimal(14,2).
   valueAtRisk     Decimal?  @db.Decimal(14, 2)
   sourceDocument  String?
@@ -2044,7 +2044,7 @@ model ExpiryAlert {
   lot             Lot      @relation(fields: [lotId], references: [id])
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
-  quantity        Float
+  quantity        Decimal @db.Decimal(18, 3)
   // Decimal migration slice 3: never written by application code today; money, Decimal(14,2).
   value           Decimal?  @db.Decimal(14, 2)
   expiryDate      DateTime
@@ -2077,10 +2077,10 @@ model ReplenishmentSuggestion {
   locationId      String
   location        Location @relation(fields: [locationId], references: [id])
   suggestType     String
-  currentStock    Float
-  minRequired     Float
-  targetStock     Float
-  suggestedQty    Float
+  currentStock    Decimal @db.Decimal(18, 3)
+  minRequired     Decimal @db.Decimal(18, 3)
+  targetStock     Decimal @db.Decimal(18, 3)
+  suggestedQty    Decimal @db.Decimal(18, 3)
   sourceLocation  String?
   salesVelocity   Float?
   daysOfCover     Float?
@@ -2150,7 +2150,7 @@ model TransferCarton {
   cartonNumber    String
   qrCode          String?
   contents        Json?
-  quantity        Float
+  quantity        Decimal @db.Decimal(18, 3)
   weight          Float?
   status          String   @default("PACKED")
   photoUrl        String?
@@ -2217,13 +2217,17 @@ model BinStock {
   locationId  String
   location    Location @relation(fields: [locationId], references: [id])
   binId       String
-  onHand      Float    @default(0)
-  reserved    Float    @default(0)
+  tenantId    String   @default("tenant-invexa")
+  companyId   String
+  onHand      Decimal    @default(0) @db.Decimal(18, 3)
+  reserved    Decimal    @default(0) @db.Decimal(18, 3)
   version     Int      @default(0)
   updatedAt   DateTime @updatedAt
 
-  @@unique([itemId, lotId, locationId, binId])
+  @@unique([companyId, itemId, lotId, locationId, binId])
   @@index([locationId, binId])
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 // Blueprint P4 "WMS 3.0: Bin moves": an explicit bin-to-bin transfer ledger,
@@ -2238,13 +2242,17 @@ model BinMovement {
   location    Location @relation(fields: [locationId], references: [id])
   fromBinId   String
   toBinId     String
-  quantity    Float
+  tenantId    String   @default("tenant-invexa")
+  companyId   String
+  quantity    Decimal @db.Decimal(18, 3)
   reference   String?
   actorId     String?
   createdAt   DateTime @default(now())
 
   @@index([locationId, createdAt])
   @@index([itemId])
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 // Blueprint P7 / P11: Amazon/Flipkart/website connectors that POST /orders.

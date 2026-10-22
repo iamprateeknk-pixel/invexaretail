@@ -25,7 +25,7 @@ export async function listRecentMovementsForCompany(ctx: TenantContext, limit = 
       lotId: row.lotId ?? undefined,
       locationId: row.locationId,
       movementType: row.movementType,
-      qtyDelta: row.qtyDelta,
+      qtyDelta: Number(row.qtyDelta),
       transactionAt: row.transactionAt.toISOString(),
       sourceType: row.sourceType as DailyMovementRecord['sourceType'],
       sourceReference: row.sourceReference,

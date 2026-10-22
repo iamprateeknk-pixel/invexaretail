@@ -80,7 +80,7 @@ async function fefoLotsForItem(companyId: string, itemId: string, locationId: st
       expiryDate: lot.expiryDate?.toISOString() ?? null,
       // Reservation-aware: a lot another order or transfer already claimed
       // is not offered again here.
-      available: Math.max(0, (ledger?.onHand ?? 0) - (ledger?.reserved ?? 0)),
+      available: Math.max(0, Number(ledger?.onHand ?? 0) - Number(ledger?.reserved ?? 0)),
       status: (lot.status as FefoLot['status']) ?? 'AVAILABLE',
       manufacturedAt: lot.manufacturedAt?.toISOString() ?? null,
       shelfLifeDays: item.shelfLifeDays ?? null,
@@ -154,7 +154,7 @@ async function itemAvailabilityByLocation(companyId: string, itemIds: string[], 
   });
   for (const row of rows) {
     const atLocation = map.get(row.locationId) ?? new Map<string, number>();
-    atLocation.set(row.itemId, (atLocation.get(row.itemId) ?? 0) + Math.max(0, row.onHand - row.reserved));
+    atLocation.set(row.itemId, (atLocation.get(row.itemId) ?? 0) + Math.max(0, Number(row.onHand) - Number(row.reserved)));
     map.set(row.locationId, atLocation);
   }
   return map;
@@ -194,8 +194,8 @@ export async function expireStaleReservations(companyId: string): Promise<number
     for (const order of stale) {
       try {
         await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
-          itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
-        })));
+          itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: Number(line.requestedQty),
+        })), { companyId: order.companyId });
         await transitionOrderStatus(order.id, order.companyId, order.status as never, 'EXPIRED', {
           actorId: 'system', actorRole: 'SYSTEM', reason: 'reservation TTL elapsed',
         }, { expiredAt: new Date() });
@@ -229,21 +229,21 @@ export async function retryBackorderAllocation(companyId: string, orderId: strin
   const order = await prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
   if (!order || order.status !== 'BACKORDERED') return order;
   try {
-    const openLines = order.lines.filter((line) => !line.lotId && line.requestedQty > 0);
+    const openLines = order.lines.filter((line) => !line.lotId && Number(line.requestedQty) > 0);
     for (const line of openLines) {
       const lots = await fefoLotsForItem(companyId, line.itemId, line.fulfillmentLocationId || order.fulfillmentLocationId);
-      const allocation = allocateLots(lots, line.requestedQty, 'FEFO');
+      const allocation = allocateLots(lots, Number(line.requestedQty), 'FEFO');
       if (!allocation.allocations.length) continue;
       await reserveStockForTransfer(allocation.allocations.map((pick) => ({
         itemId: line.itemId, lotId: pick.lotId, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: pick.quantity,
-      })));
+      })), { companyId });
       const filledQty = allocation.allocations.reduce((sum, pick) => sum + pick.quantity, 0);
       await prisma.$transaction([
         ...allocation.allocations.map((pick) => prisma.orderLine.create({
           data: { orderId: order.id, itemId: line.itemId, lotId: pick.lotId, requestedQty: pick.quantity },
         })),
-        line.requestedQty - filledQty > 1e-8
-          ? prisma.orderLine.update({ where: { id: line.id }, data: { requestedQty: line.requestedQty - filledQty } })
+        Number(line.requestedQty) - filledQty > 1e-8
+          ? prisma.orderLine.update({ where: { id: line.id }, data: { requestedQty: Number(line.requestedQty) - filledQty } })
           : prisma.orderLine.delete({ where: { id: line.id } }),
       ]);
     }
@@ -376,7 +376,7 @@ async function createOrderInner(input: {
 
   await reserveStockForTransfer(resolved.map((line) => ({
     itemId: line.itemId, lotId: line.lotId, locationId: line.locationId, quantity: line.quantity,
-  })));
+  })), { companyId });
 
   const ttlMinutes = input.reservationTtlMinutes && input.reservationTtlMinutes > 0 ? input.reservationTtlMinutes : DEFAULT_RESERVATION_TTL_MINUTES;
   const status = backordered.length ? 'BACKORDERED' : 'RESERVED';
@@ -420,7 +420,7 @@ async function createOrderInner(input: {
   } catch (error) {
     await releaseReservedStock(resolved.map((line) => ({
       itemId: line.itemId, lotId: line.lotId, locationId: line.locationId, quantity: line.quantity,
-    })));
+    })), { companyId });
     throw error;
   }
 }
@@ -440,9 +440,9 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
       if (!line.lotId) continue;
       const locationId = line.fulfillmentLocationId || order.fulfillmentLocationId;
       const ledger = await tx.stockLedger.findUnique({
-        where: { itemId_lotId_locationId: { itemId: line.itemId, lotId: line.lotId, locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId: order.companyId, itemId: line.itemId, lotId: line.lotId, locationId } },
       });
-      if (!ledger || ledger.onHand < line.requestedQty) {
+      if (!ledger || Number(ledger.onHand) < Number(line.requestedQty)) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
       }
       // onHand leaves through the canonical service (journal + ledger + audit + outbox in
@@ -451,7 +451,7 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
       await postInventoryMovementInTransaction(tx, {
         tenant: { companyId: order.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
         itemId: line.itemId, lotId: line.lotId, locationId,
-        movementType: 'SALES_DEDUCTION', qtyDelta: -line.requestedQty,
+        movementType: 'SALES_DEDUCTION', qtyDelta: -Number(line.requestedQty),
         idempotencyKey: `order-fulfill:${line.id}`,
         reason: `Order fulfilled (${order.channel})`, sourceDocument: order.id, sourceLineId: line.id, correlationId: order.id,
         metadata: { orderId: order.id, channel: order.channel },
@@ -472,7 +472,7 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
 
   await persistAudit(recordAudit({
     actorId, actorRole: 'SYSTEM', action: 'ORDER_FULFILLED', entityType: 'Order', entityId: order.id,
-    metadata: { channel: order.channel, lines: order.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty })) },
+    metadata: { channel: order.channel, lines: order.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty) })) },
   }));
   return prisma.order.findFirst({ where: { id: order.id, companyId }, include: ORDER_INCLUDE });
 }
@@ -488,8 +488,8 @@ export async function cancelOrder(companyId: string, orderId: string, actorId: s
   // centralized writer validates again immediately before persisting.
   await assertValidOrderTransition(order.status as never, 'CANCELLED', order.id, { actorId, actorRole: 'SYSTEM' });
   await releaseReservedStock(order.lines.filter((line) => line.lotId).map((line) => ({
-    itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: line.requestedQty,
-  })));
+    itemId: line.itemId, lotId: line.lotId!, locationId: line.fulfillmentLocationId || order.fulfillmentLocationId, quantity: Number(line.requestedQty),
+  })), { companyId: order.companyId });
   await transitionOrderStatus(order.id, order.companyId, order.status as never, 'CANCELLED', { actorId, actorRole: 'SYSTEM' }, { cancelledAt: new Date() });
   await persistAudit(recordAudit({ actorId, actorRole: 'SYSTEM', action: 'ORDER_CANCELLED', entityType: 'Order', entityId: order.id }));
   return prisma.order.findFirst({ where: { id: order.id, companyId }, include: ORDER_INCLUDE });
