@@ -18,7 +18,7 @@ import { prisma } from '../lib/db.js';
 import { hydrateRepositoryFromDatabase } from '../lib/persistence.js';
 import { findStockLedgerEntry, listStockLedger, listStockLedgerForLocation } from '../lib/repository.js';
 import { canonicalLedgerRows, diffJson, seedStockParityFixture, stockParityCtx, type StockParityFixture } from '../lib/repositories/stock-parity-harness.js';
-import { listBinStockForLocation, listStockForLocation } from '../lib/repositories/stock-repository.js';
+import { listBinStockForLocation, listStockForCompany, listStockForLocation } from '../lib/repositories/stock-repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -139,31 +139,26 @@ integration('plan §2.5b FIXED at step 3: a stocked location with zero BinStock 
   assert.equal(populated[0].onHand, 10);
 });
 
-integration('step 5 characterization: the two GET /intelligence implementations disagree on availability by exactly the reserved bucket (and by lot status)', async () => {
-  // The endpoint has two implementations. The database branch
-  // (opext-intelligence.ts) accumulates sellable on-hand — AVAILABLE,
-  // unexpired lots only, via sellableQuantity — and counts reserved against
-  // it. The memory branch's builder (lib/reorder-store.ts
-  // buildReplenishmentIntelligence) accumulates raw onHand and never reads
-  // reserved at all. Over the fixture row (onHand 10, reserved 4, lot
-  // AVAILABLE) the two therefore report different availability for the same
-  // stock — the §2.5c class of gap, one layer up. sellableQuantity is the
-  // DB branch's own function, imported here so the pin uses its real math.
+integration('step 5: the memory intelligence builder, fed by the stock repository, now agrees with the DB branch on availability', async () => {
+  // Step 5a pinned the divergence: over the fixture row (onHand 10,
+  // reserved 4, AVAILABLE lot) the DB branch reports availability 6 and
+  // the old builder reported 10 — a gap of exactly the reserved bucket,
+  // widened further by lot status (a BLOCKED lot is 0 to the DB branch).
+  // Step 5b fed the builder from the stock repository and reconciled its
+  // accumulation with the DB branch's sellable/reserved math; this is the
+  // flipped pin, exercising the real builder end to end.
   const { sellableQuantity } = await import('../lib/sellable-stock.js');
+  const { buildReplenishmentIntelligence, upsertReorderRule } = await import('../lib/reorder-store.js');
   const lot = { status: 'AVAILABLE', expiryDate: null };
-  const dbSellableHere = sellableQuantity({ onHand: 10, reserved: 0, lot });
-  const dbAvailable = dbSellableHere - 4; // reserved counted because sellableHere > 0
-  const dbNetworkAvailable = sellableQuantity({ onHand: 10, reserved: 4, lot });
-  const memoryAvailable = 10; // builder: quantities.onHand += entry.onHand; reserved never subtracted
-  const memoryNetworkAvailable = 10; // builder: source.available += entry.onHand
-  assert.equal(dbAvailable, 6);
-  assert.equal(dbNetworkAvailable, 6);
-  assert.equal(memoryAvailable - dbAvailable, 4, 'the availability gap is exactly the reserved bucket');
-  assert.equal(memoryNetworkAvailable - dbNetworkAvailable, 4);
-  // Lot status widens the same gap: a BLOCKED lot is worth 0 to the DB
-  // branch and a full 10 to the memory builder.
+  assert.equal(sellableQuantity({ onHand: 10, reserved: 4, lot }), 6, 'DB branch availability for the fixture row');
   assert.equal(sellableQuantity({ onHand: 10, reserved: 0, lot: { status: 'BLOCKED', expiryDate: null } }), 0);
-  // Phase 5 step 5b reconciles the builder (repository-fed stock input,
-  // sellable + reserved-aware accumulation) and flips this pin to assert
-  // the builder itself now reports 6 over the fixture.
+
+  await hydrateRepositoryFromDatabase();
+  upsertReorderRule({ itemId: fixture.itemA1, locationId: fixture.locationA, minQty: 8, targetQty: 20 });
+  const ledger = await listStockForCompany(stockParityCtx(fixture.companyA));
+  const result = buildReplenishmentIntelligence(fixture.locationA, ledger);
+  const recommendation = result.recommendations.find((row) => row.itemId === fixture.itemA1);
+  assert.ok(recommendation, 'the seeded rule must produce a recommendation');
+  assert.equal(recommendation.available, 6, 'position = sellable on-hand 10 - reserved 4, no incoming');
+  assert.equal(recommendation.suggestedOrderQty, 14, 'position 6 <= min 8, so order up to target 20');
 });
