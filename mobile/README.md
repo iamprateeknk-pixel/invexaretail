@@ -51,5 +51,8 @@ WebView (invexaretail.com and api.invexaretail.com only).
 
 ## Android APK
 
-CI generates the Android project at build time (`flutter create --platforms=android`).
-The `android/` tree is not committed.
+The `android/` project is committed and is exactly what CI builds — the
+Android release workflow (`.github/workflows/android-apk.yml`) does not
+regenerate it. The workflow runs `flutter pub get --enforce-lockfile`,
+`flutter analyze` and `flutter test`, then builds the signed release
+AAB/APK with the version from `pubspec.yaml`.

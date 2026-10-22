@@ -1,3 +1,13 @@
+> **SUPERSEDED — this plan was never built.** This document describes a React
+> Native + Expo app that was planned early in the project and never
+> implemented. The mobile app that actually shipped is a native **Flutter**
+> client in [`mobile/`](mobile/) (Android-first, committed `android/`
+> project, hand-rolled `ChangeNotifier` state, SQLite offline store on
+> schema v5). For the current app see [`mobile/README.md`](mobile/README.md),
+> [`mobile/SETUP.md`](mobile/SETUP.md) and
+> [`MOBILE_INTEGRATION_GUIDE.md`](MOBILE_INTEGRATION_GUIDE.md). This file is
+> kept only as a historical record of the original plan.
+
 # 📱 Mobile App Architecture Plan
 
 ## Overview
