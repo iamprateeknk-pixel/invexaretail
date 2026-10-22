@@ -10,7 +10,6 @@ import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
 import { ExpiryWriteOffError, buildLocationExpiryBoard, listLocationExpiryAlerts, writeOffExpiryLot } from '../lib/expiry-lifecycle.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
-import { adjustStockLedger } from '../lib/repository.js';
 import { maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
@@ -23,7 +22,7 @@ router.get('/expiry-alerts', async (req, res) => {
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
   if (!canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (!databaseEnabled) {
-    return res.json({ alerts: listLocationExpiryAlerts(locationId) });
+    return res.json({ alerts: await listLocationExpiryAlerts(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
     where: { locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
@@ -61,7 +60,7 @@ router.get('/expiry-board', async (req, res) => {
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
   if (!canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
   if (!databaseEnabled) {
-    return res.json({ board: buildLocationExpiryBoard(locationId) });
+    return res.json({ board: await buildLocationExpiryBoard(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
     where: { locationId, onHand: { gt: 0 } },
@@ -111,7 +110,7 @@ router.post('/expiry-write-off', async (req, res) => {
         entityType: 'ExpiryAlert', entityId: result.alertId,
         metadata: { quantity: result.quantity, beforeBalance: result.beforeBalance, afterBalance: result.afterBalance, movementId: result.movementId, reason, itemId, lotId, locationId },
       }));
-      maybeEmitStockLow(itemId, locationId, result.beforeBalance);
+      void maybeEmitStockLow(tenantContextOf(req), itemId, locationId, result.beforeBalance);
       return res.json({ success: true, result });
     } catch (error) {
       const status = error instanceof ExpiryWriteOffError ? error.status : 400;
@@ -167,12 +166,10 @@ router.post('/expiry-write-off', async (req, res) => {
       } });
       return { alertId, movementId: movement.id, quantity, beforeBalance: Number(ledger.onHand), afterBalance };
     });
-    try {
-      adjustStockLedger(itemId, lotId, locationId, -result.quantity);
-    } catch {
-      // Hydrated ledger may not contain this row in isolated API use.
-    }
-    maybeEmitStockLow(itemId, locationId, result.beforeBalance);
+    // Phase 5 step 14: the transaction above is the stock write; the
+    // snapshot mirror that used to trail it is retired (stock reads are
+    // database-first now, so nothing consumes the mirrored copy).
+    void maybeEmitStockLow(tenantContextOf(req), itemId, locationId, result.beforeBalance);
     return res.json({ success: true, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Expiry write-off failed.';

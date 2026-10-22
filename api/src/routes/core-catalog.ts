@@ -7,10 +7,11 @@ import { evidenceMime } from '../lib/transfer-evidence.js';
 import { DEFAULT_COMPANY_ID, itemsForCompany, registerItemCompany } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, sanitizeStockForRole, hidesZeroStockForRole, parseItemOperationalMeta, type ItemOperationalMeta } from '../lib/inventory.js';
 import { createInventoryItem } from '../lib/store.js';
-import { createItemRecord, updateItemRecord, listItems, listStockLedgerForLocation, users } from '../lib/repository.js';
+import { createItemRecord, updateItemRecord, listItems, users } from '../lib/repository.js';
 import { recordAudit } from '../lib/audit.js';
 import { findIdentityConflict, isOperationalItem, parseItemMasterFields, parseStatusFilter, seesInactiveItems, visibleItems } from '../lib/item-master.js';
-import { databaseEnabled, listStockFromDatabase, persistAudit, persistItem } from '../lib/persistence.js';
+import { databaseEnabled, persistAudit, persistItem } from '../lib/persistence.js';
+import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { prisma } from '../lib/db.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { accessContext, tenantContext, firstParam, isOperationalAdmin, upload } from './core-shared.js';
@@ -157,23 +158,27 @@ router.get('/stock/:locationId', async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Location access denied for this role.' });
   }
 
-  const rows = databaseEnabled
-    ? await listStockFromDatabase(locationId)
-    : listStockLedgerForLocation(locationId).map((row) => ({
-        itemId: row.itemId,
-        lotId: row.lotId,
-        locationId: row.locationId,
-        bookQuantity: row.onHand,
-        physicalQuantity: row.onHand,
-        variance: 0,
-        stockValue: 0,
-        quarantineQuantity: row.quarantine,
-        damagedQuantity: 0,
-        // Reservations are DB-only (see lib/reservation.ts) - memory mode
-        // has no concurrent requests to race, so nothing is ever reserved.
-        reservedQuantity: 0,
-        availableQuantity: row.onHand,
-      }));
+  // Phase 5 step 2: both modes read through the tenant-scoped stock
+  // repository. The database read it replaces (listStockFromDatabase)
+  // filtered by location alone — no companyId (plan §2.5a); the repository
+  // scopes by the caller's company in the query itself.
+  const rows = (await listStockForLocation(tenantContext(req), locationId)).map((row) => ({
+    itemId: row.itemId,
+    lotId: row.lotId,
+    locationId: row.locationId,
+    bookQuantity: row.onHand,
+    physicalQuantity: row.onHand,
+    variance: 0,
+    stockValue: 0,
+    quarantineQuantity: row.quarantine,
+    damagedQuantity: row.damaged ?? 0,
+    // Reservations are DB-only (see lib/reservation.ts) - memory-mode
+    // records carry no reserved bucket, so this stays 0 there, exactly as
+    // the old memory branch hard-coded it.
+    reservedQuantity: row.reserved ?? 0,
+    // Blueprint §7.2: "Available = On Hand - Reserved."
+    availableQuantity: Math.max(0, row.onHand - (row.reserved ?? 0)),
+  }));
 
   const activeItemIds = new Set(listItems().filter(isOperationalItem).map((item) => item.id));
   const visibleRows = (hidesZeroStockForRole(context.role)

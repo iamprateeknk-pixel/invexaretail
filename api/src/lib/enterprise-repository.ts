@@ -117,15 +117,6 @@ export type LotRecord = {
   attributes?: Record<string, unknown>;
 };
 
-export type StockLedgerRecord = {
-  itemId: string;
-  lotId: string;
-  locationId: string;
-  onHand: number;
-  version: number;
-  lastMovedAt?: string;
-};
-
 // ============================================
 // ENHANCED COUNTS WITH TIMESTAMPS
 // ============================================
@@ -303,7 +294,6 @@ export const counts: CountRecord[] = [];
 export const countAssignments: CountAssignmentRecord[] = [];
 export const transfers: TransferRecord[] = [];
 export const transferAssignments: TransferAssignmentRecord[] = [];
-export const stockLedger: StockLedgerRecord[] = [];
 export const auditLogs: AuditLogRecord[] = [];
 
 // ============================================
@@ -493,30 +483,16 @@ export function updateCountStatus(countId: string, status: CountRecord['status']
 }
 
 export function approveCount(countId: string, reviewedBy: string, notes?: string): CountRecord {
-  const count = updateCountStatus(countId, 'APPROVED', {
+  // Phase 5 step 13: approving a count here no longer "adjusts" a private
+  // stockLedger array this module kept — that array was write-only (nothing
+  // read it; it was a shadow stock truth of exactly the kind R1 retires).
+  // Real variance posting lives in the count review flow
+  // (inventory-posting-service); this legacy surface only records the review.
+  return updateCountStatus(countId, 'APPROVED', {
     reviewedBy,
     reviewedAt: new Date().toISOString(),
     reviewNotes: notes,
   });
-  // Adjust stock ledger
-  const ledgerEntry = stockLedger.find(
-    (l) => l.itemId === count.itemId && l.lotId === count.lotId && l.locationId === count.locationId
-  );
-  if (ledgerEntry) {
-    ledgerEntry.onHand += count.variance;
-    ledgerEntry.version += 1;
-    ledgerEntry.lastMovedAt = new Date().toISOString();
-  } else {
-    stockLedger.push({
-      itemId: count.itemId,
-      lotId: count.lotId,
-      locationId: count.locationId,
-      onHand: count.variance,
-      version: 1,
-      lastMovedAt: new Date().toISOString(),
-    });
-  }
-  return count;
 }
 
 // ============================================

@@ -95,6 +95,15 @@ export type StockLedgerRecord = {
   // but excluded from sellable on-hand math elsewhere in this file.
   quarantine: number;
   version: number;
+  // Phase 5 (DB-first stock reads): the projection's remaining buckets.
+  // Optional so memory-mode records (seed data, rows created by the
+  // in-memory adjusters) stay valid without them; hydration and the stock
+  // repository always populate them from the database row via
+  // lib/stock-ledger-mapper.ts. Before Phase 5 these did not exist here at
+  // all, so snapshot-fed screens in database mode reported reserved as 0.
+  reserved?: number;
+  inTransit?: number;
+  damaged?: number;
 };
 
 export type UserRecord = {

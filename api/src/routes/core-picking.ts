@@ -7,7 +7,8 @@ import { pickerMayWork } from '../lib/transfer-assignment.js';
 import { createHash } from 'node:crypto';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, type Role } from '../lib/inventory.js';
-import { createTransferRecord, findTransferForCompany, listItems, listStockLedgerForLocation, listTransfers, locations, updateTransferStatus, type TransferRecord } from '../lib/repository.js';
+import { createTransferRecord, findTransferForCompany, listItems, listTransfers, locations, updateTransferStatus, type TransferRecord } from '../lib/repository.js';
+import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
 import { lastKnownBin, sequenceKeyForBin } from '../lib/pick-wave.js';
 import { reserveStockForTransfer } from '../lib/reservation.js';
@@ -41,7 +42,10 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
 
   const item = listItems().find((entry) => entry.id === itemId);
   if (!item) return res.status(404).json({ message: 'Item was not found.' });
-  const sourceStock = listStockLedgerForLocation(sourceLocationId);
+  // Phase 5 step 6: the availability check reads current stock through the
+  // tenant-scoped repository, not the snapshot (which could be a reconcile
+  // cycle stale — and this handler reserves against what it reads).
+  const sourceStock = await listStockForLocation(tenantContext(req), sourceLocationId);
   const lots = item.lots.map((lot) => ({
     lotId: lot.id,
     lotNo: lot.lotNo,

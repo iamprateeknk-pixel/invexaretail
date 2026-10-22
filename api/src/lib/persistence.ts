@@ -69,20 +69,6 @@ export async function authenticateUser(email: string, password: string, requeste
   };
 }
 
-export type PersistedStockRow = {
-  itemId: string;
-  lotId: string;
-  locationId: string;
-  bookQuantity: number;
-  physicalQuantity: number;
-  variance: number;
-  stockValue: number;
-  quarantineQuantity: number;
-  damagedQuantity: number;
-  reservedQuantity: number;
-  availableQuantity: number;
-};
-
 function requireDatabase(): void {
   if (!databaseEnabled) {
     throw new Error('Database persistence is disabled. Set DATABASE_URL to the Postgres database.');
@@ -107,12 +93,18 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
   const profileCompanyIds = (await prisma.companyProfile.findMany({ select: { id: true } })).map((company) => company.id);
   const companyIds = [...new Set([DEFAULT_COMPANY_ID, ...profileCompanyIds])];
 
-  const [dbLocations, dbItems, dbCounts, dbTransfers, dbStockLedger, dbAssignments, dbUsers] = await Promise.all([
+  // Phase 5 step 15 (hydration slimming): StockLedger is deliberately NOT
+  // loaded into the snapshot any more. Every stock read goes to the
+  // database through lib/repositories/stock-repository.ts, and every
+  // DB-mode stock write is a canonical posting — a hydrated copy would be
+  // a second, stale stock truth (R1) that nothing may read. The snapshot
+  // keeps the document arrays (locations, items, counts, transfers,
+  // assignments, users), which the reconciler continues to refresh.
+  const [dbLocations, dbItems, dbCounts, dbTransfers, dbAssignments, dbUsers] = await Promise.all([
     prisma.location.findMany({ where: { companyId: { in: companyIds } }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] }),
     prisma.item.findMany({ where: { companyId: { in: companyIds } }, include: { lots: true } }),
     prisma.stockCount.findMany({ where: { companyId: { in: companyIds } } }),
     prisma.transfer.findMany({ where: { companyId: { in: companyIds } }, include: { lines: true } }),
-    prisma.stockLedger.findMany({ where: { companyId: { in: companyIds } } }),
     prisma.countAssignment.findMany({ where: { location: { companyId: { in: companyIds } } } }),
     prisma.user.findMany({ where: { companyId: { in: companyIds } } }),
   ]);
@@ -133,15 +125,6 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
 
   // The role is not stored on StockCount; the snapshot keeps its historical placeholder (see lib/repositories/count-repository.ts).
   replaceContents(counts, dbCounts.map((count) => countRowToRecord(count, 'STORE_USER')));
-
-  replaceContents(stockLedger, dbStockLedger.map((row) => ({
-    itemId: row.itemId,
-    lotId: row.lotId,
-    locationId: row.locationId,
-    onHand: Number(row.onHand),
-    quarantine: Number(row.quarantine),
-    version: row.version,
-  })));
 
   replaceContents(users, dbUsers.map((user) => ({
     id: user.id,
@@ -527,7 +510,11 @@ export async function persistOpeningStockImport(
     const item = items.find((candidate) => candidate.id === lot.itemId);
     if (item && !item.lots.some((candidate) => candidate.id === lot.id)) item.lots.push(lot);
   }
-  for (const { row, item, lot, location } of prepared) {
+  // Memory mode only: the snapshot ledger is the demo's stock store, so an
+  // opening-stock import maintains it directly. In database mode the
+  // transaction above is the write and the snapshot holds no stock at all
+  // (Phase 5 step 15), so there is no mirror copy to maintain.
+  if (!databaseEnabled) for (const { row, item, lot, location } of prepared) {
     const existing = stockLedger.find((entry) => entry.itemId === item.id && entry.lotId === lot.id && entry.locationId === location.id);
     if (existing) {
       existing.onHand = row.quantity ?? 0;
@@ -672,25 +659,6 @@ export async function persistCount(count: CountRecord, companyId: string): Promi
       companyId,
     } as never,
   });
-}
-
-export async function listStockFromDatabase(locationId: string): Promise<PersistedStockRow[]> {
-  requireDatabase();
-  const rows = await prisma.stockLedger.findMany({ where: { locationId } });
-  return rows.map((row) => ({
-    itemId: row.itemId,
-    lotId: row.lotId,
-    locationId: row.locationId,
-    bookQuantity: Number(row.onHand),
-    physicalQuantity: Number(row.onHand),
-    variance: 0,
-    stockValue: 0,
-    quarantineQuantity: Number(row.quarantine),
-    damagedQuantity: Number(row.damaged),
-    reservedQuantity: Number(row.reserved),
-    // Blueprint §7.2: "Available = On Hand - Reserved."
-    availableQuantity: Math.max(0, Number(row.onHand) - Number(row.reserved)),
-  }));
 }
 
 /**

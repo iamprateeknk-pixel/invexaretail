@@ -1,0 +1,13 @@
+-- Phase 5 step 12: retire StockBalance (R1 — multiple stock truths).
+-- The table was a second stock truth that nothing ever wrote or read:
+-- no writer, no reader, only one defensive deleteMany in
+-- item-master-service (removed in the same change). StockLedger is the
+-- only stock table; every stock read now goes through
+-- lib/repositories/stock-repository.ts.
+--
+-- PRE-DEPLOY GATE (runbook, deploy-time check — not code): before
+-- applying this migration run
+--   SELECT count(*) FROM "StockBalance";
+-- Expected: 0. If rows exist, export them as OPENING_STOCK journal
+-- history and reconcile against StockLedger BEFORE dropping.
+DROP TABLE IF EXISTS "StockBalance";
