@@ -1,0 +1,28 @@
+-- Wave 4 (System P2-22): remove the phantom-tenant schema defaults.
+-- 35 models carried @default("default-company") on companyId (plus
+-- MarketplaceConnector.tenantId). The Phase 3 remediation removed the
+-- placeholder from the write paths, but the schema default stayed: any
+-- insert that forgot companyId silently landed in a phantom tenant instead
+-- of failing. The defaults are now gone and companyId is simply required,
+-- so a missing tenant fails loudly at insert time.
+--
+-- Prisma supplies @default values from the generated client, not from
+-- Postgres, so there is no database object to alter here; this migration
+-- records the change in the migration history and carries the gate below.
+--
+-- PRE-DEPLOY GATE (runbook, deploy-time check - not code): before
+-- deploying the build that contains this schema change, audit for rows
+-- that arrived through the old default, e.g.
+--   SELECT count(*) FROM "Item" WHERE "companyId" = 'default-company';
+-- repeated for the other tenant tables (User, Branch, Location, Order,
+-- Item, StockCount, Transfer, Supplier, PurchaseOrder, ImportBatch,
+-- StockMovement, ExceptionCase, ExpiryAlert, ImportRow, SerialNumber,
+-- StockTakeCampaign, ChannelWebhookEvent, ItemBundleComponent, ...).
+-- Rows belonging to the real demo/first company are expected and stay;
+-- rows in any OTHER table that no operator can account for must be
+-- reassigned to their true company BEFORE deploy, because after this
+-- change nothing will write that value by accident again - and anything
+-- found later is evidence of an older bug, not new data.
+--
+-- This file intentionally contains no DDL.
+SELECT 1;

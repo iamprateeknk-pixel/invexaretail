@@ -5,9 +5,9 @@ import { PrismaPg } from '@prisma/adapter-pg';
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
 const locations = [
-  { id: 'loc-1', code: 'MAIN-STORE', name: 'Main Store', type: 'store' },
-  { id: 'loc-2', code: 'BRANCH-STORE', name: 'Branch Store', type: 'store' },
-  { id: 'wh-1', code: 'CENTRAL-WH', name: 'Warehouse', type: 'warehouse' },
+  { id: 'loc-1', code: 'MAIN-STORE', name: 'Main Store', type: 'store', companyId: 'default-company' },
+  { id: 'loc-2', code: 'BRANCH-STORE', name: 'Branch Store', type: 'store', companyId: 'default-company' },
+  { id: 'wh-1', code: 'CENTRAL-WH', name: 'Warehouse', type: 'warehouse', companyId: 'default-company' },
 ];
 
 const items = [
@@ -35,7 +35,7 @@ async function main() {
     await prisma.item.upsert({
       where: { id: item.id },
       update: { code: item.code, name: item.name, category: item.category, unit: item.unit },
-      create: { id: item.id, code: item.code, name: item.name, category: item.category, unit: item.unit },
+      create: { id: item.id, code: item.code, name: item.name, category: item.category, unit: item.unit, companyId: 'default-company' },
     });
     await prisma.lot.upsert({
       where: { id: item.lotId },
@@ -48,7 +48,7 @@ async function main() {
     await prisma.user.upsert({
       where: { id: user.id },
       update: { name: user.name, email: user.email, role: user.role, assignedLocations: JSON.stringify(user.assignedLocations), passwordHash },
-      create: { id: user.id, name: user.name, email: user.email, role: user.role, assignedLocations: JSON.stringify(user.assignedLocations), passwordHash },
+      create: { id: user.id, name: user.name, email: user.email, role: user.role, assignedLocations: JSON.stringify(user.assignedLocations), passwordHash, companyId: 'default-company' },
     });
   }
 
@@ -71,19 +71,19 @@ async function main() {
   await prisma.stockCount.upsert({
     where: { id: 'count-1' },
     update: { physicalQty: 28, mode: 'scan' },
-    create: { id: 'count-1', itemId: 'item-1001', lotId: 'lot-1001', locationId: 'loc-1', physicalQty: 28, mode: 'scan', submittedById: 'user-store-1' },
+    create: { id: 'count-1', itemId: 'item-1001', lotId: 'lot-1001', locationId: 'loc-1', physicalQty: 28, mode: 'scan', submittedById: 'user-store-1', companyId: 'default-company' },
   });
   await prisma.stockCount.upsert({
     where: { id: 'count-2' },
     update: { physicalQty: 26, mode: 'manual' },
-    create: { id: 'count-2', itemId: 'item-1002', lotId: 'lot-1002', locationId: 'loc-2', physicalQty: 26, mode: 'manual', submittedById: 'user-store-1' },
+    create: { id: 'count-2', itemId: 'item-1002', lotId: 'lot-1002', locationId: 'loc-2', physicalQty: 26, mode: 'manual', submittedById: 'user-store-1', companyId: 'default-company' },
   });
 
   await prisma.transfer.upsert({
     where: { id: 'transfer-1' },
     update: { status: TransferStatus.REQUESTED },
     create: {
-      id: 'transfer-1', sourceLocationId: 'loc-1', destinationLocationId: 'wh-1', requestedById: 'user-admin-1', status: TransferStatus.REQUESTED,
+      id: 'transfer-1', sourceLocationId: 'loc-1', destinationLocationId: 'wh-1', requestedById: 'user-admin-1', status: TransferStatus.REQUESTED, companyId: 'default-company',
       lines: { create: [{ itemId: 'item-1001', lotId: 'lot-1001', requestedQty: 12 }] },
     },
   });
@@ -91,7 +91,7 @@ async function main() {
     where: { id: 'transfer-2' },
     update: { status: TransferStatus.DISPATCHED },
     create: {
-      id: 'transfer-2', sourceLocationId: 'wh-1', destinationLocationId: 'loc-2', requestedById: 'user-admin-1', status: TransferStatus.DISPATCHED,
+      id: 'transfer-2', sourceLocationId: 'wh-1', destinationLocationId: 'loc-2', requestedById: 'user-admin-1', status: TransferStatus.DISPATCHED, companyId: 'default-company',
       lines: { create: [{ itemId: 'item-1003', lotId: 'lot-1003', requestedQty: 18 }] },
     },
   });
@@ -105,3 +105,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+

@@ -166,7 +166,7 @@ model User {
   assignedLocations  String   @db.Text
   assignedBranches   String?  @db.Text
   // SaaS company that owns this login. Distinct from Item.company (brand).
-  companyId          String   @default("default-company")
+  companyId          String
   tenantId           String   @default("tenant-invexa")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -215,7 +215,7 @@ model Branch {
   name            String
   type            String   @default("WAREHOUSE")
   status          String   @default("ACTIVE")
-  companyId       String   @default("default-company")
+  companyId       String
   tenantId        String   @default("tenant-invexa")
   address         String?  @db.Text
   phone           String?
@@ -250,7 +250,7 @@ model Location {
   status                String   @default("ACTIVE")
   // Admin-chosen display order in the location switcher; lower first, ties fall back to createdAt.
   sortOrder             Int      @default(0)
-  companyId             String   @default("default-company")
+  companyId             String
   tenantId              String   @default("tenant-invexa")
   description           String?  @db.Text
   latitude              Float?
@@ -434,7 +434,7 @@ model Order {
   // Week 19: real per-company scoping, the second slice of the migration
   // Week 17 started for PurchaseOrder. Backfilled from the order's own
   // fulfillmentLocation.companyId.
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -465,7 +465,7 @@ model PackSession {
   sealedAt     DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
-  companyId    String       @default("default-company")
+  companyId    String
   tenantId     String       @default("tenant-invexa")
 
   lines PackedLine[]
@@ -506,7 +506,7 @@ model ReturnRequest {
   refundedById  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  companyId     String   @default("default-company")
+  companyId     String
   tenantId      String   @default("tenant-invexa")
 
   lines ReturnLine[]
@@ -551,7 +551,7 @@ model Shipment {
   createdById     String
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
-  companyId       String    @default("default-company")
+  companyId       String
   tenantId        String    @default("tenant-invexa")
 
   @@unique([awbNumber])
@@ -703,7 +703,7 @@ model Item {
   subcategory String?
   company     String?
   // SaaS tenant. Item.company above is the brand/manufacturer name.
-  companyId   String   @default("default-company")
+  companyId   String
   tenantId    String   @default("tenant-invexa")
   unit        String?
   description String?  @db.Text
@@ -889,7 +889,7 @@ model StockCount {
   // Real per-company scoping, the fourth slice of the migration Weeks
   // 17/19 started for PurchaseOrder/Order/Transfer. Backfilled from the
   // count's own Location.
-  companyId   String   @default("default-company")
+  companyId   String
 
   @@index([tenantId])
   @@index([companyId])
@@ -957,7 +957,7 @@ model Transfer {
   // started for PurchaseOrder/Order. Backfilled from the transfer's own
   // sourceLocation.companyId (the location that authorized the transfer
   // out, the more natural tenant owner than the destination).
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
   @@index([destinationLocationId, status])
@@ -1055,7 +1055,7 @@ model Tag {
   id        String   @id @default(cuid())
   name      String
   // Audit T-1: tags are per company (they were one global list).
-  companyId String   @default("default-company")
+  companyId String
   color     String   @default("emerald")
   createdAt DateTime @default(now())
   items     ItemTag[]
@@ -1078,7 +1078,7 @@ model CustomFieldDefinition {
   id        String   @id @default(cuid())
   name      String
   // Audit T-1: custom fields are per company.
-  companyId String   @default("default-company")
+  companyId String
   type      String   @default("text")
   options   Json?
   required  Boolean  @default(false)
@@ -1128,7 +1128,7 @@ model Supplier {
   // rows default to the same 'default-company' constant used elsewhere in
   // this migration series when no better source exists - see the
   // migration's own comment and docs/week28-item-supplier-bare-id-remediation.md.
-  companyId   String   @default("default-company")
+  companyId   String
 
   @@index([tenantId])
   @@index([companyId])
@@ -1181,7 +1181,7 @@ model PurchaseOrder {
   // Week 17: real per-company scoping, added alongside ImportBatch (Week
   // 11) and ExceptionCase (Week 12) - the same class of fix, this time for
   // PurchaseOrder. Backfilled from the order's own Location.companyId.
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -1226,7 +1226,7 @@ model SupplierPriceBreak {
   minQty    Decimal @db.Decimal(18, 3)
   // Money: Decimal, not Float (prohibited pattern #3).
   unitCost  Decimal  @db.Decimal(18, 4)
-  companyId String   @default("default-company")
+  companyId String
   createdAt DateTime @default(now())
 
   @@unique([supplierId, itemId, minQty])
@@ -1285,7 +1285,7 @@ model PriceList {
   createdById   String
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  companyId     String    @default("default-company")
+  companyId     String
   tenantId      String    @default("tenant-invexa")
 
   @@index([itemId, priceType, branchId])
@@ -1311,7 +1311,7 @@ model ReorderRule {
   // Location.companyId, same join pattern as PurchaseOrder/Order/
   // Transfer/StockCount/ExpiryAlert - see
   // docs/week29-expiryalert-reorderrule-bare-id-remediation.md.
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -1333,7 +1333,7 @@ model SavedReport {
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
   // Company of the owner: a shared report is shared inside its company only.
-  companyId  String   @default("default-company")
+  companyId  String
   @@index([companyId])
 
   @@index([ownerId, updatedAt])
@@ -1353,7 +1353,7 @@ model SavedView {
   isShared   Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  companyId  String   @default("default-company")
+  companyId  String
   tenantId   String   @default("tenant-invexa")
 
   @@index([ownerId, updatedAt])
@@ -1377,7 +1377,7 @@ model AssetCheckout {
   updatedAt    DateTime  @updatedAt
   tenantId    String   @default("tenant-invexa")
   // P0-SEC-002: real company ownership (backfilled from the checkout's Location).
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -1390,7 +1390,7 @@ model Job {
   id          String    @id @default(cuid())
   number      String
   // Audit T-1: jobs had no company at all - every admin saw and could edit every company's jobs.
-  companyId   String    @default("default-company")
+  companyId   String
   name        String
   locationId  String
   status      String    @default("DRAFT")
@@ -1439,7 +1439,7 @@ model ContextComment {
   mentions   Json?
   createdAt  DateTime @default(now())
   // P0-SEC-003: real company ownership (backfilled from the author's User).
-  companyId  String   @default("default-company")
+  companyId  String
 
   @@index([entityType, entityId, createdAt])
   @@index([companyId])
@@ -1456,7 +1456,7 @@ model UserNotification {
   createdAt DateTime  @default(now())
   // P0-SEC-004: real company ownership (backfilled from the recipient User; rows with
   // no recipient user - role-wide or global notices - cannot be derived and keep the default).
-  companyId String    @default("default-company")
+  companyId String
 
   @@index([userId, readAt, createdAt])
   @@index([role, readAt, createdAt])
@@ -1476,7 +1476,7 @@ model WebhookSubscription {
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
   // Company that owns the subscription: events are delivered only to their own company's hooks.
-  companyId       String   @default("default-company")
+  companyId       String
   @@index([companyId])
 
   @@index([status, createdAt])
@@ -1500,7 +1500,7 @@ model WebhookDeliveryLog {
   body           String?   @db.Text
   tenantId    String   @default("tenant-invexa")
   @@index([tenantId])
-  companyId      String    @default("default-company")
+  companyId      String
   @@index([companyId])
 
 
@@ -1542,7 +1542,7 @@ model ImportBatch {
   // pre-existing `tenantId` above is a single constant across the whole
   // app, not the SaaS company boundary ADR-002 scopes everything else by.
   // Every ImportBatch/ImportRow before this week had no companyId at all.
-  companyId            String   @default("default-company")
+  companyId            String
   // Durable resume point for the batched commit worker: the highest
   // ImportRow.rowNumber successfully committed so far. A crash/restart
   // resumes from here instead of restarting (re-posting already-committed
@@ -1662,7 +1662,7 @@ model StockMovement {
   // InventoryPostingService detect a retried command and return the
   // original result instead of posting twice. Null for legacy rows and for
   // callers that predate the idempotency requirement.
-  companyId       String   @default("default-company")
+  companyId       String
   idempotencyKey  String?
   @@index([tenantId])
   @@index([companyId])
@@ -1910,7 +1910,7 @@ model ExceptionCase {
   // for it the way Week 12's reporting-repository.ts does for the other
   // queue models) - a genuine cross-tenant leak for any case with no
   // location. companyId closes it directly.
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -2034,7 +2034,7 @@ model ExpiryAlert {
   // Real per-company scoping, the fifth and last slice of the migration
   // Weeks 17/19 started for PurchaseOrder/Order/Transfer/StockCount.
   // Backfilled from the alert's own Location.
-  companyId   String   @default("default-company")
+  companyId   String
   @@index([tenantId])
   @@index([companyId])
 
@@ -2086,7 +2086,7 @@ model ImportRow {
   tenantId    String   @default("tenant-invexa")
   // Week 11: denormalized from the parent ImportBatch so a row-level query
   // (e.g. the failure export) never needs a join to stay tenant-scoped.
-  companyId       String   @default("default-company")
+  companyId       String
   // The StockMovement this row posted, once committed - lets reverse walk
   // rows instead of re-deriving movements, and lets a row prove it was
   // actually posted through InventoryPostingService, not some other path.
@@ -2237,7 +2237,7 @@ model MarketplaceConnector {
   channel        String
   webhookSecret  String
   status         String    @default("ACTIVE")
-  tenantId       String    @default("default-company")
+  tenantId       String
   createdAt      DateTime  @default(now())
   lastIngestedAt DateTime?
 
@@ -2267,7 +2267,7 @@ model SerialNumber {
   returnState       String?
   warrantyEnd       DateTime?
   metadata          Json?
-  companyId         String    @default("default-company")
+  companyId         String
   tenantId          String    @default("tenant-invexa")
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -2304,7 +2304,7 @@ model SerialMovement {
 // the other rule/result tables (restricted-MySQL hosting); joined in code.
 model StockTakeCampaign {
   id                String    @id @default(cuid())
-  companyId         String    @default("default-company")
+  companyId         String
   tenantId          String    @default("tenant-invexa")
   name              String
   locationId        String
@@ -2413,7 +2413,7 @@ model DomainEventOutbox {
 model ChannelWebhookEvent {
   id              String    @id @default(cuid())
   connectorId     String
-  companyId       String    @default("default-company")
+  companyId       String
   provider        String
   eventId         String
   payloadChecksum String
@@ -2439,7 +2439,7 @@ model ItemBundleComponent {
   componentItemId String
   component       Item     @relation("BundleComponent", fields: [componentItemId], references: [id], onDelete: Cascade)
   quantity        Decimal  @db.Decimal(12, 3)
-  companyId       String   @default("default-company")
+  companyId       String
   tenantId        String   @default("tenant-invexa")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

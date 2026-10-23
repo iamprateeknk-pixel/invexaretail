@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   generateJWT,
+  hashPassword,
+  hashPin,
+  isLegacyPasswordHash,
+  pinHashNeedsUpgrade,
   resolveOtpDeliveryChannel,
   sendOtpEmail,
   setOtpSmtpSender,
   verifyJWT,
+  verifyPassword,
+  verifyPin,
 } from './otp-auth.js';
 
 function decodePayload(token: string): { exp: number; tokenType?: string } {
@@ -16,6 +23,54 @@ function decodePayload(token: string): { exp: number; tokenType?: string } {
 test('access tokens verify and carry userId/companyId', () => {
   const access = generateJWT('user-1', 'company-1');
   assert.deepEqual(verifyJWT(access, 'access'), { userId: 'user-1', companyId: 'company-1' });
+});
+
+test('password hashes are bcrypt and never flagged legacy', () => {
+  const hash = hashPassword('Sup3rSecret!');
+  assert.ok(hash.startsWith('$2'), 'hashPassword must stay bcrypt (prisma/seed.ts depends on it)');
+  assert.equal(isLegacyPasswordHash(hash), false);
+  assert.equal(verifyPassword('Sup3rSecret!', hash), true);
+  assert.equal(verifyPassword('wrong-password', hash), false);
+});
+
+test('legacy sha256 password hashes verify only as a migration source', () => {
+  const legacy = createHash('sha256').update('OldPass123').digest('hex');
+  assert.equal(isLegacyPasswordHash(legacy), true);
+  assert.equal(verifyPassword('OldPass123', legacy), true);
+  assert.equal(verifyPassword('NotThePassword', legacy), false);
+});
+
+test('migrate-on-login contract: legacy verify, re-hash, upgraded hash verifies and is not legacy', () => {
+  // Mirrors the /login and authenticateUser flows: the stored value starts
+  // as a legacy sha256 hex; after a successful verify it is replaced with
+  // hashPassword() output, which then verifies through the bcrypt branch.
+  let stored = createHash('sha256').update('OldPass123').digest('hex');
+  assert.equal(verifyPassword('OldPass123', stored), true);
+  if (isLegacyPasswordHash(stored)) stored = hashPassword('OldPass123');
+  assert.equal(isLegacyPasswordHash(stored), false);
+  assert.equal(verifyPassword('OldPass123', stored), true);
+  assert.equal(verifyPassword('OldPass124', stored), false);
+});
+
+test('PIN hashes are bcrypt, verify, and reject wrong PINs', () => {
+  const hash = hashPin('4821');
+  assert.ok(hash.startsWith('$2'), 'PINs must be bcrypt-hashed, not sha256');
+  assert.equal(pinHashNeedsUpgrade(hash), false);
+  assert.equal(verifyPin('4821', hash), true);
+  assert.equal(verifyPin('4822', hash), false);
+  assert.throws(() => hashPin('123'), /exactly 4 digits/);
+  assert.equal(verifyPin('123', hash), false);
+});
+
+test('legacy sha256 PIN hashes still verify and are flagged for upgrade', () => {
+  const legacy = createHash('sha256').update('4821').digest('hex');
+  assert.equal(pinHashNeedsUpgrade(legacy), true);
+  assert.equal(verifyPin('4821', legacy), true);
+  assert.equal(verifyPin('9021', legacy), false);
+  // The upgrade the verify-biometric route performs on success:
+  const upgraded = hashPin('4821');
+  assert.equal(pinHashNeedsUpgrade(upgraded), false);
+  assert.equal(verifyPin('4821', upgraded), true);
 });
 
 test('tampered tokens are rejected', () => {

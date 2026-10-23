@@ -45,15 +45,29 @@ export async function refreshSessionAccessToken() {
 export async function apiRequest(path, options = {}, attempt = 0) {
   const method = String(options.method || 'GET').toUpperCase();
   if (shouldRefuseOfflineWrite({ method, onLine: globalThis.navigator?.onLine })) throw new OfflineWriteError();
+  // Exactly-once contract (server: lib/mutation-idempotency.ts, plan
+  // P0-SYNC-003): a mutating request carries one X-Mutation-Id, minted once
+  // here at the moment the caller acts - the same pattern the mobile client
+  // uses. Folding it into options.headers means this client's own retry of
+  // the SAME action (the 401 refresh retry below rebuilds headers from
+  // options.headers) reuses the same id, while a fresh apiRequest call is a
+  // new action and mints a fresh id. A caller-supplied id always wins; safe
+  // methods never carry one.
+  const callerHeaders = options.headers ?? {};
+  const callerHasMutationId = Object.keys(callerHeaders).some((key) => key.toLowerCase() === 'x-mutation-id');
+  const mutationId = method !== 'GET' && method !== 'HEAD' && !callerHasMutationId ? globalThis.crypto?.randomUUID?.() : undefined;
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    ...(mutationId ? { 'X-Mutation-Id': mutationId } : {}),
+    ...callerHeaders,
+  };
+  options = { ...options, headers: requestHeaders };
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       credentials: options.credentials ?? 'include',
       ...(method === 'GET' ? { cache: 'no-store' } : {}),
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers ?? {}),
-      },
+      headers: requestHeaders,
     });
 
     if (!response.ok) {
