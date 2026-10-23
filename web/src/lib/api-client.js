@@ -42,7 +42,25 @@ export async function refreshSessionAccessToken() {
   return refreshInFlight;
 }
 
-export async function apiRequest(path, options = {}, attempt = 0) {
+const inFlightWrites = new Map();
+
+/**
+ * A double-click (or an impatient second tap on a slow connection) fires the same write twice before
+ * React has re-rendered the disabled button. Identical writes already in flight share one request, so
+ * stock, transfers and counts are not posted twice. Only string bodies are coalesced (never FormData).
+ */
+export function apiRequest(path, options = {}, attempt = 0) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (attempt !== 0 || method === 'GET' || typeof options.body !== 'string') return performApiRequest(path, options, attempt);
+  const key = `${method} ${path} ${options.headers?.Authorization ?? ''} ${options.body}`;
+  const existing = inFlightWrites.get(key);
+  if (existing) return existing;
+  const request = performApiRequest(path, options, attempt).finally(() => inFlightWrites.delete(key));
+  inFlightWrites.set(key, request);
+  return request;
+}
+
+async function performApiRequest(path, options = {}, attempt = 0) {
   const method = String(options.method || 'GET').toUpperCase();
   if (shouldRefuseOfflineWrite({ method, onLine: globalThis.navigator?.onLine })) throw new OfflineWriteError();
   try {
@@ -60,7 +78,7 @@ export async function apiRequest(path, options = {}, attempt = 0) {
       if (response.status === 401 && attempt === 0 && !isAuthSessionPath(path)) {
         const nextToken = await refreshSessionAccessToken();
         if (nextToken) {
-          return apiRequest(path, {
+          return performApiRequest(path, {
             ...options,
             headers: {
               ...(options.headers ?? {}),

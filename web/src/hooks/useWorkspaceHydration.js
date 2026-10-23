@@ -201,7 +201,11 @@ export function useWorkspaceHydration({
       jobs.push(apiRequest(path, { headers }).then((r) => setAssignments(r.assignments ?? [])));
     }
     if (slices.has('stock') && currentLocation) {
-      jobs.push(apiRequest(`/api/v1/stock/${currentLocation}`, { headers }).then((r) => setStockRows(normalizeStockRows(r.items ?? [], currentItems))));
+      jobs.push(apiRequest(`/api/v1/stock/${currentLocation}`, { headers }).then((r) => {
+        // The user may have switched branch while this was in flight; never paint another location's stock.
+        if (latest.current.locationId !== currentLocation) return;
+        setStockRows(normalizeStockRows(r.items ?? [], currentItems));
+      }));
     }
     if (slices.has('transfers')) {
       jobs.push(apiRequest('/api/v1/transfers/list', { headers }).then((r) => setTransfers(normalizeTransfers(r.transfers, currentItems, currentLocations))));
