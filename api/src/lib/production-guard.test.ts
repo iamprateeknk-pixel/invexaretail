@@ -39,6 +39,14 @@ test('a placeholder OTP pepper and the default seed password are rejected in pro
   assert.equal(checkProductionSecrets({ NODE_ENV: 'production', JWT_SECRET: STRONG, DATABASE_URL: DB, SEED_PASSWORD: 'Another-Strong-1!' }).ok, true);
 });
 
+test('ENABLE_DEV_OTP=true fails the production guard (sign-in codes must never reach production logs)', () => {
+  const result = checkProductionSecrets({ NODE_ENV: 'production', JWT_SECRET: STRONG, DATABASE_URL: DB, ENABLE_DEV_OTP: 'true' });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /ENABLE_DEV_OTP/);
+  assert.equal(checkProductionSecrets({ NODE_ENV: 'production', JWT_SECRET: STRONG, DATABASE_URL: DB, ENABLE_DEV_OTP: 'false' }).ok, true);
+  assert.equal(checkProductionSecrets({ NODE_ENV: 'development', ENABLE_DEV_OTP: 'true' }).ok, true);
+});
+
 test('assertProductionSecrets lists every problem in one error', () => {
   assert.throws(
     () => assertProductionSecrets({ NODE_ENV: 'production', DATABASE_URL: DB, OTP_PEPPER: 'secret', SEED_PASSWORD: 'ChangeMe123!' }),
