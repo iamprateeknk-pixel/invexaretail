@@ -43,11 +43,22 @@ export async function refreshSessionAccessToken() {
 }
 
 const inFlightWrites = new Map();
+// A write that failed in a way the user will retry by hand (network drop, timeout, 5xx) keeps its
+// X-Mutation-Id for a while, so the server (lib/mutation-idempotency.ts) can return the original
+// result instead of posting twice when the first attempt actually did land.
+const retainedMutationIds = new Map();
+const MUTATION_ID_RETAIN_MS = 60_000;
+
+function newMutationId() {
+  const uuid = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  return `web-${uuid}`;
+}
 
 /**
- * A double-click (or an impatient second tap on a slow connection) fires the same write twice before
- * React has re-rendered the disabled button. Identical writes already in flight share one request, so
- * stock, transfers and counts are not posted twice. Only string bodies are coalesced (never FormData).
+ * Identical writes already in flight share one request (a double-click fires the same write twice
+ * before React re-renders the disabled button), and every JSON write carries a stable X-Mutation-Id
+ * so a retry after an ambiguous failure cannot double-post stock, transfers or counts. Only string
+ * bodies are handled (never FormData).
  */
 export function apiRequest(path, options = {}, attempt = 0) {
   const method = String(options.method || 'GET').toUpperCase();
@@ -55,7 +66,19 @@ export function apiRequest(path, options = {}, attempt = 0) {
   const key = `${method} ${path} ${options.headers?.Authorization ?? ''} ${options.body}`;
   const existing = inFlightWrites.get(key);
   if (existing) return existing;
-  const request = performApiRequest(path, options, attempt).finally(() => inFlightWrites.delete(key));
+  const now = Date.now();
+  const retained = retainedMutationIds.get(key);
+  const mutationId = retained && retained.expiresAt > now ? retained.id : newMutationId();
+  const request = performApiRequest(path, { ...options, headers: { 'X-Mutation-Id': mutationId, ...(options.headers ?? {}) } }, attempt)
+    .then((result) => { retainedMutationIds.delete(key); return result; })
+    .catch((error) => {
+      // 4xx other than "still processing": the server released the claim, so the next try is a new action.
+      const definitive = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 409 && error.status !== 408;
+      if (definitive) retainedMutationIds.delete(key);
+      else retainedMutationIds.set(key, { id: mutationId, expiresAt: Date.now() + MUTATION_ID_RETAIN_MS });
+      throw error;
+    })
+    .finally(() => inFlightWrites.delete(key));
   inFlightWrites.set(key, request);
   return request;
 }

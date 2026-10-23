@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import 'global-jsdom/register';
+
+// jsdom has no matchMedia; the toast library reads it on mount.
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query) => ({ matches: false, media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false });
+}
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { ControlPlaneApp } from './ControlPlaneApp.jsx';

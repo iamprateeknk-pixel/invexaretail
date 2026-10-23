@@ -17,11 +17,14 @@ test('transfer import accepts minimal item name and quantity files', async () =>
   assert.equal(preview.validRows[0].requestedQty, 12.5);
 });
 
+const daysFromNow = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
 test('FEFO allocation can fulfil one item from multiple lots', () => {
+  // Relative dates: fixed calendar dates silently become "expired" (and excluded) once they pass.
   const result = allocateFefo([
-    { lotId: 'b', lotNo: 'B', expiryDate: '2026-11-15', available: 15 },
-    { lotId: 'c', lotNo: 'C', expiryDate: '2027-01-20', available: 20 },
-    { lotId: 'a', lotNo: 'A', expiryDate: '2026-10-10', available: 10 },
+    { lotId: 'b', lotNo: 'B', expiryDate: daysFromNow(60), available: 15 },
+    { lotId: 'c', lotNo: 'C', expiryDate: daysFromNow(120), available: 20 },
+    { lotId: 'a', lotNo: 'A', expiryDate: daysFromNow(30), available: 10 },
   ], 30);
   assert.deepEqual(result.allocations.map((row) => [row.lotNo, row.quantity]), [['A', 10], ['B', 15], ['C', 5]]);
   assert.equal(result.shortage, 0);

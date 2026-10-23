@@ -20,7 +20,8 @@ test('operational Prisma models declare additive tenantId defaults', () => {
 
 test('stock tables never regain the placeholder company default (Phase 3, R3)', () => {
   const schema = readFileSync(join(process.cwd(), 'prisma/schema.prisma'), 'utf8');
-  for (const name of ['StockLedger', 'StockBalance']) {
+  // StockBalance was dropped (unread projection, ADR-001 addendum); StockLedger is the live stock table.
+  for (const name of ['StockLedger']) {
     const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(match, `missing Prisma model ${name}`);
     assert.doesNotMatch(match[1], /companyId\s+String\s+@default\("default-company"\)/);

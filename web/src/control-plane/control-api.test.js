@@ -25,10 +25,10 @@ test('dedicated control deploys show login without a hash', () => {
   assert.equal(isControlPlaneRoute('#/control', '/', {}), true);
 });
 
-test('App and Cloudflare admin-panel always mount the Control Plane login', () => {
+test('App and the Cloudflare admin-panel worker always serve the Control Plane login', () => {
   const app = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
   const login = readFileSync(new URL('./ControlPlaneApp.jsx', import.meta.url), 'utf8');
-  const admin = readFileSync(new URL('../../../admin-panel/src/App.jsx', import.meta.url), 'utf8');
+  const admin = readFileSync(new URL('../../../admin-panel/src/login-html.js', import.meta.url), 'utf8');
   assert.match(app, /isControlPlaneRoute/);
   assert.match(login, /id="control-email"/);
   assert.match(login, /id="control-password"/);
@@ -59,7 +59,8 @@ test('the control session lives in sessionStorage and the old localStorage copy 
 
 test('ControlPlaneApp exchanges a handoff code before showing the login form', () => {
   const login = readFileSync(new URL('./ControlPlaneApp.jsx', import.meta.url), 'utf8');
-  assert.match(login, /exchangeSessionHandoff\(\)/);
+  const session = readFileSync(new URL('./use-control-session.js', import.meta.url), 'utf8');
+  assert.match(session, /exchangeSessionHandoff\(\)/);
   assert.match(login, /Opening the Control Plane/);
-  assert.equal(login.includes('consumeSessionHandoff'), false);
+  assert.equal(login.includes('consumeSessionHandoff') || session.includes('consumeSessionHandoff'), false);
 });
