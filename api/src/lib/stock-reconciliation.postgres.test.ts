@@ -100,7 +100,7 @@ integration('a run is recorded as evidence and never changes stock or the journa
   assert.equal(latest?.trigger, 'manual');
   assert.equal(latest?.sample[0].itemId, drift.itemId);
 
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: drift.itemId } })).onHand, 7, 'the balance is left exactly as found');
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: drift.itemId } })).onHand), 7, 'the balance is left exactly as found');
   assert.equal(await prisma.stockMovement.count({ where: { companyId: c.companyId } }), movementsBefore, 'no movement is created or edited');
 });
 

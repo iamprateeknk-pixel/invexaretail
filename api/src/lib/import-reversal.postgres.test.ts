@@ -34,11 +34,11 @@ integration('legacy import history and reversal are tenant-scoped, while the own
   assert.ok((await listImportBatches(owner.companyId)).some((batch) => batch.id === owner.batch.id));
   assert.ok(!(await listImportBatches(other.companyId)).some((batch) => batch.id === owner.batch.id));
   await assert.rejects(reverseImportBatch({ batchId: owner.batch.id, companyId: other.companyId, actorId: other.userId, reason: 'wrong tenant attempt' }), /not found/i);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: owner.item.id, locationId: owner.location.id } })).onHand, 10);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: owner.item.id, locationId: owner.location.id } })).onHand), 10);
 
   const result = await reverseImportBatch({ batchId: owner.batch.id, companyId: owner.companyId, actorId: owner.userId, reason: 'approved correction' });
   assert.equal(result.duplicate, false);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: owner.item.id, locationId: owner.location.id } })).onHand, 5);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: owner.item.id, locationId: owner.location.id } })).onHand), 5);
   assert.equal((await prisma.importBatch.findUniqueOrThrow({ where: { id: owner.batch.id } })).status, 'REVERSED');
   assert.equal((await prisma.importBatch.findUniqueOrThrow({ where: { id: result.reversalBatchId! } })).companyId, owner.companyId);
 });

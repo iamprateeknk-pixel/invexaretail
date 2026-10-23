@@ -32,7 +32,7 @@ integration('lapsed AVAILABLE lots become EXPIRED; today, future, undated and no
   assert.equal(await status(future.id), 'AVAILABLE');
   assert.equal(await status(undated.id), 'AVAILABLE');
   assert.equal(await status(blocked.id), 'BLOCKED', 'a manual block is never overwritten');
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { lotId: lapsed.id } })).onHand, 7, 'write-off stays a controlled human action');
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { lotId: lapsed.id } })).onHand), 7, 'write-off stays a controlled human action');
 
   const second = await sweepExpiredLots(now);
   assert.equal(await status(lapsed.id), 'EXPIRED');

@@ -122,11 +122,11 @@ integration('POST /expiry-alerts/:id/write-off posts one canonical journal row t
     assert.equal(again.status, 409, 'a resolved alert cannot be written off twice');
   });
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: a.itemId, locationId: a.locationId } });
-  assert.equal(ledger.onHand, 6);
+  assert.equal(Number(ledger.onHand), 6);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: a.itemId } });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].movementType, 'EXPIRY_WRITE_OFF');
-  assert.equal(rows[0].qtyDelta, -4);
+  assert.equal(Number(rows[0].qtyDelta), -4);
   assert.equal(rows[0].companyId, a.companyId);
-  assert.equal(rows[0].afterBalance, 6);
+  assert.equal(Number(rows[0].afterBalance), 6);
 });

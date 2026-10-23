@@ -34,15 +34,15 @@ integration('fulfillOrder posts a SALES_DEDUCTION journal row, releases the rese
 
   await fulfillOrder(companyId, order.id, userId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } });
-  assert.equal(ledger.onHand, 7);
-  assert.equal(ledger.reserved, 0);
+  assert.equal(Number(ledger.onHand), 7);
+  assert.equal(Number(ledger.reserved), 0);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: item.id } });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].movementType, 'SALES_DEDUCTION');
-  assert.equal(rows[0].qtyDelta, -3);
+  assert.equal(Number(rows[0].qtyDelta), -3);
   assert.equal(rows[0].companyId, companyId);
 
   await assert.rejects(fulfillOrder(companyId, order.id, userId), 'a fulfilled order cannot be fulfilled again');
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } })).onHand, 7);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } })).onHand), 7);
   assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id } }), 1);
 });

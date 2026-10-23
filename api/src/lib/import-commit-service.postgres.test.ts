@@ -65,7 +65,7 @@ integration('a valid purchase batch commits, posts at HO Basni and reconciles th
 
   const lot = await prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'LOT-A' } } });
   const ledger = await prisma.stockLedger.findFirst({ where: { itemId, lotId: lot.id, locationId: hoLocationId } });
-  assert.equal(ledger?.onHand, 15, 'both purchase rows must land at HO Basni regardless of any branch field');
+  assert.equal(Number(ledger?.onHand), 15, 'both purchase rows must land at HO Basni regardless of any branch field');
 });
 
 integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconciles to expected totals', async () => {
@@ -112,8 +112,8 @@ integration('a golden dataset of 5,000 purchase rows and 5,000 sales rows reconc
   const lot = await prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'GOLD-LOT' } } });
   const hoLedger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId, lotId: lot.id, location: { name: HO_LOCATION_NAME, companyId: tenant.companyId } } });
   const branchLedger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId, lotId: lot.id, locationId: branch.id } });
-  assert.equal(hoLedger.onHand, 10000, '5000 rows x 2 units purchased at HO');
-  assert.equal(branchLedger.onHand, 0, '5000 units seeded at the branch minus 5000 rows x 1 unit sold');
+  assert.equal(Number(hoLedger.onHand), 10000, '5000 rows x 2 units purchased at HO');
+  assert.equal(Number(branchLedger.onHand), 0, '5000 units seeded at the branch minus 5000 rows x 1 unit sold');
 });
 
 integration('a byte-identical re-upload is rejected as a duplicate file and returns the existing batch', async () => {
@@ -149,7 +149,7 @@ integration('retrying a commit chunk after a simulated crash does not double-pos
   assert.equal(final.status, 'COMMITTED');
   const lot = await prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'LOT-RETRY' } } });
   const ledger = await prisma.stockLedger.findFirst({ where: { itemId, lotId: lot.id, locationId: hoLocationId } });
-  assert.equal(ledger?.onHand, 30, 'each row must be posted exactly once despite the resumed commit');
+  assert.equal(Number(ledger?.onHand), 30, 'each row must be posted exactly once despite the resumed commit');
   const movementCount = await prisma.stockMovement.count({ where: { idempotencyKey: `import:${batch.id}:1` } });
   assert.equal(movementCount, 1);
 });
@@ -245,18 +245,18 @@ integration('reversing a committed batch nets zero stock delta and is safe to ca
 
   const lot = await prisma.lot.findUniqueOrThrow({ where: { itemId_lotNo: { itemId, lotNo: 'LOT-REV' } } });
   let ledger = await prisma.stockLedger.findFirst({ where: { itemId, lotId: lot.id, locationId: hoLocationId } });
-  assert.equal(ledger?.onHand, 7);
+  assert.equal(Number(ledger?.onHand), 7);
 
   await reverseImportBatch(tenant, batch.id, 'test reversal');
   ledger = await prisma.stockLedger.findFirst({ where: { itemId, lotId: lot.id, locationId: hoLocationId } });
-  assert.equal(ledger?.onHand, 0, 'reversal must net the purchase back to zero');
+  assert.equal(Number(ledger?.onHand), 0, 'reversal must net the purchase back to zero');
 
   // Calling reverse again on an already-REVERSED batch is refused by the
   // state machine (not COMMITTED/PARTIALLY_COMMITTED/REVERSING anymore) -
   // proving reverse-then-reverse cannot double-reverse the stock.
   await assert.rejects(reverseImportBatch(tenant, batch.id, 'second attempt'));
   ledger = await prisma.stockLedger.findFirst({ where: { itemId, lotId: lot.id, locationId: hoLocationId } });
-  assert.equal(ledger?.onHand, 0, 'stock must remain net zero after a rejected second reversal attempt');
+  assert.equal(Number(ledger?.onHand), 0, 'stock must remain net zero after a rejected second reversal attempt');
 });
 
 integration('an import batch is tenant-scoped: another company cannot read, validate, commit or reverse it', async () => {

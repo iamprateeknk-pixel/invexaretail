@@ -27,6 +27,9 @@ function csvBuffer(rows: unknown[][]): Buffer {
 integration('persistOpeningStockImport commits a lot with an expiry date without the 42804 timestamp/text CASE-WHEN error', async () => {
   const companyId = `persist-opening-expiry-test-${randomUUID()}`;
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+  // ImportBatch.importedById is a real FK; do not depend on a seeded 'user-admin-1' existing.
+  const userId = `persist-opening-user-${randomUUID()}`;
+  await prisma.user.create({ data: { id: userId, name: 'Opening Expiry Admin', email: `${userId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
   const branchName = `Expiry Test Branch ${randomUUID().slice(0, 8)}`;
   const itemCode = `EXP-${randomUUID().slice(0, 8)}`;
   const lotCode = `LOT-${randomUUID().slice(0, 8)}`;
@@ -40,7 +43,7 @@ integration('persistOpeningStockImport commits a lot with an expiry date without
   assert.equal(preview.validRows.length, 1);
   assert.equal(preview.validRows[0].expiryDate, '2027-01-31T00:00:00.000Z');
 
-  const result = await persistOpeningStockImport(preview, 'stock.csv', 'user-admin-1', { companyId });
+  const result = await persistOpeningStockImport(preview, 'stock.csv', userId, { companyId });
   assert.equal(result.stockRows, 1);
 
   const item = await prisma.item.findFirst({ where: { code: itemCode, companyId } });

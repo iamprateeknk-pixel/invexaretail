@@ -218,10 +218,10 @@ integration('PATCH /returns/:id/status RECEIVE+RESTOCK posts one canonical SALES
   });
   const ledger = await prisma.stockLedger.findMany({ where: { itemId: item.id, locationId: a.locationId } });
   assert.equal(ledger.length, 1);
-  assert.equal(ledger[0].onHand, 3);
+  assert.equal(Number(ledger[0].onHand), 3);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: item.id } });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].movementType, 'SALES_RETURN');
-  assert.equal(rows[0].qtyDelta, 3);
+  assert.equal(Number(rows[0].qtyDelta), 3);
   assert.equal(rows[0].companyId, a.companyId);
 });

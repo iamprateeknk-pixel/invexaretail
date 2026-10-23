@@ -78,7 +78,7 @@ integration('reorder rules: fractional quantities are accepted for KG items and 
   await withServer(async (call) => {
     const ok = await call('PUT', `/reorder-rules/${kg.id}`, a.token, { locationId: a.loc.id, minQty: 2.5, targetQty: 10.25 });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
-    assert.equal(ok.body.rule.minQty, 2.5);
+    assert.equal(Number(ok.body.rule.minQty), 2.5);
     const rejected = await call('PUT', `/reorder-rules/${pcs.id}`, a.token, { locationId: a.loc.id, minQty: 2.5, targetQty: 10 });
     assert.equal(rejected.status, 400);
     assert.match(rejected.body.message, /whole numbers/);
@@ -106,7 +106,7 @@ integration('jobs are company scoped: another company cannot list, extend, chang
     assert.equal((await call('POST', `/jobs/${jobId}/consume`, b.token, { lineId: line.body.line.id, quantity: 1, requestId: 'req-cross-tenant-1' })).status, 404);
     assert.equal((await call('POST', '/jobs', b.token, { name: 'Sneaky', locationId: a.loc.id })).status, 404, 'cannot create a job at another company\'s location');
     assert.equal((await prisma.job.findUniqueOrThrow({ where: { id: jobId } })).status, 'DRAFT');
-    assert.equal((await prisma.jobLine.findUniqueOrThrow({ where: { id: line.body.line.id } })).issuedQty, 0);
+    assert.equal(Number((await prisma.jobLine.findUniqueOrThrow({ where: { id: line.body.line.id } })).issuedQty), 0);
 
     // A line id from ANOTHER job of the same company must not be editable through this job.
     const other = await call('POST', '/jobs', a.token, { name: 'A other job', locationId: a.loc.id });
@@ -467,10 +467,10 @@ integration('reorder suggestions can be accepted (writes the rule) or dismissed 
 
     const accepted = await call('POST', `/reorder-rules/suggestions/${item.id}/accept`, a.token, { locationId: a.loc.id, windowDays: 30, leadTimeDays: 5 });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
-    assert.equal(accepted.body.rule.minQty, suggested.suggestedMin);
-    assert.equal(accepted.body.rule.targetQty, suggested.suggestedTarget);
+    assert.equal(Number(accepted.body.rule.minQty), suggested.suggestedMin);
+    assert.equal(Number(accepted.body.rule.targetQty), suggested.suggestedTarget);
     const stored = await prisma.reorderRule.findUniqueOrThrow({ where: { itemId_locationId: { itemId: item.id, locationId: a.loc.id } } });
-    assert.equal(stored.minQty, suggested.suggestedMin);
+    assert.equal(Number(stored.minQty), suggested.suggestedMin);
 
     const after = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
     assert.equal(after.body.suggestions.some((s: { itemId: string }) => s.itemId === item.id), false, 'the rule now matches the suggestion, so it is no longer NEW/INCREASE/DECREASE');

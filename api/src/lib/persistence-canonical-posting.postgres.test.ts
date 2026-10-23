@@ -43,11 +43,11 @@ integration('an approved count variance posts one COUNT_VARIANCE journal row tha
   await persistCountReview(count, f.companyId);
   await assert.rejects(persistCountReview(count, f.companyId), 'a second review of the same count must not post again');
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
-  assert.equal(ledger.onHand, 7);
+  assert.equal(Number(ledger.onHand), 7);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: f.item.id } });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].movementType, 'COUNT_VARIANCE');
-  assert.equal(rows[0].qtyDelta, -3);
+  assert.equal(Number(rows[0].qtyDelta), -3);
   assert.equal(rows[0].companyId, f.companyId);
   assert.equal(rows[0].idempotencyKey, `count-variance:${count.id}`);
 });
@@ -56,7 +56,7 @@ integration('a count on a lot with no ledger row yet establishes stock at the ph
   const f = await fixture(null);
   await persistCountReview(await pendingCount(f, 6, 0), f.companyId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
-  assert.equal(ledger.onHand, 6);
+  assert.equal(Number(ledger.onHand), 6);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
 });
 
@@ -71,20 +71,20 @@ integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock
   const alloc = (quantity: number) => [{ itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id, quantity }];
 
   await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(1), otherTenant), /not found/i);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand, 10);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand), 10);
   await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(99), tenant), /Insufficient/);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 0, 'nothing posted on a rejected confirm');
 
   await persistConfirmedPickAllocations(transfer.id, alloc(4), tenant);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
-  assert.equal(ledger.onHand, 6);
+  assert.equal(Number(ledger.onHand), 6);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: f.item.id } });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].movementType, 'TRANSFER_OUT');
-  assert.equal(rows[0].qtyDelta, -4);
+  assert.equal(Number(rows[0].qtyDelta), -4);
 
   await assert.rejects(persistConfirmedPickAllocations(transfer.id, alloc(4), tenant), /already confirmed/);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand, 6);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand), 6);
 });
 
 integration('the review stores the root-cause reason code with the variance (audit C-3)', async () => {
