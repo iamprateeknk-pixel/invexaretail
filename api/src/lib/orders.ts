@@ -436,11 +436,20 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
   const order = await prisma.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
   if (!order) throw new Error('Order was not found.');
   await prisma.$transaction(async (tx) => {
-    for (const line of order.lines) {
+    // Wave 3 (P1-5): re-read the order inside the transaction. The outer
+    // read is a stale snapshot by the time a replayed or duplicated fulfil
+    // runs, and the loop below used to release the reservation even when
+    // the canonical poster reported the movement as a duplicate - driving
+    // `reserved` negative and eating other orders' reservations on the
+    // same ledger row.
+    const current = await tx.order.findFirst({ where: { id: orderId, companyId }, include: ORDER_INCLUDE });
+    if (!current) throw new Error('Order was not found.');
+    if (current.status === 'FULFILLED') throw new Error('Order has already been fulfilled.');
+    for (const line of current.lines) {
       if (!line.lotId) continue;
-      const locationId = line.fulfillmentLocationId || order.fulfillmentLocationId;
+      const locationId = line.fulfillmentLocationId || current.fulfillmentLocationId;
       const ledger = await tx.stockLedger.findUnique({
-        where: { companyId_itemId_lotId_locationId: { companyId: order.companyId, itemId: line.itemId, lotId: line.lotId, locationId } },
+        where: { companyId_itemId_lotId_locationId: { companyId: current.companyId, itemId: line.itemId, lotId: line.lotId, locationId } },
       });
       if (!ledger || Number(ledger.onHand) < Number(line.requestedQty)) {
         throw new Error(`Stock for ${line.itemId}/${line.lotId} changed since the order was reserved; fulfillment cannot proceed.`);
@@ -448,22 +457,23 @@ export async function fulfillOrder(companyId: string, orderId: string, actorId: 
       // onHand leaves through the canonical service (journal + ledger + audit + outbox in
       // this transaction); the reservation counter is a separate dimension the service
       // does not model, so it is released here in the same transaction.
-      await postInventoryMovementInTransaction(tx, {
-        tenant: { companyId: order.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
+      const post = await postInventoryMovementInTransaction(tx, {
+        tenant: { companyId: current.companyId, tenantId: DEFAULT_TENANT_ID, userId: actorId, role: 'ADMIN' },
         itemId: line.itemId, lotId: line.lotId, locationId,
         movementType: 'SALES_DEDUCTION', qtyDelta: -Number(line.requestedQty),
         idempotencyKey: `order-fulfill:${line.id}`,
-        reason: `Order fulfilled (${order.channel})`, sourceDocument: order.id, sourceLineId: line.id, correlationId: order.id,
-        metadata: { orderId: order.id, channel: order.channel },
+        reason: `Order fulfilled (${current.channel})`, sourceDocument: current.id, sourceLineId: line.id, correlationId: current.id,
+        metadata: { orderId: current.id, channel: current.channel },
       });
+      if (post.duplicate) continue;
       await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { decrement: line.requestedQty } } });
       await tx.orderLine.update({ where: { id: line.id }, data: { fulfilledQty: line.requestedQty } });
     }
     await transitionOrderStatusInTransaction(
       tx,
-      order.id,
-      order.companyId,
-      order.status as never,
+      current.id,
+      current.companyId,
+      current.status as never,
       'FULFILLED',
       { actorId, actorRole: 'SYSTEM' },
       { fulfilledAt: new Date() },
