@@ -2,14 +2,15 @@
 // verbatim from operations-extension.ts; the composer mounts this
 // router at the cluster's original position.
 import { Router } from 'express';
-import { prisma } from '../lib/db.js';
+import { prisma, queryRaw } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
+import { DomainError, isDomainError, statusForErrorCode } from '../lib/errors.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { createExceptionCase } from '../lib/exceptions.js';
 import { expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation } from '../lib/orders.js';
 import { listMemoryQcTemplates, listMemoryQcInspections, findTemplateForCategory } from '../lib/qc-inspection.js';
-import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, type ReturnAction } from '../lib/returns-rma.js';
+import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, PENDING_INSPECTION, QC_FAILED, type ReturnAction } from '../lib/returns-rma.js';
 import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
@@ -29,45 +30,65 @@ router.post('/orders/:id/returns', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
 
   const requestedLines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  const existingReturns = await prisma.returnLine.findMany({
-    where: { orderLine: { orderId: order.id } },
-    select: { orderLineId: true, quantity: true },
-  });
-  const alreadyReturnedByLine = new Map<string, number>();
-  for (const line of existingReturns) {
-    alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + Number(line.quantity));
-  }
   const orderLinesById = new Map(order.lines.map((line) => [line.id, line]));
-  const validationInput = requestedLines
-    .map((line: { orderLineId?: string; quantity?: number }) => {
-      const orderLine = orderLinesById.get(String(line.orderLineId));
-      return {
-        orderLineId: String(line.orderLineId || ''),
-        quantity: Number(line.quantity),
-        fulfilledQty: orderLine?.fulfilledQty == null ? 0 : Number(orderLine.fulfilledQty),
-        alreadyReturnedQty: alreadyReturnedByLine.get(String(line.orderLineId)) ?? 0,
-      };
-    })
-    .filter((line) => orderLinesById.has(line.orderLineId));
-  const validation = validateReturnLines(validationInput);
-  if (!validation.ok) return res.status(400).json({ message: 'Invalid return lines.', errors: validation.errors });
+  // Merge duplicate orderLineIds within the request itself before any cap
+  // is checked: validated entry-by-entry, two lines of 3 against a
+  // fulfilled quantity of 5 would each "pass" while totalling 6 - the
+  // returns flow would invent stock that was never shipped.
+  const requestedQtyByLine = new Map<string, number>();
+  for (const line of requestedLines as Array<{ orderLineId?: string; quantity?: number }>) {
+    const orderLineId = String(line?.orderLineId || '');
+    if (!orderLinesById.has(orderLineId)) continue;
+    requestedQtyByLine.set(orderLineId, (requestedQtyByLine.get(orderLineId) ?? 0) + Number(line?.quantity));
+  }
 
-  const returnRequest = await prisma.returnRequest.create({
-    data: {
-      orderId: order.id,
-      reason: typeof req.body.reason === 'string' ? req.body.reason : null,
-      createdById: req.user!.id,
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      lines: {
-        create: validationInput.map((line) => ({
-          orderLineId: line.orderLineId,
-          itemId: orderLinesById.get(line.orderLineId)!.itemId,
-          quantity: line.quantity,
-        })),
+  // Read-totals -> validate -> create runs as one transaction, serialized
+  // per order: under READ COMMITTED two concurrent creates could otherwise
+  // each read the same already-returned totals, both pass, and over-return
+  // (the read-decide-write gap lib/reservation.ts documents). Locking the
+  // parent order row FOR UPDATE makes the second create wait for the first
+  // to commit, after which its totals read sees the new return lines.
+  const result = await prisma.$transaction(async (tx) => {
+    await queryRaw(tx, 'SELECT "id" FROM "Order" WHERE "id" = ? AND "companyId" = ? FOR UPDATE', order.id, order.companyId);
+    const existingReturns = await tx.returnLine.findMany({
+      where: { orderLine: { orderId: order.id } },
+      select: { orderLineId: true, quantity: true },
+    });
+    const alreadyReturnedByLine = new Map<string, number>();
+    for (const line of existingReturns) {
+      alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + Number(line.quantity));
+    }
+    const validationInput = [...requestedQtyByLine.entries()].map(([orderLineId, quantity]) => {
+      const orderLine = orderLinesById.get(orderLineId)!;
+      return {
+        orderLineId,
+        quantity,
+        fulfilledQty: orderLine.fulfilledQty == null ? 0 : Number(orderLine.fulfilledQty),
+        alreadyReturnedQty: alreadyReturnedByLine.get(orderLineId) ?? 0,
+      };
+    });
+    const validation = validateReturnLines(validationInput);
+    if (!validation.ok) return { ok: false as const, errors: validation.errors };
+    const created = await tx.returnRequest.create({
+      data: {
+        orderId: order.id,
+        reason: typeof req.body.reason === 'string' ? req.body.reason : null,
+        createdById: req.user!.id,
+        companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+        lines: {
+          create: validationInput.map((line) => ({
+            orderLineId: line.orderLineId,
+            itemId: orderLinesById.get(line.orderLineId)!.itemId,
+            quantity: line.quantity,
+          })),
+        },
       },
-    },
-    include: { lines: true },
+      include: { lines: true },
+    });
+    return { ok: true as const, returnRequest: created };
   });
+  if (!result.ok) return res.status(400).json({ message: 'Invalid return lines.', errors: result.errors });
+  const returnRequest = result.returnRequest;
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_REQUESTED',
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: order.id, lines: returnRequest.lines.length },
@@ -147,25 +168,42 @@ router.patch('/returns/:id/status', async (req, res) => {
       plans.push({ line, plan });
     }
     for (const { line, plan } of plans) {
-      await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
       const lot = await returnLot(returnRequest.id, line.itemId);
-      if (plan.action === 'RESTOCK') {
-        await prisma.$transaction((tx) => postInventoryMovementInTransaction(tx, {
-          tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
-          movementType: 'SALES_RETURN', qtyDelta: line.quantity,
-          idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
-          reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
-        }));
-        // Phase 5 step 14: the canonical posting above is the stock
-        // write; the snapshot mirror that followed it is retired (this
-        // router is database-only — returns have no memory-mode flow).
-      } else if (plan.action === 'HOLD') {
-        // Physically back in the building but not sellable: quarantine until a disposition is decided.
-        await prisma.stockLedger.upsert({
-          where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } },
-          update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
-          create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+      // One transaction per line, claimed on the line itself: the attempt
+      // that flips disposition from null performs this line's stock
+      // effects, atomically with them. A retry after a mid-loop crash
+      // finds the lines it already received claimed and skips their stock
+      // effects entirely - the RESTOCK leg was already retry-safe via the
+      // poster's idempotency key, but the HOLD leg re-incremented
+      // quarantine and opened a duplicate exception case on every retry.
+      const claimed = await prisma.$transaction(async (tx) => {
+        const claim = await tx.returnLine.updateMany({
+          where: { id: line.id, disposition: null },
+          data: { disposition: plan.disposition },
         });
+        if (claim.count === 0) return false;
+        if (plan.action === 'RESTOCK') {
+          await postInventoryMovementInTransaction(tx, {
+            tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+            movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+            idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
+            reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+          });
+          // Phase 5 step 14: the canonical posting above is the stock
+          // write; the snapshot mirror that followed it is retired (this
+          // router is database-only - returns have no memory-mode flow).
+        } else if (plan.action === 'HOLD') {
+          // Physically back in the building but not sellable: quarantine until a disposition is decided.
+          await tx.stockLedger.upsert({
+            where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } },
+            update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
+            create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+          });
+        }
+        return true;
+      });
+      if (!claimed) continue;
+      if (plan.action === 'HOLD') {
         void createExceptionCase({
           type: plan.disposition === 'QC_FAILED' ? 'QC_FAIL' : 'QUARANTINE',
           title: plan.disposition === 'QC_FAILED' ? 'Returned goods failed QC' : 'Returned goods awaiting inspection',
@@ -215,44 +253,80 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
 
   const locationId = returnRequest.order.fulfillmentLocationId;
   const lot = await returnLot(returnRequest.id, line.itemId);
-  const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } } });
-  if (!ledger || Number(ledger.quarantine) + 1e-8 < lineQty) return res.status(409).json({ message: 'The quarantined quantity for this line was not found.' });
   const restock = plan.action === 'RESTOCK';
-  await prisma.$transaction(async (tx) => {
-    await tx.stockLedger.update({
-      where: { id: ledger.id },
-      data: {
-        quarantine: { decrement: lineQty },
-        ...(plan.action === 'SCRAP' ? { damaged: { increment: lineQty } } : {}),
-        version: { increment: 1 },
-      },
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Claim the line inside the transaction, the count-review way
+      // (lib/persistence.ts's persistCountReview): the conditional update
+      // only matches while the line still awaits a disposition, so two
+      // concurrent disposition calls cannot both move the same
+      // quarantined stock - the loser rolls back and reports a conflict.
+      // Previously the pending check, the quarantine read and the stock
+      // writes were separate steps around the transaction, the
+      // quarantine decrement itself was unconditional, and the line's
+      // disposition was only written after commit.
+      const claimed = await tx.returnLine.updateMany({
+        where: { id: line.id, OR: [{ disposition: null }, { disposition: { in: [PENDING_INSPECTION, QC_FAILED] } }] },
+        data: { disposition: plan.disposition },
+      });
+      if (claimed.count !== 1) {
+        throw new DomainError('CONCURRENT_UPDATE_CONFLICT', `This line was already dispositioned as ${line.disposition}.`);
+      }
+      const ledger = await tx.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } } });
+      let skipBucketMove = false;
+      if (restock) {
+        const posted = await postInventoryMovementInTransaction(tx, {
+          tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+          movementType: 'SALES_RETURN', qtyDelta: lineQty,
+          idempotencyKey: `return-disposition:${returnRequest.id}:${line.id}`,
+          reason: `Return disposition: ${plan.disposition}`, sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+        });
+        // A duplicate means an earlier attempt already posted this
+        // restock - and, in that attempt's transaction, already moved
+        // the quantity out of quarantine. Honour it: the claim above is
+        // all that was left undone, so the buckets must not move again.
+        skipBucketMove = posted.duplicate;
+      }
+      if (!skipBucketMove) {
+        // The decrement carries its own sufficiency guard
+        // (quarantine >= lineQty), evaluated atomically under the row's
+        // write lock. Prisma expresses this as a conditional updateMany,
+        // so no raw SQL is needed here (cf. lib/reservation.ts, where
+        // the guard spans computed columns Prisma cannot express).
+        const moved = await tx.stockLedger.updateMany({
+          where: { id: ledger?.id ?? '', quarantine: { gte: lineQty } },
+          data: {
+            quarantine: { decrement: lineQty },
+            ...(plan.action === 'SCRAP' ? { damaged: { increment: lineQty } } : {}),
+            version: { increment: 1 },
+          },
+        });
+        if (moved.count !== 1) {
+          throw new DomainError('CONCURRENT_UPDATE_CONFLICT', 'The quarantined quantity for this line was not found.');
+        }
+      }
+      if (!restock) {
+        // Quarantine -> damaged/other is a bucket move, not an on-hand change: zero-delta journal row.
+        await tx.stockMovement.create({
+          data: {
+            itemId: line.itemId, lotId: lot.id, locationId, movementType: plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
+            qtyDelta: 0, beforeBalance: ledger?.onHand ?? 0, afterBalance: ledger?.onHand ?? 0,
+            sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
+            reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -lineQty },
+            companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+          } as never,
+        });
+      }
+      // The quarantine case opened at receipt is decided by this action.
+      await tx.exceptionCase.updateMany({
+        where: { companyId: returnRequest.companyId, sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
+        data: { status: 'RESOLVED', resolvedAt: new Date() },
+      });
     });
-    if (restock) {
-      await postInventoryMovementInTransaction(tx, {
-        tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
-        movementType: 'SALES_RETURN', qtyDelta: lineQty,
-        idempotencyKey: `return-disposition:${returnRequest.id}:${line.id}`,
-        reason: `Return disposition: ${plan.disposition}`, sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
-      });
-    } else {
-      // Quarantine -> damaged/other is a bucket move, not an on-hand change: zero-delta journal row.
-      await tx.stockMovement.create({
-        data: {
-          itemId: line.itemId, lotId: lot.id, locationId, movementType: plan.action === 'SCRAP' ? 'DAMAGE' : 'ADJUSTMENT',
-          qtyDelta: 0, beforeBalance: ledger.onHand, afterBalance: ledger.onHand,
-          sourceDocument: returnRequest.id, sourceLineId: line.id, actor: req.user!.id, timestamp: new Date(), correlationId: returnRequest.orderId,
-          reason: `Return disposition: ${plan.disposition}`, metadata: { quarantineDelta: -lineQty },
-          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-        } as never,
-      });
-    }
-  });
-  await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
-  // The quarantine case opened at receipt is decided by this action.
-  await prisma.exceptionCase.updateMany({
-    where: { companyId: returnRequest.companyId, sourceDocument: returnRequest.id, sourceLineId: line.id, status: { in: ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] } },
-    data: { status: 'RESOLVED', resolvedAt: new Date() },
-  }).catch(() => undefined);
+  } catch (error) {
+    if (isDomainError(error)) return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    throw error;
+  }
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_LINE_DISPOSED',
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { lineId: line.id, disposition: plan.disposition, quantity: line.quantity },
