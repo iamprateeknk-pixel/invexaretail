@@ -11,7 +11,7 @@ import { createTransferRecord, findTransferForCompany, listItems, listTransfers,
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
 import { lastKnownBin, sequenceKeyForBin } from '../lib/pick-wave.js';
-import { reserveStockForTransfer } from '../lib/reservation.js';
+import { releaseReservedStock, reserveStockForTransfer } from '../lib/reservation.js';
 import { buildPickerTask, completePickerTask } from '../lib/picker.js';
 import { recordAudit } from '../lib/audit.js';
 import { persistAudit, persistTransfer, persistTransferStatus } from '../lib/persistence.js';
@@ -36,7 +36,7 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
   const context = accessContext(req.user!);
   if (!canAccessLocation(context, sourceLocationId) || !canAccessLocation(context, destinationLocationId)) return res.status(403).json({ message: 'Location access denied.' });
 
-  const transferId = `replenishment-${createHash('sha1').update(requestId).digest('hex').slice(0, 24)}`;
+  const transferId = `replenishment-${createHash('sha1').update(`${req.companyId ?? DEFAULT_COMPANY_ID}:${requestId}`).digest('hex').slice(0, 24)}`;
   const existing = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (existing) return res.json({ success: true, duplicate: true, transfer: existing });
 
@@ -68,11 +68,15 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     createdAt: new Date().toISOString(),
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   };
+  let reservedOk = false;
+  let persisted = false;
   try {
     await reserveStockForTransfer(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
+    reservedOk = true;
     // Commit first so a database failure cannot leave a phantom transfer in
     // the process mirror. The deterministic ID makes request retries safe.
     await persistTransfer(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
+    persisted = true;
     createTransferRecord(transfer);
     await persistAudit(recordAudit({
       actorId: req.user!.id, actorRole: req.user!.role,
@@ -81,6 +85,12 @@ router.post('/replenishment-actions/transfer', async (req: Request, res: Respons
     }));
     return res.status(201).json({ success: true, duplicate: false, transfer });
   } catch (error) {
+    // Wave 3 (P1-9): the reservation committed before the persist; when
+    // the persist is what failed, release it instead of stranding the
+    // stock against a transfer that does not exist.
+    if (reservedOk && !persisted) {
+      await releaseReservedStock(transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, locationId: sourceLocationId, quantity: line.quantity })), { companyId: req.companyId ?? DEFAULT_COMPANY_ID });
+    }
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to create replenishment transfer.' });
   }
 });
@@ -134,7 +144,14 @@ router.post('/pick-waves', async (req: Request, res: Response) => {
   if (!locationId || transferIds.length < 2) {
     return res.status(400).json({ message: 'A location and at least two transfers are required to form a pick wave.' });
   }
-  const transfers = listTransfers().filter((transfer) => transferIds.includes(transfer.id));
+  const context = accessContext(req.user!);
+  if (!canAccessLocation(context, locationId)) return res.status(403).json({ message: 'Location access denied.' });
+  // Wave 3 (P1-8): resolve the member transfers inside the caller's own
+  // company - the previous global listTransfers() scan let an admin form
+  // a wave over another company's transfers from their ids alone.
+  const transfers = transferIds
+    .map((id) => findTransferForCompany(id, req.companyId ?? DEFAULT_COMPANY_ID))
+    .filter((transfer): transfer is TransferRecord => Boolean(transfer));
   if (transfers.length !== transferIds.length) return res.status(404).json({ message: 'One or more transfers were not found.' });
   const invalid = transfers.find((transfer) => transfer.sourceLocationId !== locationId || !PICKABLE_TRANSFER_STATUSES.includes(transfer.status));
   if (invalid) {
@@ -278,6 +295,12 @@ router.post('/picker-tasks/complete', async (req: Request, res: Response) => {
   const transfer = findTransferForCompany(req.body.transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (context.role !== 'WAREHOUSE_PICKER' || !transfer || !canAccessLocation(context, transfer.sourceLocationId) || !pickerMayWork(transfer, req.user!.id)) {
     return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
+  }
+  // Wave 3 (P1-7): completing a task used to flip a transfer back to
+  // PICKED from ANY state - including CONFIRMED/CANCELLED ones whose
+  // stock had already been posted. Only a pickable transfer may complete.
+  if (!PICKABLE_TRANSFER_STATUSES.includes(transfer.status)) {
+    return res.status(409).json({ message: `Picker task cannot be completed while the transfer is ${transfer.status}.` });
   }
 
   try {

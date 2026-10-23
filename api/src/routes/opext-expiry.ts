@@ -25,7 +25,7 @@ router.get('/expiry-alerts', async (req, res) => {
     return res.json({ alerts: await listLocationExpiryAlerts(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
-    where: { locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
     include: {
       lot: { select: { lotNo: true, status: true, expiryDate: true } },
       item: { select: { code: true, name: true } },
@@ -63,7 +63,7 @@ router.get('/expiry-board', async (req, res) => {
     return res.json({ board: await buildLocationExpiryBoard(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
-    where: { locationId, onHand: { gt: 0 } },
+    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId, onHand: { gt: 0 } },
     include: {
       lot: { select: { id: true, lotNo: true, status: true, expiryDate: true, attributes: true } },
       item: { select: { id: true, code: true, name: true, category: true, subcategory: true, company: true, unit: true } },

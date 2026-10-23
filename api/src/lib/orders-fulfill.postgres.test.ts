@@ -46,3 +46,28 @@ integration('fulfillOrder posts a SALES_DEDUCTION journal row, releases the rese
   assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } })).onHand, 7);
   assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id } }), 1);
 });
+integration('concurrent fulfil replay deducts exactly once and never drives reserved negative (Wave 3, P1-5)', async () => {
+  const companyId = `ord-co-${randomUUID()}`;
+  await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+  const userId = `ord-user-${randomUUID()}`;
+  await prisma.user.create({ data: { id: userId, name: 'O', email: `${userId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
+  const loc = await prisma.location.create({ data: { id: `ord-loc-${randomUUID()}`, code: `ord-${randomUUID()}`, name: 'L', type: 'warehouse', companyId } });
+  const item = await prisma.item.create({ data: { code: `ORD-${randomUUID().slice(0, 8)}`, name: 'I', companyId } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: `L-${randomUUID().slice(0, 6)}` } });
+  await prisma.stockLedger.create({ data: { itemId: item.id, lotId: lot.id, locationId: loc.id, onHand: 10, reserved: 3, companyId } });
+  const order = await prisma.order.create({
+    data: { channel: 'WEBSITE', status: 'RESERVED', fulfillmentLocationId: loc.id, createdById: userId, companyId,
+      lines: { create: [{ itemId: item.id, lotId: lot.id, requestedQty: 3, fulfillmentLocationId: loc.id }] } },
+  });
+
+  // Two fulfil calls race (double submit / retry storm): the canonical
+  // poster's idempotency key must let exactly one SALES_DEDUCTION through,
+  // and the loser must not release the reservation a second time.
+  const results = await Promise.allSettled([fulfillOrder(companyId, order.id, userId), fulfillOrder(companyId, order.id, userId)]);
+  assert.ok(results.some((r) => r.status === 'fulfilled'), 'at least one fulfil succeeds');
+  const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: item.id, locationId: loc.id } });
+  assert.equal(ledger.onHand, 7, 'stock deducted exactly once');
+  assert.equal(ledger.reserved, 0, 'reservation released exactly once, never negative');
+  assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id, movementType: 'SALES_DEDUCTION' } }), 1);
+  assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status, 'FULFILLED');
+});
