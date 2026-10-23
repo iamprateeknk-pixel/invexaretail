@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { hashPassword, verifyPassword } from './otp-auth.js';
-import { prisma, resolveDatabaseUrl } from './db.js';
+import { executeRaw, prisma, queryRaw, resolveDatabaseUrl } from './db.js';
 import { saveImportedCustomValues } from './import-custom-values.js';
 import type { CompanyProfileRecord, CountAssignmentRecord, CountRecord, ItemRecord, LocationRecord, TransferRecord, UserRecord } from './repository.js';
 import type { AuditEvent } from './audit.js';
@@ -839,23 +839,62 @@ export async function persistTransferReplacement(current: TransferRecord, next: 
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    for (const line of transferReservationTotals(current).values()) {
-      const ledger = await tx.stockLedger.findUnique({
-        where: { companyId_itemId_lotId_locationId: { companyId, itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
-      });
-      if (ledger) {
-        await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: Math.max(0, Number(ledger.reserved) - line.quantity), version: { increment: 1 } } });
+    const currentTotals = transferReservationTotals(current);
+    const nextTotals = transferReservationTotals(next);
+    // Per-key delta adjustment (Wave 3, P1-3): the previous release-all /
+    // reserve-all pair read each ledger row, decided in JS and wrote the
+    // absolute value back - the read-decide-write anti-pattern
+    // reservation.ts's header documents, with a window where the
+    // reservation briefly vanished. Each key now moves exactly once,
+    // atomically, inside this transaction: increases go through the same
+    // conditional UPDATE as reserveStockForTransfer (the row only moves
+    // when enough unreserved stock remains), decreases clamp at zero
+    // like releaseReservedStock.
+    for (const key of new Set([...currentTotals.keys(), ...nextTotals.keys()])) {
+      const currentLine = currentTotals.get(key);
+      const nextLine = nextTotals.get(key);
+      const line = (nextLine ?? currentLine)!;
+      const delta = (nextLine?.quantity ?? 0) - (currentLine?.quantity ?? 0);
+      if (delta > 0) {
+        const affected = await executeRaw(
+          tx,
+          `UPDATE "StockLedger"
+           SET reserved = reserved + ?, version = version + 1
+           WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ?
+             AND "companyId" = ?
+             AND ("onHand" - reserved) >= ?`,
+          delta,
+          line.itemId,
+          line.lotId,
+          line.locationId,
+          companyId,
+          delta,
+        );
+        if (affected === 0) {
+          const [existing] = await queryRaw<Array<{ onHand: number; reserved: number }>>(
+            tx,
+            `SELECT "onHand"::float8 AS "onHand", reserved::float8 AS reserved FROM "StockLedger" WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ? AND "companyId" = ?`,
+            line.itemId,
+            line.lotId,
+            line.locationId,
+            companyId,
+          );
+          const available = existing ? existing.onHand - existing.reserved : 0;
+          throw new Error(`Only ${Math.max(0, available)} units are available for lot ${line.lotId} at this location - ${delta} were requested.`);
+        }
+      } else if (delta < 0) {
+        await executeRaw(
+          tx,
+          `UPDATE "StockLedger"
+           SET reserved = GREATEST(0, reserved - ?), version = version + 1
+           WHERE "itemId" = ? AND "lotId" = ? AND "locationId" = ? AND "companyId" = ?`,
+          -delta,
+          line.itemId,
+          line.lotId,
+          line.locationId,
+          companyId,
+        );
       }
-    }
-    for (const line of transferReservationTotals(next).values()) {
-      const ledger = await tx.stockLedger.findUnique({
-        where: { companyId_itemId_lotId_locationId: { companyId, itemId: line.itemId, lotId: line.lotId, locationId: line.locationId } },
-      });
-      const available = (ledger ? Number(ledger.onHand) : 0) - (ledger ? Number(ledger.reserved) : 0);
-      if (!ledger || available < line.quantity - 1e-8) {
-        throw new Error(`Only ${Math.max(0, available)} units are available for lot ${line.lotId} at this location - ${line.quantity} were requested.`);
-      }
-      await tx.stockLedger.update({ where: { id: ledger.id }, data: { reserved: { increment: line.quantity }, version: { increment: 1 } } });
     }
     await tx.transferLine.deleteMany({ where: { transferId: current.id } });
     await tx.transfer.update({

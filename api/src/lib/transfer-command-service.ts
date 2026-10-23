@@ -4,9 +4,10 @@
 // create-transfer workflow (validation, reservation, persistence, audit,
 // and rollback-on-failure), so routes/transfers.ts's handler is just
 // "parse request, call service, map result to response."
+import { createHash } from 'node:crypto';
 import { validateTransferRequest, canAccessLocation, type TransferInput, type AccessContext } from './inventory.js';
 import { canCreateTransfer, parseCartonCount } from './transfer-lifecycle.js';
-import { listItems, listLocations } from './repository.js';
+import { findTransferForCompany, listItems, listLocations } from './repository.js';
 import { createTransferRequest, type TransferRequest } from './store.js';
 import { createTransferRecord } from './repositories/transfer-repository.js';
 import { isOperationalItem } from './item-master.js';
@@ -50,7 +51,30 @@ export type CreateTransferCommand = {
  * behavior from the version of this logic that lived inline in
  * routes/core.ts's `POST /transfers` handler before this week's extraction.
  */
+const createTransferLocks = new Map<string, Promise<unknown>>();
+
 export async function createTransfer(cmd: CreateTransferCommand): Promise<TransferRequest> {
+  if (!cmd.requestId) return createTransferOnce(cmd);
+  // Wave 3 (P1-4): a client retry carries the same x-request-id header
+  // (index.ts exposes it as res.locals.requestId), so the retried create
+  // can be recognised instead of reserving the same stock twice. The
+  // transfer id is derived deterministically from company + requestId -
+  // the replenishment pattern - so a duplicate converges on the transfer
+  // that already exists, and creates for one (company, request) pair are
+  // serialised in-process (orders.ts ingestLocks pattern).
+  const dedupId = `transfer-${createHash('sha1').update(`${cmd.companyId}:${cmd.requestId}`).digest('hex').slice(0, 24)}`;
+  const lockKey = `${cmd.companyId}:${cmd.requestId}`;
+  const previous = createTransferLocks.get(lockKey) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(() => createTransferOnce(cmd, dedupId));
+  createTransferLocks.set(lockKey, run);
+  try {
+    return await run;
+  } finally {
+    if (createTransferLocks.get(lockKey) === run) createTransferLocks.delete(lockKey);
+  }
+}
+
+async function createTransferOnce(cmd: CreateTransferCommand, dedupId?: string): Promise<TransferRequest> {
   const { context, input } = cmd;
   if (!canCreateTransfer(context.role)) {
     throw new TransferRoleError('This role cannot create transfer requests.');
@@ -87,6 +111,11 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
     }
   }
 
+  if (dedupId) {
+    const existing = findTransferForCompany(dedupId, cmd.companyId);
+    if (existing) return existing as unknown as TransferRequest;
+  }
+
   // Blueprint §7.2/§9: reserve before creating the request so a second
   // concurrent request against the same low-stock lot is rejected here
   // rather than discovering the shortfall later, one pick at a time.
@@ -97,6 +126,7 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
 
   try {
     const saved = createTransferRequest({
+      id: dedupId,
       sourceLocationId: validated.sourceLocationId,
       destinationLocationId: validated.destinationLocationId,
       requestedBy: cmd.actorId,
@@ -133,10 +163,16 @@ export async function createTransfer(cmd: CreateTransferCommand): Promise<Transf
     return saved;
   } catch (error) {
     // The reservation above already committed; do not leave it stranded
-    // against a transfer that was never actually created.
-    void releaseReservedStock(validated.lines.map((line) => ({
-      itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
-    })), { companyId: cmd.companyId });
+    // against a transfer that was never actually created. Awaited
+    // (Wave 3, P1-4): the previous fire-and-forget `void` let a process
+    // exit strand the reservation permanently.
+    try {
+      await releaseReservedStock(validated.lines.map((line) => ({
+        itemId: line.itemId, lotId: line.lotId, locationId: validated.sourceLocationId, quantity: line.quantity,
+      })), { companyId: cmd.companyId });
+    } catch (releaseError) {
+      console.error('createTransfer: reservation release after a failed create also failed:', releaseError instanceof Error ? releaseError.message : releaseError);
+    }
     throw error;
   }
 }
