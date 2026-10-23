@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { hashPassword, verifyPassword } from './otp-auth.js';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import { saveImportedCustomValues } from './import-custom-values.js';
 import type { CompanyProfileRecord, CountAssignmentRecord, CountRecord, ItemRecord, LocationRecord, TransferRecord, UserRecord } from './repository.js';
@@ -60,7 +61,16 @@ export async function authenticateUser(email: string, password: string, requeste
   }
 
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) throw new Error('Invalid email or password.');
+  if (!user) throw new Error('Invalid email or password.');
+  if (user.passwordHash.startsWith('$2')) {
+    if (!(await bcrypt.compare(password, user.passwordHash))) throw new Error('Invalid email or password.');
+  } else {
+    // Legacy sha256 hash: verify-only (see lib/otp-auth.ts). A success
+    // upgrades the stored hash to bcrypt, so the weak format is never
+    // accepted for this account again - migrate-on-login.
+    if (!verifyPassword(password, user.passwordHash)) throw new Error('Invalid email or password.');
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } });
+  }
   return {
     id: user.id,
     email: user.email,
@@ -1118,6 +1128,12 @@ export async function persistUserUpdate(user: UserRecord, passwordHash?: string)
       ...(passwordHash ? { passwordHash } : {}),
     },
   });
+}
+
+export async function persistUserPasswordHash(userId: string, passwordHash: string): Promise<void> {
+  if (!databaseEnabled) return;
+  requireDatabase();
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
 }
 
 export async function persistUserDelete(userId: string): Promise<void> {
