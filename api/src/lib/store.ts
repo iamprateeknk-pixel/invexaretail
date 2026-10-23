@@ -69,6 +69,7 @@ export type TransferLineInput = {
 };
 
 export type TransferRequestInput = {
+  id?: string;
   sourceLocationId: string;
   destinationLocationId: string;
   requestedBy: string;
@@ -173,7 +174,7 @@ export function createTransferRequest(input: TransferRequestInput): TransferRequ
   }
 
   return {
-    id: `transfer-${Math.random().toString(36).slice(2, 9)}`,
+    id: input.id ?? `transfer-${Math.random().toString(36).slice(2, 9)}`,
     sourceLocationId: input.sourceLocationId,
     destinationLocationId: input.destinationLocationId,
     requestedBy: input.requestedBy,
