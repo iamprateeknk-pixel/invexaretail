@@ -8,29 +8,50 @@ export function hashPassword(password: string): string {
   return bcrypt.hashSync(password, 12);
 }
 
+export function isLegacyPasswordHash(hash: string): boolean {
+  return !hash.startsWith('$2');
+}
+
 export function verifyPassword(password: string, hash: string): boolean {
   if (hash.startsWith('$2')) {
     return bcrypt.compareSync(password, hash);
   }
   // Accounts created before the bcrypt switch still carry sha256 hashes.
+  // This branch is verify-only, for the migrate-on-login paths (enterprise
+  // /login and persistence.authenticateUser): a successful legacy verify is
+  // immediately re-hashed with hashPassword() and saved, so the weak format
+  // disappears account by account. Nothing creates new sha256 password
+  // hashes - hashPassword() above is bcrypt-only.
   const legacy = crypto.createHash('sha256').update(password).digest('hex');
   return legacy.length === hash.length && crypto.timingSafeEqual(Buffer.from(legacy), Buffer.from(hash));
 }
 
-// Hash 4-digit PIN
+// Hash 4-digit PIN with bcrypt at the same cost as passwords. A PIN has only
+// 10,000 possibilities, so the previous unsalted sha256 hash fell to a
+// dictionary of every PIN the moment a stored hash leaked.
 export function hashPin(pin: string): string {
   if (!/^\d{4}$/.test(pin)) {
     throw new Error('PIN must be exactly 4 digits');
   }
-  return crypto.createHash('sha256').update(pin).digest('hex');
+  return bcrypt.hashSync(pin, 12);
 }
 
-// Verify 4-digit PIN
+export function pinHashNeedsUpgrade(hash: string): boolean {
+  return !hash.startsWith('$2');
+}
+
+// Verify 4-digit PIN. Legacy sha256 hashes still verify, so existing PINs
+// keep working; the verify-biometric route upgrades them via
+// pinHashNeedsUpgrade() + hashPin() after a successful verify.
 export function verifyPin(pin: string, hash: string): boolean {
   if (!/^\d{4}$/.test(pin)) {
     return false;
   }
-  return hashPin(pin) === hash;
+  if (hash.startsWith('$2')) {
+    return bcrypt.compareSync(pin, hash);
+  }
+  const legacy = crypto.createHash('sha256').update(pin).digest('hex');
+  return legacy.length === hash.length && crypto.timingSafeEqual(Buffer.from(legacy), Buffer.from(hash));
 }
 
 // Mock face recognition (in production, use real biometric SDK)
