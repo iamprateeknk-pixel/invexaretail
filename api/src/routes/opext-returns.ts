@@ -2,14 +2,15 @@
 // verbatim from operations-extension.ts; the composer mounts this
 // router at the cluster's original position.
 import { Router } from 'express';
-import { prisma } from '../lib/db.js';
+import { prisma, queryRaw } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
+import { DomainError, isDomainError, statusForErrorCode } from '../lib/errors.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { createExceptionCase } from '../lib/exceptions.js';
 import { expireStaleReservations, retryBackorderedOrders, retryBackorderAllocation } from '../lib/orders.js';
 import { listMemoryQcTemplates, listMemoryQcInspections, findTemplateForCategory } from '../lib/qc-inspection.js';
-import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, type ReturnAction } from '../lib/returns-rma.js';
+import { canCloseReturn, isPendingDisposition, nextReturnStatus, parseRefundDecision, planReturnLine, validateReturnLines, PENDING_INSPECTION, QC_FAILED, type ReturnAction } from '../lib/returns-rma.js';
 import { transitionReturnStatus } from '../lib/domain-policies.js';
 import { verdictForLine, type InspectionLike } from '../lib/qc-gate.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
@@ -29,45 +30,65 @@ router.post('/orders/:id/returns', async (req, res) => {
   if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
 
   const requestedLines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  const existingReturns = await prisma.returnLine.findMany({
-    where: { orderLine: { orderId: order.id } },
-    select: { orderLineId: true, quantity: true },
-  });
-  const alreadyReturnedByLine = new Map<string, number>();
-  for (const line of existingReturns) {
-    alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + Number(line.quantity));
-  }
   const orderLinesById = new Map(order.lines.map((line) => [line.id, line]));
-  const validationInput = requestedLines
-    .map((line: { orderLineId?: string; quantity?: number }) => {
-      const orderLine = orderLinesById.get(String(line.orderLineId));
-      return {
-        orderLineId: String(line.orderLineId || ''),
-        quantity: Number(line.quantity),
-        fulfilledQty: orderLine?.fulfilledQty == null ? 0 : Number(orderLine.fulfilledQty),
-        alreadyReturnedQty: alreadyReturnedByLine.get(String(line.orderLineId)) ?? 0,
-      };
-    })
-    .filter((line) => orderLinesById.has(line.orderLineId));
-  const validation = validateReturnLines(validationInput);
-  if (!validation.ok) return res.status(400).json({ message: 'Invalid return lines.', errors: validation.errors });
+  // Merge duplicate orderLineIds within the request itself before any cap
+  // is checked: validated entry-by-entry, two lines of 3 against a
+  // fulfilled quantity of 5 would each "pass" while totalling 6 - the
+  // returns flow would invent stock that was never shipped.
+  const requestedQtyByLine = new Map<string, number>();
+  for (const line of requestedLines as Array<{ orderLineId?: string; quantity?: number }>) {
+    const orderLineId = String(line?.orderLineId || '');
+    if (!orderLinesById.has(orderLineId)) continue;
+    requestedQtyByLine.set(orderLineId, (requestedQtyByLine.get(orderLineId) ?? 0) + Number(line?.quantity));
+  }
 
-  const returnRequest = await prisma.returnRequest.create({
-    data: {
-      orderId: order.id,
-      reason: typeof req.body.reason === 'string' ? req.body.reason : null,
-      createdById: req.user!.id,
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      lines: {
-        create: validationInput.map((line) => ({
-          orderLineId: line.orderLineId,
-          itemId: orderLinesById.get(line.orderLineId)!.itemId,
-          quantity: line.quantity,
-        })),
+  // Read-totals -> validate -> create runs as one transaction, serialized
+  // per order: under READ COMMITTED two concurrent creates could otherwise
+  // each read the same already-returned totals, both pass, and over-return
+  // (the read-decide-write gap lib/reservation.ts documents). Locking the
+  // parent order row FOR UPDATE makes the second create wait for the first
+  // to commit, after which its totals read sees the new return lines.
+  const result = await prisma.$transaction(async (tx) => {
+    await queryRaw(tx, 'SELECT "id" FROM "Order" WHERE "id" = ? AND "companyId" = ? FOR UPDATE', order.id, order.companyId);
+    const existingReturns = await tx.returnLine.findMany({
+      where: { orderLine: { orderId: order.id } },
+      select: { orderLineId: true, quantity: true },
+    });
+    const alreadyReturnedByLine = new Map<string, number>();
+    for (const line of existingReturns) {
+      alreadyReturnedByLine.set(line.orderLineId, (alreadyReturnedByLine.get(line.orderLineId) ?? 0) + Number(line.quantity));
+    }
+    const validationInput = [...requestedQtyByLine.entries()].map(([orderLineId, quantity]) => {
+      const orderLine = orderLinesById.get(orderLineId)!;
+      return {
+        orderLineId,
+        quantity,
+        fulfilledQty: orderLine.fulfilledQty == null ? 0 : Number(orderLine.fulfilledQty),
+        alreadyReturnedQty: alreadyReturnedByLine.get(orderLineId) ?? 0,
+      };
+    });
+    const validation = validateReturnLines(validationInput);
+    if (!validation.ok) return { ok: false as const, errors: validation.errors };
+    const created = await tx.returnRequest.create({
+      data: {
+        orderId: order.id,
+        reason: typeof req.body.reason === 'string' ? req.body.reason : null,
+        createdById: req.user!.id,
+        companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+        lines: {
+          create: validationInput.map((line) => ({
+            orderLineId: line.orderLineId,
+            itemId: orderLinesById.get(line.orderLineId)!.itemId,
+            quantity: line.quantity,
+          })),
+        },
       },
-    },
-    include: { lines: true },
+      include: { lines: true },
+    });
+    return { ok: true as const, returnRequest: created };
   });
+  if (!result.ok) return res.status(400).json({ message: 'Invalid return lines.', errors: result.errors });
+  const returnRequest = result.returnRequest;
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_REQUESTED',
     entityType: 'ReturnRequest', entityId: returnRequest.id, metadata: { orderId: order.id, lines: returnRequest.lines.length },
