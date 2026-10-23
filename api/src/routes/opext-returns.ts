@@ -168,25 +168,42 @@ router.patch('/returns/:id/status', async (req, res) => {
       plans.push({ line, plan });
     }
     for (const { line, plan } of plans) {
-      await prisma.returnLine.update({ where: { id: line.id }, data: { disposition: plan.disposition } });
       const lot = await returnLot(returnRequest.id, line.itemId);
-      if (plan.action === 'RESTOCK') {
-        await prisma.$transaction((tx) => postInventoryMovementInTransaction(tx, {
-          tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
-          movementType: 'SALES_RETURN', qtyDelta: line.quantity,
-          idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
-          reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
-        }));
-        // Phase 5 step 14: the canonical posting above is the stock
-        // write; the snapshot mirror that followed it is retired (this
-        // router is database-only — returns have no memory-mode flow).
-      } else if (plan.action === 'HOLD') {
-        // Physically back in the building but not sellable: quarantine until a disposition is decided.
-        await prisma.stockLedger.upsert({
-          where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } },
-          update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
-          create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+      // One transaction per line, claimed on the line itself: the attempt
+      // that flips disposition from null performs this line's stock
+      // effects, atomically with them. A retry after a mid-loop crash
+      // finds the lines it already received claimed and skips their stock
+      // effects entirely - the RESTOCK leg was already retry-safe via the
+      // poster's idempotency key, but the HOLD leg re-incremented
+      // quarantine and opened a duplicate exception case on every retry.
+      const claimed = await prisma.$transaction(async (tx) => {
+        const claim = await tx.returnLine.updateMany({
+          where: { id: line.id, disposition: null },
+          data: { disposition: plan.disposition },
         });
+        if (claim.count === 0) return false;
+        if (plan.action === 'RESTOCK') {
+          await postInventoryMovementInTransaction(tx, {
+            tenant: tenantContextOf(req), itemId: line.itemId, lotId: lot.id, locationId,
+            movementType: 'SALES_RETURN', qtyDelta: line.quantity,
+            idempotencyKey: `return-restock:${returnRequest.id}:${line.id}`,
+            reason: 'Customer return restocked after inspection', sourceDocument: returnRequest.id, sourceLineId: line.id, correlationId: returnRequest.orderId,
+          });
+          // Phase 5 step 14: the canonical posting above is the stock
+          // write; the snapshot mirror that followed it is retired (this
+          // router is database-only - returns have no memory-mode flow).
+        } else if (plan.action === 'HOLD') {
+          // Physically back in the building but not sellable: quarantine until a disposition is decided.
+          await tx.stockLedger.upsert({
+            where: { companyId_itemId_lotId_locationId: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId } },
+            update: { quarantine: { increment: line.quantity }, version: { increment: 1 } },
+            create: { companyId: returnRequest.companyId, itemId: line.itemId, lotId: lot.id, locationId, onHand: 0, quarantine: line.quantity, version: 1 },
+          });
+        }
+        return true;
+      });
+      if (!claimed) continue;
+      if (plan.action === 'HOLD') {
         void createExceptionCase({
           type: plan.disposition === 'QC_FAILED' ? 'QC_FAIL' : 'QUARANTINE',
           title: plan.disposition === 'QC_FAILED' ? 'Returned goods failed QC' : 'Returned goods awaiting inspection',
