@@ -30,8 +30,11 @@ const _transientStatuses = {408, 425, 429};
 
 bool isTransientServerStatus(int statusCode) => _transientStatuses.contains(statusCode) || statusCode >= 500;
 
-SyncOutcome classifySyncFailure({required bool isOffline, int? statusCode, int attempts = 0}) {
+SyncOutcome classifySyncFailure({required bool isOffline, int? statusCode, int attempts = 0, int? retryAfterSeconds}) {
   if (isOffline || statusCode == 401) return SyncOutcome.retry;
+  // 409 MUTATION_IN_PROGRESS (the same mutation id is still being applied, e.g. a flush racing a retry)
+  // is the only 409 that carries Retry-After; it is transient, not a conflict for the user to resolve.
+  if (statusCode == 409 && retryAfterSeconds != null) return SyncOutcome.retry;
   if (statusCode == 409) return SyncOutcome.conflict;
   if (statusCode != null && isTransientServerStatus(statusCode)) {
     return attempts >= maxTransientServerAttempts ? SyncOutcome.rejected : SyncOutcome.retry;

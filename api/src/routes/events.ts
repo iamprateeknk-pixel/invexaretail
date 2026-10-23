@@ -9,6 +9,17 @@ const MAX_STREAMS_PER_USER = 5;
 const MAX_STREAMS_TOTAL = 2000;
 const streamsByUser = new Map<string, number>();
 let activeStreams = 0;
+
+// Every durable stream used to run its own query each second (2000 streams = 2000 queries/s even when
+// nothing happened). One shared "latest id" read per second now gates them; a stream only queries rows
+// when the table has actually moved past its cursor.
+let latestCache = { at: 0, value: 0 };
+let latestPending: Promise<number> | null = null;
+function sharedLatestEventId(): Promise<number> {
+  if (Date.now() - latestCache.at < 900) return Promise.resolve(latestCache.value);
+  latestPending ??= durableLatestEventId().then((value) => { latestCache = { at: Date.now(), value }; return value; }).finally(() => { latestPending = null; });
+  return latestPending;
+}
 function visibleLocationIds(user: NonNullable<Request['user']>): string[] | null { return user.role === 'ADMIN' || user.role === 'ADMIN_USER' ? null : user.locationIds ?? []; }
 function frame(event: DomainEvent): string { const { id, topic, ...data } = event; return `id: ${id}\nevent: ${topic}\ndata: ${JSON.stringify({ id, topic, ...data })}\n\n`; }
 
@@ -86,7 +97,7 @@ router.get('/events', extractToken, requireAuth, async (req: Request, res: Respo
   let polling = false;
   if (durable) durablePoll = setInterval(() => void (async () => {
     if (polling || closed) return; polling = true;
-    try { const rows = await durableEventsSince(cursor, { companyId, locationIds }); rows.forEach((event) => { cursor = event.id; write(frame(event)); }); }
+    try { if ((await sharedLatestEventId()) <= cursor) return; const rows = await durableEventsSince(cursor, { companyId, locationIds }); rows.forEach((event) => { cursor = event.id; write(frame(event)); }); }
     catch (error) { console.error('[events] durable poll failed', error); }
     finally { polling = false; }
   })(), 1000);

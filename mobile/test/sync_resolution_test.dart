@@ -9,6 +9,8 @@ void main() {
 
   test('a 409 means the server saw a real conflict - stop auto-retrying', () {
     expect(classifySyncFailure(isOffline: false, statusCode: 409), SyncOutcome.conflict);
+    // MUTATION_IN_PROGRESS carries Retry-After and must not be surfaced as a conflict.
+    expect(classifySyncFailure(isOffline: false, statusCode: 409, retryAfterSeconds: 2), SyncOutcome.retry);
   });
 
   test('any other rejection will never succeed by retrying', () {

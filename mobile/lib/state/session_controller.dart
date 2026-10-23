@@ -743,7 +743,7 @@ class SessionController extends ChangeNotifier {
       } on ApiException catch (err) {
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
           stopCounts = true;
@@ -774,7 +774,7 @@ class SessionController extends ChangeNotifier {
       } on ApiException catch (err) {
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
           stopActions = true;
