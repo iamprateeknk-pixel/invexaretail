@@ -11,7 +11,9 @@ What was found, fixed and left open when auditing live updates, double submits a
 - Mobile: a 409 with `Retry-After` (MUTATION_IN_PROGRESS) is retried, not shown as a conflict.
 - Tests: nested-router walk in contract/auth sweeps; time-bomb FEFO dates; dropped `StockBalance`; moved admin-panel/handoff; jsdom `matchMedia`.
 
+- Orders: correction to the earlier "no unique constraint" note (docs/week36): a global `(channel, externalReference)` unique index existed since init, so duplicates could not persist. The real defects were (1) it was global, so two companies receiving the same marketplace reference collided; now `(companyId, channel, externalReference)` (migration `20270126090000_order_external_reference_per_company`, additive, rehearsed on Postgres 16, schema diff empty); (2) a cross-replica race surfaced as a 500; `createOrderWithReservation` now treats P2002 as a replay and returns the winning order.
+
 ## Open
-- No DB unique constraint on `(channel, externalReference)`: duplicate marketplace orders are possible across replicas (needs a rehearsed migration).
 - Multipart uploads (evidence photos) are not covered by the web mutation-id/coalescing.
+- The P2002 catch path itself has no automated test (needs two processes to race); the DB-level rejection and cross-company cases are tested in `orders-idempotent-replay.postgres.test.ts`.
 - Mobile changes could not be run here (no Flutter SDK).

@@ -531,7 +531,18 @@ export async function createOrderWithReservation(input: Parameters<typeof create
   const run = previous.catch(() => undefined).then(async () => {
     const existing = await findOrderByExternalReference(companyId ?? DEFAULT_COMPANY_ID, input.channel, reference);
     if (existing) return { ...(existing as Awaited<ReturnType<typeof createOrderInner>>), duplicate: true };
-    return createOrderInner({ ...input, externalReference: reference });
+    try {
+      return await createOrderInner({ ...input, externalReference: reference });
+    } catch (error) {
+      // Another API replica created the same (company, channel, reference) between our lookup and our
+      // insert: the unique index rejected us and createOrderInner already released our reservation.
+      // That is a replay, not a failure - return the winner's order.
+      if (databaseEnabled && (error as { code?: string } | null)?.code === 'P2002') {
+        const winner = await findOrderByExternalReference(companyId ?? DEFAULT_COMPANY_ID, input.channel, reference);
+        if (winner) return { ...(winner as Awaited<ReturnType<typeof createOrderInner>>), duplicate: true };
+      }
+      throw error;
+    }
   });
   ingestLocks.set(key, run);
   try {

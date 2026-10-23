@@ -59,7 +59,7 @@ integration('the same marketplace order replayed twice (sequentially) creates on
   // being exactly one Order/OrderLine, asserted above, and confirmed here
   // by onHand still reflecting only the fixture's original stock (no second
   // debit occurred, whatever the specific reservation accounting model is).
-  assert.equal(ledger?.onHand, 10);
+  assert.equal(Number(ledger?.onHand), 10);
 });
 
 integration('two deliveries of the same marketplace order arriving concurrently still create exactly one order', async () => {
@@ -87,4 +87,30 @@ integration('two deliveries of the same marketplace order arriving concurrently 
 
   const orders = await prisma.order.findMany({ where: { channel: 'AMAZON', externalReference } });
   assert.equal(orders.length, 1, 'exactly one Order row must exist even though two requests raced for it');
+});
+
+integration('two companies can each receive the same channel + external reference (uniqueness is per company)', async () => {
+  const a = await makeFixture(10);
+  const b = await makeFixture(10);
+  const externalReference = `shared-ref-${randomUUID()}`;
+  const make = (f: typeof a) => ({ channel: 'SHOPIFY', externalReference, createdById: f.userId, companyId: f.companyId, allowSplit: true, fulfillmentLocationId: f.locationId, lines: [{ itemId: f.itemId, quantity: 2 }] });
+
+  const orderA = await createOrderWithReservation(make(a));
+  const orderB = await createOrderWithReservation(make(b));
+  assert.equal(orderA.duplicate, undefined);
+  assert.equal(orderB.duplicate, undefined, 'company B must get its own order, not be told it is a duplicate of company A');
+  assert.notEqual(orderA.id, orderB.id);
+  assert.equal((await prisma.order.findUnique({ where: { id: orderB.id } }))?.companyId, b.companyId);
+});
+
+integration('the database itself rejects a second order for the same company + channel + reference (guards multiple API replicas)', async () => {
+  const f = await makeFixture(10);
+  const externalReference = `db-guard-${randomUUID()}`;
+  const first = await createOrderWithReservation({ channel: 'AMAZON', externalReference, createdById: f.userId, companyId: f.companyId, allowSplit: true, fulfillmentLocationId: f.locationId, lines: [{ itemId: f.itemId, quantity: 1 }] });
+  await assert.rejects(
+    prisma.order.create({ data: { companyId: f.companyId, channel: 'AMAZON', externalReference, status: 'RESERVED', fulfillmentLocationId: f.locationId, createdById: f.userId } }),
+    (error: { code?: string }) => error.code === 'P2002',
+  );
+  assert.equal((await prisma.order.count({ where: { companyId: f.companyId, channel: 'AMAZON', externalReference } })), 1);
+  assert.ok(first.id);
 });
