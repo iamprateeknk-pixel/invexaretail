@@ -15,6 +15,9 @@ import {
   WebhookReplayError,
 } from './webhook-dispatcher.js';
 import { verifyWebhookSignature } from './webhook-events.js';
+import { requireTenantContext } from './tenant-context.js';
+
+const testCtx = requireTenantContext({ companyId: 'default-company', userId: 'user-test', role: 'ADMIN' });
 import {
   createWebhookSubscription,
   listWebhookDeliveries,
@@ -172,12 +175,12 @@ test('stock.low fires only when on-hand crosses the reorder minimum', async () =
   upsertReorderRule({ itemId: 'item-1003', locationId: 'wh-1', minQty: 79, targetQty: 90 });
   const before = findStockLedgerEntry('item-1003', 'lot-1003', 'wh-1')?.onHand ?? 0;
   assert.ok(before > 79);
-  maybeEmitStockLow('item-1003', 'wh-1', before);
+  await maybeEmitStockLow(testCtx, 'item-1003', 'wh-1', before);
   await waitForWebhooks();
   assert.deepEqual(received, []);
 
   adjustStockLedger('item-1003', 'lot-1003', 'wh-1', -2);
-  maybeEmitStockLow('item-1003', 'wh-1', before);
+  await maybeEmitStockLow(testCtx, 'item-1003', 'wh-1', before);
   await waitForWebhooks();
   adjustStockLedger('item-1003', 'lot-1003', 'wh-1', 2);
   resetReorderStore();

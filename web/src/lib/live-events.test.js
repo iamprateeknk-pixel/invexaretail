@@ -148,3 +148,44 @@ test('a network failure retries with backoff instead of throwing', async () => {
   assert.equal(calls, 3);
   assert.deepEqual(sleeps, [2000, 4000]);
 });
+
+test('a 401 on reconnect refreshes the token once and resumes instead of going dead', async () => {
+  const seenAuth = [];
+  const statuses = [];
+  let refreshes = 0;
+  const client = createLiveClient({
+    url: 'http://x/events',
+    getToken: () => 'expired',
+    refreshToken: async () => { refreshes += 1; return 'fresh'; },
+    sleep: async () => {},
+    fetchImpl: async (_url, init) => {
+      seenAuth.push(init.headers.Authorization);
+      return init.headers.Authorization === 'Bearer fresh'
+        ? streamResponse([hello('e1')], { holdOpen: true })
+        : streamResponse([], { status: 401 });
+    },
+    onStatus: (status) => statuses.push(status),
+  });
+  client.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(seenAuth, ['Bearer expired', 'Bearer fresh']);
+  assert.equal(refreshes, 1);
+  assert.equal(statuses.at(-1), LIVE_STATUS.live);
+  client.stop();
+});
+
+test('a 401 that survives the refresh still stops the client', async () => {
+  let calls = 0;
+  const client = createLiveClient({
+    url: 'http://x/events',
+    getToken: () => 'expired',
+    refreshToken: async () => 'also-bad',
+    sleep: async () => {},
+    fetchImpl: async () => { calls += 1; return streamResponse([], { status: 401 }); },
+  });
+  client.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(calls, 2);
+  assert.equal(client.status, LIVE_STATUS.unauthorized);
+  client.stop();
+});

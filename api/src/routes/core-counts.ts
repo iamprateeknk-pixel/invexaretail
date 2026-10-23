@@ -781,7 +781,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
     ? [...new Set(itemIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
     : [];
 
-  const plan = cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const plan = await cycleCountPlanForLocation(tenantContext(req), locationId, req.companyId ?? DEFAULT_COMPANY_ID);
   if (requestedItemIds.length) {
     const known = new Set(plan.items.map((item) => item.itemId));
     const unknownItemId = requestedItemIds.find((id) => !known.has(id));
@@ -828,7 +828,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
   return res.status(201).json({
     success: true,
     assignments: createdAssignments,
-    plan: cycleCountPlanForLocation(locationId, req.companyId ?? DEFAULT_COMPANY_ID),
+    plan: await cycleCountPlanForLocation(tenantContext(req), locationId, req.companyId ?? DEFAULT_COMPANY_ID),
   });
 });
 

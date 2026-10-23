@@ -1,4 +1,4 @@
-import { API_BASE, apiRequest } from '../lib/api-client';
+import { API_BASE, apiRequest, refreshSessionAccessToken } from '../lib/api-client';
 import { nextPollDelayMs } from '../lib/poll-policy';
 import { fetchCatalogueVersion, loadCatalogueIfChanged } from '../lib/catalogue-version';
 import { LIVE_STATUS, createLiveClient, invalidationsForTopics } from '../lib/live-events';
@@ -164,6 +164,7 @@ export function useWorkspaceHydration({
   const [liveRevision, setLiveRevision] = useState(0);
   const latest = useRef({});
   latest.current = { authToken, items, locations, locationId, role };
+  const hasSession = Boolean(session && authToken);
   const pendingSlices = useRef(new Set());
   const flushTimer = useRef(null);
 
@@ -219,6 +220,7 @@ export function useWorkspaceHydration({
     const client = createLiveClient({
       url: `${API_BASE}/api/v1/events`,
       getToken: () => latest.current.authToken,
+      refreshToken: refreshSessionAccessToken,
       onStatus: setLiveStatus,
       onEvents: (topics) => {
         invalidationsForTopics(topics).forEach((slice) => pendingSlices.current.add(slice));
@@ -246,9 +248,11 @@ export function useWorkspaceHydration({
       clearTimeout(flushTimer.current);
       client.stop();
     };
-    // refreshSlices reads everything through refs, so it never goes stale.
+    // refreshSlices and the client's getToken read everything through refs, so a rotated access token
+    // (every ~13 minutes) must not tear the stream down: a new client starts with no cursor and would
+    // silently drop every event between the old stream closing and the new one saying hello.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, session]);
+  }, [hasSession]);
 
   useEffect(() => {
     // Plan P1-PERF-001 (event-first): while the live stream is healthy, events drive targeted

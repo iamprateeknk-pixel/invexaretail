@@ -606,7 +606,8 @@ async function planDailyImport(preview: DailyImportPreview, importedBy: string, 
     if (preview.importType === 'PURCHASE' && !destination && location.type !== 'warehouse') { errors.push({ rowNumber: row.rowNumber, message: 'Purchase can be received only into H.O. Basni warehouse.' }); continue; }
     let lot = row.lotNo ? item.lots.find((entry) => normalName(entry.lotNo) === normalName(row.lotNo!)) : undefined;
     if (!lot && row.movementType === 'SALE_OUT') {
-      const available = item.lots.map((entry) => ({ lot: entry, qty: (await ledgerFor(location.id)).find((stock) => stock.itemId === item.id && stock.lotId === entry.id)?.onHand ?? 0 })).filter((entry) => entry.qty > 0).sort((a, b) => new Date(a.lot.expiryDate ?? '9999-12-31').getTime() - new Date(b.lot.expiryDate ?? '9999-12-31').getTime());
+      const locationLedger = await ledgerFor(location.id);
+      const available = item.lots.map((entry) => ({ lot: entry, qty: locationLedger.find((stock) => stock.itemId === item.id && stock.lotId === entry.id)?.onHand ?? 0 })).filter((entry) => entry.qty > 0).sort((a, b) => new Date(a.lot.expiryDate ?? '9999-12-31').getTime() - new Date(b.lot.expiryDate ?? '9999-12-31').getTime());
       let remaining = row.quantity;
       for (const candidate of available) { if (remaining <= 0) break; const quantity = Math.min(remaining, candidate.qty); prepared.push({ row, item, locationId: location.id, lotId: candidate.lot.id, qtyDelta: -quantity }); remaining -= quantity; }
       if (remaining > 0) errors.push({ rowNumber: row.rowNumber, message: `${item.code} has insufficient stock at ${location.name}; ${remaining} cannot be deducted.` });

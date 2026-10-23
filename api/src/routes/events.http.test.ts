@@ -152,3 +152,17 @@ test('HTTP: a committed mutation is pushed to an open stream, and a reconnect re
     assert.match(reset, /event: reset/);
   });
 });
+
+test('HTTP: closed streams release their per-user slot, so a flaky connection never locks a user out of live updates', async () => {
+  resetEventBusForTests();
+  await withServer(async (url) => {
+    const admin = userFor('admin@retail.local');
+    const token = generateJWT(admin.id, admin.companyId);
+    // Well past MAX_STREAMS_PER_USER (5): each stream is opened, read to its hello frame, then dropped.
+    for (let i = 0; i < 8; i += 1) {
+      const text = await readStream(url, token, (t) => t.includes('event: hello'));
+      assert.match(text, /event: hello/);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  });
+});

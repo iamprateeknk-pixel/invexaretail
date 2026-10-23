@@ -1,8 +1,9 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 import { ControlPlaneError, nowIso } from './control-plane.js';
 import type { PublicControlPlaneWebhook, PublicApiKey, ScopeContext, CompanyRecord, AuditEvent, BillingInvoice } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
+import { jwtSecret } from './control-plane-tokens.js';
 
 /** Cross-calls the integrations area needs from the facade (they stay on ControlPlane). */
 export interface ControlPlaneIntegrationsHost {
@@ -58,7 +59,7 @@ export class ControlPlaneIntegrations {
     const expected = createHmac('sha256', jwtSecret()).update(token).digest('hex');
     let matched: { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' } | null = null;
     for (const key of this.store.apiKeys.values()) {
-      if (key.hash.length !== expected.length || !timingSafeEqual(key.hash, expected)) continue;
+      if (key.hash.length !== expected.length || !timingSafeEqual(Buffer.from(key.hash), Buffer.from(expected))) continue;
       matched = key;
       break;
     }
@@ -215,6 +216,4 @@ export class ControlPlaneIntegrations {
       usage: this.store.usage.get(company.id) ?? {},
     };
   }
-}
-
 }

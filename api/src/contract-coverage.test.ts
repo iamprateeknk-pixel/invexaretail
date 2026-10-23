@@ -23,11 +23,13 @@ import operationsExtensionRouter from './routes/operations-extension.js';
 import commandCenterRouter from './routes/command-center.js';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
 
-type Layer = { route?: { path: string | string[]; methods: Record<string, boolean> } };
+type Layer = { route?: { path: string | string[]; methods: Record<string, boolean> }; handle?: { stack?: Layer[] } };
 
 function endpoints(router: Router, prefix = ''): string[] {
   const out: string[] = [];
   for (const layer of (router as unknown as { stack: Layer[] }).stack) {
+    // core.ts is composed of mounted sub-routers; walk into them.
+    if (!layer.route && layer.handle?.stack) { out.push(...endpoints(layer.handle as unknown as Router, prefix)); continue; }
     if (!layer.route) continue;
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     for (const path of paths) {

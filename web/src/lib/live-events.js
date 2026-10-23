@@ -98,6 +98,9 @@ export function invalidationsForTopics(topics) {
 export function createLiveClient({
   url,
   getToken,
+  // Optional: called once on a 401 to mint a fresh access token (e.g. after the laptop slept past the
+  // 15-minute token life). Without it, a stale token on reconnect would stop live updates for good.
+  refreshToken,
   onEvents,
   onStatus,
   fetchImpl = (...args) => fetch(...args),
@@ -123,12 +126,19 @@ export function createLiveClient({
   async function connectOnce(attempt) {
     controller = new AbortController();
     setStatus(attempt === 0 ? LIVE_STATUS.connecting : attempt >= 3 ? LIVE_STATUS.polling : LIVE_STATUS.reconnecting);
-    const token = getToken();
+    let token = getToken();
     if (!token) { setStatus(LIVE_STATUS.unauthorized); stopped = true; return; }
-    const headers = { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' };
-    if (cursor !== null) headers['Last-Event-ID'] = String(cursor);
-    const query = epoch ? `?epoch=${encodeURIComponent(epoch)}` : '';
-    const response = await fetchImpl(`${url}${query}`, { headers, signal: controller.signal });
+    const open = (bearer) => {
+      const headers = { Authorization: `Bearer ${bearer}`, Accept: 'text/event-stream' };
+      if (cursor !== null) headers['Last-Event-ID'] = String(cursor);
+      const query = epoch ? `?epoch=${encodeURIComponent(epoch)}` : '';
+      return fetchImpl(`${url}${query}`, { headers, signal: controller.signal });
+    };
+    let response = await open(token);
+    if (response.status === 401 && refreshToken) {
+      const fresh = await refreshToken().catch(() => null);
+      if (fresh) { token = fresh; response = await open(token); }
+    }
     if (response.status === 401 || response.status === 403) {
       setStatus(LIVE_STATUS.unauthorized);
       stopped = true;

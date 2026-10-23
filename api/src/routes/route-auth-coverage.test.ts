@@ -35,7 +35,10 @@ type Probe = { method: string; path: string };
 
 function collect(router: Router): Probe[] {
   const found: Probe[] = [];
-  for (const layer of (router as unknown as { stack: Array<{ route?: { path: string | string[]; methods: Record<string, boolean> } }> }).stack) {
+  type RouterLayer = { route?: { path: string | string[]; methods: Record<string, boolean> }; handle?: { stack?: RouterLayer[] } };
+  for (const layer of (router as unknown as { stack: RouterLayer[] }).stack) {
+    // core.ts is composed of mounted sub-routers; walk into them so no route escapes the sweep.
+    if (!layer.route && layer.handle?.stack) { found.push(...collect(layer.handle as unknown as Router)); continue; }
     if (!layer.route) continue;
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     for (const path of paths) {
