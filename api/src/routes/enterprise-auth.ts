@@ -5,8 +5,10 @@ import rateLimit from 'express-rate-limit';
 import {
   hashPassword,
   verifyPassword,
+  isLegacyPasswordHash,
   hashPin,
   verifyPin,
+  pinHashNeedsUpgrade,
   sendOtpEmail,
   resolveOtpDeliveryChannel,
   shouldExposeDevOtpCode,
@@ -424,6 +426,22 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       if (respondIfLocked(res, await registerFailure(normalizedEmail))) return;
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    // Migrate-on-login: a legacy sha256 password hash that just verified is
+    // replaced with bcrypt and saved, so the weak format disappears account
+    // by account without locking anyone out. A failed save only postpones
+    // the upgrade to the next login; it never fails this one.
+    if (isLegacyPasswordHash(user.passwordHash ?? '')) {
+      const upgradedHash = hashPassword(password);
+      user.passwordHash = upgradedHash;
+      try {
+        const { persistUserPasswordHash } = await import('../lib/persistence.js');
+        await persistUserPasswordHash(user.id, upgradedHash);
+      } catch (error) {
+        console.error('Legacy password hash upgrade failed:', error);
+      }
+    }
+
     await clearFailures(normalizedEmail);
 
     // Checked only after the password is proven, so "inactive" cannot be probed without it.
@@ -839,6 +857,12 @@ router.post('/verify-biometric', loginLimiter, async (req: Request, res: Respons
     if (method === 'pin' && pin) {
       if (!credential.pin4Digit || !verifyPin(pin, credential.pin4Digit)) {
         return res.status(401).json({ error: 'Invalid PIN' });
+      }
+      // Transparently upgrade a legacy sha256 PIN hash to bcrypt on success;
+      // the credential record is the live in-memory object, so this is the save.
+      if (pinHashNeedsUpgrade(credential.pin4Digit)) {
+        credential.pin4Digit = hashPin(pin);
+        credential.updatedAt = new Date().toISOString();
       }
     } else if (method === 'face' && faceData) {
       if (!credential.faceDataHash) {
