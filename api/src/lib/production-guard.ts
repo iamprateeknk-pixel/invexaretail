@@ -60,6 +60,14 @@ export function checkProductionSecrets(env: Record<string, string | undefined> =
     result.errors.push('SEED_PASSWORD is the well-known default. Seeded accounts would be open to anyone who has read the repository.');
   }
 
+  // Dev OTP prints one-time sign-in codes to the API console. otp-auth only
+  // honours it outside production today, but a production process carrying
+  // ENABLE_DEV_OTP=true is one refactor away from leaking live codes into
+  // platform logs, so the guard fails closed on the configuration itself.
+  if (env.ENABLE_DEV_OTP?.trim().toLowerCase() === 'true') {
+    result.errors.push('ENABLE_DEV_OTP=true in production would print one-time sign-in codes to the API console. Remove it; dev OTP is a local-only escape hatch.');
+  }
+
   // R9: production must never boot in the in-memory demo mode by accident.
   // Until now the database was only mandatory when someone remembered to set
   // REQUIRE_DATABASE=true, so a production deploy that lost its DATABASE_URL
