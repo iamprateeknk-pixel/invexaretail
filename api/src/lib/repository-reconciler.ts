@@ -22,6 +22,8 @@ export type ReconcilerHealth = {
   lastError: string | null;
   /** True when the snapshot is older than 3 intervals or 3 refreshes in a row failed. */
   stale: boolean;
+  /** ULTRA P1: how the last refresh loaded (full vs delta) and how many rows it touched, when the refresh function reports it. */
+  refresh?: Record<string, unknown>;
 };
 
 export class RepositoryReconciler {
@@ -36,6 +38,7 @@ export class RepositoryReconciler {
     private readonly refresh: () => Promise<void>,
     readonly intervalMs: number,
     private readonly now: () => number = Date.now,
+    private readonly refreshStats?: () => Record<string, unknown>,
   ) {}
 
   /** Marks "the snapshot was just loaded" (startup hydration), so the first timer tick is a full interval away. */
@@ -85,6 +88,7 @@ export class RepositoryReconciler {
       consecutiveFailures: this.failures,
       lastError: this.lastError,
       stale: this.failures >= 3 || (ageMs !== null && ageMs > this.intervalMs * 3),
+      ...(this.refreshStats ? { refresh: this.refreshStats() } : {}),
     };
   }
 }
