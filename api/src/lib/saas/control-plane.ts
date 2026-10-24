@@ -950,9 +950,29 @@ export class ControlPlane {
   }
 
   addStockColumn(scope: ScopeContext, input: {
+    name: string;
+    key: string;
+    type: string;
+    required?: boolean;
+    defaultValue?: unknown;
+    placement?: string;
+    visibleRoles?: string[];
+    editableRoles?: string[];
+  }): ConfigurationVersion {
     return this.studioSvc.addStockColumn(scope, input);
   }
   addField(scope: ScopeContext, input: {
+    entityType: string;
+    key: string;
+    name: string;
+    type: string;
+    required?: boolean;
+    defaultValue?: unknown;
+    visibleRoles?: string[];
+    editableRoles?: string[];
+    // true = edit the existing field with this entity + key instead of refusing the duplicate.
+    replace?: boolean;
+  }): ConfigurationVersion {
     return this.studioSvc.addField(scope, input);
   }
 
@@ -988,6 +1008,11 @@ export class ControlPlane {
   }
 
   preview(scope: ScopeContext, input: { role: string; device: 'desktop' | 'tablet' | 'mobile' }): {
+    role: string;
+    device: string;
+    page: PageDefinition;
+    version: number;
+  } {
     return this.studioSvc.preview(scope, input);
   }
 
@@ -1004,6 +1029,13 @@ export class ControlPlane {
   }
 
   runtimeConfig(companyId: string, role = 'ADMIN'): {
+    companyId: string;
+    version: number;
+    page: PageDefinition;
+    modules: Record<string, boolean>;
+    killSwitches: Record<string, boolean>;
+    mobilePolicy?: MobilePolicy;
+  } {
     return this.studioSvc.runtimeConfig(companyId, role);
   }
 
@@ -1111,6 +1143,7 @@ export class ControlPlane {
   publicCompany(company: CompanyRecord) {
     return this.integrationsSvc.publicCompany(company);
   }
+}
 
 export const controlPlane = new ControlPlane();
 export { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY, signControlToken, verifyControlToken };
