@@ -10,6 +10,9 @@ import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, type AccessContext, type Role } from '../lib/inventory.js';
 import { findTransferForCompany } from '../lib/repository.js';
+import { findTransferForCompany as findTransferFromDb } from '../lib/repositories/transfer-repository.js';
+import { DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
+import type { TenantContext } from '../lib/tenant-context.js';
 import { evidenceMime, saveTransferEvidence, listTransferEvidence, readTransferEvidence } from '../lib/transfer-evidence.js';
 import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
 
@@ -26,6 +29,15 @@ function accessContext(user: EnhancedUserRecord): AccessContext {
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? '');
+}
+
+function tenantContext(req: Request): TenantContext {
+  return {
+    companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    userId: req.user!.id,
+    role: req.user!.role as TenantContext['role'],
+  };
 }
 
 router.post('/transfers/:transferId/evidence', upload.single('evidence'), async (req: Request, res: Response) => {
@@ -50,7 +62,7 @@ router.post('/transfers/:transferId/evidence', upload.single('evidence'), async 
 
 router.get('/transfers/:transferId/evidence', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const transfer = await findTransferFromDb(tenantContext(req), transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {
@@ -62,7 +74,7 @@ router.get('/transfers/:transferId/evidence', async (req: Request, res: Response
 
 router.get('/transfers/:transferId/evidence/:evidenceId', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const transfer = await findTransferFromDb(tenantContext(req), transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!canAccessLocation(context, transfer.sourceLocationId) && !canAccessLocation(context, transfer.destinationLocationId)) {

@@ -15,6 +15,9 @@ import { listAuditEvents } from '../lib/audit.js';
 import { totalVariance } from '../lib/weight-allocation.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
+import { listCountsForCompany } from '../lib/repositories/count-repository.js';
+import { listItemsForCompany } from '../lib/repositories/item-repository.js';
+import { listTransfersForCompany } from '../lib/repositories/transfer-repository.js';
 import { accessContext, tenantContext, csvEscape, firstParam, isOperationalAdmin } from './core-shared.js';
 
 const router = Router();
@@ -26,18 +29,22 @@ const router = Router();
 router.get('/dashboard', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const companyId = context.companyId ?? DEFAULT_COMPANY_ID;
-  // Phase 5 step 4: the stock input is DB-first (tenant-scoped repository);
-  // counts/transfers/items still come from the snapshot — their conversions
-  // are the document-read follow-on, so this response deliberately joins
-  // current stock with snapshot documents until that phase. The builder is
-  // unchanged; only its stock provenance moved.
+  // Phase 5 step 4 made the stock input DB-first; ULTRA P1 (below) completed
+  // the document inputs. The builder is unchanged; only provenance moved.
   const ctx: TenantContext = { ...tenantContext(req), companyId };
+  // ULTRA P1: counts, transfers and items are database-first now too (count/transfer/item
+  // repositories) — the dashboard no longer joins current stock with snapshot documents.
+  const [companyCounts, companyTransfers, companyItems] = await Promise.all([
+    listCountsForCompany(ctx),
+    listTransfersForCompany(ctx),
+    listItemsForCompany(ctx),
+  ]);
   const summary = buildDashboardSummary({
-    counts: listCounts().filter((count) => canAccessLocation(context, count.locationId)),
-    transfers: listTransfers().filter((transfer) =>
+    counts: companyCounts.filter((count) => canAccessLocation(context, count.locationId)),
+    transfers: companyTransfers.filter((transfer) =>
       canAccessLocation(context, transfer.sourceLocationId) && canAccessLocation(context, transfer.destinationLocationId),
     ),
-    items: itemsForCompany(companyId, listItems()),
+    items: companyItems,
     // Expiry KPIs count only lots that still hold stock in a location this user can see.
     stock: (await listStockForCompany(ctx)).filter((row) => canAccessLocation(context, row.locationId)),
   });
@@ -58,20 +65,25 @@ router.get('/audit', (req: Request, res: Response) => {
 // CSV EXPORT / IMPORT
 // ============================================
 
-router.get('/export/:type', (req: Request, res: Response) => {
+router.get('/export/:type', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins can export data.' });
   }
 
   const today = new Date().toISOString().split('T')[0];
   const type = firstParam(req.params.type);
-  // Every list below is process-wide; an export is the caller's company's data only.
-  const exportCompanyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  // An export is the caller's company's data only. ULTRA P1: the lists come from the
+  // company-scoped repositories (Postgres in database mode), whose scoping replaces the
+  // process-wide snapshot lists plus ownership post-filters this handler used to apply —
+  // for counts the old filter was "location owned by the company" and StockCount.companyId
+  // was backfilled from exactly that location; for transfers it was source-or-destination
+  // ownership, which is the transfer repository's scope verbatim.
+  const exportCtx = tenantContext(req);
 
   if (type === 'stock') {
     const csv = [
       ['ID', 'Code', 'Name', 'Category', 'Unit', 'Lots'].join(','),
-      ...itemsForCompany(exportCompanyId, listItems()).map((item) => [
+      ...(await listItemsForCompany(exportCtx)).map((item) => [
         item.id, item.code, item.name, item.category ?? '', item.unit ?? '',
         item.lots.map((lot) => `${lot.lotNo}(${lot.id})`).join(';'),
       ].map(csvEscape).join(',')),
@@ -82,7 +94,7 @@ router.get('/export/:type', (req: Request, res: Response) => {
   if (type === 'counts') {
     const csv = [
       ['ID', 'Item', 'Lot', 'Location', 'Physical', 'Book', 'Variance', 'Status', 'Submitted By', 'Created'].join(','),
-      ...listCounts().filter((count) => companyOwnsLocation(exportCompanyId, count.locationId)).map((count) => [
+      ...(await listCountsForCompany(exportCtx)).map((count) => [
         count.id, count.itemId, count.lotId, count.locationId, count.physicalQuantity,
         count.bookQty ?? 0, count.physicalQuantity - (count.bookQty ?? 0),
         count.status ?? 'PENDING_REVIEW', count.submittedBy, count.createdAt,
@@ -94,7 +106,7 @@ router.get('/export/:type', (req: Request, res: Response) => {
   if (type === 'transfers') {
     const csv = [
       ['ID', 'From', 'To', 'Item', 'Qty', 'Status', 'Requested By', 'Created'].join(','),
-      ...listTransfers().filter((transfer) => companyOwnsLocation(exportCompanyId, transfer.sourceLocationId) || companyOwnsLocation(exportCompanyId, transfer.destinationLocationId)).map((transfer) => [
+      ...(await listTransfersForCompany(exportCtx)).map((transfer) => [
         transfer.id, transfer.sourceLocationId, transfer.destinationLocationId,
         transfer.lines.map((line) => line.itemId).join(';'),
         transfer.lines.reduce((sum, line) => sum + line.quantity, 0),
@@ -151,7 +163,7 @@ router.get('/expiry-dashboard', async (req: Request, res: Response) => {
     ? await listStockForCompany(ctx)
     : await listStockForLocation(ctx, locationId);
   const dashboard = buildExpiryDashboard(
-    itemsForCompany(expiryCompanyId, listItems()),
+    await listItemsForCompany(ctx),
     stockRows.filter((row) => companyOwnsLocation(expiryCompanyId, row.locationId)),
   );
 
@@ -170,7 +182,7 @@ router.get('/expiry-dashboard', async (req: Request, res: Response) => {
   return res.json({ dashboard });
 });
 
-router.get('/reports/variance/:locationId', (req: Request, res: Response) => {
+router.get('/reports/variance/:locationId', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {
     return res.status(403).json({ message: 'Variance reports require Admin or Auditor access.' });
   }
@@ -179,12 +191,13 @@ router.get('/reports/variance/:locationId', (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Access to this location is denied.' });
   }
 
-  const itemMap = new Map(listItems().map((item) => [item.id, item]));
+  // ULTRA P1: items and counts are database-first (item/count repositories).
+  const itemMap = new Map((await listItemsForCompany(tenantContext(req))).map((item) => [item.id, item]));
 
   // The ledger stores only on-hand, so book-vs-physical comes from the counts,
   // each of which captured the book quantity at the moment it was submitted.
   const latestCountPerLot = new Map<string, CountRecord>();
-  for (const count of listCounts()) {
+  for (const count of await listCountsForCompany(tenantContext(req))) {
     if (count.locationId !== locationId) continue;
     const key = `${count.itemId}:${count.lotId}`;
     const existing = latestCountPerLot.get(key);
@@ -225,7 +238,7 @@ router.get('/reports/variance/:locationId', (req: Request, res: Response) => {
   });
 });
 
-router.get('/reports/:locationId', (req: Request, res: Response) => {
+router.get('/reports/:locationId', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) {
     return res.status(403).json({ message: 'Reports require Admin or Auditor access.' });
   }
@@ -233,8 +246,12 @@ router.get('/reports/:locationId', (req: Request, res: Response) => {
   if (!canAccessLocation(accessContext(req.user!), locationId)) {
     return res.status(403).json({ message: 'Access to this location is denied.' });
   }
+  // ULTRA P1: counts and transfers are database-first (count/transfer repositories);
+  // the builder still applies its own location filter to both lists.
+  const ctx = tenantContext(req);
+  const [counts, transfers] = await Promise.all([listCountsForCompany(ctx), listTransfersForCompany(ctx)]);
   return res.json({
-    report: buildReportSummary({ locationId, counts: listCounts(), transfers: listTransfers() }),
+    report: buildReportSummary({ locationId, counts, transfers }),
   });
 });
 }

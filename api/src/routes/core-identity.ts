@@ -19,6 +19,7 @@ import { applyIndustryPack, getActiveWorkflow, getIndustryPack, listIndustryCata
 import { prisma } from '../lib/db.js';
 import { PERMISSION_ACTIONS, PERMISSION_MODULES } from '../lib/access-control.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listUsersForCompany } from '../lib/repositories/user-repository.js';
 import { accessContext, tenantContext, firstParam, VALID_ROLES, EMAIL_PATTERN, requireAdmin, companyProfileFor } from './core-shared.js';
 
 const router = Router();
@@ -128,17 +129,15 @@ router.post('/users/:userId/permissions/copy-from/:sourceUserId', async (req: Re
 // USERS & LOCATIONS
 // ============================================
 
-router.get('/users', (req: Request, res: Response) => {
+router.get('/users', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins and branch managers can list users.' });
   }
   const roleFilter = typeof req.query.role === 'string' ? req.query.role : undefined;
   const context = accessContext(req.user!);
-  const filtered = listUsers().filter((user) => {
-    if (req.companyId) {
-      const tenantUser = enterpriseRepo.findUserById(user.id);
-      if ((tenantUser?.companyId ?? DEFAULT_COMPANY_ID) !== req.companyId) return false;
-    }
+  // ULTRA P1: the company list itself is database-first (user-repository); the repository's
+  // memory branch reproduces the enterprise-repository company filter this handler used to apply.
+  const filtered = (await listUsersForCompany(tenantContext(req))).filter((user) => {
     if (roleFilter && user.role !== roleFilter) return false;
     if (context.role !== 'BRANCH_MANAGER') return true;
     return isCountWorkerRole(user.role)

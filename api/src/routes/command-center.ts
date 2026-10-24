@@ -9,8 +9,14 @@ import { databaseProbe, prisma } from '../lib/db.js';
 import { listAuditEvents } from '../lib/audit.js';
 import { latestEventId, subscriberCount } from '../lib/event-bus.js';
 import { listUsersByCompany } from '../lib/enterprise-repository.js';
-import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
-import { listCountAssignments, listCounts, listItems, listLocations, listSyncCheckpoints, listTransfers } from '../lib/repository.js';
+import { companyOwnsLocation, DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
+import type { TenantContext } from '../lib/tenant-context.js';
+import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { listCountsForCompany } from '../lib/repositories/count-repository.js';
+import { listAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
+import { listTransfersForCompany } from '../lib/repositories/transfer-repository.js';
+import { listItemsForCompany } from '../lib/repositories/item-repository.js';
+import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
 import { databaseEnabled } from '../lib/persistence.js';
 import { buildCommandCenter } from '../lib/command-center.js';
 import { metricsSnapshot } from '../lib/request-metrics.js';
@@ -30,6 +36,16 @@ function scope(req: Request) {
   const all = user.role === 'ADMIN' || user.role === 'ADMIN_USER' || user.role === 'AUDITOR' && !(user.locationIds ?? []).length;
   const allowed = (locationId: string) => companyOwnsLocation(companyId, locationId) && (all || (user.locationIds ?? []).includes(locationId));
   return { companyId, allowed };
+}
+
+function tenantContextFor(req: Request): TenantContext {
+  const user = req.user!;
+  return {
+    companyId: req.companyId ?? user.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    userId: user.id,
+    role: user.role as TenantContext['role'],
+  };
 }
 
 // The audit list carries no company id, so a company sees the actions of its own users
@@ -64,16 +80,27 @@ async function databaseExtras(companyId: string) {
 router.get('/command-center', ...guard, async (req: Request, res: Response) => {
   if (!MANAGEMENT.includes(req.user!.role)) return deny(res);
   const { companyId, allowed } = scope(req);
-  const locations = listLocations().filter((location) => allowed(location.id));
+  const ctx = tenantContextFor(req);
+  // ULTRA P1: every operational input is database-first (location/count/assignment/transfer/
+  // checkpoint repositories); the same allowed-location filters then apply as before. Audit
+  // events stay on their own store (they are DB-persisted on write and cached on read).
+  const [companyLocations, companyCounts, companyAssignments, companyTransfers, companyCheckpoints] = await Promise.all([
+    listLocationsForCompany(ctx),
+    listCountsForCompany(ctx),
+    listAssignmentsForCompany(ctx),
+    listTransfersForCompany(ctx),
+    listSyncCheckpointsForCompany(ctx),
+  ]);
+  const locations = companyLocations.filter((location) => allowed(location.id));
   const locationIds = new Set(locations.map((location) => location.id));
   const users = new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name]));
   const center = buildCommandCenter({
     now: new Date(),
     locations,
-    counts: listCounts().filter((count) => locationIds.has(count.locationId)),
-    assignments: listCountAssignments().filter((row) => locationIds.has(row.locationId)),
-    transfers: listTransfers().filter((transfer) => locationIds.has(transfer.sourceLocationId) || locationIds.has(transfer.destinationLocationId)),
-    checkpoints: listSyncCheckpoints().filter((row) => locationIds.has(row.locationId)),
+    counts: companyCounts.filter((count) => locationIds.has(count.locationId)),
+    assignments: companyAssignments.filter((row) => locationIds.has(row.locationId)),
+    transfers: companyTransfers.filter((transfer) => locationIds.has(transfer.sourceLocationId) || locationIds.has(transfer.destinationLocationId)),
+    checkpoints: companyCheckpoints.filter((row) => locationIds.has(row.locationId)),
     audit: companyAudit(companyId),
     userNames: users,
     live: { clients: subscriberCount(), lastEventId: latestEventId() },
@@ -96,29 +123,35 @@ function rangeOf(req: Request, res: Response) {
   }
 }
 
-router.get('/reports/transfer-cycle', ...guard, (req: Request, res: Response) => {
+router.get('/reports/transfer-cycle', ...guard, async (req: Request, res: Response) => {
   if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
   const { companyId, allowed } = scope(req);
-  const transfers = listTransfers().filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
+  const transfers = (await listTransfersForCompany(tenantContextFor(req))).filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
   const range = rangeOf(req, res);
   if (!range) return;
   return res.json({ timezone: range.timezone, report: transferCycleReport(transfers, companyAudit(companyId), { from: range.from, to: range.to }) });
 });
 
-router.get('/reports/count-accuracy', ...guard, (req: Request, res: Response) => {
+router.get('/reports/count-accuracy', ...guard, async (req: Request, res: Response) => {
   if (!MANAGEMENT.includes(req.user!.role)) return res.status(403).json({ message: 'Reports require Admin, Branch Manager or Auditor access.' });
   const groupBy = (['branch', 'user', 'category'].includes(String(req.query.groupBy)) ? String(req.query.groupBy) : 'branch') as AccuracyGroup;
   const { companyId, allowed } = scope(req);
   const range = rangeOf(req, res);
   if (!range) return;
+  const ctx = tenantContextFor(req);
+  const [companyCounts, companyItems, companyLocations] = await Promise.all([
+    listCountsForCompany(ctx),
+    listItemsForCompany(ctx),
+    listLocationsForCompany(ctx),
+  ]);
   return res.json({
     groupBy,
     timezone: range.timezone,
     rows: countAccuracyReport({
-      counts: listCounts().filter((count) => allowed(count.locationId)),
-      items: listItems(),
+      counts: companyCounts.filter((count) => allowed(count.locationId)),
+      items: companyItems,
       groupBy,
-      labels: { locations: new Map(listLocations().map((location) => [location.id, location.name])), users: new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name])) },
+      labels: { locations: new Map(companyLocations.map((location) => [location.id, location.name])), users: new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name])) },
       range: { from: range.from, to: range.to },
     }),
   });
