@@ -196,3 +196,40 @@ Run each file on its own, as CI does: running them together against one database
   stock-touching files finds zero snapshot stock readers and zero DB-mode mirror writes outside verified
   memory-mode-only paths (the orders memory branch, the expiry write-off's memory flow). What remains on the
   snapshot by design: document reads (transfer/count lists and their joins) - the follow-on slices.
+
+- **ULTRA P1 (issue #184): delta reconciler + transfer/user/report document reads.** Full census re-run at
+  main `820af3828c` (every snapshot list/find accessor call site in non-test `api/src`: 189 calls in 33 files),
+  grouped by what a call site actually is:
+
+  | Family | Already database-first before this slice | Converted in this slice | Still on the snapshot (with reason) |
+  |---|---|---|---|
+  | Locations | `GET /locations`, `GET /sync-status` (slices 1/4) | — | mutation-path lookups only |
+  | Items / catalogue | `GET /items`, `GET /items/search`, `GET /items/version`, stock detail (slices 6/10) | picker detail + export joins now read the item repository instead of `listItems()` | catalogue *mutation* paths (create/update/lot edit read the record they are about to persist from, then write through) |
+  | Counts | `GET /counts`, `GET /count-assignments`, `/mine`, `GET /mobile/work`, `GET /picker-tasks` (slices 3/5/7/8/9) | dashboard/export/variance/command-center joins | count submit/review mutation paths; the cycle-count planner (a synchronous pure engine over items+stock+counts, shared by the GET and its POST assign twin — converting it means async plumbing through `abc-cycle-count`, its own slice) |
+  | Transfers | picker queues (slice 9), pick-waves (direct Prisma) | `GET /transfers/list`, `GET /picker/transfers/:id`, `GET /transfers/:id/export.xls`, `GET /transfers/:id/eligible-pickers`, `GET /transfers/:id/evidence[/:id]`, dashboard/export/command-center/`transfer-cycle` joins — new `listTransfersForCompany` / `findTransferForCompany` / `listTransferCartonsForTransfers` in `transfer-repository.ts`, rows mapped by the new shared `lib/transfer-record-mapper.ts` | transfer *mutation* paths (create/edit/status/receive/pick-slips read the snapshot record they then persist — the command pattern of this codebase); transfer labels + reprint audit (the reprint log is in-memory-only state with no table; the label route also writes audit/reprint records, so it is not a pure read) |
+  | Orders | `GET /orders` and every pack/ship route (direct Prisma; memory branch is `lib/orders.ts` by design) | — | the memory-mode order engine itself (demo mode's store, not a stale mirror) |
+  | Users | auth (direct Prisma), permissions (direct Prisma) | `GET /users` — new `lib/repositories/user-repository.ts` | user mutation paths (create/update/delete read the enterprise record they persist) |
+  | Reports | `reports.ts` family (reporting-repository), stock/expiry inputs (slice 10) | `GET /dashboard`, `GET /export/:type`, `GET /reports/variance/:locationId`, `GET /reports/:locationId`, `GET /expiry-dashboard` (items input), `GET /command-center`, `GET /reports/transfer-cycle`, `GET /reports/count-accuracy` | audit-event inputs (the audit store is DB-persisted on write and cached on read — a different pattern, not the repository snapshot) |
+  | Internal engines | — | — | `campaign-service`, `reorder-store`, `expiry-lifecycle`, `transfer-command-service` helpers: synchronous domain engines consumed by schedulers and mutation flows alike; they read the snapshot as their working set. Converting them is the same async re-plumbing as the cycle-count planner and is the explicit remainder on issue #184 |
+  | Control plane | — | — | out of scope here: the SaaS control plane is issue #185's programme, not this snapshot |
+
+  **Delta reconciler.** `hydrateRepositoryFromDatabase()` remains the boot load and the fallback. The
+  reconciler now calls `refreshRepositoryDeltaFromDatabase()`: per-table `updatedAt` watermarks captured at
+  the last full load (`importedAt` for InventoryMovement, which has no `updatedAt`); a tick fetches only
+  changed rows, follows nested changes to their parents (Lot → Item, TransferLine → Transfer), and merges by
+  id. Fallbacks to a full hydration: no watermarks yet, a new company in `CompanyProfile`, a database row
+  count *below* the snapshot length for any hydrated table (hard deletes — a delete masked by a simultaneous
+  insert is caught by the periodic full refresh), and every `DATABASE_DELTA_FULL_REFRESH_EVERY` ticks
+  (default 20). All rows are fetched before anything merges, so a failed tick changes nothing.
+  `/ops/metrics` → `reconciliation.refresh` now reports `{ mode, lastRunAt, rowsLoaded, fullRefreshes,
+  deltaRefreshes }`. Proven by `persistence-delta.postgres.test.ts` (updates, nested changes and inserts
+  merge in delta mode with a bounded row count; a hard delete falls back to full and disappears).
+
+  **Parity tests added:** `transfer-repository.postgres.test.ts` (isolation incl. destination-company
+  visibility, field-for-field parity with the hydrated snapshot, cartons scoped through their transfer,
+  post-boot visibility), `user-repository.postgres.test.ts` (isolation, parity, post-boot visibility).
+  One deliberate behaviour tightening inside the conversions: `GET /reports/count-accuracy` now feeds the
+  builder the *caller's* items/locations for grouping labels instead of every company's (the counts were
+  already the caller's; foreign catalogue rows could previously surface as group labels).
+  Transfer parity keeps one historical limitation on purpose: hydration's mapping drops
+  `TransferLine.excessQty`, so the database-first read does too (see `transfer-record-mapper.ts`).

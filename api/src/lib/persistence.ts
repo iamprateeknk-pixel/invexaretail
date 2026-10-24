@@ -12,6 +12,7 @@ import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
 import { itemRowToRecord } from './item-record-mapper.js';
+import { transferRowToRecord, transferCartonRowToRecord } from './transfer-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
 import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFromPack } from './industry-packs.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
@@ -38,7 +39,7 @@ const demoUsers: Record<string, AuthenticatedUser> = {
   'auditor@retail.local': { id: 'user-auditor-1', email: 'auditor@retail.local', role: 'AUDITOR', assignedLocationIds: ['loc-1'] },
 };
 
-function parseAssignedLocations(value: unknown): string[] {
+export function parseAssignedLocations(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === 'string');
   if (typeof value !== 'string' || !value.trim()) return [];
   try {
@@ -85,10 +86,302 @@ function requireDatabase(): void {
   }
 }
 
-// Packing/dispatch details live in one JSON column; JSON null means "not set yet".
-function logisticsOf(transfer: unknown): Pick<TransferRecord, 'packing' | 'dispatch'> {
-  const raw = (transfer as { logistics?: { packing?: TransferRecord['packing'] | null; dispatch?: TransferRecord['dispatch'] | null } | null }).logistics;
-  return { ...(raw?.packing ? { packing: raw.packing } : {}), ...(raw?.dispatch ? { dispatch: raw.dispatch } : {}) };
+// Row-to-record mappers for the document arrays, shared by full hydration and the delta refresh below
+// (item/count/transfer mappings live in their own mapper modules for the same reason). Local copies of
+// the assignment/movement/checkpoint mappings also exist in their repositories — pre-existing duplication
+// recorded in docs/db-first-reads-plan.md, not something this slice widens.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function locationRowToRecord(location: any): LocationRecord {
+  return {
+    id: location.id,
+    name: location.name,
+    type: location.type as 'store' | 'warehouse',
+    sortOrder: location.sortOrder,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function userRowToRecord(user: any): UserRecord {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role as Role,
+    assignedLocationIds: parseAssignedLocations(user.assignedLocations),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function assignmentRowToRecord(row: any): CountAssignmentRecord {
+  return {
+    id: row.id,
+    locationId: row.locationId,
+    itemId: row.itemId,
+    assignedToId: row.assignedToId,
+    assignedById: row.assignedById,
+    countDate: row.countDate.toISOString(),
+    dueDate: row.dueDate?.toISOString(),
+    priority: (row.priority as CountAssignmentRecord['priority']) || 'NORMAL',
+    instructions: row.instructions ?? undefined,
+    status: row.status,
+    countId: row.countId ?? undefined,
+    parentCountId: row.parentCountId ?? undefined,
+    campaignId: (row as { campaignId?: string | null }).campaignId ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function movementRowToRecord(row: any): DailyMovementRecord {
+  return {
+    id: row.id,
+    dedupeKey: row.dedupeKey,
+    itemId: row.itemId,
+    lotId: row.lotId ?? undefined,
+    locationId: row.locationId,
+    movementType: row.movementType,
+    qtyDelta: Number(row.qtyDelta),
+    transactionAt: row.transactionAt.toISOString(),
+    sourceType: row.sourceType as DailyMovementRecord['sourceType'],
+    sourceReference: row.sourceReference,
+    importBatchId: row.importBatchId ?? undefined,
+    createdById: row.createdById,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? undefined,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function checkpointRowToRecord(row: any): SyncCheckpointRecord {
+  return {
+    locationId: row.locationId,
+    sourceType: row.sourceType as SyncCheckpointRecord['sourceType'],
+    syncedThroughAt: row.syncedThroughAt.toISOString(),
+    lastImportBatchId: row.lastImportBatchId ?? '',
+  };
+}
+
+function maxDate(values: Array<Date | null | undefined>): Date | null {
+  let max: Date | null = null;
+  for (const value of values) {
+    if (value && (!max || value > max)) max = value;
+  }
+  return max;
+}
+
+// ---------------------------------------------------------------------------
+// Delta refresh (ULTRA P1, issue #184): the reconciler used to re-run the FULL
+// hydration above every 30s per replica — every location, item+lot, count,
+// transfer+line, assignment and user of every company, whether anything had
+// changed or not. The delta path instead keeps a per-table `updatedAt`
+// watermark from the last full load and, per tick, fetches only rows changed
+// since then (InventoryMovement, which has no updatedAt, uses importedAt).
+// Nested changes are followed to their parent: a changed Lot reloads its Item,
+// a changed TransferLine reloads its Transfer.
+//
+// Two things a watermark cannot see, handled explicitly rather than ignored:
+//   - hard deletes: a per-table row-count check runs every tick; a database
+//     count below the snapshot's length falls back to a full hydration (a
+//     delete masked by a simultaneous insert is caught by the periodic full
+//     refresh below);
+//   - brand-new companies: the CompanyProfile id set is re-read every tick
+//     and any change falls back to a full hydration.
+// A full hydration also runs unconditionally every DATABASE_DELTA_FULL_REFRESH_EVERY
+// delta ticks (default 20), so ordering drift from in-place merges is bounded.
+// All rows are fetched BEFORE anything is merged, so a failed tick leaves the
+// last good snapshot and the watermarks untouched (the reconciler counts the
+// failure and keeps serving, exactly as before).
+// ---------------------------------------------------------------------------
+
+type DeltaWatermarks = {
+  companiesKey: string;
+  location: Date | null;
+  item: Date | null;
+  lot: Date | null;
+  count: Date | null;
+  transfer: Date | null;
+  transferLine: Date | null;
+  assignment: Date | null;
+  user: Date | null;
+  carton: Date | null;
+  checkpoint: Date | null;
+  movementImportedAt: Date | null;
+};
+
+let deltaWatermarks: DeltaWatermarks | null = null;
+let deltaTickCount = 0;
+
+export type DeltaRefreshStats = {
+  mode: 'full' | 'delta' | 'none';
+  lastRunAt: string | null;
+  rowsLoaded: number;
+  fullRefreshes: number;
+  deltaRefreshes: number;
+};
+
+const deltaStats: DeltaRefreshStats = { mode: 'none', lastRunAt: null, rowsLoaded: 0, fullRefreshes: 0, deltaRefreshes: 0 };
+
+/** Snapshot-refresh provenance for /ops/metrics: which mode last ran, when, and how many rows it loaded. */
+export function deltaRefreshStats(): DeltaRefreshStats {
+  return { ...deltaStats };
+}
+
+/** How often a delta tick is replaced by a full hydration (env-tunable; never below 2). */
+export function deltaFullRefreshEvery(env: Record<string, string | undefined> = process.env): number {
+  const configured = Number(env.DATABASE_DELTA_FULL_REFRESH_EVERY ?? 20);
+  return Number.isFinite(configured) ? Math.max(2, Math.floor(configured)) : 20;
+}
+
+function mergeById<T extends { id: string }>(target: T[], rows: T[]): void {
+  if (!rows.length) return;
+  const indexById = new Map(target.map((row, index) => [row.id, index] as const));
+  for (const row of rows) {
+    const at = indexById.get(row.id);
+    if (at === undefined) {
+      indexById.set(row.id, target.length);
+      target.push(row);
+    } else {
+      target[at] = row;
+    }
+  }
+}
+
+export async function refreshRepositoryDeltaFromDatabase(): Promise<void> {
+  if (!databaseEnabled) return;
+  deltaTickCount += 1;
+  const watermarks = deltaWatermarks;
+  if (!watermarks || deltaTickCount % deltaFullRefreshEvery() === 0) {
+    await hydrateRepositoryFromDatabase();
+    return;
+  }
+
+  const profileCompanyIds = (await prisma.companyProfile.findMany({ select: { id: true } })).map((company) => company.id);
+  const companyIds = [...new Set([DEFAULT_COMPANY_ID, ...profileCompanyIds])];
+  if (companyIds.join(',') !== watermarks.companiesKey) {
+    await hydrateRepositoryFromDatabase();
+    return;
+  }
+
+  // Deletion detection: row counts are cheap aggregates. Only a count BELOW the snapshot's
+  // length falls back to a full hydration — an insert makes the database count HIGHER, and the
+  // delta queries below see new rows on their own (a fresh row's updatedAt is past the
+  // watermark). A delete masked by a simultaneous insert keeps counts equal and is caught by
+  // the periodic full refresh instead. The movements table is exempt (the snapshot
+  // intentionally caps it at 10,000 rows) and cartons are counted globally because hydration
+  // loads them unscoped, exactly like the snapshot does.
+  const [locationCount, itemCount, countCount, transferCount, assignmentCount, userCount, cartonCount] = await Promise.all([
+    prisma.location.count({ where: { companyId: { in: companyIds } } }),
+    prisma.item.count({ where: { companyId: { in: companyIds } } }),
+    prisma.stockCount.count({ where: { companyId: { in: companyIds } } }),
+    prisma.transfer.count({ where: { companyId: { in: companyIds } } }),
+    prisma.countAssignment.count({ where: { location: { companyId: { in: companyIds } } } }),
+    prisma.user.count({ where: { companyId: { in: companyIds } } }),
+    prisma.transferCarton.count(),
+  ]);
+  if (
+    locationCount < locations.length
+    || itemCount < items.length
+    || countCount < counts.length
+    || transferCount < transfers.length
+    || assignmentCount < countAssignments.length
+    || userCount < users.length
+    || cartonCount < transferCartons.length
+  ) {
+    await hydrateRepositoryFromDatabase();
+    return;
+  }
+
+  const since = (watermark: Date | null) => (watermark ? { gte: watermark } : undefined);
+
+  // Fetch phase — nothing below mutates the snapshot until every query has succeeded.
+  const [changedLocations, changedItems, changedLots, changedCounts, changedTransfers, changedLines, changedAssignments, changedUsers, changedCartons, changedCheckpoints, changedMovements] = await Promise.all([
+    prisma.location.findMany({ where: { companyId: { in: companyIds }, updatedAt: since(watermarks.location) }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] }),
+    prisma.item.findMany({ where: { companyId: { in: companyIds }, updatedAt: since(watermarks.item) }, include: { lots: true } }),
+    prisma.lot.findMany({ where: { item: { companyId: { in: companyIds } }, updatedAt: since(watermarks.lot) }, select: { itemId: true, updatedAt: true } }),
+    prisma.stockCount.findMany({ where: { companyId: { in: companyIds }, updatedAt: since(watermarks.count) } }),
+    prisma.transfer.findMany({ where: { companyId: { in: companyIds }, updatedAt: since(watermarks.transfer) }, include: { lines: true } }),
+    prisma.transferLine.findMany({ where: { transfer: { companyId: { in: companyIds } }, updatedAt: since(watermarks.transferLine) }, select: { transferId: true, updatedAt: true } }),
+    prisma.countAssignment.findMany({ where: { location: { companyId: { in: companyIds } }, updatedAt: since(watermarks.assignment) } }),
+    prisma.user.findMany({ where: { companyId: { in: companyIds }, updatedAt: since(watermarks.user) } }),
+    prisma.transferCarton.findMany({ where: { updatedAt: since(watermarks.carton) }, orderBy: { createdAt: 'asc' } }),
+    prisma.syncCheckpoint.findMany({ where: { updatedAt: since(watermarks.checkpoint) } }),
+    prisma.inventoryMovement.findMany({ where: { importedAt: since(watermarks.movementImportedAt) }, orderBy: { transactionAt: 'desc' }, take: 10_000 }),
+  ]);
+
+  // Parents of changed nested rows must be reloaded whole, or the snapshot would keep the old
+  // nested copy forever (a lot's expiry edit touches only the Lot row, not its Item).
+  const itemIdsToReload = new Set(changedLots.map((lot) => lot.itemId));
+  for (const itemId of [...itemIdsToReload]) {
+    if (changedItems.some((item) => item.id === itemId)) itemIdsToReload.delete(itemId);
+  }
+  const transferIdsToReload = new Set(changedLines.map((line) => line.transferId));
+  for (const transferId of [...transferIdsToReload]) {
+    if (changedTransfers.some((transfer) => transfer.id === transferId)) transferIdsToReload.delete(transferId);
+  }
+  const [reloadedItems, reloadedTransfers] = await Promise.all([
+    itemIdsToReload.size
+      ? prisma.item.findMany({ where: { id: { in: [...itemIdsToReload] }, companyId: { in: companyIds } }, include: { lots: true } })
+      : Promise.resolve([]),
+    transferIdsToReload.size
+      ? prisma.transfer.findMany({ where: { id: { in: [...transferIdsToReload] }, companyId: { in: companyIds } }, include: { lines: true } })
+      : Promise.resolve([]),
+  ]);
+
+  // Merge phase.
+  mergeById(locations, changedLocations.map(locationRowToRecord));
+  // Keep the admin-chosen location order after in-place merges (stable sort: equal sortOrder
+  // keeps the existing relative order; the periodic full refresh restores exact createdAt order).
+  locations.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const mergedItems = [...changedItems, ...reloadedItems].map(itemRowToRecord);
+  mergeById(items, mergedItems);
+  mergeById(counts, changedCounts.map((count) => countRowToRecord(count, 'STORE_USER')));
+  mergeById(users, changedUsers.map(userRowToRecord));
+  mergeById(countAssignments, changedAssignments.map(assignmentRowToRecord));
+  mergeById(transfers, [...changedTransfers, ...reloadedTransfers].map(transferRowToRecord));
+  mergeById(transferCartons, changedCartons.map(transferCartonRowToRecord));
+
+  // Register ownership for rows this tick introduced. Deliberately NOT adoptHydratedOwnership:
+  // that helper rebuilds both ownership maps from its input, which is only safe for a full load.
+  for (const location of changedLocations) registerLocationCompany(location.id, (location as { companyId?: string }).companyId);
+  for (const item of [...changedItems, ...reloadedItems]) registerItemCompany(item.id, (item as { companyId?: string }).companyId);
+
+  for (const row of changedCheckpoints) {
+    if (row.sourceType !== 'SALES' && row.sourceType !== 'PURCHASE') continue;
+    const record = checkpointRowToRecord(row);
+    const at = syncCheckpoints.findIndex((entry) => entry.locationId === record.locationId && entry.sourceType === record.sourceType);
+    if (at === -1) syncCheckpoints.push(record);
+    else syncCheckpoints[at] = record;
+  }
+
+  if (changedMovements.length) {
+    const changed = changedMovements.map(movementRowToRecord);
+    const changedIds = new Set(changed.map((row) => row.id));
+    replaceContents(dailyMovements, [...changed, ...dailyMovements.filter((row) => !changedIds.has(row.id))]
+      .sort((a, b) => b.transactionAt.localeCompare(a.transactionAt))
+      .slice(0, 10_000));
+  }
+
+  // Advance the watermarks only now that every merge succeeded.
+  deltaWatermarks = {
+    companiesKey: watermarks.companiesKey,
+    location: maxDate([...changedLocations.map((row) => row.updatedAt), watermarks.location]),
+    item: maxDate([...changedItems.map((row) => row.updatedAt), ...reloadedItems.map((row) => row.updatedAt), watermarks.item]),
+    lot: maxDate([...changedLots.map((row) => row.updatedAt), ...[...changedItems, ...reloadedItems].flatMap((row) => row.lots.map((lot) => lot.updatedAt)), watermarks.lot]),
+    count: maxDate([...changedCounts.map((row) => row.updatedAt), watermarks.count]),
+    transfer: maxDate([...changedTransfers.map((row) => row.updatedAt), ...reloadedTransfers.map((row) => row.updatedAt), watermarks.transfer]),
+    transferLine: maxDate([...changedLines.map((row) => row.updatedAt), ...[...changedTransfers, ...reloadedTransfers].flatMap((row) => row.lines.map((line) => line.updatedAt)), watermarks.transferLine]),
+    assignment: maxDate([...changedAssignments.map((row) => row.updatedAt), watermarks.assignment]),
+    user: maxDate([...changedUsers.map((row) => row.updatedAt), watermarks.user]),
+    carton: maxDate([...changedCartons.map((row) => row.updatedAt), watermarks.carton]),
+    checkpoint: maxDate([...changedCheckpoints.map((row) => row.updatedAt), watermarks.checkpoint]),
+    movementImportedAt: maxDate([...changedMovements.map((row) => row.importedAt), watermarks.movementImportedAt]),
+  };
+
+  deltaStats.mode = 'delta';
+  deltaStats.lastRunAt = new Date().toISOString();
+  deltaStats.rowsLoaded = changedLocations.length + changedItems.length + reloadedItems.length + changedCounts.length
+    + changedTransfers.length + reloadedTransfers.length + changedAssignments.length + changedUsers.length
+    + changedCartons.length + changedCheckpoints.length + changedMovements.length;
+  deltaStats.deltaRefreshes += 1;
 }
 
 export async function hydrateRepositoryFromDatabase(): Promise<void> {
@@ -119,12 +412,7 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
     prisma.user.findMany({ where: { companyId: { in: companyIds } } }),
   ]);
 
-  replaceContents(locations, dbLocations.map((location) => ({
-    id: location.id,
-    name: location.name,
-    type: location.type as 'store' | 'warehouse',
-    sortOrder: location.sortOrder,
-  })));
+  replaceContents(locations, dbLocations.map(locationRowToRecord));
 
   replaceContents(items, dbItems.map(itemRowToRecord));
 
@@ -136,64 +424,33 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
   // The role is not stored on StockCount; the snapshot keeps its historical placeholder (see lib/repositories/count-repository.ts).
   replaceContents(counts, dbCounts.map((count) => countRowToRecord(count, 'STORE_USER')));
 
-  replaceContents(users, dbUsers.map((user) => ({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role as Role,
-    assignedLocationIds: parseAssignedLocations(user.assignedLocations),
-  })));
+  replaceContents(users, dbUsers.map(userRowToRecord));
 
-  replaceContents(countAssignments, dbAssignments.map((row) => ({
-    id: row.id,
-    locationId: row.locationId,
-    itemId: row.itemId,
-    assignedToId: row.assignedToId,
-    assignedById: row.assignedById,
-    countDate: row.countDate.toISOString(),
-    dueDate: row.dueDate?.toISOString(),
-    priority: (row.priority as CountAssignmentRecord['priority']) || 'NORMAL',
-    instructions: row.instructions ?? undefined,
-    status: row.status,
-    countId: row.countId ?? undefined,
-    parentCountId: row.parentCountId ?? undefined,
-    campaignId: (row as { campaignId?: string | null }).campaignId ?? undefined,
-    createdAt: row.createdAt.toISOString(),
-  })));
+  replaceContents(countAssignments, dbAssignments.map(assignmentRowToRecord));
 
-  replaceContents(transfers, dbTransfers.map((transfer) => ({
-    id: transfer.id,
-    sourceLocationId: transfer.sourceLocationId,
-    destinationLocationId: transfer.destinationLocationId,
-    requestedBy: transfer.requestedById,
-    role: 'ADMIN' as const,
-    status: transfer.status,
-    cartonCount: transfer.cartonCount ?? undefined,
-    notes: transfer.notes ?? undefined,
-    lines: transfer.lines.map((line: any) => ({ itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty ?? 0) })),
-    ...logisticsOf(transfer),
-    ...(transfer.assignedPickerId ? { assignedPickerId: transfer.assignedPickerId } : {}),
-    createdAt: transfer.createdAt.toISOString(),
-  })));
+  replaceContents(transfers, dbTransfers.map(transferRowToRecord));
+
+  // Delta-refresh watermarks (see refreshRepositoryDeltaFromDatabase): the newest updatedAt this
+  // full load saw per table, so the next reconciler tick only needs rows changed since here.
+  deltaWatermarks = {
+    companiesKey: companyIds.join(','),
+    location: maxDate(dbLocations.map((row) => row.updatedAt)),
+    item: maxDate(dbItems.map((row) => row.updatedAt)),
+    lot: maxDate(dbItems.flatMap((row) => row.lots.map((lot) => lot.updatedAt))),
+    count: maxDate(dbCounts.map((row) => row.updatedAt)),
+    transfer: maxDate(dbTransfers.map((row) => row.updatedAt)),
+    transferLine: maxDate(dbTransfers.flatMap((row) => row.lines.map((line) => line.updatedAt))),
+    assignment: maxDate(dbAssignments.map((row) => row.updatedAt)),
+    user: maxDate(dbUsers.map((row) => row.updatedAt)),
+    carton: null,
+    checkpoint: null,
+    movementImportedAt: null,
+  };
 
   try {
     const dbCartons = await prisma.transferCarton.findMany({ orderBy: { createdAt: 'asc' } });
-    replaceContents(transferCartons, dbCartons.map((row) => {
-      const contents = (row.contents ?? {}) as { lines?: Array<{ itemId: string; lotId: string; quantity: number }>; packedById?: string; sealedAt?: string; requestId?: string };
-      return {
-        id: row.id,
-        transferId: row.transferId,
-        cartonNumber: row.cartonNumber,
-        packageId: row.qrCode ?? row.cartonNumber,
-        lines: contents.lines ?? [],
-        quantity: Number(row.quantity),
-        weightKg: row.weight ?? undefined,
-        status: (row.status === 'VOID' ? 'VOID' : 'SEALED') as 'SEALED' | 'VOID',
-        packedById: contents.packedById ?? '',
-        sealedAt: contents.sealedAt ?? row.createdAt.toISOString(),
-        requestId: contents.requestId,
-      };
-    }));
+    replaceContents(transferCartons, dbCartons.map(transferCartonRowToRecord));
+    if (deltaWatermarks) deltaWatermarks.carton = maxDate(dbCartons.map((row) => row.updatedAt));
   } catch (error) {
     console.warn('Transfer cartons could not be hydrated:', error instanceof Error ? error.message : error);
   }
@@ -206,32 +463,22 @@ export async function hydrateRepositoryFromDatabase(): Promise<void> {
       prisma.inventoryMovement.findMany({ orderBy: { transactionAt: 'desc' }, take: 10_000 }),
       prisma.syncCheckpoint.findMany(),
     ]);
-    replaceContents(dailyMovements, dbMovements.map((row) => ({
-      id: row.id,
-      dedupeKey: row.dedupeKey,
-      itemId: row.itemId,
-      lotId: row.lotId ?? undefined,
-      locationId: row.locationId,
-      movementType: row.movementType,
-      qtyDelta: Number(row.qtyDelta),
-      transactionAt: row.transactionAt.toISOString(),
-      sourceType: row.sourceType as DailyMovementRecord['sourceType'],
-      sourceReference: row.sourceReference,
-      importBatchId: row.importBatchId ?? undefined,
-      createdById: row.createdById,
-      metadata: (row.metadata as Record<string, unknown> | null) ?? undefined,
-    })));
+    replaceContents(dailyMovements, dbMovements.map(movementRowToRecord));
     replaceContents(syncCheckpoints, dbCheckpoints
       .filter((row) => row.sourceType === 'SALES' || row.sourceType === 'PURCHASE')
-      .map((row) => ({
-        locationId: row.locationId,
-        sourceType: row.sourceType as SyncCheckpointRecord['sourceType'],
-        syncedThroughAt: row.syncedThroughAt.toISOString(),
-        lastImportBatchId: row.lastImportBatchId ?? '',
-      })));
+      .map(checkpointRowToRecord));
+    if (deltaWatermarks) {
+      deltaWatermarks.movementImportedAt = maxDate(dbMovements.map((row) => row.importedAt));
+      deltaWatermarks.checkpoint = maxDate(dbCheckpoints.map((row) => row.updatedAt));
+    }
   } catch (error) {
     console.warn('Daily sync tables are not available yet; run the Hostinger migration.', error instanceof Error ? error.message : error);
   }
+
+  deltaStats.fullRefreshes += 1;
+  deltaStats.mode = 'full';
+  deltaStats.lastRunAt = new Date().toISOString();
+  deltaStats.rowsLoaded = dbLocations.length + dbItems.length + dbCounts.length + dbTransfers.length + dbAssignments.length + dbUsers.length;
 }
 
 export async function hydrateAuditFromDatabase(): Promise<AuditEvent[]> {

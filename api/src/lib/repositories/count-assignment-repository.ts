@@ -43,6 +43,20 @@ export async function listOpenAssignmentsForCompany(ctx: TenantContext): Promise
     .map((assignment) => ({ ...assignment }));
 }
 
+/** Every assignment (any status) at locations the company owns, oldest first — ULTRA P1, for the command center. */
+export async function listAssignmentsForCompany(ctx: TenantContext): Promise<CountAssignmentRecord[]> {
+  if (databaseEnabled) {
+    const rows = await prisma.countAssignment.findMany({
+      where: { location: { companyId: ctx.companyId } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map(assignmentRowToRecord);
+  }
+  return countAssignments
+    .filter((assignment) => companyOwnsLocation(ctx.companyId, assignment.locationId))
+    .map((assignment) => ({ ...assignment }));
+}
+
 /**
  * The signed-in count worker's own open tasks (GET /count-assignments/mine), each with its item's name and code.
  * Database mode also requires the assignment's location to belong to the company.

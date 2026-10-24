@@ -459,9 +459,12 @@ const hydrateRepository = async () => {
 // Background reconciliation of the in-memory snapshot with the database (off the request path).
 let repositoryReconciler: RepositoryReconciler | null = null;
 const startRepositoryReconciler = async (): Promise<void> => {
-  const { databaseEnabled, hydrateRepositoryFromDatabase } = await import('./lib/persistence.js');
+  const { databaseEnabled, refreshRepositoryDeltaFromDatabase, deltaRefreshStats } = await import('./lib/persistence.js');
   if (!databaseEnabled) return;
-  repositoryReconciler = new RepositoryReconciler(() => hydrateRepositoryFromDatabase(), reconcileIntervalMs());
+  // ULTRA P1: ticks are delta refreshes (per-table updatedAt watermarks); a full hydration still
+  // runs at boot above and as the delta path's own fallback (new company, row-count drift,
+  // every Nth tick). Boot's hydrateRepository() call already loaded everything, hence markFresh.
+  repositoryReconciler = new RepositoryReconciler(() => refreshRepositoryDeltaFromDatabase(), reconcileIntervalMs(), Date.now, () => deltaRefreshStats() as unknown as Record<string, unknown>);
   repositoryReconciler.markFresh();
   repositoryReconciler.start();
   setActiveReconciler(repositoryReconciler);

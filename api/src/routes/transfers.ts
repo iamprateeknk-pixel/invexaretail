@@ -14,7 +14,8 @@ import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { isDomainError, statusForErrorCode } from '../lib/errors.js';
 import type { AccessContext, Role, TransferInput } from '../lib/inventory.js';
-import { listTransfersForContext } from '../lib/repositories/transfer-repository.js';
+import { listTransfersForContextDb, findTransferForCompany as findTransferFromDb } from '../lib/repositories/transfer-repository.js';
+import { listItemsForCompany } from '../lib/repositories/item-repository.js';
 import { createTransfer, TransferRoleError, TransferValidationError, TransferExpiryBlockedError, InsufficientStockError } from '../lib/transfer-command-service.js';
 import type { EnhancedUserRecord } from '../lib/enterprise-repository.js';
 import { canCreateTransfer, canManageTransferDispatch, parseCartonCount } from '../lib/transfer-lifecycle.js';
@@ -69,10 +70,11 @@ function accessContext(user: EnhancedUserRecord): AccessContext {
   return { role, assignedLocationIds: user.locationIds ?? [], companyId: user.companyId };
 }
 
-router.get('/transfers/list', (req: Request, res: Response) => {
+router.get('/transfers/list', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
+  // ULTRA P1: database-first (transfer-repository); memory mode delegates to the snapshot version.
   // A picker sees the transfers handed to them and the unassigned ones, not another picker's work.
-  const visible = listTransfersForContext(context)
+  const visible = (await listTransfersForContextDb(context, tenantContext(req)))
     .filter((transfer) => context.role !== 'WAREHOUSE_PICKER' || pickerMayWork(transfer, req.user!.id));
   return res.json({
     transfers: visible.map((transfer) => (transfer.assignedPickerId
@@ -261,10 +263,10 @@ function locationName(locationId: string): string {
 
 // Admins and branch managers hand a queued transfer to one named picker. Only pickers of the
 // caller's own company who work the source location qualify.
-router.get('/transfers/:transferId/eligible-pickers', (req: Request, res: Response) => {
+router.get('/transfers/:transferId/eligible-pickers', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
-  const transfer = findTransferForCompany(firstParam(req.params.transferId), companyId);
+  const transfer = await findTransferFromDb(tenantContext(req), firstParam(req.params.transferId));
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   if (!canManageTransferDispatch(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) {
     return res.status(403).json({ message: 'Only admins and the source branch manager can assign a picker.' });
@@ -331,14 +333,14 @@ function xmlEscape(value: unknown): string {
 // Handler bodies are unchanged.
 router.get('/picker/transfers/:transferId', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const transfer = await findTransferFromDb(tenantContext(req), transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
   const context = accessContext(req.user!);
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker access denied.' });
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
   // Phase 5 step 6: picker-facing stock reads are DB-first (stock repository).
   const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
-  const itemsById = new Map(listItems().map((item) => [item.id, item]));
+  const itemsById = new Map((await listItemsForCompany(tenantContext(req))).map((item) => [item.id, item]));
   const slips = await savedPickSlips(transferId);
   const picked = new Map<string, number>();
   for (const slip of slips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
@@ -567,9 +569,9 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
 router.get('/transfers/:transferId/export.xls', async (req: Request, res: Response) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Transfer export is restricted to admins and auditors.' });
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const transfer = await findTransferFromDb(tenantContext(req), transferId);
   if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  const itemMap = new Map(listItems().map((item) => [item.id, item]));
+  const itemMap = new Map((await listItemsForCompany(tenantContext(req))).map((item) => [item.id, item]));
   const slips = await savedPickSlips(transfer.id);
   const picked = new Map<string, number>();
   const exceptionMap = new Map<string, string[]>();
