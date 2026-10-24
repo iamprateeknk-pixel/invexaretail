@@ -66,6 +66,13 @@ test('start is idempotent, stop halts the timer, and the timer does not keep the
   assert.equal(reconciler.health().running, false);
 });
 
+test('health surfaces refresh provenance when a stats provider is supplied (ULTRA P1)', () => {
+  const withStats = new RepositoryReconciler(async () => {}, 30_000, () => 0, () => ({ mode: 'delta', rowsLoaded: 3 }));
+  assert.deepEqual(withStats.health().refresh, { mode: 'delta', rowsLoaded: 3 });
+  const plain = new RepositoryReconciler(async () => {}, 30_000, () => 0);
+  assert.equal(plain.health().refresh, undefined, 'no provider, no refresh block — existing consumers are unaffected');
+});
+
 test('the interval comes from DATABASE_REFRESH_INTERVAL_MS with a 5 second floor and a sane default', () => {
   assert.equal(reconcileIntervalMs({}), 30_000);
   assert.equal(reconcileIntervalMs({ DATABASE_REFRESH_INTERVAL_MS: '60000' }), 60_000);
