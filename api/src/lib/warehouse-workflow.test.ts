@@ -22,7 +22,7 @@ test('FEFO allocation can fulfil one item from multiple lots', () => {
     { lotId: 'b', lotNo: 'B', expiryDate: '2026-11-15', available: 15 },
     { lotId: 'c', lotNo: 'C', expiryDate: '2027-01-20', available: 20 },
     { lotId: 'a', lotNo: 'A', expiryDate: '2026-10-10', available: 10 },
-  ], 30);
+  ], 30, new Date('2026-09-26T06:30:00Z'));
   assert.deepEqual(result.allocations.map((row) => [row.lotNo, row.quantity]), [['A', 10], ['B', 15], ['C', 5]]);
   assert.equal(result.shortage, 0);
 });
@@ -33,7 +33,7 @@ test('allocateFefo excludes expired, blocked and quarantined lots from allocatio
     { lotId: 'blk', lotNo: 'BLK', expiryDate: '2026-02-01', available: 20, status: 'BLOCKED' },
     { lotId: 'qtn', lotNo: 'QTN', expiryDate: '2026-03-01', available: 20, status: 'QUARANTINE' },
     { lotId: 'ok', lotNo: 'OK', expiryDate: '2026-12-01', available: 20, status: 'AVAILABLE' },
-  ], 15);
+  ], 15, new Date('2026-09-26T06:30:00Z'));
   assert.deepEqual(result.allocations.map((a) => a.lotNo), ['OK']);
   assert.equal(result.allocations[0].quantity, 15);
   assert.equal(result.shortage, 0);
@@ -43,7 +43,7 @@ test('allocateLots with FIFO strategy picks the oldest lot by createdAt regardle
   const result = allocateLots([
     { lotId: 'new', lotNo: 'NEW', createdAt: '2026-06-01', expiryDate: '2026-07-01', available: 10 },
     { lotId: 'old', lotNo: 'OLD', createdAt: '2026-01-01', expiryDate: '2027-01-01', available: 10 },
-  ], 10, 'FIFO');
+  ], 10, 'FIFO', { today: new Date('2026-09-26T06:30:00Z') });
   assert.deepEqual(result.allocations.map((a) => a.lotNo), ['OLD']);
   assert.equal(result.strategy, 'FIFO');
 });

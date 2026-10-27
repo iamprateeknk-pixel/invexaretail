@@ -33,16 +33,27 @@ const PUBLIC: string[] = [];
 
 type Probe = { method: string; path: string };
 
+type Layer = {
+  route?: { path: string | string[]; methods: Record<string, boolean> };
+  handle?: { stack?: Layer[] };
+};
+
 function collect(router: Router): Probe[] {
   const found: Probe[] = [];
-  for (const layer of (router as unknown as { stack: Array<{ route?: { path: string | string[]; methods: Record<string, boolean> } }> }).stack) {
-    if (!layer.route) continue;
-    const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
-    for (const path of paths) {
-      if (typeof path !== 'string') continue;
-      for (const method of Object.keys(layer.route.methods)) found.push({ method: method.toUpperCase(), path });
+  const walk = (stack: Layer[]) => {
+    for (const layer of stack) {
+      if (layer.route) {
+        const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+        for (const path of paths) {
+          if (typeof path !== 'string') continue;
+          for (const method of Object.keys(layer.route.methods)) found.push({ method: method.toUpperCase(), path });
+        }
+        continue;
+      }
+      if (Array.isArray(layer.handle?.stack)) walk(layer.handle.stack);
     }
-  }
+  };
+  walk((router as unknown as { stack: Layer[] }).stack);
   return found;
 }
 
