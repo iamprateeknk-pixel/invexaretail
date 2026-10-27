@@ -6,6 +6,10 @@ import React from 'react';
 import { ControlPlaneApp } from './ControlPlaneApp.jsx';
 import { clearControlSession, writeControlSession } from './control-api.js';
 
+// sonner's Toaster (inside ControlPlaneApp) reads matchMedia, which jsdom
+// does not provide - same stub as PasskeyPanel.test.jsx.
+globalThis.window.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+
 test.afterEach(() => {
   cleanup();
   clearControlSession();

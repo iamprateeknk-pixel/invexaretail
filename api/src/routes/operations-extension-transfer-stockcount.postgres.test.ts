@@ -99,7 +99,7 @@ integration('GET /intelligence/:locationId: another company\'s admin sees neithe
 integration('GET /purchase-orders/plan: another company\'s locationId resolves 404, not a leak of its reorder plan', async () => {
   const a = await makeFixture();
   const b = await makeFixture();
-  await prisma.reorderRule.create({ data: { itemId: a.itemId, locationId: a.locationId, minQty: 5, targetQty: 20 } });
+  await prisma.reorderRule.create({ data: { itemId: a.itemId, locationId: a.locationId, minQty: 5, targetQty: 20, companyId: a.companyId } });
 
   await withCatalogServer(async (call) => {
     const cross = await call('GET', `/purchase-orders/plan?locationId=${a.locationId}`, b.token);

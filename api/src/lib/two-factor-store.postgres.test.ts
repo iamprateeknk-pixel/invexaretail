@@ -17,7 +17,7 @@ process.env.TOTP_ENCRYPTION_KEY ||= Buffer.alloc(32, 3).toString('base64');
 async function makeUser() {
   const id = `tf-test-${randomUUID()}`;
   await prisma.user.create({
-    data: { id, name: 'Two Factor Test User', email: `${id}@test.invexa.local`, passwordHash: 'not-a-real-hash', role: 'ADMIN', assignedLocations: '[]' },
+    data: { id, name: 'Two Factor Test User', email: `${id}@test.invexa.local`, passwordHash: 'not-a-real-hash', role: 'ADMIN', assignedLocations: '[]', companyId: 'default-company' },
   });
   return id;
 }

@@ -11,7 +11,7 @@ const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 async function makeUser() {
   const id = `pk-test-${randomUUID()}`;
   await prisma.user.create({
-    data: { id, name: 'Passkey Test User', email: `${id}@test.invexa.local`, passwordHash: 'not-a-real-hash', role: 'ADMIN', assignedLocations: '[]' },
+    data: { id, name: 'Passkey Test User', email: `${id}@test.invexa.local`, passwordHash: 'not-a-real-hash', role: 'ADMIN', assignedLocations: '[]', companyId: 'default-company' },
   });
   return id;
 }

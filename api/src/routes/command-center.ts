@@ -198,7 +198,7 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     generatedAt: new Date().toISOString(),
     api: metricsSnapshot(),
     sync: { liveClients: subscriberCount(), lastEventId: latestEventId() },
-    warehouse: { stuckTransfers: stuckTransfers(listTransfers(), new Date()).rows.length },
+    warehouse: { stuckTransfers: stuckTransfers(await listTransfersForCompany(tenantContextFor(req)), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
     database: { connected: databaseEnabled, ...database },
     // Plan P1-PERF-002: how fresh the in-memory snapshot is. `stale` (3 failed refreshes in a row,

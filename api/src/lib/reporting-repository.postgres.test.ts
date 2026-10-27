@@ -126,7 +126,7 @@ integration('queue backlog summary counts pending and SLA-breached items across 
   });
 
   // Purchase order: open and past its own expectedAt due date.
-  const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier' } });
+  const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier', companyId: tenant.companyId } });
   await prisma.purchaseOrder.create({
     data: { number: `PO-${randomUUID().slice(0, 8)}`, supplierId: supplier.id, locationId, createdById: userId, companyId: tenant.companyId, status: 'APPROVED', expectedAt: hoursAgo(1) },
   });
@@ -176,7 +176,7 @@ integration('the dashboard summary is tenant-scoped: another company sees none o
 integration('PurchaseOrder queue backlog is scoped by its real companyId column (Week 17), not by location join', async () => {
   const { tenant, locationId, userId } = await makeFixture();
   const other = await makeFixture();
-  const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier' } });
+  const supplier = await prisma.supplier.create({ data: { id: `report-test-supplier-${randomUUID()}`, name: 'Test Supplier', companyId: tenant.companyId } });
   // Same real Location.companyId (tenant.companyId), but the PurchaseOrder's
   // own companyId column - the field the query now filters on directly -
   // belongs to a different company. If the query still relied on the old

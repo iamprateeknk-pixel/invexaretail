@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { jwtSecret, timingSafeEqual } from './control-plane-tokens.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 import { ControlPlaneError, nowIso } from './control-plane.js';
 import type { PublicControlPlaneWebhook, PublicApiKey, ScopeContext, CompanyRecord, AuditEvent, BillingInvoice } from './control-plane.js';

@@ -20,11 +20,16 @@ test('operational Prisma models declare additive tenantId defaults', () => {
 
 test('stock tables never regain the placeholder company default (Phase 3, R3)', () => {
   const schema = readFileSync(join(process.cwd(), 'prisma/schema.prisma'), 'utf8');
-  for (const name of ['StockLedger', 'StockBalance']) {
+  for (const name of ['StockLedger']) {
     const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(match, `missing Prisma model ${name}`);
     assert.doesNotMatch(match[1], /companyId\s+String\s+@default\("default-company"\)/);
   }
+  // StockBalance was retired by the Phase 5 drop migration
+  // (20270119090000_drop_stock_balance); a dropped table cannot regain a
+  // default, so pin its absence instead of requiring the model.
+  const balance = schema.match(new RegExp(`model StockBalance \\{([\\s\\S]*?)\\n\\}`));
+  assert.equal(balance, null, 'StockBalance was dropped in Phase 5 and must not come back');
   const ledger = schema.match(new RegExp(`model StockLedger \\{([\\s\\S]*?)\\n\\}`));
   assert.ok(ledger);
   assert.match(ledger[1], /@@unique\(\[companyId, itemId, lotId, locationId\]\)/);
