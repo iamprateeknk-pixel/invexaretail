@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildReplenishmentIntelligence, listReorderRules, resetReorderStore, upsertReorderRule } from './reorder-store.js';
+import { listStockLedger } from './repository.js';
 
 test('seed reorder rules prefer warehouse transfer then purchase', () => {
   resetReorderStore();
-  const intelligence = buildReplenishmentIntelligence('loc-1');
+  const intelligence = buildReplenishmentIntelligence('loc-1', listStockLedger());
   const rice = intelligence.recommendations.find((entry) => entry.itemId === 'item-1001');
   const flour = intelligence.recommendations.find((entry) => entry.itemId === 'item-1006');
   assert.ok(rice);

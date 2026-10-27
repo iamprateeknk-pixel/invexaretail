@@ -28,6 +28,7 @@ async function makeUser() {
       passwordHash: 'not-a-real-hash',
       role: 'ADMIN',
       assignedLocations: '[]',
+      companyId: 'default-company',
     },
   });
   return id;

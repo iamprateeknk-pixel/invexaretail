@@ -89,7 +89,7 @@ integration('a branch with a location holding on-hand stock cannot be archived -
   const companyId = `branch-test-${randomUUID()}`;
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
   const branchCode = `BR-${randomUUID().slice(0, 6)}`.toUpperCase();
-  const branch = await prisma.branch.create({ data: { code: branchCode, name: 'Stocked Branch', type: 'WAREHOUSE' } });
+  const branch = await prisma.branch.create({ data: { code: branchCode, name: 'Stocked Branch', type: 'WAREHOUSE', companyId } });
   const locationId = `branch-test-loc-${randomUUID()}`;
   await prisma.location.create({ data: { id: locationId, code: locationId, name: 'Loc', type: 'warehouse', companyId, branchId: branch.id } });
   const itemId = `branch-test-item-${randomUUID()}`;

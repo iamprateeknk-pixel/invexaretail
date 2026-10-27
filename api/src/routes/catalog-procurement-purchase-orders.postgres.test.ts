@@ -61,7 +61,7 @@ async function makeFixture() {
   });
   const locationId = `catalog-po-loc-${randomUUID()}`;
   await prisma.location.create({ data: { id: locationId, code: locationId, name: 'Test Loc', type: 'warehouse', companyId } });
-  const supplier = await prisma.supplier.create({ data: { id: `catalog-po-supplier-${randomUUID()}`, name: 'Test Supplier' } });
+  const supplier = await prisma.supplier.create({ data: { id: `catalog-po-supplier-${randomUUID()}`, name: 'Test Supplier', companyId } });
   const token = generateJWT(userId, companyId);
   return { companyId, userId, locationId, supplierId: supplier.id, token };
 }

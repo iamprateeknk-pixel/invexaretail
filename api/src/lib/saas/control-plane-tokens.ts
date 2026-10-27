@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { ControlPlaneError, type ControlTokenPayload } from './control-plane.js';
 
-function jwtSecret(): string {
+export function jwtSecret(): string {
   const configured = process.env.JWT_SECRET?.trim();
   if (configured) return configured;
   if (process.env.NODE_ENV === 'production') {
@@ -49,7 +49,7 @@ export function verifyControlToken(token: string, expectedType: 'access' | 'refr
   return payload;
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
+export function timingSafeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   if (left.length !== right.length) return false;
