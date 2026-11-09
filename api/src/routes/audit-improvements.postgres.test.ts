@@ -81,7 +81,7 @@ integration('reorder rules: fractional quantities are accepted for KG items and 
     assert.equal(ok.body.rule.minQty, 2.5);
     const rejected = await call('PUT', `/reorder-rules/${pcs.id}`, a.token, { locationId: a.loc.id, minQty: 2.5, targetQty: 10 });
     assert.equal(rejected.status, 400);
-    assert.match(rejected.body.message, /whole numbers/);
+    assert.match(rejected.body.error, /whole numbers/);
   });
 });
 

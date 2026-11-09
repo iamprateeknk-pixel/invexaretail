@@ -12,6 +12,9 @@ import { verifyPackScan } from '../lib/pack-verification.js';
 import { getCarrierAdapter } from '../lib/carrier-adapter.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, requireAdmin, requirePacker } from './opext-shared.js';
+import { sendError } from '../lib/errors.js';
+import { parseBody } from '../lib/validate.js';
+import { orderCreateSchema, packScanSchema } from '../lib/validation-schemas.js';
 
 const router = Router();
 
@@ -32,7 +35,7 @@ router.get('/orders', async (req, res) => {
   await retryBackorderedOrders(companyId);
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   const status = typeof req.query.status === 'string' ? req.query.status : '';
-  if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (locationId && !canAccessLocation(req, locationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const scope = locationId
     ? { fulfillmentLocationId: locationId }
     : ['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)
@@ -52,15 +55,15 @@ router.get('/orders', async (req, res) => {
 
 router.post('/orders', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the location check — exactly
+  // where the channel/lines presence check used to run.
+  if (parseBody(req, res, orderCreateSchema) === null) return;
   const channel = typeof req.body.channel === 'string' ? req.body.channel.trim() : '';
   const fulfillmentLocationId = typeof req.body.fulfillmentLocationId === 'string' && req.body.fulfillmentLocationId ? req.body.fulfillmentLocationId : null;
   const lines: Array<{ itemId: string; quantity: number; minRslPercent?: number }> = Array.isArray(req.body.lines)
     ? req.body.lines.map((line: any) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), ...(Number(line.minRslPercent) > 0 && Number(line.minRslPercent) <= 100 ? { minRslPercent: Number(line.minRslPercent) } : {}) })).filter((line: any) => line.itemId && Number.isFinite(line.quantity) && line.quantity > 0)
     : [];
-  if (!channel || !lines.length) {
-    return res.status(400).json({ message: 'channel and at least one positive-quantity line are required.' });
-  }
-  if (fulfillmentLocationId && !canAccessLocation(req, fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (fulfillmentLocationId && !canAccessLocation(req, fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   try {
     // Blueprint §13.3 routing: no location was specified, so route across
     // every active location rather than requiring the caller to already
@@ -119,9 +122,9 @@ router.post('/orders', async (req, res) => {
     });
     return res.status(order.duplicate ? 200 : 201).json({ order, duplicate: Boolean(order.duplicate) });
   } catch (error) {
-    if (error instanceof OrderShortageError) return res.status(409).json({ message: error.message, shortages: error.shortages });
-    if (error instanceof OrderInsufficientStockError) return res.status(409).json({ message: error.message });
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to create order.' });
+    if (error instanceof OrderShortageError) return sendError(res, 409, 'INSUFFICIENT_STOCK', error.message, { shortages: error.shortages });
+    if (error instanceof OrderInsufficientStockError) return sendError(res, 409, 'INSUFFICIENT_STOCK', error.message);
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to create order.');
   }
 });
 
@@ -131,8 +134,8 @@ router.post('/orders/:id/fulfill', async (req, res) => {
     const order = await fulfillOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order: decimalsToNumbers(order) });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
-    return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to fulfill order.' });
+    if (error instanceof Error && error.message === 'Order was not found.') return sendError(res, 404, 'NOT_FOUND', error.message);
+    return sendError(res, 409, 'INVALID_TRANSITION', error instanceof Error ? error.message : 'Unable to fulfill order.');
   }
 });
 
@@ -142,8 +145,8 @@ router.post('/orders/:id/cancel', async (req, res) => {
     const order = await cancelOrder(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id, req.user!.id);
     return res.json({ order: decimalsToNumbers(order) });
   } catch (error) {
-    if (error instanceof Error && error.message === 'Order was not found.') return res.status(404).json({ message: error.message });
-    return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to cancel order.' });
+    if (error instanceof Error && error.message === 'Order was not found.') return sendError(res, 404, 'NOT_FOUND', error.message);
+    return sendError(res, 409, 'INVALID_TRANSITION', error instanceof Error ? error.message : 'Unable to cancel order.');
   }
 });
 
@@ -161,8 +164,8 @@ async function packVerificationFor(companyId: string, orderId: string, session: 
 router.post('/orders/:id/pack/start', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   let session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
   if (!session) {
     session = await prisma.packSession.create({ data: { orderId: order.id, packedById: req.user!.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
@@ -174,8 +177,8 @@ router.post('/orders/:id/pack/start', async (req, res) => {
 router.get('/orders/:id/pack', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
   if (!session) return res.json({ session: null, verification: null });
   const verification = await packVerificationFor(order.companyId, order.id, session);
@@ -184,14 +187,16 @@ router.get('/orders/:id/pack', async (req, res) => {
 
 router.post('/orders/:id/pack/scan', async (req, res) => {
   if (!requirePacker(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // itemId/quantity presence check used to run.
+  if (parseBody(req, res, packScanSchema) === null) return;
   const itemId = typeof req.body.itemId === 'string' ? req.body.itemId : '';
   const quantity = Number(req.body.quantity ?? 1);
-  if (!itemId || !Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: 'itemId and a positive quantity are required.' });
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
-  if (!session) return res.status(409).json({ message: 'Start a pack session before scanning items.' });
+  if (!session) return sendError(res, 409, 'INVALID_TRANSITION', 'Start a pack session before scanning items.');
   await prisma.packedLine.create({
     data: { packSessionId: session.id, itemId, lotId: typeof req.body.lotId === 'string' ? req.body.lotId : null, quantity, scannedById: req.user!.id },
   });
@@ -202,13 +207,13 @@ router.post('/orders/:id/pack/scan', async (req, res) => {
 router.post('/orders/:id/pack/seal', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'IN_PROGRESS' } });
-  if (!session) return res.status(409).json({ message: 'No pack session is in progress for this order.' });
+  if (!session) return sendError(res, 409, 'INVALID_TRANSITION', 'No pack session is in progress for this order.');
   const verification = await packVerificationFor(order.companyId, order.id, session);
   if (!verification?.readyToSeal) {
-    return res.status(409).json({ message: 'Every order line must be scanned exactly before sealing.', verification });
+    return sendError(res, 409, 'INVALID_TRANSITION', 'Every order line must be scanned exactly before sealing.', { verification });
   }
   const sealed = await prisma.packSession.update({
     where: { id: session.id },
@@ -233,17 +238,17 @@ router.post('/orders/:id/pack/seal', async (req, res) => {
 router.post('/orders/:id/ship', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const session = await prisma.packSession.findFirst({ where: { orderId: order.id, status: 'SEALED' }, orderBy: { sealedAt: 'desc' } });
-  if (!session) return res.status(409).json({ message: 'Seal a pack session before shipping this order.' });
+  if (!session) return sendError(res, 409, 'INVALID_TRANSITION', 'Seal a pack session before shipping this order.');
 
   const provider = typeof req.body.provider === 'string' && req.body.provider ? req.body.provider : 'local';
   let adapter;
   try {
     adapter = getCarrierAdapter(provider);
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown carrier provider.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unknown carrier provider.');
   }
 
   try {
@@ -268,15 +273,15 @@ router.post('/orders/:id/ship', async (req, res) => {
     }));
     return res.status(201).json({ shipment });
   } catch (error) {
-    return res.status(502).json({ message: error instanceof Error ? error.message : 'Unable to book this shipment.' });
+    return sendError(res, 502, 'UPSTREAM_ERROR', error instanceof Error ? error.message : 'Unable to book this shipment.');
   }
 });
 
 router.get('/orders/:id/shipment', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const shipment = await prisma.shipment.findFirst({ where: { orderId: order.id }, orderBy: { createdAt: 'desc' } });
   if (!shipment) return res.json({ shipment: null, tracking: null });
   const adapter = getCarrierAdapter(shipment.carrierProvider);
@@ -287,9 +292,9 @@ router.get('/orders/:id/shipment', async (req, res) => {
 router.post('/shipments/:awb/cancel', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const shipment = await prisma.shipment.findFirst({ where: { awbNumber: req.params.awb, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!shipment) return res.status(404).json({ message: 'Shipment not found.' });
+  if (!shipment) return sendError(res, 404, 'NOT_FOUND', 'Shipment not found.');
   if (!canAccessLocation(req, (await prisma.order.findFirst({ where: { id: shipment.orderId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } }))?.fulfillmentLocationId ?? '')) {
-    return res.status(403).json({ message: 'Location access denied.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   }
   try {
     const adapter = getCarrierAdapter(shipment.carrierProvider);
@@ -301,7 +306,7 @@ router.post('/shipments/:awb/cancel', async (req, res) => {
     }));
     return res.json({ shipment: updated });
   } catch (error) {
-    return res.status(409).json({ message: error instanceof Error ? error.message : 'Unable to cancel this shipment.' });
+    return sendError(res, 409, 'CONFLICT', error instanceof Error ? error.message : 'Unable to cancel this shipment.');
   }
 });
 

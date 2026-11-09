@@ -12,7 +12,16 @@ import { Router, type Request, type Response } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
-import { isDomainError, statusForErrorCode } from '../lib/errors.js';
+import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
+import { parseBody, validate } from '../lib/validate.js';
+import {
+  transferInputSchema,
+  transferStatusSchema,
+  transferPickerSchema,
+  allocationPreviewSchema,
+  pickSlipSchema,
+  transferReceiveSchema,
+} from '../lib/validation-schemas.js';
 import type { AccessContext, Role, TransferInput } from '../lib/inventory.js';
 import { listTransfersForContextDb, findTransferForCompany as findTransferFromDb } from '../lib/repositories/transfer-repository.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
@@ -83,7 +92,7 @@ router.get('/transfers/list', async (req: Request, res: Response) => {
   });
 });
 
-router.post('/transfers', async (req: Request, res: Response) => {
+router.post('/transfers', validate(transferInputSchema), async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const input = req.body as TransferInput;
 
@@ -101,11 +110,16 @@ router.post('/transfers', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof InsufficientStockError) return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
     if (isDomainError(error)) return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
-    if (error instanceof TransferRoleError) return res.status(403).json({ message: error.message });
+    if (error instanceof TransferRoleError) return sendError(res, 403, 'FORBIDDEN', error.message);
     if (error instanceof TransferValidationError || error instanceof TransferExpiryBlockedError) {
-      return res.status(error instanceof TransferExpiryBlockedError ? 409 : 400).json({ message: error.message });
+      return sendError(
+        res,
+        error instanceof TransferExpiryBlockedError ? 409 : 400,
+        error instanceof TransferExpiryBlockedError ? 'CONFLICT' : 'VALIDATION_FAILED',
+        error.message,
+      );
     }
-    return res.status(403).json({ message: error instanceof Error ? error.message : 'Invalid transfer payload' });
+    return sendError(res, 403, 'FORBIDDEN', error instanceof Error ? error.message : 'Invalid transfer payload');
   }
 });
 
@@ -139,33 +153,38 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
   const current = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!current) return res.status(404).json({ message: 'Transfer was not found.' });
-  if (!canModifyTransfer(context, req.user!.id, current)) return res.status(403).json({ message: 'Only an editable transfer request can be changed by its requester or a transfer manager.' });
-  if (activeCartons(listTransferCartons(current.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer can no longer be edited.' });
+  if (!current) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
+  if (!canModifyTransfer(context, req.user!.id, current)) return sendError(res, 403, 'FORBIDDEN', 'Only an editable transfer request can be changed by its requester or a transfer manager.');
+  if (activeCartons(listTransferCartons(current.id)).length) return sendError(res, 409, 'CONFLICT', 'Packing has started, so this transfer can no longer be edited.');
 
   try {
     const input = req.body as TransferInput;
     if (!canAccessLocation(context, input.sourceLocationId) || !canAccessLocation(context, input.destinationLocationId)) {
-      return res.status(403).json({ message: 'Transfer location access denied.' });
+      return sendError(res, 403, 'FORBIDDEN', 'Transfer location access denied.');
     }
     if (context.role === 'STORE_USER') {
       const destination = listLocations().find((location) => location.id === input.destinationLocationId);
       if (input.sourceLocationId !== current.sourceLocationId || destination?.type !== 'warehouse') {
-        return res.status(400).json({ message: 'Store users can only edit their request to the same source branch and a warehouse destination.' });
+        return sendError(res, 400, 'VALIDATION_FAILED', 'Store users can only edit their request to the same source branch and a warehouse destination.');
       }
     }
-    const cartonCount = parseCartonCount(input.cartonCount);
-    const validated = validateTransferRequest(context.role, { ...input, cartonCount });
+    // Shape validation runs here — after the tenant/editable/location
+    // guards above, exactly where validateTransferRequest used to be
+    // the first check — so a cross-tenant edit still answers 404, not 400.
+    if (parseBody(req, res, transferInputSchema) === null) return;
+    const validatedInput = req.body as TransferInput;
+    const cartonCount = parseCartonCount(validatedInput.cartonCount);
+    const validated = validateTransferRequest(context.role, { ...validatedInput, cartonCount });
     const inactiveTransferItem = inactiveItemMessage(validated.lines.map((line) => line.itemId));
-    if (inactiveTransferItem) return res.status(400).json({ message: inactiveTransferItem });
+    if (inactiveTransferItem) return sendError(res, 400, 'VALIDATION_FAILED', inactiveTransferItem);
     const invalidLot = validated.lines.find((line) => !listItems().find((item) => item.id === line.itemId)?.lots.some((lot) => lot.id === line.lotId));
-    if (invalidLot) return res.status(400).json({ message: 'Each transfer lot must belong to its selected item.' });
+    if (invalidLot) return sendError(res, 400, 'VALIDATION_FAILED', 'Each transfer lot must belong to its selected item.');
     if (getActiveWorkflow(req.companyId ?? DEFAULT_COMPANY_ID).expiryBlocking) {
       const blocked = validated.lines.find((line) => {
         const lot = listItems().find((item) => item.id === line.itemId)?.lots.find((entry) => entry.id === line.lotId);
         return lot && ((lot.status && lot.status !== 'AVAILABLE') || Boolean(lot.expiryDate && new Date(lot.expiryDate).getTime() < Date.now()));
       });
-      if (blocked) return res.status(409).json({ message: 'Expired or quarantined lots cannot be transferred while expiry blocking is on.' });
+      if (blocked) return sendError(res, 409, 'CONFLICT', 'Expired or quarantined lots cannot be transferred while expiry blocking is on.');
     }
     const next: TransferRecord = { ...current, sourceLocationId: validated.sourceLocationId, destinationLocationId: validated.destinationLocationId, lines: validated.lines, cartonCount, notes: validated.notes };
     await persistTransferReplacement(current, next, req.companyId ?? DEFAULT_COMPANY_ID);
@@ -173,7 +192,7 @@ router.patch('/transfers/:transferId', async (req: Request, res: Response) => {
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_EDITED', entityType: 'Transfer', entityId: current.id }));
     return res.json({ success: true, transfer: updated });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to edit transfer.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to edit transfer.');
   }
 });
 
@@ -181,16 +200,16 @@ router.delete('/transfers/:transferId', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  if (!canModifyTransfer(context, req.user!.id, transfer)) return res.status(403).json({ message: 'Only an editable transfer request can be deleted by its requester or a transfer manager.' });
-  if (activeCartons(listTransferCartons(transfer.id)).length) return res.status(409).json({ message: 'Packing has started, so this transfer cannot be deleted.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
+  if (!canModifyTransfer(context, req.user!.id, transfer)) return sendError(res, 403, 'FORBIDDEN', 'Only an editable transfer request can be deleted by its requester or a transfer manager.');
+  if (activeCartons(listTransferCartons(transfer.id)).length) return sendError(res, 409, 'CONFLICT', 'Packing has started, so this transfer cannot be deleted.');
   try {
     await persistTransferDeletion(transfer, req.companyId ?? DEFAULT_COMPANY_ID);
     removeTransferRecord(transfer.id);
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'TRANSFER_DELETED', entityType: 'Transfer', entityId: transfer.id }));
     return res.json({ success: true, transferId: transfer.id });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to delete transfer.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to delete transfer.');
   }
 });
 
@@ -198,28 +217,27 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
   const context = accessContext(req.user!);
   const transferId = firstParam(req.params.transferId);
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  const nextStatus = req.body.status as TransferRecord['status'];
 
   if (!transfer) {
-    return res.status(404).json({ message: 'Transfer was not found.' });
+    return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   }
 
-  const validStatuses = ['SUBMITTED', 'DRAFT', 'PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL', 'PICKED', 'READY_FOR_ADMIN', 'CONFIRMED', 'IN_TRANSIT', 'DISPATCHED', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED', 'RECEIVED', 'CLOSED', 'REJECTED', 'CANCELLED'];
-  if (!validStatuses.includes(nextStatus)) {
-    return res.status(400).json({ message: 'Invalid transfer status.' });
-  }
+  // Shape validation runs after the 404, exactly where the enum check
+  // used to run.
+  if (parseBody(req, res, transferStatusSchema) === null) return;
+  const nextStatus = (req.body as { status: TransferRecord['status'] }).status;
 
   if (!canAccessLocation(context, transfer.sourceLocationId)
     && !canAccessLocation(context, transfer.destinationLocationId)) {
-    return res.status(403).json({ message: 'Transfer location access denied.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Transfer location access denied.');
   }
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) {
-    return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
   }
 
   // Packing that was started must be finished (every line in a sealed carton) before the goods leave.
   if (nextStatus === 'DISPATCHED' && !transfer.packing && activeCartons(listTransferCartons(transfer.id)).length > 0) {
-    return res.status(409).json({ message: 'Packing was started for this transfer. Complete it before dispatching.' });
+    return sendError(res, 409, 'CONFLICT', 'Packing was started for this transfer. Complete it before dispatching.');
   }
 
   try {
@@ -253,7 +271,7 @@ router.patch('/transfers/:transferId/status', async (req: Request, res: Response
     }
     return res.json({ success: true, transfer: updated });
   } catch (error) {
-    return res.status(403).json({ message: error instanceof Error ? error.message : 'Transfer status change denied.' });
+    return sendError(res, 403, 'INVALID_TRANSITION', error instanceof Error ? error.message : 'Transfer status change denied.');
   }
 });
 
@@ -267,9 +285,9 @@ router.get('/transfers/:transferId/eligible-pickers', async (req: Request, res: 
   const context = accessContext(req.user!);
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const transfer = await findTransferFromDb(tenantContext(req), firstParam(req.params.transferId));
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   if (!canManageTransferDispatch(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) {
-    return res.status(403).json({ message: 'Only admins and the source branch manager can assign a picker.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and the source branch manager can assign a picker.');
   }
   const pickers = listUsersByCompany(companyId)
     .filter((user) => isEligiblePicker(user, companyId, transfer.sourceLocationId))
@@ -282,19 +300,20 @@ router.patch('/transfers/:transferId/picker', async (req: Request, res: Response
   const context = accessContext(req.user!);
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const transfer = findTransferForCompany(firstParam(req.params.transferId), companyId);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   if (!canManageTransferDispatch(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) {
-    return res.status(403).json({ message: 'Only admins and the source branch manager can assign a picker.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and the source branch manager can assign a picker.');
   }
   if (!PICKER_ASSIGNABLE_STATUSES.includes(transfer.status)) {
-    return res.status(409).json({ message: `A picker can only be assigned before picking is finished; this transfer is ${transfer.status}.` });
+    return sendError(res, 409, 'INVALID_TRANSITION', `A picker can only be assigned before picking is finished; this transfer is ${transfer.status}.`);
   }
+  // Shape validation runs here, after the 404/role/status guards above.
+  if (parseBody(req, res, transferPickerSchema) === null) return;
   const raw = req.body?.pickerId;
-  if (raw !== null && typeof raw !== 'string') return res.status(400).json({ message: 'pickerId must be a user id, or null to unassign.' });
   const pickerId = typeof raw === 'string' ? raw.trim() : '';
   // The same answer for another company's picker as for a missing one - never confirm the user exists.
   if (pickerId && !isEligiblePicker(findEnterpriseUser(pickerId), companyId, transfer.sourceLocationId)) {
-    return res.status(400).json({ message: 'Choose a warehouse picker who works at the source location.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'Choose a warehouse picker who works at the source location.');
   }
   if ((transfer.assignedPickerId ?? '') === pickerId) return res.json({ success: true, unchanged: true, transfer });
 
@@ -303,7 +322,7 @@ router.patch('/transfers/:transferId/picker', async (req: Request, res: Response
     await persistTransferAssignedPicker(updated, companyId);
   } catch (error) {
     setTransferAssignedPicker(transfer.id, transfer.assignedPickerId);
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unable to assign the picker.' });
+    return sendError(res, 500, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Unable to assign the picker.');
   }
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: pickerId ? 'TRANSFER_PICKER_ASSIGNED' : 'TRANSFER_PICKER_UNASSIGNED',
@@ -334,10 +353,10 @@ function xmlEscape(value: unknown): string {
 router.get('/picker/transfers/:transferId', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
   const transfer = await findTransferFromDb(tenantContext(req), transferId);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   const context = accessContext(req.user!);
-  if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker access denied.' });
-  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
+  if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker access denied.');
+  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
   // Phase 5 step 6: picker-facing stock reads are DB-first (stock repository).
   const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
   const itemsById = new Map((await listItemsForCompany(tenantContext(req))).map((item) => [item.id, item]));
@@ -388,8 +407,10 @@ async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, ite
 router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
   const transfer = findTransferForCompany(firstParam(req.params.transferId), req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
-  if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
-  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
+  if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
+  if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
+  // Shape validation runs here, after the scope guards above.
+  if (parseBody(req, res, allocationPreviewSchema) === null) return;
   try {
     const quantity = Number(req.body?.quantity);
     const state = await pooledPickState(tenantContext(req), transfer, String(req.body?.itemId ?? ''));
@@ -397,7 +418,7 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
     const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
     return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to preview this pick.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to preview this pick.');
   }
 });
 
@@ -405,8 +426,8 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
   const transferId = firstParam(req.params.transferId);
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
   const context = accessContext(req.user!);
-  if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return res.status(403).json({ message: 'Picker task is outside the assigned scope.' });
-  if (!pickerMayWork(transfer, req.user!.id)) return res.status(403).json({ message: 'This transfer is assigned to another picker.' });
+  if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
+  if (!pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
   const prior = await savedPickSlips(transferId);
   // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
@@ -414,10 +435,12 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
     if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
   }
-  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return res.status(400).json({ message: `Transfer cannot be picked while ${transfer.status}.` });
+  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer cannot be picked while ${transfer.status}.`);
+  // Shape validation runs here — after the scope/status guards above —
+  // replacing the lines-or-exceptions presence check below.
+  if (parseBody(req, res, pickSlipSchema) === null) return;
   let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
-  if (!lines.length && !exceptions.length) return res.status(400).json({ message: 'At least one picked line or exception is required.' });
   const itemMap = new Map(listItems().map((item) => [item.id, item]));
   const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
   const priorPicked = new Map<string, number>();
@@ -512,23 +535,23 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save pick slip.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to save pick slip.');
   }
 });
 
 router.post('/transfers/:transferId/confirm', async (req: Request, res: Response) => {
-  if (!isOperationalAdmin(req.user!.role)) return res.status(403).json({ message: 'Only admins can confirm transfer-out.' });
+  if (!isOperationalAdmin(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins can confirm transfer-out.');
   const transferId = firstParam(req.params.transferId);
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
-  if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status)) return res.status(400).json({ message: `Transfer must be ready for admin review, not ${transfer.status}.` });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
+  if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer must be ready for admin review, not ${transfer.status}.`);
   const allocations = new Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }>();
   for (const slip of await savedPickSlips(transferId)) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`;
     const existing = allocations.get(key) ?? { itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: 0 };
     existing.quantity += Number(line.quantity ?? 0); allocations.set(key, existing);
   }
-  if (!allocations.size) return res.status(400).json({ message: 'No accepted pick quantities are available to confirm.' });
+  if (!allocations.size) return sendError(res, 400, 'VALIDATION_FAILED', 'No accepted pick quantities are available to confirm.');
 
   // Blueprint §16.2: "transfer > ₹1 lakh -> regional manager approval."
   // Gate before touching stock - a confirmed allocation's total value
@@ -542,7 +565,7 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
     branchId: sourceLocation?.branchId ?? null, value: totalValue, requestedById: req.user!.id,
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   });
-  if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
+  if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
   try {
     await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
@@ -562,15 +585,15 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
     void emitTransferUpdated(updated);
     return res.json({ message: 'Transfer confirmed and lot-level stock deducted.', transfer: updated });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to confirm transfer.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to confirm transfer.');
   }
 });
 
 router.get('/transfers/:transferId/export.xls', async (req: Request, res: Response) => {
-  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return res.status(403).json({ message: 'Transfer export is restricted to admins and auditors.' });
+  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Transfer export is restricted to admins and auditors.');
   const transferId = firstParam(req.params.transferId);
   const transfer = await findTransferFromDb(tenantContext(req), transferId);
-  if (!transfer) return res.status(404).json({ message: 'Transfer was not found.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   const itemMap = new Map((await listItemsForCompany(tenantContext(req))).map((item) => [item.id, item]));
   const slips = await savedPickSlips(transfer.id);
   const picked = new Map<string, number>();
@@ -599,33 +622,37 @@ router.get('/transfers/:transferId/export.xls', async (req: Request, res: Respon
 });
 
 router.post('/transfers/:transferId/receive', async (req: Request, res: Response) => {
-  if (!canReceiveTransfer(req.user!.role)) return res.status(403).json({ message: 'Only operational admins and destination store users can receive transfers.' });
+  if (!canReceiveTransfer(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only operational admins and destination store users can receive transfers.');
   const transferId = firstParam(req.params.transferId);
   const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!transfer) return res.status(404).json({ message: 'Transfer not found.' });
+  if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer not found.');
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
-    return res.status(403).json({ message: 'Receiving is limited to the assigned destination.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Receiving is limited to the assigned destination.');
   }
 
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
-  if (!requestId || requestId.length > 191) return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
+  if (!requestId || requestId.length > 191) return sendError(res, 400, 'VALIDATION_FAILED', 'A valid requestId is required for retry-safe receiving.');
 
   // A retry (client timeout, offline outbox) of a receipt that already went
   // through answers with the recorded result - before the status gate, because
   // that receipt may itself have completed the transfer.
   const prior = await findReceiptByRequestId(requestId).catch(() => null);
   if (prior) {
-    if (prior.transferId !== transferId) return res.status(409).json({ message: 'This requestId was already used for a different transfer.' });
+    if (prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
     return res.json({
       success: true, duplicate: true, transfer,
       receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
     });
   }
   if (!isReceivableStatus(transfer.status)) {
-    return res.status(400).json({ message: 'Only dispatched, in-transit or partially received transfers can be received.' });
+    return sendError(res, 400, 'INVALID_TRANSITION', 'Only dispatched, in-transit or partially received transfers can be received.');
   }
+  // Shape validation for the receipt lines runs here, after the
+  // requestId/status guards above (the requestId check itself stays
+  // where it was, ahead of the retry lookup).
+  if (parseBody(req, res, transferReceiveSchema) === null) return;
   // The same request twice at once must not both post: the second waits for the client's next retry.
-  if (!beginReceiptRequest(requestId)) return res.status(409).json({ message: 'This receipt is already being processed. Retry in a moment.' });
+  if (!beginReceiptRequest(requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt is already being processed. Retry in a moment.');
   try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
@@ -649,7 +676,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       excessQty: Number(req.body.excessQty ?? 0),
     }];
   } else {
-    return res.status(400).json({ message: 'Multi-lot transfers require a separate receipt line for every item and lot.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'Multi-lot transfers require a separate receipt line for every item and lot.');
   }
 
   const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
@@ -660,7 +687,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
         transferId: transfer.id, triggerType: 'TRANSFER_RECEIVE_DAMAGE', itemId: line.itemId,
         branchId: destinationLocation?.branchId ?? null, damagedQty: line.damagedQty,
       });
-      if (gate.blocked) return res.status(400).json({ message: gate.reason });
+      if (gate.blocked) return sendError(res, 400, 'VALIDATION_FAILED', gate.reason);
     }
   }
 
@@ -685,7 +712,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       })),
       templates,
     );
-    if (qc.ok === false) return res.status(400).json({ message: qc.message, itemId: qc.itemId, lineId: qc.lineId, code: 'QC_REQUIRED' });
+    if (qc.ok === false) return sendError(res, 400, 'QC_REQUIRED', qc.message, { itemId: qc.itemId, lineId: qc.lineId });
     // Blueprint v4 §25: an inspection that failed sends the goods to quarantine
     // (the QC_FAIL exception case already exists), never to sellable stock.
     const recorded: InspectionLike[] = [
@@ -823,7 +850,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user!.id, ...summary, status, notes },
     });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to process receipt.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to process receipt.');
   }
   } finally {
     endReceiptRequest(requestId);

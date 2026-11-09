@@ -37,13 +37,30 @@ import { postInventoryMovementInTransaction } from '../lib/inventory-posting-ser
 import type { TenantContext } from '../lib/tenant-context.js';
 import { applySavedViewFilter, type SavedViewFilterConfig } from '../lib/saved-view-filter.js';
 import { transitionPurchaseOrderStatus } from '../lib/domain-policies.js';
+import { sendError } from '../lib/errors.js';
+import { parseBody } from '../lib/validate.js';
+import {
+  tagCreateSchema,
+  customFieldCreateSchema,
+  reorderSuggestionAcceptSchema,
+  reorderRuleSchema,
+  purchaseOrderCreateSchema,
+  poReceiveSchema,
+  purchaseOrderStatusSchema,
+  poPlanDraftSchema,
+  poInvoiceSchema,
+  priceCreateSchema,
+  priceBreaksSchema,
+  savedReportSchema,
+  savedViewSchema,
+} from '../lib/validation-schemas.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides, respondWhenMemoryUnavailable);
 
 function requireAdmin(req: Request, res: Response): boolean {
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
-    res.status(403).json({ message: 'Admin access required.' });
+    sendError(res, 403, 'FORBIDDEN', 'Admin access required.');
     return false;
   }
   return true;
@@ -51,7 +68,7 @@ function requireAdmin(req: Request, res: Response): boolean {
 
 function requireReportingRole(req: Request, res: Response): boolean {
   if (!['ADMIN', 'ADMIN_USER', 'AUDITOR'].includes(req.user!.role)) {
-    res.status(403).json({ message: 'Reporting access requires Admin or Auditor role.' });
+    sendError(res, 403, 'FORBIDDEN', 'Reporting access requires Admin or Auditor role.');
     return false;
   }
   return true;
@@ -69,22 +86,24 @@ router.get('/catalog/tags', async (req, res) => {
 
 router.post('/catalog/tags', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the create — exactly where the
+  // name-length check used to run.
+  if (parseBody(req, res, tagCreateSchema) === null) return;
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
-  if (name.length < 2) return res.status(400).json({ message: 'Tag name must be at least 2 characters.' });
   try {
     const tag = await prisma.tag.create({ data: { name, companyId: catalogCompany(req), color: req.body.color || 'emerald' } });
     return res.status(201).json({ tag });
   } catch {
-    return res.status(409).json({ message: 'A tag with this name already exists.' });
+    return sendError(res, 409, 'CONFLICT', 'A tag with this name already exists.');
   }
 });
 
 router.put('/catalog/items/:itemId/tags', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const requestedTagIds: string[] = Array.isArray(req.body.tagIds) ? req.body.tagIds.filter((id: unknown) => typeof id === 'string') : [];
-  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  if (!(await ownsItem(req, req.params.itemId))) return sendError(res, 404, 'NOT_FOUND', 'Item not found.');
   const tagIds = (await prisma.tag.findMany({ where: { id: { in: requestedTagIds }, companyId: catalogCompany(req) }, select: { id: true } })).map((tag) => tag.id);
-  if (tagIds.length !== new Set(requestedTagIds).size) return res.status(404).json({ message: 'Tag not found.' });
+  if (tagIds.length !== new Set(requestedTagIds).size) return sendError(res, 404, 'NOT_FOUND', 'Tag not found.');
   await prisma.$transaction([
     prisma.itemTag.deleteMany({ where: { itemId: req.params.itemId } }),
     prisma.itemTag.createMany({ data: tagIds.map((tagId: string) => ({ itemId: req.params.itemId, tagId })), skipDuplicates: true }),
@@ -99,10 +118,12 @@ router.get('/catalog/custom-fields', async (req, res) => {
 
 router.post('/catalog/custom-fields', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the create — exactly where the
+  // name-length check used to run.
+  if (parseBody(req, res, customFieldCreateSchema) === null) return;
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   const type = ['text', 'number', 'date', 'boolean', 'select'].includes(req.body.type) ? req.body.type : 'text';
-  if (name.length < 2) return res.status(400).json({ message: 'Field name must be at least 2 characters.' });
-  if (await prisma.customFieldDefinition.findFirst({ where: { companyId: catalogCompany(req), name }, select: { id: true } })) return res.status(409).json({ message: 'A custom field with this name already exists.' });
+  if (await prisma.customFieldDefinition.findFirst({ where: { companyId: catalogCompany(req), name }, select: { id: true } })) return sendError(res, 409, 'CONFLICT', 'A custom field with this name already exists.');
   const field = await prisma.customFieldDefinition.create({
     data: { name, companyId: catalogCompany(req), type, options: Array.isArray(req.body.options) ? req.body.options : undefined, required: Boolean(req.body.required) },
   });
@@ -116,7 +137,7 @@ router.get('/catalog/custom-field-values', async (req, res) => {
 });
 
 router.get('/catalog/items/:itemId', async (req, res) => {
-  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  if (!(await ownsItem(req, req.params.itemId))) return sendError(res, 404, 'NOT_FOUND', 'Item not found.');
   const [tags, values] = await Promise.all([
     prisma.itemTag.findMany({ where: { itemId: req.params.itemId }, include: { tag: true } }),
     prisma.customFieldValue.findMany({ where: { itemId: req.params.itemId }, include: { field: true } }),
@@ -127,15 +148,15 @@ router.get('/catalog/items/:itemId', async (req, res) => {
 router.put('/catalog/items/:itemId/custom-fields/:fieldId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const value = req.body.value == null ? '' : String(req.body.value);
-  if (!(await ownsItem(req, req.params.itemId))) return res.status(404).json({ message: 'Item not found.' });
+  if (!(await ownsItem(req, req.params.itemId))) return sendError(res, 404, 'NOT_FOUND', 'Item not found.');
   const field = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.fieldId, companyId: catalogCompany(req) } });
-  if (!field) return res.status(404).json({ message: 'Custom field was not found.' });
+  if (!field) return sendError(res, 404, 'NOT_FOUND', 'Custom field was not found.');
   const pack = getIndustryPack(getActiveWorkflow(catalogCompany(req)).industryKey);
   if (value.trim() && isSerialFieldName(field.name, pack)) {
     const duplicate = await prisma.customFieldValue.findFirst({
       where: { fieldId: field.id, value: value.trim(), NOT: { itemId: req.params.itemId } },
     });
-    if (duplicate) return res.status(409).json({ message: `${field.name} must be unique across the catalogue.` });
+    if (duplicate) return sendError(res, 409, 'CONFLICT', `${field.name} must be unique across the catalogue.`);
   }
   const customField = await prisma.customFieldValue.upsert({
     where: { itemId_fieldId: { itemId: req.params.itemId, fieldId: req.params.fieldId } },
@@ -147,9 +168,9 @@ router.put('/catalog/items/:itemId/custom-fields/:fieldId', async (req, res) => 
 
 router.get('/reorder-rules', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!locationId) return sendError(res, 400, 'VALIDATION_FAILED', 'locationId is required.');
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && !(req.user!.locationIds ?? []).includes(locationId)) {
-    return res.status(403).json({ message: 'Reorder rule location access denied.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Reorder rule location access denied.');
   }
   // Stock screens only need the rule values. Avoid joining and sorting through
   // Item here: older Hostinger databases can carry a compatible ReorderRule
@@ -207,13 +228,13 @@ async function computeReorderSuggestions(companyId: string, locationId: string, 
 router.get('/reorder-rules/suggestions', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
-  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  if (!locationId) return sendError(res, 400, 'VALIDATION_FAILED', 'locationId is required.');
+  if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Reorder suggestions require a connected database.');
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
-  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
   const query = parseReorderSuggestionQuery(req.query);
-  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  if (!query) return sendError(res, 400, 'VALIDATION_FAILED', 'servicePercent must be between 50 and 99.99.');
   const dismissedSince = new Date(Date.now() - REORDER_SUGGESTION_DISMISSAL_TTL_MS);
   const [computed, dismissals] = await Promise.all([
     computeReorderSuggestions(companyId, locationId, query),
@@ -232,18 +253,20 @@ router.get('/reorder-rules/suggestions', async (req, res) => {
 // Action Center endpoint, POST /intelligence/:locationId/dismiss with type REORDER_SUGGESTION.
 router.post('/reorder-rules/suggestions/:itemId/accept', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // locationId presence check used to run.
+  if (parseBody(req, res, reorderSuggestionAcceptSchema) === null) return;
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
-  if (!databaseEnabled) return res.status(501).json({ message: 'Reorder suggestions require a connected database.' });
+  if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Reorder suggestions require a connected database.');
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
-  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
   const query = parseReorderSuggestionQuery(req.body);
-  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  if (!query) return sendError(res, 400, 'VALIDATION_FAILED', 'servicePercent must be between 50 and 99.99.');
   const [suggestion] = await computeReorderSuggestions(companyId, locationId, query, [req.params.itemId]);
-  if (!suggestion) return res.status(404).json({ message: 'No demand history to derive a suggestion from for this item at this location.' });
+  if (!suggestion) return sendError(res, 404, 'NOT_FOUND', 'No demand history to derive a suggestion from for this item at this location.');
   const quantityProblem = validateReorderQuantities(suggestion.suggestedMin, suggestion.suggestedTarget, suggestion.decimal);
-  if (quantityProblem) return res.status(400).json({ message: quantityProblem });
+  if (quantityProblem) return sendError(res, 400, 'VALIDATION_FAILED', quantityProblem);
   const rule = decimalsToNumbers(await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
     update: { minQty: suggestion.suggestedMin, targetQty: suggestion.suggestedTarget },
@@ -266,16 +289,16 @@ router.post('/reorder-rules/suggestions/:itemId/accept', async (req, res) => {
 router.get('/items/:itemId/periodic-review-policy', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
-  if (!databaseEnabled) return res.status(501).json({ message: 'Periodic-review policy requires a connected database.' });
+  if (!locationId) return sendError(res, 400, 'VALIDATION_FAILED', 'locationId is required.');
+  if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Periodic-review policy requires a connected database.');
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const [location, item] = await Promise.all([
     prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } }),
     prisma.item.findFirst({ where: { id: req.params.itemId, companyId }, select: { id: true, code: true, name: true } }),
   ]);
-  if (!location || !item) return res.status(404).json({ message: 'Item or location not found.' });
+  if (!location || !item) return sendError(res, 404, 'NOT_FOUND', 'Item or location not found.');
   const query = parseReorderSuggestionQuery(req.query); // reuses windowDays/leadTimeDays/servicePercent parsing+defaults
-  if (!query) return res.status(400).json({ message: 'servicePercent must be between 50 and 99.99.' });
+  if (!query) return sendError(res, 400, 'VALIDATION_FAILED', 'servicePercent must be between 50 and 99.99.');
   const reviewPeriodDays = Number(req.query.reviewPeriodDays) > 0 ? Math.min(90, Number(req.query.reviewPeriodDays)) : 7;
   const leadTimeStdDevDays = Number(req.query.leadTimeStdDevDays) >= 0 ? Number(req.query.leadTimeStdDevDays) : 0;
 
@@ -309,29 +332,31 @@ router.get('/items/:itemId/periodic-review-policy', async (req, res) => {
 
 router.put('/reorder-rules/:itemId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the item lookup — exactly where
+  // the locationId/orderMultiple checks used to run. The min/target
+  // quantities stay with validateReorderQuantities (decimal flag).
+  if (parseBody(req, res, reorderRuleSchema) === null) return;
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
   const minQty = Number(req.body.minQty);
   const targetQty = Number(req.body.targetQty);
-  if (!locationId) return res.status(400).json({ message: 'Location, non-negative minimum and target not below minimum are required.' });
   const ruleItem = databaseEnabled
     ? await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { decimalQuantity: true } })
     : listItems().find((entry) => entry.id === req.params.itemId);
   const decimal = Boolean(ruleItem?.decimalQuantity);
   // Optional case pack: positive, or null to clear it.
   const orderMultiple = req.body.orderMultiple === undefined ? undefined : req.body.orderMultiple === null ? null : Number(req.body.orderMultiple);
-  if (orderMultiple !== undefined && orderMultiple !== null && (!Number.isFinite(orderMultiple) || orderMultiple <= 0)) return res.status(400).json({ message: 'orderMultiple must be a positive number.' });
   const quantityProblem = validateReorderQuantities(minQty, targetQty, decimal);
-  if (quantityProblem) return res.status(400).json({ message: quantityProblem });
+  if (quantityProblem) return sendError(res, 400, 'VALIDATION_FAILED', quantityProblem);
   if (!databaseEnabled) {
     try {
       const rule = upsertReorderRule({ itemId: req.params.itemId, locationId, minQty, targetQty, decimal });
       return res.json({ rule });
     } catch (error) {
-      return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to save reorder rule.' });
+      return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to save reorder rule.');
     }
   }
   const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
   const rule = decimalsToNumbers(await prisma.reorderRule.upsert({
     where: { itemId_locationId: { itemId: req.params.itemId, locationId } },
     update: { minQty, targetQty, ...(orderMultiple !== undefined ? { orderMultiple } : {}) },
@@ -353,7 +378,7 @@ router.post('/suppliers', async (req, res) => {
     const supplier = await prisma.supplier.create({ data: { ...fields, companyId: req.companyId ?? DEFAULT_COMPANY_ID } as never });
     return res.status(201).json({ supplier: presentSupplier(supplier) });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid supplier.');
   }
 });
 
@@ -361,14 +386,14 @@ router.put('/suppliers/:id', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
     const fields = parseSupplierFields(req.body ?? {}, false);
-    if (!Object.keys(fields).length) return res.status(400).json({ message: 'Nothing to update.' });
+    if (!Object.keys(fields).length) return sendError(res, 400, 'VALIDATION_FAILED', 'Nothing to update.');
     const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-    if (!existing) return res.status(404).json({ message: 'Supplier not found.' });
+    if (!existing) return sendError(res, 404, 'NOT_FOUND', 'Supplier not found.');
     const supplier = await prisma.supplier.update({ where: { id: existing.id, companyId: existing.companyId }, data: fields as never });
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'SUPPLIER_UPDATED', entityType: 'Supplier', entityId: supplier.id, metadata: { fields: Object.keys(fields) } }));
     return res.json({ supplier: presentSupplier(supplier) });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid supplier.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid supplier.');
   }
 });
 
@@ -376,7 +401,7 @@ router.get('/suppliers/:id/price-breaks', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId }, select: { id: true } });
-  if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
+  if (!supplier) return sendError(res, 404, 'NOT_FOUND', 'Supplier not found.');
   const breaks = await prisma.supplierPriceBreak.findMany({ where: { supplierId: supplier.id, companyId }, orderBy: [{ itemId: 'asc' }, { minQty: 'asc' }] });
   return res.json({ priceBreaks: breaks.map((row) => ({ ...row, minQty: Number(row.minQty), unitCost: Number(row.unitCost) })) });
 });
@@ -384,17 +409,19 @@ router.get('/suppliers/:id/price-breaks', async (req, res) => {
 // Replaces the whole ladder for one supplier + item: [{ minQty, unitCost }], quantities ascending with costs falling.
 router.put('/suppliers/:id/price-breaks/:itemId', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // tiers checks used to run (a non-array `breaks` still means "clear
+  // the ladder", and the distinct/falling-cost rules are the schema's
+  // refines, in the same order).
+  if (parseBody(req, res, priceBreaksSchema) === null) return;
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const tiers: Array<{ minQty: number; unitCost: number }> = Array.isArray(req.body.breaks) ? req.body.breaks.map((tier: any) => ({ minQty: Number(tier.minQty), unitCost: Number(tier.unitCost) })) : [];
-  if (tiers.some((tier) => !Number.isFinite(tier.minQty) || tier.minQty <= 0 || !Number.isFinite(tier.unitCost) || tier.unitCost <= 0)) return res.status(400).json({ message: 'Every break needs a positive quantity and unit cost.' });
   const ordered = [...tiers].sort((a, b) => a.minQty - b.minQty);
-  if (new Set(ordered.map((tier) => tier.minQty)).size !== ordered.length) return res.status(400).json({ message: 'Break quantities must be distinct.' });
-  if (ordered.some((tier, index) => index > 0 && tier.unitCost >= ordered[index - 1].unitCost)) return res.status(400).json({ message: 'A larger quantity must have a lower unit cost.' });
   const [supplier, item] = await Promise.all([
     prisma.supplier.findFirst({ where: { id: req.params.id, companyId }, select: { id: true } }),
     prisma.item.findFirst({ where: { id: req.params.itemId, companyId }, select: { id: true } }),
   ]);
-  if (!supplier || !item) return res.status(404).json({ message: 'Supplier or item not found.' });
+  if (!supplier || !item) return sendError(res, 404, 'NOT_FOUND', 'Supplier or item not found.');
   await prisma.$transaction([
     prisma.supplierPriceBreak.deleteMany({ where: { supplierId: supplier.id, itemId: item.id } }),
     prisma.supplierPriceBreak.createMany({ data: ordered.map((tier) => ({ supplierId: supplier.id, itemId: item.id, minQty: tier.minQty, unitCost: tier.unitCost, companyId })) }),
@@ -405,7 +432,7 @@ router.put('/suppliers/:id/price-breaks/:itemId', async (req, res) => {
 router.get('/suppliers/:id/score', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
+  if (!supplier) return sendError(res, 404, 'NOT_FOUND', 'Supplier not found.');
 
   const orders = decimalsToNumbers(await prisma.purchaseOrder.findMany({
     where: { supplierId: supplier.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID, status: { notIn: ['DRAFT', 'CANCELLED'] } },
@@ -474,25 +501,22 @@ router.get('/purchase-orders', async (req, res) => {
 
 router.post('/purchase-orders', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // supplier/location/lines presence and line-shape checks used to run.
+  if (parseBody(req, res, purchaseOrderCreateSchema) === null) return;
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!req.body.supplierId || !req.body.locationId || lines.length === 0) {
-    return res.status(400).json({ message: 'Supplier, destination and at least one line are required.' });
-  }
   const normalized = lines.map((line: { itemId?: string; quantity?: number; unitCost?: number }) => ({
     itemId: String(line.itemId || ''), quantity: Number(line.quantity), unitCost: Number(line.unitCost || 0),
   }));
-  if (normalized.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) {
-    return res.status(400).json({ message: 'Every line requires an item and positive quantity.' });
-  }
   const supplier = await prisma.supplier.findFirst({ where: { id: String(req.body.supplierId), companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
-  if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} is ${String((supplier as { status?: string }).status).toLowerCase()} and cannot receive new purchase orders.` });
+  if (!supplier) return sendError(res, 404, 'NOT_FOUND', 'Supplier not found.');
+  if (!canOrderFrom((supplier as { status?: string }).status)) return sendError(res, 409, 'CONFLICT', `${supplier.name} is ${String((supplier as { status?: string }).status).toLowerCase()} and cannot receive new purchase orders.`);
   const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
   const lineItems = await prisma.item.findMany({ where: { id: { in: normalized.map((line) => line.itemId) }, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, select: { id: true, code: true, status: true } });
   const missing = normalized.map((line) => line.itemId).filter((itemId) => !lineItems.some((row) => row.id === itemId));
-  if (missing.length) return res.status(400).json({ message: `Item ${missing[0]} was not found.` });
+  if (missing.length) return sendError(res, 400, 'VALIDATION_FAILED', `Item ${missing[0]} was not found.`);
   const inactive = lineItems.find((row) => (row as { status?: string }).status && (row as { status?: string }).status !== 'ACTIVE');
-  if (inactive) return res.status(400).json({ message: `Item ${inactive.code} is ${String((inactive as { status?: string }).status).toLowerCase()} and cannot be ordered.` });
+  if (inactive) return sendError(res, 400, 'VALIDATION_FAILED', `Item ${inactive.code} is ${String((inactive as { status?: string }).status).toLowerCase()} and cannot be ordered.`);
   const landedCostMethod = ['VALUE', 'WEIGHT', 'QUANTITY'].includes(req.body.landedCostMethod) ? req.body.landedCostMethod : 'VALUE';
   const purchaseOrder = decimalsToNumbers(await prisma.purchaseOrder.create({
     data: {
@@ -522,18 +546,22 @@ router.post('/purchase-orders', async (req, res) => {
 router.post('/purchase-orders/:id/receive', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
-  if (!requestId || requestId.length > 191) return res.status(400).json({ message: 'A valid requestId is required for retry-safe receiving.' });
+  if (!requestId || requestId.length > 191) return sendError(res, 400, 'VALIDATION_FAILED', 'A valid requestId is required for retry-safe receiving.');
 
   const priorReceipt = await prisma.purchaseReceipt.findUnique({ where: { requestId } }).catch(() => null);
   if (priorReceipt) {
-    if (priorReceipt.purchaseOrderId !== req.params.id) return res.status(409).json({ message: 'This requestId was already used for a different purchase order.' });
+    if (priorReceipt.purchaseOrderId !== req.params.id) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
     return res.json({ ...(priorReceipt.result as Record<string, unknown>), duplicate: true });
   }
 
   const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
-  if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
-  if (!isReceivablePo(order.status)) return res.status(409).json({ message: `A purchase order in ${order.status} cannot be received. It must be approved and still open.` });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
+  if (!isReceivablePo(order.status)) return sendError(res, 409, 'INVALID_TRANSITION', `A purchase order in ${order.status} cannot be received. It must be approved and still open.`);
 
+  // Shape validation for the receipt lines runs here, after the
+  // requestId/404/receivable guards above (the requestId check itself
+  // stays where it was, ahead of the retry lookup).
+  if (parseBody(req, res, poReceiveSchema) === null) return;
   const receipt: ReceiptLineInput[] = (Array.isArray(req.body.lines) ? req.body.lines : []).map((line: Record<string, unknown>) => ({
     lineId: String(line.lineId ?? ''),
     receivedQty: Number(line.receivedQty ?? 0),
@@ -548,7 +576,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   });
   const rules = new Map<string, ItemRules>(itemRows.map((row) => [row.id, { code: row.code, lotRequired: row.lotRequired ?? false, expiryRequired: row.expiryRequired ?? false }]));
   const plan = planPoReceipt({ orderNumber: order.number, lines: order.lines, receipt, items: rules });
-  if (plan.ok === false) return res.status(400).json({ message: plan.message, lineId: plan.lineId });
+  if (plan.ok === false) return sendError(res, 400, 'VALIDATION_FAILED', plan.message, { lineId: plan.lineId });
 
   // QC gate (blueprint §25): a checklist must exist for every good-stock line, and a failed one
   // sends that line's goods to quarantine instead of sellable stock.
@@ -567,7 +595,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
     })),
     templates,
   );
-  if (qcCheck.ok === false) return res.status(400).json({ message: qcCheck.message, itemId: qcCheck.itemId, lineId: qcCheck.lineId, code: 'QC_REQUIRED' });
+  if (qcCheck.ok === false) return sendError(res, 400, 'QC_REQUIRED', qcCheck.message, { itemId: qcCheck.itemId, lineId: qcCheck.lineId });
   const gated = quarantineFailedLines(
     plan.postings.map((posting) => ({ ...posting, lotId: posting.lotNo, receivedQty: posting.goodQty })),
     (line) => verdictForLine(recorded, { itemId: line.itemId, lineId: line.lineId }),
@@ -639,7 +667,7 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
       const winner = await prisma.purchaseReceipt.findUnique({ where: { requestId } });
       if (winner) return res.json({ ...(winner.result as Record<string, unknown>), duplicate: true });
     }
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to receive this purchase order.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to receive this purchase order.');
   }
   const { purchaseOrder, postedStock } = outcome;
   for (const receipt of postedStock) {
@@ -708,17 +736,19 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
 
 router.patch('/purchase-orders/:id/status', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // isPoStatus check used to run.
+  if (parseBody(req, res, purchaseOrderStatusSchema) === null) return;
   const to = req.body.status;
-  if (!isPoStatus(to)) return res.status(400).json({ message: 'Invalid purchase order status.' });
   const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, supplierInvoices: { select: { status: true } } } }));
-  if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
   const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
   const check = checkPoMove({
     from: (isPoStatus(order.status) ? order.status : 'DRAFT') as PoStatus, to,
     anyReceived: order.lines.some((line) => line.receivedQty > 0),
     invoiceStatuses: order.supplierInvoices.map((invoice) => invoice.status), note,
   });
-  if (check.ok === false) return res.status(409).json({ message: check.message });
+  if (check.ok === false) return sendError(res, 409, 'CONFLICT', check.message);
 
   // Blueprint §27: approval is a policy gate (value / branch thresholds), not just a status flip.
   if (to === 'APPROVED') {
@@ -728,7 +758,7 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
       branchId: location?.branchId ?? null, value: order.totalAmount, requestedById: req.user!.id,
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
-    if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
+    if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
   }
   const now = new Date();
   const purchaseOrder = await transitionPurchaseOrderStatus({
@@ -754,9 +784,9 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
 router.get('/purchase-orders/plan', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
-  if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
+  if (!locationId) return sendError(res, 400, 'VALIDATION_FAILED', 'locationId is required.');
   const location = await prisma.location.findFirst({ where: { id: locationId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!location) return res.status(404).json({ message: 'Location not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
   const windowDays = Number(req.query.windowDays) > 0 ? Math.min(Number(req.query.windowDays), 180) : 30;
   const since = new Date(Date.now() - windowDays * 86_400_000);
 
@@ -846,17 +876,20 @@ router.get('/purchase-orders/plan', async (req, res) => {
 // The human action: turn chosen suggestions into DRAFT purchase orders, one per supplier.
 router.post('/purchase-orders/plan/draft', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the loop — exactly where the
+  // location/groups presence check used to run. The per-group
+  // supplier/lines checks stay in the loop below.
+  if (parseBody(req, res, poPlanDraftSchema) === null) return;
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : '';
   const groups: Array<{ supplierId?: string; lines?: Array<{ itemId?: string; quantity?: number; unitCost?: number }> }> = Array.isArray(req.body.groups) ? req.body.groups : [];
-  if (!locationId || !groups.length) return res.status(400).json({ message: 'A location and at least one supplier group are required.' });
   const created = [];
   for (const group of groups) {
     const lines = (group.lines ?? []).map((line) => ({ itemId: String(line.itemId ?? ''), quantity: Number(line.quantity), unitCost: Number(line.unitCost ?? 0) }));
-    if (!group.supplierId) return res.status(400).json({ message: 'Choose a supplier for every group before creating draft orders.' });
-    if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) return res.status(400).json({ message: 'Every line needs an item and a positive quantity.' });
+    if (!group.supplierId) return sendError(res, 400, 'VALIDATION_FAILED', 'Choose a supplier for every group before creating draft orders.');
+    if (!lines.length || lines.some((line) => !line.itemId || !Number.isFinite(line.quantity) || line.quantity <= 0)) return sendError(res, 400, 'VALIDATION_FAILED', 'Every line needs an item and a positive quantity.');
     const supplier = await prisma.supplier.findFirst({ where: { id: group.supplierId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-    if (!supplier) return res.status(404).json({ message: 'Supplier not found.' });
-    if (!canOrderFrom((supplier as { status?: string }).status)) return res.status(409).json({ message: `${supplier.name} cannot receive new purchase orders.` });
+    if (!supplier) return sendError(res, 404, 'NOT_FOUND', 'Supplier not found.');
+    if (!canOrderFrom((supplier as { status?: string }).status)) return sendError(res, 409, 'CONFLICT', `${supplier.name} cannot receive new purchase orders.`);
     const leadTimeDays = (supplier as { leadTimeDays?: number | null }).leadTimeDays;
     const purchaseOrder = decimalsToNumbers(await prisma.purchaseOrder.create({
       data: {
@@ -888,18 +921,19 @@ router.get('/purchase-orders/:id/invoices', async (req, res) => {
 
 router.post('/purchase-orders/:id/invoices', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // invoice-number/lines presence and line-filter checks used to run.
+  if (parseBody(req, res, poInvoiceSchema) === null) return;
   const invoiceNumber = typeof req.body.invoiceNumber === 'string' ? req.body.invoiceNumber.trim() : '';
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!invoiceNumber || !lines.length) return res.status(400).json({ message: 'Invoice number and at least one line are required.' });
   const normalizedLines = lines
     .map((line: { itemId?: string; invoicedQty?: number; unitCost?: number }) => ({
       itemId: String(line.itemId || ''), invoicedQty: Number(line.invoicedQty), unitCost: Number(line.unitCost),
     }))
     .filter((line: { itemId: string; invoicedQty: number; unitCost: number }) => line.itemId && Number.isFinite(line.invoicedQty) && line.invoicedQty > 0);
-  if (!normalizedLines.length) return res.status(400).json({ message: 'Every line requires an item and a positive invoiced quantity.' });
 
   const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
-  if (!order) return res.status(404).json({ message: 'Purchase order not found.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
 
   const poLines = order.lines.map((line) => ({ itemId: line.itemId, orderedQty: line.quantity, receivedQty: line.receivedQty, unitCost: line.unitCost }));
   const tolerancePercent = Number.isFinite(Number(req.body.tolerancePercent)) ? Number(req.body.tolerancePercent) : undefined;
@@ -965,20 +999,20 @@ router.get('/items/:itemId/price', async (req, res) => {
     })),
     { branchId, customerGroup, at },
   );
-  if (!resolved) return res.status(404).json({ message: `No effective ${priceType} price found for this item.` });
+  if (!resolved) return sendError(res, 404, 'NOT_FOUND', `No effective ${priceType} price found for this item.`);
   return res.json({ price: resolved });
 });
 
 router.post('/items/:itemId/prices', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the item lookup — exactly where
+  // the price-type/price presence check used to run.
+  if (parseBody(req, res, priceCreateSchema) === null) return;
   const priceType = typeof req.body.priceType === 'string' ? req.body.priceType.trim() : '';
   const proposedPrice = Number(req.body.price);
-  if (!priceType || !Number.isFinite(proposedPrice) || proposedPrice <= 0) {
-    return res.status(400).json({ message: 'A price type and a positive price are required.' });
-  }
 
   const item = await prisma.item.findFirst({ where: { id: req.params.itemId, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!item) return res.status(404).json({ message: 'Item not found.' });
+  if (!item) return sendError(res, 404, 'NOT_FOUND', 'Item not found.');
 
   const effectiveFrom = req.body.effectiveFrom ? String(req.body.effectiveFrom) : null;
   const effectiveTo = req.body.effectiveTo ? String(req.body.effectiveTo) : null;
@@ -988,7 +1022,7 @@ router.post('/items/:itemId/prices', async (req, res) => {
 
   const guardrail = validatePrice({ proposedPrice, mrp, landedCost, minMarginPercent, effectiveFrom, effectiveTo });
   if (!guardrail.ok) {
-    return res.status(422).json({ message: 'Price violates a guardrail.', guardrail });
+    return sendError(res, 422, 'VALIDATION_FAILED', 'Price violates a guardrail.', { guardrail });
   }
 
   const priceList = await prisma.priceList.create({
@@ -1023,15 +1057,14 @@ router.get('/saved-reports', async (req, res) => {
 
 router.post('/saved-reports', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
+  // Shape validation runs here, before the create — exactly where the
+  // name/type check used to run.
+  if (parseBody(req, res, savedReportSchema) === null) return;
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   const reportType = typeof req.body.reportType === 'string' ? req.body.reportType : '';
-  const allowedTypes = ['inventory', 'low-stock', 'moves', 'variance', 'expiry', 'activity'];
   const locationId = typeof req.body.locationId === 'string' ? req.body.locationId : null;
-  if (name.length < 2 || !allowedTypes.includes(reportType)) {
-    return res.status(400).json({ message: 'Report name and a supported report type are required.' });
-  }
   if (locationId && !['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && !(req.user!.locationIds ?? []).includes(locationId)) {
-    return res.status(403).json({ message: 'Saved report location access denied.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Saved report location access denied.');
   }
   const savedReport = await prisma.savedReport.create({
     data: {
@@ -1050,9 +1083,9 @@ router.post('/saved-reports', async (req, res) => {
 router.delete('/saved-reports/:id', async (req, res) => {
   if (!requireReportingRole(req, res)) return;
   const savedReport = await prisma.savedReport.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!savedReport) return res.status(404).json({ message: 'Saved report not found.' });
+  if (!savedReport) return sendError(res, 404, 'NOT_FOUND', 'Saved report not found.');
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && savedReport.ownerId !== req.user!.id) {
-    return res.status(403).json({ message: 'Only the report owner or an Admin can delete this report.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only the report owner or an Admin can delete this report.');
   }
   await prisma.savedReport.delete({ where: { id: savedReport.id } });
   return res.status(204).send();
@@ -1076,8 +1109,10 @@ router.get('/saved-views', async (req, res) => {
 });
 
 router.post('/saved-views', async (req, res) => {
+  // Shape validation runs here, before the create — exactly where the
+  // name-length check used to run.
+  if (parseBody(req, res, savedViewSchema) === null) return;
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
-  if (name.length < 2) return res.status(400).json({ message: 'A saved view name is required.' });
   const filter = req.body.filter && typeof req.body.filter === 'object' ? req.body.filter : {};
   const savedView = await prisma.savedView.create({
     data: {
@@ -1094,9 +1129,9 @@ router.post('/saved-views', async (req, res) => {
 
 router.delete('/saved-views/:id', async (req, res) => {
   const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
+  if (!savedView) return sendError(res, 404, 'NOT_FOUND', 'Saved view not found.');
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role) && savedView.ownerId !== req.user!.id) {
-    return res.status(403).json({ message: 'Only the view owner or an Admin can delete this view.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only the view owner or an Admin can delete this view.');
   }
   await prisma.savedView.delete({ where: { id: savedView.id } });
   return res.status(204).send();
@@ -1104,9 +1139,9 @@ router.delete('/saved-views/:id', async (req, res) => {
 
 router.get('/saved-views/:id/items', async (req, res) => {
   const savedView = await prisma.savedView.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!savedView) return res.status(404).json({ message: 'Saved view not found.' });
+  if (!savedView) return sendError(res, 404, 'NOT_FOUND', 'Saved view not found.');
   if (!savedView.isShared && savedView.ownerId !== req.user!.id && !['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
-    return res.status(403).json({ message: 'This saved view is private to its owner.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This saved view is private to its owner.');
   }
   const items = await prisma.item.findMany({ where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { tags: true } });
   const filterableItems = items.map((item) => ({

@@ -65,19 +65,28 @@ test('a transfer with the same source and destination is rejected before any res
       sourceLocationId: 'wh-1', destinationLocationId: 'wh-1',
       lines: [{ itemId: 'item-1003', lotId: 'lot-1003', quantity: 1 }],
     });
-    assert.equal(response.status, 403);
-    assert.match(response.body.message, /same source and destination/);
+    // [ULTRA] P3 (#186): the shape check is now the zod schema, so the
+    // rejection is the single 400 envelope instead of the old 403.
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'Validation failed.');
+    assert.equal(response.body.code, 'VALIDATION_FAILED');
+    assert.match(String(response.body.details?.[0]?.message ?? ''), /same source and destination/);
   });
 });
 
 test('a store user cannot request a transfer to a non-warehouse destination - same rule as the pre-extraction handler', async () => {
   await withServer(async (call) => {
     const store = tokenFor('store@retail.local');
+    // loc-1 -> loc-2 (different locations, neither a warehouse): the
+    // failure must come from the warehouse-destination rule, not the
+    // same-source shape check.
     const response = await call('POST', '/transfers', store, {
-      sourceLocationId: 'loc-1', destinationLocationId: 'loc-1',
+      sourceLocationId: 'loc-1', destinationLocationId: 'loc-2',
       lines: [{ itemId: 'item-1001', lotId: 'lot-1001', quantity: 1 }],
     });
     assert.equal(response.status, 400);
+    assert.equal(response.body.code, 'VALIDATION_FAILED');
+    assert.match(String(response.body.error ?? ''), /warehouse/);
   });
 });
 
@@ -89,6 +98,7 @@ test('a warehouse picker cannot create a transfer request - role check runs befo
       lines: [{ itemId: 'item-1003', lotId: 'lot-1003', quantity: 1 }],
     });
     assert.equal(response.status, 403);
+    assert.equal(response.body.code, 'FORBIDDEN');
   });
 });
 

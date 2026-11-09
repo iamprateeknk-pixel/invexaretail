@@ -124,7 +124,7 @@ test('blocked, expired and empty lots are never picked, and a shelf that cannot 
     createTransferRecord({ id: shortTransfer, sourceLocationId: 'wh-1', destinationLocationId: 'loc-1', requestedBy: 'user-admin-1', role: 'ADMIN', status: 'REQUESTED', lines: [{ itemId: empty.id, lotId: emptyLot.id, quantity: 5 }], createdAt: new Date().toISOString() });
     const shortage = await call('POST', `/picker/transfers/${shortTransfer}/pick-slips`, picker, { lines: [{ itemId: empty.id, quantity: 3, inputMethod: 'MANUAL' }] });
     assert.equal(shortage.status, 400);
-    assert.match(shortage.body.message, /Only 1 of .* is available/);
+    assert.match(shortage.body.error, /Only 1 of .* is available/);
     // ... and it can be reported instead of silently short-picked; the exception reason is the real one.
     const reported = await call('POST', `/picker/transfers/${shortTransfer}/pick-slips`, picker, { exceptions: [{ itemId: empty.id, lotId: emptyLot.id, reason: 'NO_STOCK', quantity: 2 }] });
     assert.equal(reported.status, 201);
@@ -143,11 +143,11 @@ test('a piece pick still needs the right scan and refuses a blocked lot', async 
     const line = (scanCode: string) => ({ lines: [{ itemId: item.id, lotId: lot.id, quantity: 2, inputMethod: 'SCAN', scanCode }] });
     const wrong = await call('POST', `/picker/transfers/${id}/pick-slips`, picker, line('SOMETHING-ELSE'));
     assert.equal(wrong.status, 400);
-    assert.match(wrong.body.message, /Wrong Item/);
+    assert.match(wrong.body.error, /Wrong Item/);
     updateLotStatus(lot.id, 'BLOCKED');
     const blocked = await call('POST', `/picker/transfers/${id}/pick-slips`, picker, line(item.code));
     assert.equal(blocked.status, 400);
-    assert.match(blocked.body.message, /blocked, expired or has no stock/);
+    assert.match(blocked.body.error, /blocked, expired or has no stock/);
     updateLotStatus(lot.id, 'AVAILABLE');
     assert.equal((await call('POST', `/picker/transfers/${id}/pick-slips`, picker, line(item.code))).status, 201);
     // Two lines for the same lot in one slip cannot together exceed what is asked for.

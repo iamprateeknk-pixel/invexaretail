@@ -111,7 +111,7 @@ test('an admin assigns a named picker: only that picker can see and pick it, and
       lines: [{ itemId: 'item-1003', lotId: 'lot-1003', quantity: 1, inputMethod: 'MANUAL' }],
     });
     assert.equal(blocked.status, 403);
-    assert.match(blocked.body.message, /another picker/);
+    assert.match(blocked.body.error, /another picker/);
     assert.equal((await call('GET', `/picker/transfers/${id}`, picker)).status, 200);
 
     // The admin's list shows who has it.
@@ -147,7 +147,13 @@ test('only transfer managers assign, only eligible pickers qualify, and only whi
     const foreignAttempt = await call('PATCH', `/transfers/${id}/picker`, admin, { pickerId: foreign.id });
     const missingAttempt = await call('PATCH', `/transfers/${id}/picker`, admin, { pickerId: 'user-does-not-exist' });
     assert.equal(foreignAttempt.status, 400);
-    assert.deepEqual(foreignAttempt.body, missingAttempt.body);
+    // The two answers must be indistinguishable — same error and code.
+    // traceId is deliberately excluded: it is a fresh per-request UUID,
+    // so two responses can never share one ([ULTRA] P3 #186).
+    assert.deepEqual(
+      { error: foreignAttempt.body.error, code: foreignAttempt.body.code },
+      { error: missingAttempt.body.error, code: missingAttempt.body.code },
+    );
     assert.ok(!(await call('GET', `/transfers/${id}/eligible-pickers`, admin)).body.pickers.some((entry: any) => entry.id === foreign.id));
     assert.equal((await call('PATCH', `/transfers/${id}/picker`, admin, { pickerId: 42 })).status, 400);
 

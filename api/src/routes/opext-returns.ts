@@ -4,7 +4,9 @@
 import { Router } from 'express';
 import { prisma, queryRaw } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
-import { DomainError, isDomainError, statusForErrorCode } from '../lib/errors.js';
+import { DomainError, isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
+import { parseBody } from '../lib/validate.js';
+import { returnCreateSchema, returnDispositionSchema, returnRefundSchema } from '../lib/validation-schemas.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { createExceptionCase } from '../lib/exceptions.js';
@@ -26,9 +28,12 @@ const router = Router();
 router.post('/orders/:id/returns', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
 
+  // Shape validation runs here, after the packer/404/location guards
+  // above; the per-line quantity caps stay in the transaction below.
+  if (parseBody(req, res, returnCreateSchema) === null) return;
   const requestedLines = Array.isArray(req.body.lines) ? req.body.lines : [];
   const orderLinesById = new Map(order.lines.map((line) => [line.id, line]));
   // Merge duplicate orderLineIds within the request itself before any cap
@@ -87,7 +92,11 @@ router.post('/orders/:id/returns', async (req, res) => {
     });
     return { ok: true as const, returnRequest: created };
   });
-  if (!result.ok) return res.status(400).json({ message: 'Invalid return lines.', errors: result.errors });
+  if (!result.ok) {
+    // The per-line messages stay under their legacy `errors` key, not
+    // duplicated into `details` — same array the route always returned.
+    return sendError(res, 400, 'VALIDATION_FAILED', 'Invalid return lines.', { errors: result.errors });
+  }
   const returnRequest = result.returnRequest;
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role, action: 'RETURN_REQUESTED',
@@ -99,8 +108,8 @@ router.post('/orders/:id/returns', async (req, res) => {
 router.get('/orders/:id/returns', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const order = await prisma.order.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (!canAccessLocation(req, order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order not found.');
+  if (!canAccessLocation(req, order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
   const returnRequests = await prisma.returnRequest.findMany({ where: { orderId: order.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true }, orderBy: { createdAt: 'desc' } });
   return res.json({ returnRequests });
 });
@@ -144,17 +153,17 @@ async function returnLot(returnRequestId: string, itemId: string) {
 router.patch('/returns/:id/status', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const returnRequest = await prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
-  if (!returnRequest) return res.status(404).json({ message: 'Return request not found.' });
-  if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
+  if (!returnRequest) return sendError(res, 404, 'NOT_FOUND', 'Return request not found.');
+  if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
 
   const action = String(req.body.action || '') as ReturnAction;
   const nextStatus = nextReturnStatus(returnRequest.status as never, action);
-  if (!nextStatus) return res.status(409).json({ message: `Cannot apply action ${action} to a return in status ${returnRequest.status}.` });
+  if (!nextStatus) return sendError(res, 409, 'INVALID_TRANSITION', `Cannot apply action ${action} to a return in status ${returnRequest.status}.`);
 
   const locationId = returnRequest.order.fulfillmentLocationId;
   if (action === 'CLOSE') {
     const closable = canCloseReturn(returnRequest.lines);
-    if ('message' in closable) return res.status(409).json({ message: closable.message });
+    if ('message' in closable) return sendError(res, 409, 'INVALID_TRANSITION', closable.message);
   }
 
   if (action === 'RECEIVE') {
@@ -164,7 +173,7 @@ router.patch('/returns/:id/status', async (req, res) => {
     const plans = [];
     for (const line of returnRequest.lines) {
       const plan = planReturnLine({ requested: dispositions[line.id], qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
-      if ('message' in plan) return res.status(400).json({ message: plan.message, lineId: line.id });
+      if ('message' in plan) return sendError(res, 400, 'VALIDATION_FAILED', plan.message, { lineId: line.id });
       plans.push({ line, plan });
     }
     for (const { line, plan } of plans) {
@@ -238,18 +247,21 @@ router.patch('/returns/:id/status', async (req, res) => {
 router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
   if (!requirePacker(req, res)) return;
   const returnRequest = await prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true, order: true } });
-  if (!returnRequest) return res.status(404).json({ message: 'Return request not found.' });
-  if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId)) return res.status(403).json({ message: 'Location access denied.' });
-  if (returnRequest.status !== 'RECEIVED') return res.status(409).json({ message: 'Only a received return can have its lines disposed.' });
+  if (!returnRequest) return sendError(res, 404, 'NOT_FOUND', 'Return request not found.');
+  if (!canAccessLocation(req, returnRequest.order.fulfillmentLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
+  if (returnRequest.status !== 'RECEIVED') return sendError(res, 409, 'INVALID_TRANSITION', 'Only a received return can have its lines disposed.');
   const line = returnRequest.lines.find((row) => row.id === req.params.lineId);
-  if (!line) return res.status(404).json({ message: 'Return line was not found.' });
-  if (!isPendingDisposition(line.disposition)) return res.status(409).json({ message: `This line was already dispositioned as ${line.disposition}.` });
+  if (!line) return sendError(res, 404, 'NOT_FOUND', 'Return line was not found.');
+  if (!isPendingDisposition(line.disposition)) return sendError(res, 409, 'CONFLICT', `This line was already dispositioned as ${line.disposition}.`);
 
   const lineQty = Number(line.quantity);
   const qc = await returnQcContext(returnRequest.companyId, returnRequest.id, [line.itemId]);
+  // Shape validation runs here, after the guards above; the disposition
+  // value itself stays with planReturnLine (400/409 live there).
+  if (parseBody(req, res, returnDispositionSchema) === null) return;
   const plan = planReturnLine({ requested: String(req.body.disposition ?? ''), qcRequired: qc.qcRequired(line.itemId), verdict: qc.verdict(line.itemId, line.id) });
-  if ('message' in plan) return res.status(400).json({ message: plan.message });
-  if (plan.action === 'HOLD') return res.status(409).json({ message: plan.note ?? 'This line must stay in quarantine.' });
+  if ('message' in plan) return sendError(res, 400, 'VALIDATION_FAILED', plan.message);
+  if (plan.action === 'HOLD') return sendError(res, 409, 'CONFLICT', plan.note ?? 'This line must stay in quarantine.');
 
   const locationId = returnRequest.order.fulfillmentLocationId;
   const lot = await returnLot(returnRequest.id, line.itemId);
@@ -338,11 +350,14 @@ router.post('/returns/:id/lines/:lineId/disposition', async (req, res) => {
 // Blueprint v4 §24 "Refund status": a finance decision, recorded separately from the stock disposition.
 router.patch('/returns/:id/refund', async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  // Shape validation runs here, before the lookup — exactly where the
+  // parseRefundDecision check used to run.
+  if (parseBody(req, res, returnRefundSchema) === null) return;
   const decision = parseRefundDecision(req.body.status);
-  if (!decision) return res.status(400).json({ message: 'Refund status must be REFUNDED or DENIED.' });
+  if (!decision) return sendError(res, 400, 'VALIDATION_FAILED', 'Refund status must be REFUNDED or DENIED.');
   const returnRequest = await prisma.returnRequest.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
-  if (!returnRequest) return res.status(404).json({ message: 'Return request not found.' });
-  if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status)) return res.status(409).json({ message: 'A refund can be decided once the goods have been received.' });
+  if (!returnRequest) return sendError(res, 404, 'NOT_FOUND', 'Return request not found.');
+  if (!['RECEIVED', 'CLOSED'].includes(returnRequest.status)) return sendError(res, 409, 'INVALID_TRANSITION', 'A refund can be decided once the goods have been received.');
   const updated = await prisma.returnRequest.update({
     where: { id: returnRequest.id, companyId: returnRequest.companyId },
     data: { refundStatus: decision, refundNote: typeof req.body.note === 'string' ? req.body.note.slice(0, 2000) : null, refundedAt: new Date(), refundedById: req.user!.id },
@@ -373,7 +388,7 @@ router.post('/orders/retry-backorders', async (req, res) => {
 router.post('/orders/:id/retry-backorder', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const order = await retryBackorderAllocation(req.companyId ?? DEFAULT_COMPANY_ID, req.params.id);
-  if (!order) return res.status(404).json({ message: 'Order was not found.' });
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Order was not found.');
   return res.json({ order });
 });
 
