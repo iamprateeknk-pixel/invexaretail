@@ -419,8 +419,8 @@ const hydrateRepository = async () => {
   try {
     const { hydrateControlPlaneFromStore } = await import('./lib/saas/persistence.js');
     const saas = await hydrateControlPlaneFromStore();
-    if (saas === 'restored') console.log('✅ SaaS control plane restored from ControlPlaneState');
-    else if (saas === 'seeded') console.log('✅ SaaS control plane seed saved to ControlPlaneState');
+    if (saas === 'restored') console.log('✅ SaaS control plane restored from database rows');
+    else if (saas === 'seeded') console.log('✅ SaaS control plane seed saved to database rows');
   } catch (error) {
     console.warn('SaaS control plane could not be hydrated; continuing with in-memory seed.', error instanceof Error ? error.message : error);
   }
@@ -478,6 +478,11 @@ const startServer = () => {
     await authHydration;
     await hydrateRepository();
     await startRepositoryReconciler();
+    // ULTRA P2: cross-replica control-plane refresh (kill switches,
+    // sessions and keys also read through on the request path).
+    const { startControlPlaneRefresh } = await import('./lib/saas/control-plane-repository.js');
+    const { controlPlane } = await import('./lib/saas/control-plane.js');
+    startControlPlaneRefresh(controlPlane);
     repositoryHydrationState = 'ready';
     if (process.env.RUN_SCHEDULERS !== 'false') {
       const { startCampaignScheduler } = await import('./lib/campaign-scheduler.js');
@@ -500,6 +505,12 @@ const startServer = () => {
     console.log(`${signal} received; closing the API server.`);
     repositoryReconciler?.stop();
     server.close(async () => {
+      try {
+        const { stopControlPlaneRefresh } = await import('./lib/saas/control-plane-repository.js');
+        stopControlPlaneRefresh();
+      } catch (error) {
+        console.warn('Control plane refresh could not be stopped on shutdown.', error instanceof Error ? error.message : error);
+      }
       try {
         const { flushControlPlanePersist } = await import('./lib/saas/persistence.js');
         await flushControlPlanePersist();

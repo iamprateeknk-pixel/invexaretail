@@ -4,6 +4,7 @@ import { PLAN_PRICES } from './tenant-scope.js';
 import { ControlPlaneError, nowIso } from './control-plane.js';
 import type { CompanyStatus, ScopeContext, PlanTemplate, CompanyRecord, BillingInvoice, AuditEvent, ConfigStatus, ConfigurationVersion } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
+import { writeKillSwitchRow, writeSessionRows } from './control-plane-repository.js';
 
 /** Cross-calls the billing/entitlements area needs from the facade (they stay on ControlPlane). */
 export interface ControlPlaneBillingHost {
@@ -100,6 +101,10 @@ export class ControlPlaneBilling {
           session.status = 'closed';
         }
       }
+      // ULTRA P2: session closes reach the database now (see selectCompany).
+      writeSessionRows([...this.store.sessions.values()].filter((entry) => entry.companyId === companyId)).catch((error) => {
+        console.warn('Control plane session could not be written through.', error instanceof Error ? error.message : error);
+      });
     }
     this.host.auditEvent({
       actorUserId: scope.actorId,
@@ -308,6 +313,12 @@ export class ControlPlaneBilling {
 
   setKillSwitch(scope: ScopeContext, featureKey: string, enabled: boolean, reason: string): void {
     this.store.safety.set(featureKey, enabled);
+    // ULTRA P2: the switch reaches the database now, not on the debounced
+    // persist, so every replica (and its kill-switch middleware) honours
+    // it at once. Fire-and-forget: the diff persist retries on failure.
+    writeKillSwitchRow(featureKey, enabled).catch((error) => {
+      console.warn('Kill switch could not be written through.', error instanceof Error ? error.message : error);
+    });
     this.host.auditEvent({
       actorUserId: scope.actorId,
       actorType: 'platform',

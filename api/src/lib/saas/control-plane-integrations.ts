@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { jwtSecret, timingSafeEqual } from './control-plane-tokens.js';
+import { controlPlaneDbEnabled, refreshApiKeyFromDb, writeApiKeyRow } from './control-plane-repository.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
 import { ControlPlaneError, nowIso } from './control-plane.js';
 import type { PublicControlPlaneWebhook, PublicApiKey, ScopeContext, CompanyRecord, AuditEvent, BillingInvoice } from './control-plane.js';
@@ -30,14 +31,19 @@ export class ControlPlaneIntegrations {
     const token = `invx_${randomBytes(16).toString('hex')}`;
     const id = randomUUID();
     const prefix = token.slice(0, 12);
-    this.store.apiKeys.set(id, {
+    const record = {
       id,
       companyId,
       name,
       prefix,
       hash: createHmac('sha256', jwtSecret()).update(token).digest('hex'),
       scopes,
-      status: 'active',
+      status: 'active' as const,
+    };
+    this.store.apiKeys.set(id, record);
+    // ULTRA P2: the key row reaches the database now (see setKillSwitch).
+    writeApiKeyRow(record).catch((error) => {
+      console.warn('API key could not be written through.', error instanceof Error ? error.message : error);
     });
     this.host.auditEvent({
       actorUserId: scope.actorId,
@@ -57,6 +63,24 @@ export class ControlPlaneIntegrations {
   verifyApiKey(token: string): PublicApiKey | null {
     if (!token.startsWith('invx_')) return null;
     const expected = createHmac('sha256', jwtSecret()).update(token).digest('hex');
+    return this.verifyAgainstStore(expected);
+  }
+
+  /**
+   * Request-path key check (ULTRA P2): the key row is re-read from the
+   * database first, so a revocation on another replica is honoured
+   * immediately. Memory mode delegates straight to the store check.
+   */
+  async verifyApiKeyFresh(token: string): Promise<PublicApiKey | null> {
+    if (!token.startsWith('invx_')) return null;
+    const expected = createHmac('sha256', jwtSecret()).update(token).digest('hex');
+    if (controlPlaneDbEnabled()) {
+      await refreshApiKeyFromDb(this.store.apiKeys, expected);
+    }
+    return this.verifyAgainstStore(expected);
+  }
+
+  private verifyAgainstStore(expected: string): PublicApiKey | null {
     let matched: { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' } | null = null;
     for (const key of this.store.apiKeys.values()) {
       if (key.hash.length !== expected.length || !timingSafeEqual(key.hash, expected)) continue;
@@ -81,6 +105,9 @@ export class ControlPlaneIntegrations {
       throw new ControlPlaneError('API key not found', 'API_KEY_NOT_FOUND', 404);
     }
     key.status = 'revoked';
+    writeApiKeyRow(key).catch((error) => {
+      console.warn('API key could not be written through.', error instanceof Error ? error.message : error);
+    });
     this.host.auditEvent({
       actorUserId: scope.actorId,
       actorType: 'platform',
@@ -115,6 +142,9 @@ export class ControlPlaneIntegrations {
     }
     const created = this.createApiKey(scope, old.name, [...old.scopes]);
     old.status = 'revoked';
+    writeApiKeyRow(old).catch((error) => {
+      console.warn('API key could not be written through.', error instanceof Error ? error.message : error);
+    });
     this.host.auditEvent({
       actorUserId: scope.actorId,
       actorType: 'platform',
@@ -185,7 +215,7 @@ export class ControlPlaneIntegrations {
     return {
       ok: true,
       service: 'invexa-control-plane',
-      persistence: 'snapshot',
+      persistence: controlPlaneDbEnabled() ? 'db-rows' : 'snapshot',
       companies: this.store.companies.size,
       sessions: [...this.store.sessions.values()].filter((session) => session.status === 'active').length,
       queueLag: this.store.outbox.length,

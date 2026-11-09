@@ -2181,6 +2181,229 @@ model ControlPlaneState {
   updatedAt DateTime @updatedAt
 }
 
+// ULTRA P2: the control plane's system of record is one row per record, not
+// the single ControlPlaneState JSON blob (multi-replica split truth plus
+// last-writer-wins on every save). ControlPlaneState is retained for the
+// one-time blob import on first boot after the rows migration and as a
+// rollback source; nothing writes it anymore. Plans stay code seeds
+// (control-plane.ts seed()); they are static config, not tenant state, and
+// are re-seeded on every boot. Snapshot ISO-string fields stay TEXT on
+// purpose: the row layer must round-trip the snapshot exactly, so no Date
+// normalisation happens here. Only updatedAt is a real timestamp (the
+// refresh watermark / row-change signal).
+model ControlPlaneCompany {
+  id             String   @id
+  tenantId       String
+  name           String
+  status         String
+  planId         String
+  primaryAdminId String?
+  createdAt      String
+  entitlements   Json
+  limitOverrides Json
+  billing        Json
+  updatedAt      DateTime @updatedAt
+}
+
+model ControlPlanePlatformUser {
+  id           String   @id
+  email        String   @unique
+  name         String
+  passwordHash String
+  status       String
+  updatedAt    DateTime @updatedAt
+}
+
+model ControlPlaneCompanyUser {
+  id             String   @id
+  companyId      String
+  email          String
+  name           String
+  role           String
+  status         String
+  passwordHash   String
+  isPrimaryAdmin Boolean
+  createdAt      String
+  updatedAt      DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneSession {
+  id             String   @id
+  platformUserId String
+  companyId      String
+  tenantId       String
+  status         String
+  issuedAt       String
+  expiresAt      String
+  updatedAt      DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneApiKey {
+  id        String   @id
+  companyId String
+  name      String
+  prefix    String
+  hash      String   @unique
+  scopes    Json
+  status    String
+  createdAt String
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneKillSwitch {
+  featureKey String   @id
+  enabled    Boolean
+  updatedAt  DateTime @updatedAt
+}
+
+model ControlPlaneUsage {
+  companyId String
+  meter     String
+  value     Float
+  updatedAt DateTime @updatedAt
+
+  @@id([companyId, meter])
+}
+
+model ControlPlaneWebhook {
+  id            String   @id
+  companyId     String
+  name          String
+  url           String
+  events        Json
+  status        String
+  signingSecret String
+  createdAt     String
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneConnector {
+  id        String   @id
+  companyId String
+  type      String
+  status    String
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneDevice {
+  id         String   @id
+  companyId  String
+  userId     String
+  status     String
+  appVersion String
+  updatedAt  DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneInvoice {
+  id                      String   @id
+  companyId               String
+  amount                  Int
+  cycle                   String
+  status                  String
+  issuedAt                String
+  paidAt                  String?
+  stripeCheckoutSessionId String?
+  updatedAt               DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneConfig {
+  versionId String
+  companyId String
+  version   Int
+  kind      String
+  status    String
+  payload   Json
+  updatedAt DateTime @updatedAt
+
+  @@id([versionId, kind])
+  @@index([companyId, kind])
+}
+
+model ControlPlaneAudit {
+  id          String   @id
+  actorUserId String
+  actorType   String
+  tenantId    String
+  companyId   String?
+  sessionId   String?
+  action      String
+  entityType  String
+  entityId    String
+  before      Json?
+  after       Json?
+  reason      String?
+  timestamp   String
+
+  @@index([companyId, timestamp])
+}
+
+model ControlPlaneMutation {
+  mutationId  String   @id
+  tenantId    String
+  companyId   String
+  userId      String
+  deviceId    String
+  entityType  String
+  actionType  String
+  payload     Json
+  status      String
+  retryCount  Int
+  lastError   String?
+  result      Json?
+  createdAt   String
+  serverAckAt String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ControlPlaneFieldValue {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model ControlPlaneLedger {
+  key       String   @id
+  value     Float
+  updatedAt DateTime @updatedAt
+}
+
+model ControlPlaneImportProfile {
+  key       String   @id
+  profile   Json
+  updatedAt DateTime @updatedAt
+}
+
+model ControlPlaneOutbox {
+  id        String   @id
+  event     String
+  payload   Json
+  createdAt String
+
+  @@index([createdAt])
+}
+
+model ControlPlaneMeta {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
 // Blueprint P8: bin-granularity stock. Location ATP remains on StockLedger
 // (item+lot+location); this table answers "Bin A currently holds N units".
 model BinStock {

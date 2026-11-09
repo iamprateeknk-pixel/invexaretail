@@ -95,7 +95,7 @@ function attachApiKey(req: Request, key: { id: string; companyId: string; name: 
 }
 
 // Middleware to extract JWT token
-export function extractToken(req: Request, res: Response, next: NextFunction): void {
+export async function extractToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return next();
@@ -108,7 +108,9 @@ export function extractToken(req: Request, res: Response, next: NextFunction): v
       return;
     }
     try {
-      const key = controlPlane.verifyApiKey(token);
+      // ULTRA P2: the key row is re-read first, so a revocation on
+      // another replica is honoured here immediately.
+      const key = await controlPlane.verifyApiKeyFresh(token);
       if (!key) {
         res.status(401).json({ error: 'Invalid API key', code: 'API_KEY_INVALID' });
         return;

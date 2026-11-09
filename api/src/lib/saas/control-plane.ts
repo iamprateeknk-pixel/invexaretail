@@ -11,6 +11,13 @@ import { ControlPlaneBilling } from './control-plane-billing.js';
 import { ControlPlaneIntegrations } from './control-plane-integrations.js';
 import { ControlPlaneStudio } from './control-plane-studio.js';
 import { ControlPlaneSync } from './control-plane-sync.js';
+import {
+  controlPlaneDbEnabled,
+  incrementUsage as incrementUsageRow,
+  refreshSessionFromDb,
+  syncUsageBaseline,
+  writeSessionRows,
+} from './control-plane-repository.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -52,6 +59,17 @@ export type PublicApiKey = {
   companyId: string;
   name: string;
   prefix: string;
+  scopes: string[];
+  status: 'active' | 'revoked';
+};
+
+/** Stored API-key record: the HMAC hash only, never a token. */
+export type ControlPlaneApiKeyRecord = {
+  id: string;
+  companyId: string;
+  name: string;
+  prefix: string;
+  hash: string;
   scopes: string[];
   status: 'active' | 'revoked';
 };
@@ -351,7 +369,7 @@ export class ControlPlane {
   ledger = new Map<string, number>();
   mutations = new Map<string, SyncMutation>();
   devices = new Map<string, { id: string; companyId: string; userId: string; status: 'trusted' | 'revoked' | 'outdated'; appVersion: string }>();
-  apiKeys = new Map<string, { id: string; companyId: string; name: string; prefix: string; hash: string; scopes: string[]; status: 'active' | 'revoked' }>();
+  apiKeys = new Map<string, ControlPlaneApiKeyRecord>();
   webhooks = new Map<string, ControlPlaneWebhook>();
   connectors = new Map<string, { id: string; companyId: string; type: string; status: 'healthy' | 'degraded' | 'down' }>();
   importProfiles = new Map<string, ImportProfile>();
@@ -702,6 +720,12 @@ export class ControlPlane {
         session.status = 'closed';
       }
     }
+    // ULTRA P2: the new session and the closes reach the database now, not
+    // on the debounced persist, so another replica honours them at once.
+    // Fire-and-forget: the diff persist retries if this write fails.
+    writeSessionRows([...this.sessions.values()].filter((entry) => entry.platformUserId === platformUserId)).catch((error) => {
+      console.warn('Control plane session could not be written through.', error instanceof Error ? error.message : error);
+    });
     const session: CompanySession = {
       id: randomUUID(),
       platformUserId,
@@ -740,6 +764,9 @@ export class ControlPlane {
     const session = this.sessions.get(sessionId);
     if (!session) throw new ControlPlaneError('Session not found', 'SESSION_NOT_FOUND', 404);
     session.status = 'closed';
+    writeSessionRows([session]).catch((error) => {
+      console.warn('Control plane session could not be written through.', error instanceof Error ? error.message : error);
+    });
     this.auditEvent({
       actorUserId: actorId,
       actorType: 'platform',
@@ -787,6 +814,24 @@ export class ControlPlane {
       payload,
       session,
     };
+  }
+
+  /**
+   * Request-path session check (ULTRA P2): in DB mode the session row is
+   * re-read from the database first, so a session closed on another
+   * replica (company suspend, company switch) is honoured here
+   * immediately instead of at the next restart. Memory mode delegates
+   * straight to the synchronous check. The sync requireControlSession
+   * stays for services and unit tests.
+   */
+  async requireControlSessionFresh(token: string): Promise<{ scope: ScopeContext; payload: ControlTokenPayload; session?: CompanySession }> {
+    if (controlPlaneDbEnabled()) {
+      const payload = verifyControlToken(token);
+      if (payload.sessionType !== 'platform') {
+        await refreshSessionFromDb(this, payload.companySessionId);
+      }
+    }
+    return this.requireControlSession(token);
   }
 
   requireCompany(companyId: string): CompanyRecord {
@@ -1109,6 +1154,11 @@ export class ControlPlane {
     return this.integrationsSvc.verifyApiKey(token);
   }
 
+  /** Request-path API-key check (ULTRA P2): row read-through, then the sync check. */
+  verifyApiKeyFresh(token: string): Promise<PublicApiKey | null> {
+    return this.integrationsSvc.verifyApiKeyFresh(token);
+  }
+
   revokeApiKey(scope: ScopeContext, keyId: string): PublicApiKey {
     return this.integrationsSvc.revokeApiKey(scope, keyId);
   }
@@ -1130,6 +1180,27 @@ export class ControlPlane {
 
   recordUsage(companyId: string, meter: string, increment = 1): void {
     this.integrationsSvc.recordUsage(companyId, meter, increment);
+  }
+
+  /**
+   * Atomic usage increment (ULTRA P2): in DB mode the counter is a
+   * per-meter row incremented by the database, so concurrent increments
+   * from two replicas sum instead of racing. The in-memory map is synced
+   * to the returned total. Memory mode falls back to the sync path. The
+   * per-request counting in company-access.ts stays on the sync path
+   * (advisory counters flushed by the row persist).
+   */
+  async incrementUsage(companyId: string, meter: string, increment = 1): Promise<number> {
+    if (!controlPlaneDbEnabled()) {
+      this.recordUsage(companyId, meter, increment);
+      return this.usage.get(companyId)?.[meter] ?? 0;
+    }
+    const total = await incrementUsageRow(companyId, meter, increment);
+    const usage = this.usage.get(companyId) ?? {};
+    usage[meter] = total;
+    this.usage.set(companyId, usage);
+    syncUsageBaseline(this, companyId, meter, total);
+    return total;
   }
 
   health() {

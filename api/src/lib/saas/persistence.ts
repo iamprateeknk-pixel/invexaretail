@@ -1,8 +1,12 @@
-import { Prisma } from '@prisma/client';
-import { resolveDatabaseUrl } from '../db.js';
 import { controlPlane } from './control-plane.js';
 import {
-  applyControlPlaneSnapshot,
+  controlPlaneDbEnabled,
+  controlPlaneRowsExist,
+  hydrateControlPlaneRows,
+  importBlobSnapshotToRows,
+  persistControlPlaneRows,
+} from './control-plane-repository.js';
+import {
   CONTROL_PLANE_STATE_ID,
   isControlPlaneSnapshot,
   serializeControlPlane,
@@ -10,23 +14,20 @@ import {
 } from './snapshot.js';
 
 function databaseEnabled(): boolean {
-  if (process.env.NODE_TEST_CONTEXT && process.env.CONTROL_PLANE_PERSIST_IN_TESTS !== '1') {
-    return false;
-  }
-  return Boolean(resolveDatabaseUrl());
+  return controlPlaneDbEnabled();
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let persistInFlight: Promise<void> | undefined;
 
-function asJsonPayload(snapshot: ControlPlaneSnapshot): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue;
-}
-
 // ADR-004: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
 // its schema. No-op kept so existing call sites do not need to change.
 export async function ensureControlPlaneSchema(): Promise<void> {}
 
+/**
+ * Legacy blob read: kept only as the one-time import source on first boot
+ * after the ULTRA P2 rows migration. Nothing writes the blob anymore.
+ */
 export async function loadControlPlaneSnapshot(): Promise<ControlPlaneSnapshot | null> {
   if (!databaseEnabled()) return null;
   const { prisma } = await import('../db.js');
@@ -38,30 +39,39 @@ export async function loadControlPlaneSnapshot(): Promise<ControlPlaneSnapshot |
   return isControlPlaneSnapshot(parsed) ? parsed : null;
 }
 
+/**
+ * Persists the plane as ROWS (see control-plane-repository.ts): only the
+ * records that changed since the last persist are written, in one
+ * transaction. The signature keeps the old blob-save shape; the snapshot
+ * argument defaults to the live plane, which is what every caller passes.
+ */
 export async function saveControlPlaneSnapshot(
   snapshot: ControlPlaneSnapshot = serializeControlPlane(controlPlane),
 ): Promise<void> {
   if (!databaseEnabled()) return;
-  const { prisma } = await import('../db.js');
-  const payload = asJsonPayload(snapshot);
-  await prisma.controlPlaneState.upsert({
-    where: { id: CONTROL_PLANE_STATE_ID },
-    create: { id: CONTROL_PLANE_STATE_ID, payload },
-    update: { payload },
-  });
+  await persistControlPlaneRows(controlPlane, snapshot);
 }
 
 export async function hydrateControlPlaneFromStore(): Promise<'skipped' | 'seeded' | 'restored'> {
   if (!databaseEnabled()) return 'skipped';
   try {
     await ensureControlPlaneSchema();
-    const snapshot = await loadControlPlaneSnapshot();
-    if (!snapshot) {
-      await saveControlPlaneSnapshot();
-      return 'seeded';
+    if (await controlPlaneRowsExist()) {
+      const restored = await hydrateControlPlaneRows(controlPlane);
+      return restored ? 'restored' : 'skipped';
     }
-    applyControlPlaneSnapshot(controlPlane, snapshot);
-    return 'restored';
+    // First boot after the rows migration: import the legacy blob once, if
+    // one exists, so existing deployments keep their companies, sessions,
+    // keys and kill switches. The blob row is left untouched as a rollback
+    // source; afterwards the rows are the system of record.
+    const snapshot = await loadControlPlaneSnapshot();
+    if (snapshot) {
+      await importBlobSnapshotToRows(snapshot);
+      await hydrateControlPlaneRows(controlPlane);
+      return 'restored';
+    }
+    await persistControlPlaneRows(controlPlane);
+    return 'seeded';
   } catch (error) {
     console.warn(
       'SaaS control plane state could not be hydrated; continuing with in-memory seed.',
@@ -152,4 +162,3 @@ export async function syncOperationalCompanies(): Promise<number> {
   if (changed) scheduleControlPlanePersist();
   return changed;
 }
-
