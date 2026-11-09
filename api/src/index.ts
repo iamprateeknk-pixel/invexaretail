@@ -366,7 +366,10 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_ERROR',
-    requestId,
+    // [ULTRA] P3 (#186): `traceId`, not `requestId` — the same key the
+    // ADR-006 envelope (DomainError.toEnvelope / sendError) carries, so
+    // a client reads one field on every error response.
+    traceId: requestId,
   });
 });
 

@@ -133,15 +133,15 @@ test('archiving hides an item from operations, blocks new transactions, and is f
     // No new transactions against it.
     const assign = await call('POST', '/count-assignments', admin, { locationId: 'loc-1', storeUserId: 'user-store-1', itemIds: [target] });
     assert.equal(assign.status, 400);
-    assert.match(assign.body.message, /archived/);
+    assert.match(assign.body.error, /archived/);
     const count = await call('POST', '/stock-counts', admin, { itemId: target, locationId: 'loc-1', physicalQuantity: 1, mode: 'manual' });
     assert.equal(count.status, 400);
-    assert.match(count.body.message, /archived/);
+    assert.match(count.body.error, /archived/);
     const transfer = await call('POST', '/transfers', admin, {
       sourceLocationId: 'loc-1', destinationLocationId: 'wh-1', lines: [{ itemId: target, lotId: 'lot-1002', quantity: 1 }],
     });
     assert.equal(transfer.status, 400);
-    assert.match(transfer.body.message, /archived/);
+    assert.match(transfer.body.error, /archived/);
 
     const restored = await call('PATCH', `/items/${target}/status`, admin, { status: 'ACTIVE' });
     assert.equal(restored.status, 200);

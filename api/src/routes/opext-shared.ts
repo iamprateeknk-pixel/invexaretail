@@ -3,6 +3,7 @@
 // every cluster. Extracted verbatim from operations-extension.ts.
 import { type Request, type Response } from 'express';
 import { createHash } from 'node:crypto';
+import { sendError } from '../lib/errors.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { type TenantContext } from '../lib/tenant-context.js';
 
@@ -31,7 +32,7 @@ export function canAccessLocation(req: Request, locationId: string): boolean {
 
 export function requireAdmin(req: Request, res: Response): boolean {
   if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) {
-    res.status(403).json({ message: 'Admin access required.' });
+    sendError(res, 403, 'FORBIDDEN', 'Admin access required.');
     return false;
   }
   return true;
@@ -44,7 +45,7 @@ export function requireAdmin(req: Request, res: Response): boolean {
 export function requirePlatformOperator(req: Request, res: Response): boolean {
   const isOperator = req.user!.role === 'ADMIN' && (req.companyId ?? DEFAULT_COMPANY_ID) === DEFAULT_COMPANY_ID;
   if (!isOperator) {
-    res.status(403).json({ message: 'Only the platform operator can manage tenants.' });
+    sendError(res, 403, 'FORBIDDEN', 'Only the platform operator can manage tenants.');
     return false;
   }
   return true;
@@ -56,7 +57,7 @@ export function expiryAlertId(itemId: string, lotId: string, locationId: string)
 
 export function requirePacker(req: Request, res: Response): boolean {
   if (!['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(req.user!.role)) {
-    res.status(403).json({ message: 'Admin or Warehouse Picker access required.' });
+    sendError(res, 403, 'FORBIDDEN', 'Admin or Warehouse Picker access required.');
     return false;
   }
   return true;

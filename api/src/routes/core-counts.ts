@@ -9,7 +9,7 @@ import { type Request, type Response, Router } from 'express';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, hidesZeroStockForRole, validateBlindCountSubmission, type BlindCountInput, type Role } from '../lib/inventory.js';
 import { assertCountLocationAccess, canManageCountWork, countsOnlyWhenAssigned, isCountWorkerRole, parseCountPriority, parseCountReviewReason, parseCountReviewStatus, parseOptionalDueDate } from '../lib/count-lifecycle.js';
-import { buildCycleCountPlan, cycleCountInstructions, parseAbcClasses, selectEligibleCycleCountItems } from '../lib/abc-cycle-count.js';
+import { buildCycleCountPlan, cycleCountInstructions, selectEligibleCycleCountItems } from '../lib/abc-cycle-count.js';
 import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import { signedSalesQty } from '../lib/sales-demand.js';
 import { submitStockCount } from '../lib/store.js';
@@ -18,7 +18,18 @@ import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listSto
 import type { TenantContext } from '../lib/tenant-context.js';
 import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { getCountRecommendation } from '../lib/count-tolerance.js';
-import { isDomainError, statusForErrorCode } from '../lib/errors.js';
+import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
+import { parseBody } from '../lib/validate.js';
+import {
+  countSubmitSchema,
+  weightCountSchema,
+  countReviewSchema,
+  countReconciliationAckSchema,
+  countAssignmentSchema,
+  countAssignmentUpdateSchema,
+  countAssignmentBulkDeleteSchema,
+  cycleCountAssignSchema,
+} from '../lib/validation-schemas.js';
 import { recordAudit } from '../lib/audit.js';
 import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
 import { allocateWeightCount, totalVariance } from '../lib/weight-allocation.js';
@@ -80,17 +91,15 @@ router.get('/counts', async (req: Request, res: Response) => {
 // looked at it (and adjusted stock if needed). The recomputed figures stay on
 // the count for the audit trail.
 router.post('/stock-counts/:countId/reconciliation/ack', async (req: Request, res: Response) => {
-  if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Only admins and branch managers can resolve a reconciliation flag.' });
+  if (!canManageCountWork(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can resolve a reconciliation flag.');
   const count = findCountForCompany(firstParam(req.params.countId), req.companyId ?? DEFAULT_COMPANY_ID);
-  if (!count) return res.status(404).json({ message: 'Stock count was not found.' });
-  if (!canAccessLocation(accessContext(req.user!), count.locationId)) return res.status(403).json({ message: 'This user cannot review counts at that location.' });
-  if (!count.reconciliationRequired) return res.status(409).json({ message: 'This count has no open reconciliation flag.' });
-  let note: string;
-  try {
-    note = parseCountReviewReason(req.body?.note);
-  } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'A resolution note is required.' });
-  }
+  if (!count) return sendError(res, 404, 'NOT_FOUND', 'Stock count was not found.');
+  if (!canAccessLocation(accessContext(req.user!), count.locationId)) return sendError(res, 403, 'FORBIDDEN', 'This user cannot review counts at that location.');
+  if (!count.reconciliationRequired) return sendError(res, 409, 'CONFLICT', 'This count has no open reconciliation flag.');
+  // Shape validation runs here, after the guards above; the note-length
+  // rule is the same one parseCountReviewReason enforced.
+  if (parseBody(req, res, countReconciliationAckSchema) === null) return;
+  const note = String(req.body.note).trim();
   const stored = countsStore.find((candidate) => candidate.id === count.id)!;
   stored.reconciliationRequired = false;
   stored.reconciliationNote = `${stored.reconciliationNote ?? ''} Resolved by ${req.user!.id}: ${note}`.trim();
@@ -212,8 +221,12 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
   const input = req.body as BlindCountInput;
 
   if (!canAccessLocation(context, input.locationId)) {
-    return res.status(403).json({ message: 'This user cannot submit a count for the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot submit a count for the selected location.');
   }
+
+  // Shape validation runs here, after the location check; the blind-role
+  // rules (no bookQuantity/variance) stay in validateBlindCountSubmission.
+  if (parseBody(req, res, countSubmitSchema) === null) return;
 
   try {
     const validated = validateBlindCountSubmission(context.role, input);
@@ -224,33 +237,33 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
-    if (!item) return res.status(400).json({ message: 'Item was not found.' });
-    if (!isOperationalItem(item)) return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
+    if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
+    if (!isOperationalItem(item)) return sendError(res, 400, 'VALIDATION_FAILED', `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.`);
 
     const lot = validated.lotNo
       ? item.lots.find((candidate) => candidate.lotNo.toLowerCase() === validated.lotNo!.toLowerCase())
       : item.lots[0];
-    if (!lot) return res.status(400).json({ message: `Lot "${validated.lotNo}" was not found for this item.` });
+    if (!lot) return sendError(res, 400, 'VALIDATION_FAILED', `Lot "${validated.lotNo}" was not found for this item.`);
 
     // Blueprint v4 §13: pieces are whole numbers; only weight / decimal items take fractions.
     if (!item.decimalQuantity && item.countMethod !== 'ITEM_WEIGHT' && !Number.isInteger(validated.physicalQuantity)) {
-      return res.status(400).json({ message: `Item ${item.code} is counted in whole units.` });
+      return sendError(res, 400, 'VALIDATION_FAILED', `Item ${item.code} is counted in whole units.`);
     }
 
     // Blueprint v4 §7: operational users never act on a zero-stock lot.
     if (hidesZeroStockForRole(context.role) && ((await findStockEntry(tenantContext(req), item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
-      return res.status(400).json({ message: `Lot ${lot.lotNo} has no stock at this location and cannot be counted.` });
+      return sendError(res, 400, 'VALIDATION_FAILED', `Lot ${lot.lotNo} has no stock at this location and cannot be counted.`);
     }
 
     if (findPendingCountForLot(req.user!.id, item.id, lot.id, validated.locationId)) {
-      return res.status(409).json({ message: 'This lot is already submitted and waiting for review.' });
+      return sendError(res, 409, 'CONFLICT', 'This lot is already submitted and waiting for review.');
     }
 
     // Store Users may only count what Admin assigned them; Admin can record ad hoc counts freely.
     // A branch manager may do either - a count of an item assigned to them closes that task.
     const assignment = isCountWorkerRole(context.role) ? findActiveAssignment(req.user!.id, item.id, validated.locationId) : undefined;
     if (!assignment && countsOnlyWhenAssigned(context.role)) {
-      return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
+      return sendError(res, 403, 'FORBIDDEN', 'This item is not assigned to you for counting at this location.');
     }
 
     const { saved, bookQty } = await commitLotCount({
@@ -263,7 +276,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid stock count payload' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid stock count payload');
   }
 });
 
@@ -277,16 +290,19 @@ const weightInFlight = new Set<string>();
 router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string };
-  if (!input?.itemId || !input?.locationId) return res.status(400).json({ message: 'Item and location are required for a count submission.' });
+  // The presence check stays ahead of the location check, exactly as
+  // before — a missing itemId/locationId is a 400 even for a location
+  // this user cannot access.
+  if (!input?.itemId || !input?.locationId) return sendError(res, 400, 'VALIDATION_FAILED', 'Item and location are required for a count submission.');
   const locationId = input.locationId;
   if (!canAccessLocation(context, locationId)) {
-    return res.status(403).json({ message: 'This user cannot submit a count for the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot submit a count for the selected location.');
   }
+  // Shape validation runs here, after the location check — exactly where
+  // the total-quantity check used to run.
+  if (parseBody(req, res, weightCountSchema) === null) return;
   try {
     const total = Number(input.totalQuantity);
-    if (input.totalQuantity === undefined || input.totalQuantity === null || (input.totalQuantity as unknown) === '' || !Number.isFinite(total) || total < 0) {
-      return res.status(400).json({ message: 'Counted quantity must be a non-negative number.' });
-    }
     const requestId = parseRequestId(input.requestId);
     if (requestId) {
       const prior = countsForRequest(req.user!.id, requestId);
@@ -299,16 +315,16 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
     }
 
     const item = listItems().find((candidate) => candidate.id === input.itemId);
-    if (!item) return res.status(400).json({ message: 'Item was not found.' });
-    if (!isOperationalItem(item)) return res.status(400).json({ message: `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.` });
+    if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
+    if (!isOperationalItem(item)) return sendError(res, 400, 'VALIDATION_FAILED', `Item ${item.code} is ${String(item.status).toLowerCase()} and cannot be counted.`);
     if (item.countMethod !== 'ITEM_WEIGHT') {
-      return res.status(400).json({ message: `Item ${item.code} is counted by scanning lots, not by weight.` });
+      return sendError(res, 400, 'VALIDATION_FAILED', `Item ${item.code} is counted by scanning lots, not by weight.`);
     }
 
     let assignment;
     if (context.role === 'STORE_USER') {
       assignment = findActiveAssignment(req.user!.id, item.id, locationId);
-      if (!assignment) return res.status(403).json({ message: 'This item is not assigned to you for counting at this location.' });
+      if (!assignment) return sendError(res, 403, 'FORBIDDEN', 'This item is not assigned to you for counting at this location.');
     }
 
     const weightLedger = await listStockForLocation(tenantContext(req), locationId);
@@ -318,13 +334,13 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
     }));
     const allocation = allocateWeightCount(total, lots, item.allocationStrategy ?? 'FEFO');
     if (allocation.some((row) => findPendingCountForLot(req.user!.id, item.id, row.lotId, locationId))) {
-      return res.status(409).json({ message: 'This item is already submitted and waiting for review.' });
+      return sendError(res, 409, 'CONFLICT', 'This item is already submitted and waiting for review.');
     }
 
     // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
     // so a retry never finds half a count and calls it done.
     const flightKey = requestId ? `${req.user!.id}|${requestId}` : '';
-    if (flightKey && weightInFlight.has(flightKey)) return res.status(409).json({ message: 'This count is already being saved. Retry in a moment.' });
+    if (flightKey && weightInFlight.has(flightKey)) return sendError(res, 409, 'CONFLICT', 'This count is already being saved. Retry in a moment.');
     if (flightKey) weightInFlight.add(flightKey);
     const saved: Array<Awaited<ReturnType<typeof commitLotCount>>> = [];
     try {
@@ -362,52 +378,49 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       totalVariance: totalVariance(allocation),
     });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid weight count payload' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid weight count payload');
   }
 });
 
 router.patch('/stock-counts/:countId/review', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
-    return res.status(403).json({ message: 'Only admins and branch managers can review stock counts.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can review stock counts.');
   }
 
-  let status;
-  let reviewReason;
-  let reasonCode;
-  try {
-    status = parseCountReviewStatus(req.body.status);
-    reviewReason = parseCountReviewReason(req.body.reviewReason ?? req.body.reason);
-    reasonCode = parseCountReasonCode(req.body.reasonCode);
-  } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid review payload.' });
-  }
+  // Shape validation runs here, before the lookup — exactly where the
+  // status/reason/code parse used to run. The lib parsers below still
+  // produce the stored values (they cannot throw on schema-valid input).
+  if (parseBody(req, res, countReviewSchema) === null) return;
+  const status = parseCountReviewStatus(req.body.status);
+  const reviewReason = parseCountReviewReason(req.body.reviewReason ?? req.body.reason);
+  const reasonCode = parseCountReasonCode(req.body.reasonCode);
 
   try {
     const countId = firstParam(req.params.countId);
     const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
-    if (!current) return res.status(404).json({ message: 'Stock count was not found.' });
-    if (current.status !== 'PENDING_REVIEW') return res.status(409).json({ message: `Count is already ${current.status} and cannot be reviewed again.` });
+    if (!current) return sendError(res, 404, 'NOT_FOUND', 'Stock count was not found.');
+    if (current.status !== 'PENDING_REVIEW') return sendError(res, 409, 'INVALID_TRANSITION', `Count is already ${current.status} and cannot be reviewed again.`);
     // Branch managers can be assigned count work too: whoever was handed the count cannot also approve it.
     // (An admin's own ad hoc count has no assignment behind it and stays reviewable as before.)
     if (current.submittedBy === req.user!.id && countWasAssignedWork(current)) {
-      return res.status(403).json({ message: 'You cannot review a count you were assigned and submitted yourself.', code: 'SELF_REVIEW' });
+      return sendError(res, 403, 'SELF_REVIEW', 'You cannot review a count you were assigned and submitted yourself.');
     }
     try {
       assertCountLocationAccess(accessContext(req.user!), current.locationId);
     } catch {
-      return res.status(403).json({ message: 'This user cannot review counts at the selected location.' });
+      return sendError(res, 403, 'FORBIDDEN', 'This user cannot review counts at the selected location.');
     }
     // Optional enforcement (COUNT_ENFORCE_RECOUNT=true, audit C-1): a first count whose variance is outside the
     // default tolerance cannot be approved as is - it must go to a recount, which is then a second, independent count.
     if (process.env.COUNT_ENFORCE_RECOUNT === 'true' && status === 'APPROVED' && !current.parentCountId
       && exceedsDefaultTolerance(current.bookQty, Math.abs(current.physicalQuantity - current.bookQty))) {
-      return res.status(409).json({ message: 'This variance is outside tolerance. Request a recount instead of approving the first count.', code: 'RECOUNT_REQUIRED' });
+      return sendError(res, 409, 'RECOUNT_REQUIRED', 'This variance is outside tolerance. Request a recount instead of approving the first count.');
     }
     // A recount must be independent: the same person re-counting their own first count proves nothing (audit C-1).
     if (process.env.COUNT_ENFORCE_RECOUNT === 'true' && status === 'APPROVED' && current.parentCountId) {
       const parent = listCounts().find((count) => count.id === current.parentCountId);
       if (parent && parent.submittedBy === current.submittedBy) {
-        return res.status(409).json({ message: 'A recount must be done by a different person than the first count.', code: 'RECOUNT_NOT_INDEPENDENT' });
+        return sendError(res, 409, 'RECOUNT_NOT_INDEPENDENT', 'A recount must be done by a different person than the first count.');
       }
     }
     const reviewedAt = new Date().toISOString();
@@ -459,7 +472,9 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
     }
     const message = error instanceof Error ? error.message : 'Stock count was not found.';
-    return res.status(message.includes('not found') ? 404 : 400).json({ message });
+    return message.includes('not found')
+      ? sendError(res, 404, 'NOT_FOUND', message)
+      : sendError(res, 400, 'VALIDATION_FAILED', message);
   }
 });
 
@@ -469,9 +484,12 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
 
 router.post('/count-assignments', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
-    return res.status(403).json({ message: 'Only admins and branch managers can assign stock counts.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can assign stock counts.');
   }
 
+  // Shape validation runs here, before the location check — exactly
+  // where the locationId/storeUserId/itemIds presence check used to run.
+  if (parseBody(req, res, countAssignmentSchema) === null) return;
   const { locationId, storeUserId, itemIds, countDate, dueDate, priority, instructions } = req.body as {
     locationId?: string;
     storeUserId?: string;
@@ -482,31 +500,27 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
     instructions?: string;
   };
 
-  if (!locationId || !storeUserId || !Array.isArray(itemIds) || itemIds.length === 0) {
-    return res.status(400).json({ message: 'locationId, storeUserId and a non-empty itemIds array are required.' });
-  }
-
   try {
     assertCountLocationAccess(accessContext(req.user!), locationId);
   } catch {
-    return res.status(403).json({ message: 'This user cannot assign counts at the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot assign counts at the selected location.');
   }
 
   const storeUser = findUserById(storeUserId);
   if (!storeUser || !isCountWorkerRole(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'storeUserId must belong to an existing count worker.');
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
-    return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'That Store User is not assigned to this location.');
   }
 
   const knownItemIds = new Set(listItems().map((item) => item.id));
   const unknownItemId = itemIds.find((id) => !knownItemIds.has(id));
   if (unknownItemId) {
-    return res.status(400).json({ message: `Item "${unknownItemId}" was not found.` });
+    return sendError(res, 400, 'VALIDATION_FAILED', `Item "${unknownItemId}" was not found.`);
   }
   const inactiveAssignItem = inactiveItemMessage(itemIds);
-  if (inactiveAssignItem) return res.status(400).json({ message: inactiveAssignItem });
+  if (inactiveAssignItem) return sendError(res, 400, 'VALIDATION_FAILED', inactiveAssignItem);
 
   let parsedDueDate: string | undefined;
   let parsedPriority;
@@ -514,7 +528,7 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
     parsedDueDate = parseOptionalDueDate(dueDate);
     parsedPriority = parseCountPriority(priority);
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid assignment payload.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid assignment payload.');
   }
 
   const createdAssignments = itemIds.map((itemId) => createCountAssignment({
@@ -544,35 +558,40 @@ router.post('/count-assignments', async (req: Request, res: Response) => {
 
 
 router.patch('/count-assignments/:assignmentId', async (req: Request, res: Response) => {
-  if (!canManageCountWork(req.user!.role)) return res.status(403).json({ message: 'Admin access required.' });
+  if (!canManageCountWork(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Admin access required.');
   const isAdmin = req.user!.role === 'ADMIN' || req.user!.role === 'ADMIN_USER';
   const assignmentId = firstParam(req.params.assignmentId);
   const current = listCountAssignments().find((candidate) => candidate.id === assignmentId);
-  if (!current) return res.status(404).json({ message: 'Count assignment was not found.' });
+  if (!current) return sendError(res, 404, 'NOT_FOUND', 'Count assignment was not found.');
   try {
     assertCountLocationAccess(accessContext(req.user!), current.locationId);
   } catch {
-    return res.status(403).json({ message: 'This user cannot update assignments at the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot update assignments at the selected location.');
   }
-  if (current.status === 'SUBMITTED' && !isAdmin) return res.status(409).json({ message: 'Submitted work is immutable for branch managers; an admin can modify the task metadata.' });
+  if (current.status === 'SUBMITTED' && !isAdmin) return sendError(res, 409, 'CONFLICT', 'Submitted work is immutable for branch managers; an admin can modify the task metadata.');
+  // Shape validation runs here, after the guards above; the assignee,
+  // countDate, dueDate, priority and status checks below still run
+  // (they cannot fail on schema-valid input, except the assignee one,
+  // which is an existence check, not a shape check).
+  if (parseBody(req, res, countAssignmentUpdateSchema) === null) return;
   const assignedToId = typeof req.body.assignedToId === 'string' ? req.body.assignedToId : current.assignedToId;
   const assignee = findUserById(assignedToId);
   if (!assignee || !isCountWorkerRole(assignee.role) || !assignee.assignedLocationIds.includes(current.locationId)) {
-    return res.status(400).json({ message: 'Assignee must be a Store User assigned to this location.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'Assignee must be a Store User assigned to this location.');
   }
   const countDate = req.body.countDate ? new Date(req.body.countDate) : new Date(current.countDate);
-  if (Number.isNaN(countDate.getTime())) return res.status(400).json({ message: 'Count date is invalid.' });
+  if (Number.isNaN(countDate.getTime())) return sendError(res, 400, 'VALIDATION_FAILED', 'Count date is invalid.');
   let dueDate = current.dueDate;
   let priority = current.priority;
   try {
     if (req.body.dueDate !== undefined) dueDate = parseOptionalDueDate(req.body.dueDate);
     if (req.body.priority !== undefined) priority = parseCountPriority(req.body.priority);
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid assignment payload.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid assignment payload.');
   }
   const status = req.body.status === undefined ? current.status : String(req.body.status).toUpperCase();
-  if (!['ASSIGNED', 'CANCELLED', 'SUBMITTED'].includes(status)) return res.status(400).json({ message: 'Assignments can be ASSIGNED, SUBMITTED or CANCELLED.' });
-  if (current.status === 'SUBMITTED' && status !== 'SUBMITTED') return res.status(409).json({ message: 'An approved/submitted task cannot be reopened; create a recount instead.' });
+  if (!['ASSIGNED', 'CANCELLED', 'SUBMITTED'].includes(status)) return sendError(res, 400, 'VALIDATION_FAILED', 'Assignments can be ASSIGNED, SUBMITTED or CANCELLED.');
+  if (current.status === 'SUBMITTED' && status !== 'SUBMITTED') return sendError(res, 409, 'INVALID_TRANSITION', 'An approved/submitted task cannot be reopened; create a recount instead.');
   const updated = updateCountAssignment(assignmentId, {
     assignedToId,
     countDate: countDate.toISOString(),
@@ -587,20 +606,21 @@ router.patch('/count-assignments/:assignmentId', async (req: Request, res: Respo
 });
 
 router.delete('/count-assignments/bulk', async (req: Request, res: Response) => {
-  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can delete count tasks.' });
-  const assignmentIds: string[] = Array.isArray(req.body.assignmentIds)
-    ? [...new Set((req.body.assignmentIds as unknown[]).filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim()))]
-    : [];
-  if (!assignmentIds.length) return res.status(400).json({ message: 'Select at least one count task to delete.' });
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins can delete count tasks.');
+  // Shape validation runs here, after the role check — exactly where the
+  // assignmentIds filtering used to run (junk entries are dropped by
+  // the schema, an empty result is rejected).
+  if (parseBody(req, res, countAssignmentBulkDeleteSchema) === null) return;
+  const assignmentIds: string[] = Array.isArray(req.body.assignmentIds) ? req.body.assignmentIds : [];
 
   const byId = new Map(listCountAssignments().map((assignment) => [assignment.id, assignment]));
   const missingIds = assignmentIds.filter((assignmentId) => !byId.has(assignmentId));
-  if (missingIds.length) return res.status(404).json({ message: 'One or more count tasks were not found.', missingIds });
+  if (missingIds.length) return sendError(res, 404, 'NOT_FOUND', 'One or more count tasks were not found.', { missingIds });
   const selected = assignmentIds.map((assignmentId) => byId.get(assignmentId)!);
   try {
     selected.forEach((assignment) => assertCountLocationAccess(accessContext(req.user!), assignment.locationId));
   } catch {
-    return res.status(403).json({ message: 'This admin cannot delete one or more selected tasks.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This admin cannot delete one or more selected tasks.');
   }
 
   const removed = [];
@@ -628,14 +648,14 @@ router.delete('/count-assignments/bulk', async (req: Request, res: Response) => 
 });
 
 router.delete('/count-assignments/:assignmentId', async (req: Request, res: Response) => {
-  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return res.status(403).json({ message: 'Only admins can delete count tasks.' });
+  if (!['ADMIN', 'ADMIN_USER'].includes(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins can delete count tasks.');
   const assignmentId = firstParam(req.params.assignmentId);
   const current = listCountAssignments().find((candidate) => candidate.id === assignmentId);
-  if (!current) return res.status(404).json({ message: 'Count assignment was not found.' });
+  if (!current) return sendError(res, 404, 'NOT_FOUND', 'Count assignment was not found.');
   try {
     assertCountLocationAccess(accessContext(req.user!), current.locationId);
   } catch {
-    return res.status(403).json({ message: 'This admin cannot delete a task at the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This admin cannot delete a task at the selected location.');
   }
   const removed = deleteCountAssignment(assignmentId);
   try {
@@ -650,7 +670,7 @@ router.delete('/count-assignments/:assignmentId', async (req: Request, res: Resp
 });
 router.get('/count-assignments/mine', async (req: Request, res: Response) => {
   if (!isCountWorkerRole(req.user!.role)) {
-    return res.status(403).json({ message: 'Only assigned count workers have a count task list.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only assigned count workers have a count task list.');
   }
   // Database-first slice 7: the worker's own open tasks, with item name/code, straight from Postgres.
   return res.json({ assignments: await listMyOpenAssignments(tenantContext(req)) });
@@ -668,7 +688,7 @@ router.get('/mobile/work', async (req: Request, res: Response) => {
 
 router.get('/count-assignments', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
-    return res.status(403).json({ message: 'Only admins and branch managers can view count assignments.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can view count assignments.');
   }
   const context = accessContext(req.user!);
   // Database-first slice 3: read through the scoped assignment repository (Postgres in database mode).
@@ -727,54 +747,50 @@ async function cycleCountPlanForLocation(ctx: TenantContext, locationId: string,
 
 router.get('/cycle-counts/:locationId', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
-    return res.status(403).json({ message: 'Only admins and branch managers can view the cycle-count planner.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can view the cycle-count planner.');
   }
   const locationId = firstParam(req.params.locationId);
   const location = listLocations().find((candidate) => candidate.id === locationId);
-  if (!location) return res.status(404).json({ message: 'Location was not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location was not found.');
   try {
     assertCountLocationAccess(accessContext(req.user!), locationId);
   } catch {
-    return res.status(403).json({ message: 'This user cannot manage counts at the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot manage counts at the selected location.');
   }
   return res.json({ plan: await cycleCountPlanForLocation(tenantContext(req), locationId, req.companyId ?? DEFAULT_COMPANY_ID) });
 });
 
 router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Response) => {
   if (!canManageCountWork(req.user!.role)) {
-    return res.status(403).json({ message: 'Only admins and branch managers can assign cycle counts.' });
+    return sendError(res, 403, 'FORBIDDEN', 'Only admins and branch managers can assign cycle counts.');
   }
   const locationId = firstParam(req.params.locationId);
   const location = listLocations().find((candidate) => candidate.id === locationId);
-  if (!location) return res.status(404).json({ message: 'Location was not found.' });
+  if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location was not found.');
   try {
     assertCountLocationAccess(accessContext(req.user!), locationId);
   } catch {
-    return res.status(403).json({ message: 'This user cannot assign counts at the selected location.' });
+    return sendError(res, 403, 'FORBIDDEN', 'This user cannot assign counts at the selected location.');
   }
 
+  // Shape validation runs here, after the location check — exactly
+  // where the storeUserId presence and ABC-classes parse used to run.
+  if (parseBody(req, res, cycleCountAssignSchema) === null) return;
   const { storeUserId, classes, itemIds } = req.body as {
     storeUserId?: string;
     classes?: unknown;
     itemIds?: unknown;
   };
-  if (!storeUserId) {
-    return res.status(400).json({ message: 'storeUserId is required.' });
-  }
+  // The schema already applied the parseAbcClasses rules (missing/empty
+  // means ['A'], unknown entries dropped, none left rejected).
+  const parsedClasses = classes as Array<'A' | 'B' | 'C'>;
 
   const storeUser = findUserById(storeUserId);
   if (!storeUser || !isCountWorkerRole(storeUser.role)) {
-    return res.status(400).json({ message: 'storeUserId must belong to an existing count worker.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'storeUserId must belong to an existing count worker.');
   }
   if (!canAccessLocation({ role: storeUser.role, assignedLocationIds: storeUser.assignedLocationIds }, locationId)) {
-    return res.status(400).json({ message: 'That Store User is not assigned to this location.' });
-  }
-
-  let parsedClasses;
-  try {
-    parsedClasses = parseAbcClasses(classes);
-  } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid ABC classes.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'That Store User is not assigned to this location.');
   }
 
   const requestedItemIds = Array.isArray(itemIds)
@@ -786,7 +802,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
     const known = new Set(plan.items.map((item) => item.itemId));
     const unknownItemId = requestedItemIds.find((id) => !known.has(id));
     if (unknownItemId) {
-      return res.status(400).json({ message: `Item "${unknownItemId}" is not on the cycle-count plan for this location.` });
+      return sendError(res, 400, 'VALIDATION_FAILED', `Item "${unknownItemId}" is not on the cycle-count plan for this location.`);
     }
   }
 
@@ -795,7 +811,7 @@ router.post('/cycle-counts/:locationId/assign', async (req: Request, res: Respon
     itemIds: requestedItemIds,
   });
   if (selected.length === 0) {
-    return res.status(400).json({ message: 'No eligible items remain for the selected ABC classes.' });
+    return sendError(res, 400, 'VALIDATION_FAILED', 'No eligible items remain for the selected ABC classes.');
   }
 
   const createdAssignments = selected.map((item) => createCountAssignment({

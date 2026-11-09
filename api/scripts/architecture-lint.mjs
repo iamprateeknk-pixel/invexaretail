@@ -67,6 +67,14 @@ const RULES = [
     },
   },
   {
+    id: 'raw-error-envelope',
+    description: 'Raw { message } error response in a P3-converted route file — use sendError / the ADR-006 envelope (issue #186)',
+    test(file, line) {
+      if (!RAW_ENVELOPE_FILES.has(file)) return false;
+      return /res\.status\([45]\d\d\)\.json\(\{\s*message\b/.test(line);
+    },
+  },
+  {
     id: 'direct-stock-write',
     description: 'StockLedger/StockMovement/StockBalance write outside the ADR-001 posting-service allowlist',
     test(file, line) {
@@ -117,6 +125,23 @@ const RULES = [
 // lifecycle modules (or the model's own repository/command-service layer,
 // where the lifecycle module's own transition function is what's calling
 // through) or InventoryPostingService/reservation.ts's status column reads.
+// [ULTRA] P3 (#186): the route files converted to the single ADR-006
+// error envelope ({ error, code, traceId }). A raw `{ message }` error
+// response in one of these files is a new violation (fails CI). The
+// other ~40 route files still return raw shapes — they are the
+// follow-up remainder on #186, not baseline, so the rule is scoped
+// here instead of repo-wide.
+const RAW_ENVELOPE_FILES = new Set([
+  'src/routes/transfers.ts',
+  'src/routes/opext-returns.ts',
+  'src/routes/opext-orders.ts',
+  'src/routes/core-counts.ts',
+  'src/routes/catalog-procurement.ts',
+  // The shared opext role guards (requireAdmin/requirePacker/...) live
+  // here and were converted with the routes that call them.
+  'src/routes/opext-shared.ts',
+]);
+
 const STATUS_WRITE_MODELS = ['transfer', 'order', 'purchaseOrder', 'stockCount', 'returnRequest'];
 const STATUS_WRITE_ALLOWLIST = new Set([
   'src/lib/transfer-lifecycle.ts',

@@ -76,7 +76,7 @@ test('piece items only take whole-number counts', async () => {
     const admin = tokenFor('admin@retail.local');
     const fraction = await call('POST', '/stock-counts', admin, { itemId: 'item-1001', locationId: 'loc-1', physicalQuantity: 2.5, mode: 'manual' });
     assert.equal(fraction.status, 400);
-    assert.match(fraction.body.message, /whole units/);
+    assert.match(fraction.body.error, /whole units/);
     const { item } = weightItem(unique());
     // A weight item may be counted lot by lot with decimals.
     const lot = item.lots[0];
@@ -95,7 +95,7 @@ test('a store user cannot count a lot that has no stock, and never sees book qua
 
     const rejected = await call('POST', '/stock-counts', store, { itemId: item.id, locationId: 'loc-1', physicalQuantity: 1, mode: 'manual' });
     assert.equal(rejected.status, 400);
-    assert.match(rejected.body.message, /no stock/);
+    assert.match(rejected.body.error, /no stock/);
 
     // The same lot is still countable by an admin (maintenance), and a store user's normal count is blind.
     assert.equal((await call('POST', '/stock-counts', admin, { itemId: item.id, locationId: 'loc-1', physicalQuantity: 1, mode: 'manual' })).status, 201);
