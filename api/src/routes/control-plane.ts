@@ -26,9 +26,9 @@ function bearer(req: Request): string {
   return header.slice(7);
 }
 
-function requirePlatform(req: Request, _res: Response, next: NextFunction): void {
+async function requirePlatform(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
-    const { scope, payload, session } = controlPlane.requireControlSession(bearer(req));
+    const { scope, payload, session } = await controlPlane.requireControlSessionFresh(bearer(req));
     if (payload.sessionType !== 'platform' && payload.sessionType !== 'control') {
       throw new ControlPlaneError('Platform credentials required', 'FORBIDDEN', 403);
     }
@@ -48,9 +48,9 @@ function requireScope(req: Request): ScopeContext {
   return req.controlScope;
 }
 
-function requireLockedCompany(req: Request, res: Response, next: NextFunction): void {
+async function requireLockedCompany(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { scope, payload, session } = controlPlane.requireControlSession(bearer(req));
+    const { scope, payload, session } = await controlPlane.requireControlSessionFresh(bearer(req));
     if (payload.sessionType !== 'control' || !scope.companyId) {
       throw new ControlPlaneError('Hard-locked company control session required', 'SESSION_REQUIRED', 401);
     }
@@ -355,8 +355,10 @@ controlRouter.get('/billing', requireLockedCompany, (req: Request, res: Response
   res.json({ success: true, ...billingPayload(scopedCompany(req)) });
 });
 
-controlRouter.post('/billing/usage', requireLockedCompany, (req: Request, res: Response) => {
-  controlPlane.recordUsage(scopedCompany(req), String(req.body?.meter ?? 'api_requests'), Number(req.body?.increment ?? 1));
+controlRouter.post('/billing/usage', requireLockedCompany, async (req: Request, res: Response) => {
+  // ULTRA P2: the explicit usage-recording endpoint increments atomically
+  // in the database, so concurrent recordings sum instead of racing.
+  await controlPlane.incrementUsage(scopedCompany(req), String(req.body?.meter ?? 'api_requests'), Number(req.body?.increment ?? 1));
   res.json({ success: true, ...billingPayload(scopedCompany(req)) });
 });
 
@@ -824,9 +826,9 @@ studioRouter.delete('/:kind/:key', (req: Request, res: Response, next: NextFunct
   }
 });
 
-syncRouter.post('/mutations', (req: Request, res: Response) => {
+syncRouter.post('/mutations', async (req: Request, res: Response) => {
   try {
-    const auth = req.headers.authorization?.startsWith('Bearer ') ? controlPlane.requireControlSession(req.headers.authorization.slice(7)) : null;
+    const auth = req.headers.authorization?.startsWith('Bearer ') ? await controlPlane.requireControlSessionFresh(req.headers.authorization.slice(7)) : null;
     const requestedCompanyId = String(req.body?.companyId ?? '');
     const companyId = auth?.scope.companyId || requestedCompanyId;
     if (auth?.scope.companyId && requestedCompanyId) {

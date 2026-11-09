@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { controlPlane } from './control-plane.js';
+import { refreshKillSwitchesFromDb } from './control-plane-repository.js';
 
 export const KILLABLE_FEATURES = ['INVENTORY', 'WMS', 'OMS'] as const;
 export type KillableFeature = (typeof KILLABLE_FEATURES)[number];
@@ -39,12 +40,19 @@ export function isOperationalKillSwitchOn(feature: string): boolean {
   return controlPlane.safety.get(feature) === false;
 }
 
-export function enforceOperationalKillSwitches(req: Request, res: Response, next: NextFunction): void {
+export async function enforceOperationalKillSwitches(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     next();
     return;
   }
   const feature = featureForOperationalPath(req.path ?? '');
+  if (feature) {
+    // ULTRA P2: re-read kill switches from the database in DB mode, so a
+    // switch set on another replica is honoured on this one immediately
+    // instead of at the next restart. Fail-soft: a refresh error keeps the
+    // in-memory map (the background refresh retries on its next tick).
+    await refreshKillSwitchesFromDb(controlPlane).catch(() => false);
+  }
   if (!feature || !isOperationalKillSwitchOn(feature)) {
     next();
     return;
