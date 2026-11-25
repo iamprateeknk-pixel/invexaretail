@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+import { assertApprovalReviewer, checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+
+test('an approval decision requires a qualified reviewer other than the requester', () => {
+  assert.throws(() => assertApprovalReviewer('requester', 'ADMIN', 'requester', 'BRANCH_MANAGER'), { code: 'SELF_REVIEW' });
+  assert.throws(() => assertApprovalReviewer('reviewer', 'STORE_USER', 'requester', 'BRANCH_MANAGER'), { code: 'FORBIDDEN' });
+  assert.doesNotThrow(() => assertApprovalReviewer('reviewer', 'ADMIN', 'requester', 'BRANCH_MANAGER'));
+});
 
 test('a configured but unavailable policy source cannot authorize a command', async () => {
   const previous = process.env.DATABASE_URL;

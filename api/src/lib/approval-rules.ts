@@ -1,7 +1,7 @@
 import { prisma, resolveDatabaseUrl } from './db.js';
 import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
-import { recordAudit } from './audit.js';
+import { recordAudit, rememberPersistedAudit } from './audit.js';
 import { databaseEnabled, persistAudit } from './persistence.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
@@ -103,22 +103,43 @@ export async function checkApprovalGate(input: {
   }
 }
 
-export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string) {
-  // A request of another company is indistinguishable from a missing one.
-  const request = await prisma.approvalRequest.findFirst({ where: { id: requestId, requestedBy: { companyId } }, include: { rule: true } });
-  if (!request) throw new Error('Approval request was not found.');
-  if (request.status !== 'PENDING') throw new Error(`This request is already ${request.status}.`);
-  if (!roleMeetsRequirement(deciderRole, request.rule.requiredApproverRole)) {
-    throw new Error(`Only a ${request.rule.requiredApproverRole} or higher can decide this request.`);
+export function assertApprovalReviewer(deciderId: string, deciderRole: string, requesterId: string, requiredRole: string): void {
+  if (deciderId === requesterId) {
+    throw new DomainError('SELF_REVIEW', 'A different reviewer must decide this approval request.');
   }
-  const updated = await prisma.approvalRequest.update({
-    where: { id: requestId },
-    data: { status: decision, decidedById: deciderId, decidedAt: new Date(), decisionNotes: notes ?? null },
+  if (!roleMeetsRequirement(deciderRole, requiredRole)) {
+    throw new DomainError('FORBIDDEN', `Only a ${requiredRole} or higher can decide this request.`);
+  }
+}
+
+export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string) {
+  const { updated, audit, metadata } = await prisma.$transaction(async (tx) => {
+    // A request of another company is indistinguishable from a missing one.
+    const scope = { id: requestId, requestedBy: { companyId }, rule: { createdBy: { companyId } } };
+    const request = await tx.approvalRequest.findFirst({ where: scope, include: { rule: true } });
+    if (!request) throw new DomainError('CONFLICT', 'Approval request was not found.');
+    if (request.status !== 'PENDING') throw new DomainError('CONFLICT', `This request is already ${request.status}.`);
+    assertApprovalReviewer(deciderId, deciderRole, request.requestedById, request.rule.requiredApproverRole);
+
+    const decidedAt = new Date();
+    const [updated] = await tx.approvalRequest.updateManyAndReturn({
+      where: {
+        ...scope, status: 'PENDING', requestedById: request.requestedById, ruleId: request.ruleId,
+        rule: { ...scope.rule, requiredApproverRole: request.rule.requiredApproverRole },
+      },
+      data: { status: decision, decidedById: deciderId, decidedAt, decisionNotes: notes ?? null },
+    });
+    if (!updated) throw new DomainError('CONFLICT', 'The approval request or its rule has changed. Refresh to see the current state.');
+
+    const metadata = { requestId, ruleId: request.ruleId, ...(notes ? { notes } : {}) };
+    const audit = await tx.auditLog.create({
+      data: {
+        actorId: deciderId, actorRole: deciderRole, action: `APPROVAL_${decision}`,
+        entityType: request.entityType, entityId: request.entityId, metadata, createdAt: decidedAt,
+      },
+    });
+    return { updated, audit, metadata };
   });
-  await persistAudit(recordAudit({
-    actorId: deciderId, actorRole: deciderRole, action: `APPROVAL_${decision}`,
-    entityType: request.entityType, entityId: request.entityId,
-    metadata: { requestId, ruleId: request.ruleId, notes: notes ?? undefined },
-  }));
+  rememberPersistedAudit({ ...audit, metadata, createdAt: audit.createdAt.toISOString() });
   return updated;
 }

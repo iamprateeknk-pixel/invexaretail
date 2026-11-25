@@ -7881,7 +7881,7 @@
     "/approval-requests/{id}/decide": {
       "post": {
         "operationId": "decideApprovalRequest",
-        "summary": "Approve or reject a pending request.",
+        "summary": "Approve or reject a pending request as an independent reviewer.",
         "tags": [
           "Approvals"
         ],
@@ -7941,11 +7941,38 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid decision or notes."
+          },
           "403": {
-            "description": "The caller's role is below the rule's required approver role."
+            "description": "The caller submitted this request or does not meet the required approver role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Not found (also for another company's id) or already decided."
+            "description": "Request not found, already decided, or changed during review.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The approval decision could not be saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }

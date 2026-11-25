@@ -45,9 +45,10 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
   const requesterId = `ard-req-${randomUUID()}`;
   const approverId = `ard-app-${randomUUID()}`;
-  await prisma.user.create({ data: { id: requesterId, name: 'Requester', email: `${requesterId}@test.invexa.local`, passwordHash: 'x', role: 'STORE_USER', assignedLocations: '[]', companyId } });
+  await prisma.user.create({ data: { id: requesterId, name: 'Requester', email: `${requesterId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
   await prisma.user.create({ data: { id: approverId, name: 'Approver', email: `${approverId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
   createEnhancedUser({ id: approverId, companyId, email: `${approverId}@test.invexa.local`, name: 'Approver', role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active' });
+  createEnhancedUser({ id: requesterId, companyId, email: `${requesterId}@test.invexa.local`, name: 'Requester', role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active' });
   const token = generateJWT(approverId, companyId);
 
   const branch = await prisma.branch.create({ data: { code: companyId, name: 'Approval branch', companyId } });
@@ -84,9 +85,26 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
     assert.equal(typeof row.valueAtStake, 'number', 'must serialize as a JSON number, not a Decimal string');
     assert.equal(row.valueAtStake, 1234.57);
 
-    const decided = await call('POST', `/approval-requests/${row.id}/decide`, token, { decision: 'APPROVED' });
+    const selfReview = await call('POST', `/approval-requests/${row.id}/decide`, generateJWT(requesterId, companyId), { decision: 'APPROVED' });
+    assert.equal(selfReview.status, 403, JSON.stringify(selfReview.body));
+    assert.equal(selfReview.body.code, 'SELF_REVIEW');
+    assert.equal((await prisma.approvalRequest.findUniqueOrThrow({ where: { id: row.id } })).status, 'PENDING');
+
+    const attempts = await Promise.all([
+      call('POST', `/approval-requests/${row.id}/decide`, token, { decision: 'APPROVED' }),
+      call('POST', `/approval-requests/${row.id}/decide`, token, { decision: 'REJECTED' }),
+    ]);
+    assert.deepEqual(attempts.map((response) => response.status).sort(), [200, 409]);
+    const decided = attempts.find((response) => response.status === 200)!;
     assert.equal(decided.status, 200, JSON.stringify(decided.body));
     assert.equal(typeof decided.body.request.valueAtStake, 'number');
     assert.equal(decided.body.request.valueAtStake, 1234.57);
+    const final = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(final.status, decided.body.request.status);
+    const audit = await prisma.auditLog.findMany({
+      where: { entityId, action: { in: ['APPROVAL_APPROVED', 'APPROVAL_REJECTED'] } },
+    });
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].action, `APPROVAL_${final.status}`);
   });
 });

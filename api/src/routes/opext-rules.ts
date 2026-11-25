@@ -6,6 +6,7 @@ import { thresholdsAsNumbers } from '../lib/decimal-json.js';
 import { type Request, Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { decideApprovalRequest } from '../lib/approval-rules.js';
+import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { requireAdmin } from './opext-shared.js';
 
@@ -90,14 +91,20 @@ router.get('/approval-requests', async (req, res) => {
 });
 
 router.post('/approval-requests/:id/decide', async (req, res) => {
-  const decision = req.body.decision === 'APPROVED' || req.body.decision === 'REJECTED' ? req.body.decision : null;
-  if (!decision) return res.status(400).json({ message: 'decision must be APPROVED or REJECTED.' });
+  const decision = req.body?.decision;
+  if (decision !== 'APPROVED' && decision !== 'REJECTED') return res.status(400).json({ message: 'decision must be APPROVED or REJECTED.' });
+  const notes = req.body.notes;
+  if (notes != null && typeof notes !== 'string') return res.status(400).json({ message: 'notes must be text.' });
   try {
-    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, req.body.notes || null, req.companyId ?? DEFAULT_COMPANY_ID);
+    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, notes || null, req.companyId ?? DEFAULT_COMPANY_ID);
     // valueAtStake is Decimal (docs/decimal-migration-plan.md) - see the same note on GET /approval-requests.
     return res.json({ request: { ...request, valueAtStake: Number(request.valueAtStake) } });
   } catch (error) {
-    return res.status(error instanceof Error && error.message.includes('Only a') ? 403 : 409).json({ message: error instanceof Error ? error.message : 'Unable to decide approval request.' });
+    if (isDomainError(error)) {
+      return sendError(res, statusForErrorCode(error.code), error.code, error.message, { message: error.message });
+    }
+    const message = 'Unable to save the approval decision. Refresh before retrying.';
+    return sendError(res, 503, 'APPROVAL_UNAVAILABLE', message, { message });
   }
 });
 

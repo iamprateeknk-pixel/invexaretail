@@ -646,7 +646,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve or reject a pending request. */
+        /** Approve or reject a pending request as an independent reviewer. */
         post: operations["decideApprovalRequest"];
         delete?: never;
         options?: never;
@@ -7311,19 +7311,39 @@ export interface operations {
                     };
                 };
             };
-            /** @description The caller's role is below the rule's required approver role. */
-            403: {
+            /** @description Invalid decision or notes. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Not found (also for another company's id) or already decided. */
+            /** @description The caller submitted this request or does not meet the required approver role. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not found, already decided, or changed during review. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The approval decision could not be saved. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };

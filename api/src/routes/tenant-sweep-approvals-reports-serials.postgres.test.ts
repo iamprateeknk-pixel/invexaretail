@@ -48,21 +48,24 @@ test.after(async () => {
   await prisma.approvalRule.deleteMany({ where: { createdById: { in: userIds } } });
 });
 
-async function makeAdmin(label: string) {
-  const companyId = `sweep-co-${label}-${randomUUID()}`;
-  await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+async function makeAdmin(label: string, existingCompanyId?: string) {
+  const companyId = existingCompanyId ?? `sweep-co-${label}-${randomUUID()}`;
+  if (!existingCompanyId) {
+    await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+    companyIds.push(companyId);
+  }
   const userId = `sweep-admin-${label}-${randomUUID()}`;
   const email = `${userId}@test.invexa.local`;
   await prisma.user.create({ data: { id: userId, name: `Admin ${label}`, email, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
   createEnhancedUser({ id: userId, companyId, email, name: `Admin ${label}`, role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active' });
   userIds.push(userId);
-  companyIds.push(companyId);
   return { companyId, userId, token: generateJWT(userId, companyId) };
 }
 
 integration('approval requests: lists and decisions are company scoped', async () => {
   const a = await makeAdmin('ar-a');
   const b = await makeAdmin('ar-b');
+  const reviewer = await makeAdmin('ar-reviewer', a.companyId);
   const rule = await prisma.approvalRule.create({ data: { label: 'rule', triggerType: `t-${randomUUID()}`, valueThreshold: 10, requiredApproverRole: 'ADMIN', createdById: a.userId } });
   const request = await prisma.approvalRequest.create({ data: { ruleId: rule.id, triggerType: rule.triggerType, entityType: 'X', entityId: `e-${randomUUID()}`, valueAtStake: 500, requestedById: a.userId } });
 
@@ -77,8 +80,8 @@ integration('approval requests: lists and decisions are company scoped', async (
     assert.match(String(denied.body.message), /not found/i, 'a foreign request looks exactly like a missing one');
     assert.equal((await prisma.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })).status, 'PENDING', 'the request is untouched');
 
-    const allowed = await call('POST', `/approval-requests/${request.id}/decide`, a.token, { decision: 'APPROVED' });
-    assert.equal(allowed.status, 200, 'the identical call succeeds for the owner');
+    const allowed = await call('POST', `/approval-requests/${request.id}/decide`, reviewer.token, { decision: 'APPROVED' });
+    assert.equal(allowed.status, 200, 'an independent reviewer in the owning company can approve');
   });
 });
 
