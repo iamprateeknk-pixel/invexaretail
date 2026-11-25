@@ -117,12 +117,6 @@ function parseRequestId(value: unknown): string | undefined {
   return value.trim() || undefined;
 }
 
-/** True when the count was made against a task assigned to its submitter (a lot of a multi-lot task included). */
-function countWasAssignedWork(count: { itemId: string; locationId: string; submittedBy: string; createdAt: string }): boolean {
-  return listCountAssignments().some((assignment) => assignment.assignedToId === count.submittedBy
-    && assignment.itemId === count.itemId && assignment.locationId === count.locationId && assignment.createdAt <= count.createdAt);
-}
-
 function countsForRequest(userId: string, requestId: string) {
   return listCounts().filter((count) => count.submittedBy === userId && count.requestId === requestId);
 }
@@ -400,10 +394,10 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
     if (!current) return sendError(res, 404, 'NOT_FOUND', 'Stock count was not found.');
     if (current.status !== 'PENDING_REVIEW') return sendError(res, 409, 'INVALID_TRANSITION', `Count is already ${current.status} and cannot be reviewed again.`);
-    // Branch managers can be assigned count work too: whoever was handed the count cannot also approve it.
-    // (An admin's own ad hoc count has no assignment behind it and stays reviewable as before.)
-    if (current.submittedBy === req.user!.id && countWasAssignedWork(current)) {
-      return sendError(res, 403, 'SELF_REVIEW', 'You cannot review a count you were assigned and submitted yourself.');
+    // Approval is independent of how the count was created. Ad hoc work has
+    // no assignment record, but still must never be approved by its creator.
+    if (current.submittedBy === req.user!.id) {
+      return sendError(res, 403, 'SELF_REVIEW', 'You cannot review a count you submitted yourself.');
     }
     try {
       assertCountLocationAccess(accessContext(req.user!), current.locationId);

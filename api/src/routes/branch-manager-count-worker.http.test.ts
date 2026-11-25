@@ -87,6 +87,38 @@ test('an admin can assign a stock count to a branch manager, who sees and counts
   });
 });
 
+test('a count creator cannot approve their own ad hoc count', async () => {
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const manager = tokenFor('manager@retail.local');
+    const stock = await call('GET', '/stock/loc-1', admin);
+    const row = stock.body.items.find((entry: { physicalQuantity: number }) => entry.physicalQuantity > 0);
+    assert.ok(row, 'seed data has an item with stock at loc-1');
+
+    const submitted = await call('POST', '/stock-counts', admin, {
+      itemId: row.itemId,
+      locationId: 'loc-1',
+      physicalQuantity: row.physicalQuantity,
+      mode: 'manual',
+    });
+    assert.equal(submitted.status, 201, JSON.stringify(submitted.body));
+    const countId = submitted.body.count.id;
+
+    const selfReview = await call('PATCH', `/stock-counts/${countId}/review`, admin, {
+      status: 'APPROVED',
+      reviewReason: 'I checked my own count',
+    });
+    assert.equal(selfReview.status, 403, JSON.stringify(selfReview.body));
+    assert.equal(selfReview.body.code, 'SELF_REVIEW');
+
+    const independentReview = await call('PATCH', `/stock-counts/${countId}/review`, manager, {
+      status: 'APPROVED',
+      reviewReason: 'Independently checked',
+    });
+    assert.equal(independentReview.status, 200, JSON.stringify(independentReview.body));
+  });
+});
+
 test('roles outside store user, picker and branch manager still cannot be given count work', async () => {
   await withServer(async (call) => {
     const admin = tokenFor('admin@retail.local');
