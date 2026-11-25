@@ -42,6 +42,23 @@ async function json(url: string, path: string, options: RequestInit = {}) {
   return { status: response.status, body };
 }
 
+test('HTTP: sync endpoints require a locked company session', async () => {
+  await withServer(async (url) => {
+    const requests: Array<[string, string, RequestInit?]> = [
+      ['GET', '/sync/v1/mutations'],
+      ['GET', '/sync/v1/status'],
+      ['POST', '/sync/v1/mutations', { body: JSON.stringify({ mutationId: 'anonymous-mut', actionType: 'TASK_COMPLETE' }) }],
+      ['POST', '/sync/v1/devices/register', { body: JSON.stringify({ companyId: 'default-company', userId: 'attacker' }) }],
+      ['POST', '/sync/v1/devices/device-1/revoke'],
+    ];
+    for (const [method, path, options] of requests) {
+      const result = await json(url, path, { ...options, method });
+      assert.equal(result.status, 401, `${method} ${path} must require authentication`);
+      assert.equal(result.body.code, 'UNAUTHENTICATED');
+    }
+  });
+});
+
 test('HTTP: platform login, company lock, studio publish and sync mutation', async () => {
   await withServer(async (url) => {
     const login = await json(url, '/control/v1/auth/login', {
@@ -110,6 +127,12 @@ test('HTTP: platform login, company lock, studio publish and sync mutation', asy
     });
     assert.equal(cross.status, 403);
     assert.equal(cross.body.code, 'COMPANY_SCOPE_MISMATCH');
+
+    const crossRead = await json(url, '/sync/v1/mutations?companyId=company-jaipur', {
+      headers: auth,
+    });
+    assert.equal(crossRead.status, 403);
+    assert.equal(crossRead.body.code, 'COMPANY_SCOPE_MISMATCH');
   });
 });
 

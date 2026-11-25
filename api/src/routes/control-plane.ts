@@ -93,6 +93,7 @@ function persistOnSuccess(req: Request, res: Response, next: NextFunction): void
 controlRouter.use(persistOnSuccess);
 studioRouter.use(persistOnSuccess);
 syncRouter.use(persistOnSuccess);
+syncRouter.use(requireLockedCompany);
 
 controlRouter.post('/auth/login', async (req: Request, res: Response) => {
   try {
@@ -828,11 +829,10 @@ studioRouter.delete('/:kind/:key', (req: Request, res: Response, next: NextFunct
 
 syncRouter.post('/mutations', async (req: Request, res: Response) => {
   try {
-    const auth = req.headers.authorization?.startsWith('Bearer ') ? await controlPlane.requireControlSessionFresh(req.headers.authorization.slice(7)) : null;
+    const companyId = scopedCompany(req);
     const requestedCompanyId = String(req.body?.companyId ?? '');
-    const companyId = auth?.scope.companyId || requestedCompanyId;
-    if (auth?.scope.companyId && requestedCompanyId) {
-      controlPlane.assertCompanyScope(auth.scope, requestedCompanyId);
+    if (requestedCompanyId) {
+      controlPlane.assertCompanyScope(requireScope(req), requestedCompanyId);
     }
     const actionType = String(req.body?.actionType ?? 'STOCK_ADJUST');
     if (actionType === 'STOCK_ADJUST' || actionType === 'POST_STOCK_ADJUSTMENT') {
@@ -846,7 +846,7 @@ syncRouter.post('/mutations', async (req: Request, res: Response) => {
       mutationId: String(req.body?.mutationId ?? ''),
       tenantId: controlPlane.tenantId,
       companyId,
-      userId: String(req.body?.userId ?? auth?.scope.actorId ?? ''),
+      userId: requireScope(req).actorId,
       deviceId: String(req.body?.deviceId ?? ''),
       entityType: String(req.body?.entityType ?? 'inventory'),
       actionType,
@@ -859,30 +859,59 @@ syncRouter.post('/mutations', async (req: Request, res: Response) => {
 });
 
 syncRouter.get('/mutations', (req: Request, res: Response) => {
-  const companyId = String(req.query.companyId ?? '');
-  const mutations = [...controlPlane.mutations.values()].filter((mutation) => !companyId || mutation.companyId === companyId);
-  res.json({ success: true, mutations });
+  try {
+    const companyId = scopedCompany(req);
+    const requestedCompanyId = String(req.query.companyId ?? '');
+    if (requestedCompanyId) controlPlane.assertCompanyScope(requireScope(req), requestedCompanyId);
+    const mutations = [...controlPlane.mutations.values()].filter((mutation) => mutation.companyId === companyId);
+    res.json({ success: true, mutations });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 syncRouter.post('/devices/register', (req: Request, res: Response) => {
-  const device = controlPlane.registerDevice({
-    companyId: String(req.body?.companyId ?? ''),
-    userId: String(req.body?.userId ?? ''),
-    appVersion: String(req.body?.appVersion ?? '2.0.0'),
-  });
-  res.status(201).json({ success: true, device });
+  try {
+    const device = controlPlane.registerDevice({
+      companyId: scopedCompany(req),
+      userId: requireScope(req).actorId,
+      appVersion: String(req.body?.appVersion ?? '2.0.0'),
+    });
+    res.status(201).json({ success: true, device });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 syncRouter.post('/devices/:deviceId/revoke', (req: Request, res: Response) => {
-  controlPlane.revokeDevice(param(req, 'deviceId'));
-  res.json({ success: true });
+  try {
+    const companyId = scopedCompany(req);
+    const deviceId = param(req, 'deviceId');
+    const device = controlPlane.devices.get(deviceId);
+    if (!device || device.companyId !== companyId) {
+      throw new ControlPlaneError('Device not found', 'DEVICE_NOT_FOUND', 404);
+    }
+    const scope = requireScope(req);
+    const isCompanyAdmin = scope.role === 'ADMIN' || scope.role === 'PLATFORM_SUPER_ADMIN';
+    if (device.userId !== scope.actorId && !isCompanyAdmin) {
+      throw new ControlPlaneError('Only the device owner or a company admin can revoke this device', 'FORBIDDEN', 403);
+    }
+    controlPlane.revokeDevice(deviceId);
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
-syncRouter.get('/status', (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    health: controlPlane.health(),
-    pending: [...controlPlane.mutations.values()].filter((mutation) => mutation.status !== 'synced'),
-  });
+syncRouter.get('/status', (req: Request, res: Response) => {
+  try {
+    const companyId = scopedCompany(req);
+    res.json({
+      success: true,
+      pending: [...controlPlane.mutations.values()].filter((mutation) => mutation.companyId === companyId && mutation.status !== 'synced'),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 

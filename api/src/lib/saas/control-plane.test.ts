@@ -296,6 +296,34 @@ test('P9-P10: offline stock mutations are idempotent and never last-write-wins',
   assert.equal(revoked.status, 'rejected');
 });
 
+test('offline mutation idempotency keys cannot return another company mutation', () => {
+  const plane = new ControlPlane();
+  const original = plane.enqueueMutation({
+    mutationId: 'shared-idempotency-key',
+    tenantId: plane.tenantId,
+    companyId: 'default-company',
+    userId: 'user-a',
+    deviceId: 'device-a',
+    entityType: 'task',
+    actionType: 'TASK_COMPLETE',
+    payload: {},
+  });
+  assert.equal(original.status, 'synced');
+  assert.throws(
+    () => plane.enqueueMutation({
+      mutationId: 'shared-idempotency-key',
+      tenantId: plane.tenantId,
+      companyId: 'company-jaipur',
+      userId: 'user-b',
+      deviceId: 'device-b',
+      entityType: 'task',
+      actionType: 'TASK_COMPLETE',
+      payload: {},
+    }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'COMPANY_SCOPE_MISMATCH' && error.status === 403,
+  );
+});
+
 test('P11-P12: integrations, billing usage and health are company scoped', () => {
   const plane = new ControlPlane();
   const grocery = locked(plane, 'default-company');
