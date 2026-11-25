@@ -918,6 +918,31 @@ export async function persistCount(count: CountRecord, companyId: string): Promi
   });
 }
 
+/** Creates every lot row for a pooled weight count in one database transaction. */
+export async function persistCountBatch(countBatch: readonly CountRecord[], companyId: string): Promise<void> {
+  if (!databaseEnabled || countBatch.length === 0) return;
+  requireDatabase();
+  await prisma.$transaction(async (tx) => {
+    await tx.stockCount.createMany({
+      data: countBatch.map((count) => ({
+        id: count.id,
+        itemId: count.itemId,
+        lotId: count.lotId,
+        locationId: count.locationId,
+        physicalQty: count.physicalQuantity,
+        bookQty: count.bookQty,
+        mode: count.mode,
+        submittedById: count.submittedBy,
+        parentCountId: count.parentCountId ?? null,
+        requestId: count.requestId ?? null,
+        countDate: new Date(count.createdAt),
+        reviewStatus: 'PENDING_REVIEW',
+        companyId,
+      })) as never,
+    });
+  });
+}
+
 /**
  * Persists a count review decision. On APPROVED this also posts the
  * resulting variance to the stock ledger, in the same transaction, so the

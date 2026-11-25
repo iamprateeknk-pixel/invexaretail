@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from './db.js';
-import { persistConfirmedPickAllocations, persistCountReview } from './persistence.js';
+import { persistConfirmedPickAllocations, persistCountBatch, persistCountReview } from './persistence.js';
 import type { CountRecord } from './repository.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -58,6 +58,34 @@ integration('a count on a lot with no ledger row yet establishes stock at the ph
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
   assert.equal(Number(ledger.onHand), 6);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
+});
+
+integration('a failed multi-lot count batch leaves no partial StockCount rows', async () => {
+  const f = await fixture(10);
+  const valid: CountRecord = {
+    id: `count-${randomUUID()}`,
+    itemId: f.item.id,
+    lotId: f.lot.id,
+    locationId: f.loc.id,
+    physicalQuantity: 6,
+    bookQty: 10,
+    mode: 'weight',
+    submittedBy: f.userId,
+    role: 'ADMIN',
+    createdAt: new Date().toISOString(),
+    status: 'PENDING_REVIEW',
+  };
+  const invalid = {
+    ...valid,
+    id: `count-${randomUUID()}`,
+    lotId: `missing-lot-${randomUUID()}`,
+    status: 'PENDING_REVIEW' as const,
+    reviewedBy: undefined,
+    reviewedAt: undefined,
+  };
+
+  await assert.rejects(persistCountBatch([valid, invalid], f.companyId));
+  assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, itemId: f.item.id } }), 0);
 });
 
 integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock atomically, and cannot deduct twice', async () => {

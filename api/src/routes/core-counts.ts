@@ -5,6 +5,7 @@
 import { exceedsDefaultTolerance } from '../lib/count-tolerance.js';
 import { parseCountReasonCode } from '../lib/count-reason-codes.js';
 import { recordThenPersist } from '../lib/record-then-persist.js';
+import { persistBatchThenRecord } from '../lib/persist-batch-then-record.js';
 import { type Request, type Response, Router } from 'express';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, hidesZeroStockForRole, validateBlindCountSubmission, type BlindCountInput, type Role } from '../lib/inventory.js';
@@ -14,6 +15,7 @@ import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import { signedSalesQty } from '../lib/sales-demand.js';
 import { submitStockCount } from '../lib/store.js';
 import { createCountAssignment, deleteCountAssignment, createCountRecord, removeCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment, users } from '../lib/repository.js';
+import type { CountRecord } from '../lib/repository.js';
 import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listStockForLocation } from '../lib/repositories/stock-repository.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
@@ -35,7 +37,7 @@ import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
 import { allocateWeightCount, totalVariance } from '../lib/weight-allocation.js';
 import { publishEvent } from '../lib/event-bus.js';
 import { isOperationalItem } from '../lib/item-master.js';
-import { persistAssignmentSubmitted, persistAudit, persistCount, persistCountDeletion, persistCountAssignment, persistCountAssignmentDelete, persistCountAssignmentUpdate, persistCountReview, persistCountReconciliation } from '../lib/persistence.js';
+import { persistAssignmentSubmitted, persistAudit, persistCount, persistCountBatch, persistCountAssignment, persistCountAssignmentDelete, persistCountAssignmentUpdate, persistCountReview, persistCountReconciliation } from '../lib/persistence.js';
 import { loadMobileWork } from '../lib/mobile-work.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listMyOpenAssignments, listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
@@ -331,31 +333,45 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       return sendError(res, 409, 'CONFLICT', 'This item is already submitted and waiting for review.');
     }
 
-    // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
-    // so a retry never finds half a count and calls it done.
+    // Submit all lot rows atomically before updating the in-memory mirror. A
+    // process stop during the request cannot leave a partial multi-lot count.
     const flightKey = requestId ? `${req.user!.id}|${requestId}` : '';
     if (flightKey && weightInFlight.has(flightKey)) return sendError(res, 409, 'CONFLICT', 'This count is already being saved. Retry in a moment.');
     if (flightKey) weightInFlight.add(flightKey);
-    const saved: Array<Awaited<ReturnType<typeof commitLotCount>>> = [];
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    let countBatch: CountRecord[] = [];
     try {
-      for (const row of allocation) {
+      countBatch = allocation.map((row) => {
         const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
-        saved.push(await commitLotCount({
-          ctx: tenantContext(req),
-          userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
-          physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
-          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-        }));
+        const submitted = submitStockCount({
+          itemId: item.id,
+          lotId: lot.id,
+          locationId,
+          physicalQuantity: row.physicalQty,
+          mode: 'weight',
+          submittedBy: req.user!.id,
+          role: context.role,
+        });
+        return {
+          ...submitted,
+          bookQty: row.bookQty,
+          parentCountId: assignment?.parentCountId,
+          requestId,
+          companyId,
+        };
+      });
+      await persistBatchThenRecord(
+        countBatch,
+        (records) => persistCountBatch(records, companyId),
+        (record) => createCountRecord(record),
+      );
+      for (const count of countBatch) {
+        await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: count.id }));
       }
-    } catch (error) {
-      for (const row of saved) {
-        removeCountRecord(row.saved.id);
-        await persistCountDeletion(row.saved.id, req.companyId ?? DEFAULT_COMPANY_ID).catch(() => undefined);
-      }
-      throw error;
     } finally {
       if (flightKey) weightInFlight.delete(flightKey);
     }
+    const saved = countBatch.map((count) => ({ saved: count, bookQty: count.bookQty }));
     // The whole item was counted in one entry, so the task is complete now.
     if (assignment) {
       markAssignmentSubmitted(assignment.id, saved[0].saved.id);
