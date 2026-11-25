@@ -333,6 +333,23 @@ void main() {
     expect(posts.first['lotNo'], 'LOT-EXP');
     expect(controller.queuedCounts, isEmpty);
   });
+  test('runtime config reads the authenticated, role-resolved settings route', () async {
+    late http.Request captured;
+    final api = InvexaApi(
+      baseUrl: 'https://api.test',
+      httpClient: MockClient((request) async {
+        captured = request;
+        return _json({'success': true, 'runtime': {'mobilePolicy': {'navigation': ['dashboard', 'counts']}}});
+      }),
+    )..token = 'jwt';
+
+    final result = await api.runtimeConfig();
+
+    expect(captured.method, 'GET');
+    expect(captured.url.path, '/api/v1/runtime/config');
+    expect(captured.headers['Authorization'], 'Bearer jwt');
+    expect(result['runtime']['mobilePolicy']['navigation'], ['dashboard', 'counts']);
+  });
 }
 
 http.Response _json(Object body, {int status = 200}) {

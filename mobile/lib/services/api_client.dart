@@ -188,6 +188,10 @@ class InvexaApi {
     return code;
   }
 
+  /// Published, role-resolved runtime settings. These are presentation hints;
+  /// operational authorization is still enforced by each server endpoint.
+  Future<Map<String, dynamic>> runtimeConfig() => _send('GET', '/api/v1/runtime/config');
+
   Future<LoginResult> loginWithOtp(String email, String otpCode) async {
     final payload = await _send(
       'POST',

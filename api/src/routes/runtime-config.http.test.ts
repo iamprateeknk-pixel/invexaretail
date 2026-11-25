@@ -106,6 +106,18 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
       body: JSON.stringify({ enabled: false }),
     });
     assert.equal(disabled.status, 200);
+    const mobilePolicy = await json(url, '/studio/v1/mobile-policy', {
+      method: 'POST',
+      headers: studioAuth,
+      body: JSON.stringify({
+        role: 'ADMIN',
+        offlineMaxHours: 12,
+        syncScope: ['stock'],
+        navigation: ['dashboard', 'stock'],
+        encryptedLocalStore: true,
+      }),
+    });
+    assert.equal(mobilePolicy.status, 200);
     const published = await json(url, '/studio/v1/publish', { method: 'POST', headers: studioAuth });
     assert.equal(published.status, 200);
 
@@ -114,6 +126,7 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
       assert.equal(after.status, 200);
       assert.equal(after.body.runtime.page.columns.some((entry: { key: string }) => entry.key === columnKey), true);
       assert.equal(after.body.runtime.page.actions.some((action: { key: string }) => action.key === 'export'), false);
+      assert.deepEqual(after.body.runtime.mobilePolicy.navigation, ['dashboard', 'stock']);
 
       if (storeUser) {
         const storeRuntime = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${storeToken}` } });

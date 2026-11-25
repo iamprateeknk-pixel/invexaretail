@@ -30,7 +30,39 @@ const _scan = MobileDestination(id: 'scan', label: 'Scan', icon: Icons.qr_code_s
 const _work = MobileDestination(id: 'work', label: 'Work', icon: Icons.task_alt_outlined);
 const _orders = MobileDestination(id: 'orders', label: 'Orders', icon: Icons.shopping_bag_outlined);
 
-MobileRoleHome mobileHomeForRole(String role) {
+MobileRoleHome mobileHomeForRole(String role, {List<String>? navigation}) {
+  final defaults = _defaultMobileHomeForRole(role);
+  if (navigation == null) return defaults;
+
+  final allowedIds = defaults.destinations.map((destination) => destination.id).toSet();
+  final mapped = <String>[];
+  for (final key in navigation) {
+    final id = switch (key) {
+      'dashboard' => 'home',
+      'counts' when role == 'STORE_USER' => 'work',
+      'counts' => 'count',
+      'receiving' when role == 'STORE_USER' => 'work',
+      'picks' || 'putaway' => 'work',
+      _ => key,
+    };
+    if (allowedIds.contains(id) && !mapped.contains(id)) mapped.add(id);
+  }
+  if (mapped.isEmpty) return defaults;
+
+  final destinationById = {for (final destination in defaults.destinations) destination.id: destination};
+  final destinations = mapped.map((id) => destinationById[id]!).toList(growable: false);
+  final preferred = destinations.any((destination) => destination.id == defaults.defaultDestination)
+      ? defaults.defaultDestination
+      : destinations.first.id;
+  return MobileRoleHome(
+    title: defaults.title,
+    subtitle: defaults.subtitle,
+    defaultDestination: preferred,
+    destinations: destinations,
+  );
+}
+
+MobileRoleHome _defaultMobileHomeForRole(String role) {
   switch (role) {
     case 'WAREHOUSE_PICKER':
       return const MobileRoleHome(

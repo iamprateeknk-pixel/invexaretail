@@ -38,6 +38,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   String? _role;
+  String? _navigationSignature;
   // Plan Area H WP2: tabs the person has opened stay alive (scroll position, half-typed forms, an
   // in-progress count) instead of being rebuilt from scratch on every switch. Unvisited tabs are not
   // built at all, so opening the app does not fire every screen's requests at once.
@@ -46,9 +47,12 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    final home = mobileHomeForRole(controller.user?.role ?? '');
-    if (_role != controller.user?.role) {
-      _role = controller.user?.role;
+    final role = controller.user?.role ?? '';
+    final home = mobileHomeForRole(role, navigation: controller.mobileNavigation);
+    final navigationSignature = home.destinations.map((destination) => destination.id).join('|');
+    if (_role != role || _navigationSignature != navigationSignature) {
+      _role = role;
+      _navigationSignature = navigationSignature;
       final defaultIndex = home.destinations.indexWhere((row) => row.id == home.defaultDestination);
       _index = defaultIndex < 0 ? 0 : defaultIndex;
       _visited.clear();
@@ -184,7 +188,7 @@ class _HomeShellState extends State<HomeShell> {
       case 'work':
         return WorkScreen(
           controller: controller,
-          tabs: controller.user?.role == 'WAREHOUSE_PICKER' ? const ['pick', 'putaway'] : const ['count', 'receive'],
+          tabs: _workTabs(controller),
         );
       case 'stock':
         return StockScreen(controller: controller);
@@ -205,6 +209,27 @@ class _HomeShellState extends State<HomeShell> {
       default:
         return DashboardScreen(controller: controller);
     }
+  }
+
+  List<String> _workTabs(SessionController controller) {
+    final role = controller.user?.role ?? '';
+    final navigation = controller.mobileNavigation;
+    if (navigation == null) {
+      return role == 'WAREHOUSE_PICKER' ? const ['pick', 'putaway'] : const ['count', 'receive'];
+    }
+    if (role == 'WAREHOUSE_PICKER') {
+      return [
+        if (navigation.contains('picks')) 'pick',
+        if (navigation.contains('putaway')) 'putaway',
+      ];
+    }
+    if (role == 'STORE_USER') {
+      return [
+        if (navigation.contains('counts')) 'count',
+        if (navigation.contains('receiving')) 'receive',
+      ];
+    }
+    return const ['count', 'receive'];
   }
 }
 

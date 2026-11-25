@@ -61,6 +61,10 @@ class SessionController extends ChangeNotifier {
   List<QueuedAction> queuedActions = [];
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  /// Published screens for this role. Null uses the built-in role home when
+  /// the service has no policy or cannot be reached.
+  List<String>? mobileNavigation;
+  String? _mobilePolicyIdentity;
   // Set when sign-in needs a second factor; the login screen then asks for the code.
   String? twoFactorChallenge;
   // Set by the quick-scan sheet; the Count screen consumes it when it opens.
@@ -314,6 +318,8 @@ class SessionController extends ChangeNotifier {
     queuedCounts = [];
     queuedActions = [];
     selectedLocationId = null;
+    mobileNavigation = null;
+    _mobilePolicyIdentity = null;
     api.clearToken();
     await store.clearSession();
     if (notify) notifyListeners();
@@ -346,6 +352,7 @@ class SessionController extends ChangeNotifier {
   void resumeLive() {
     if (!isSignedIn) return;
     startLive();
+    unawaited(_refreshMobileNavigation('$companyId|$_userId|${user?.role ?? ''}'));
     unawaited(_reconnectSync());
   }
 
@@ -413,6 +420,12 @@ class SessionController extends ChangeNotifier {
   Future<void> refreshAll() async {
     error = null;
     api.servedFromCacheAt = null;
+    final policyIdentity = '$companyId|$_userId|${user?.role ?? ''}';
+    if (_mobilePolicyIdentity != policyIdentity) {
+      mobileNavigation = null;
+      _mobilePolicyIdentity = policyIdentity;
+    }
+    unawaited(_refreshMobileNavigation(policyIdentity));
     final locationFuture = api.locations();
     final itemFuture = api.items();
     final dashFuture = api.dashboard();
@@ -439,6 +452,24 @@ class SessionController extends ChangeNotifier {
     await refreshPutaway();
     await flushQueue();
     notifyListeners();
+  }
+
+  Future<void> _refreshMobileNavigation(String identity) async {
+    try {
+      final response = await api.runtimeConfig();
+      final runtime = response['runtime'];
+      final policy = runtime is Map ? runtime['mobilePolicy'] : null;
+      final navigation = policy is Map ? policy['navigation'] : null;
+      if (identity != _mobilePolicyIdentity || !isSignedIn) return;
+      mobileNavigation = navigation is List
+          ? navigation.whereType<String>().toList(growable: false)
+          : null;
+      notifyListeners();
+    } on ApiException {
+      // Keep the role's safe built-in destinations when Studio is unavailable.
+    } catch (_) {
+      // A runtime presentation setting must not block sign-in or operational work.
+    }
   }
 
   Future<void> _loadCountTasks() async {
