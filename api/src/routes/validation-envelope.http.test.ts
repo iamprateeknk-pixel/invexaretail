@@ -10,7 +10,7 @@ import { seedEnhancedUsersForMemoryMode, findUserByEmail } from '../lib/enterpri
 import { seedUsers } from '../lib/seed.js';
 import { extractToken } from './enterprise-auth.js';
 import { enforceOperationalCompanyScope } from '../lib/saas/tenant-scope.js';
-import { counts, createCountRecord } from '../lib/repository.js';
+import { counts, createCountRecord, listStockLedgerForLocation } from '../lib/repository.js';
 import { applyLateMovements } from '../lib/late-movement-service.js';
 import transfersRouter from './transfers.js';
 import coreRouter from './core.js';
@@ -138,6 +138,26 @@ test('transfers: receive with no requestId, confirm in the wrong state, and miss
       await call('GET', '/transfers/nope/export.xls', admin),
       404, 'NOT_FOUND',
     );
+  });
+});
+
+test('manual stock adjustment leaves stock unchanged when approval is unavailable', async () => {
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const before = structuredClone(listStockLedgerForLocation('wh-1'));
+    assert.ok(before.length > 0);
+    const previous = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'unavailable-approval-test';
+    try {
+      const response = await call('POST', '/stock-adjustments/manual', admin, {
+        mode: 'ADD', itemId: 'item-1003', locationId: 'wh-1', quantity: 1, reason: 'Test approval outage',
+      });
+      assertEnvelope(response, 503, 'APPROVAL_UNAVAILABLE');
+      assert.deepEqual(listStockLedgerForLocation('wh-1'), before);
+    } finally {
+      if (previous === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previous;
+    }
   });
 });
 

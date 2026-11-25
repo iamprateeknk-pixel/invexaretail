@@ -50,14 +50,25 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
   createEnhancedUser({ id: approverId, companyId, email: `${approverId}@test.invexa.local`, name: 'Approver', role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active' });
   const token = generateJWT(approverId, companyId);
 
+  const branch = await prisma.branch.create({ data: { code: companyId, name: 'Approval branch', companyId } });
+  const location = await prisma.location.create({
+    data: { code: companyId, name: 'Approval location', type: 'WAREHOUSE', companyId, branchId: branch.id },
+  });
   const triggerType = `ard-trigger-${randomUUID()}`;
   await prisma.approvalRule.create({
-    data: { label: 'Decimal pilot rule', triggerType, valueThreshold: 100, requiredApproverRole: 'ADMIN', createdById: approverId },
+    data: { label: 'Decimal pilot rule', triggerType, valueThreshold: 100, requiredApproverRole: 'ADMIN', createdById: approverId, branchId: branch.id },
   });
 
   const entityId = `ard-entity-${randomUUID()}`;
+  await assert.rejects(checkApprovalGate({
+    triggerType, entityType: 'TestEntity', entityId, locationId: location.id,
+    value: async () => { throw new Error('Valuation store unavailable'); },
+    requestedById: requesterId, companyId,
+  }), { code: 'APPROVAL_UNAVAILABLE' });
+  assert.equal(await prisma.approvalRequest.count({ where: { entityId } }), 0);
+
   const gate = await checkApprovalGate({
-    triggerType, entityType: 'TestEntity', entityId, branchId: null,
+    triggerType, entityType: 'TestEntity', entityId, locationId: location.id,
     value: 1234.567, requestedById: requesterId, companyId, // deliberately 3 decimal places to exercise the 2dp rounding policy
   });
   assert.equal(gate.blocked, true, JSON.stringify(gate));

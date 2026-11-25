@@ -52,8 +52,7 @@ export type EvidenceGateResult =
  * and, if so, whether evidence already exists for the transfer. Never
  * throws (a rule-engine failure must not block the underlying receipt from
  * at least attempting its normal path) - returns `{ blocked: false }` on
- * any internal error, same fail-open posture as checkApprovalGate /
- * getCountRecommendation elsewhere in this app.
+ * any internal error.
  */
 export async function requireEvidenceForDamage(tenant: TenantContext, input: {
   transferId: string;

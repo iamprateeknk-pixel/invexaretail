@@ -752,10 +752,9 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
 
   // Blueprint §27: approval is a policy gate (value / branch thresholds), not just a status flip.
   if (to === 'APPROVED') {
-    const location = await prisma.location.findUnique({ where: { id: order.locationId }, select: { branchId: true } }).catch(() => null);
     const gate = await checkApprovalGate({
       triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: order.id,
-      branchId: location?.branchId ?? null, value: order.totalAmount, requestedById: req.user!.id,
+      locationId: order.locationId, value: order.totalAmount, requestedById: req.user!.id,
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });

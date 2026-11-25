@@ -27,6 +27,7 @@ export const ERROR_CODES = [
   'INTERNAL_ERROR',
   'NOT_SUPPORTED',
   'UPSTREAM_ERROR',
+  'APPROVAL_UNAVAILABLE',
   // Codes already sent ad hoc inside error bodies before P3, now named here.
   'QC_REQUIRED',
   'SELF_REVIEW',
@@ -157,6 +158,8 @@ export function statusForErrorCode(code: ErrorCode): number {
       return 501;
     case 'UPSTREAM_ERROR':
       return 502;
+    case 'APPROVAL_UNAVAILABLE':
+      return 503;
     default:
       return 400;
   }

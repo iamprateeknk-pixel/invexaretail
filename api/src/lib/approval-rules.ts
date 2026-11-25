@@ -1,7 +1,8 @@
-import { prisma } from './db.js';
+import { prisma, resolveDatabaseUrl } from './db.js';
+import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
 import { recordAudit } from './audit.js';
-import { persistAudit } from './persistence.js';
+import { databaseEnabled, persistAudit } from './persistence.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -35,26 +36,38 @@ export type GateResult =
 
 /**
  * Checks whether `triggerType` is gated for this value/branch, and if so,
- * reuses an existing pending/approved request or opens a new one. Never
- * throws (a rule-engine failure must not block the underlying action from
- * at least attempting its normal path) - returns `{ blocked: false }` on
- * any internal error, same fail-open posture as ToleranceRule/Exception
- * Inbox best-effort helpers elsewhere in this app.
+ * reuses an existing pending/approved request or opens a new one.
+ * A configured policy store must be available before the command can proceed.
  */
 export async function checkApprovalGate(input: {
   triggerType: string;
   entityType: string;
   entityId: string;
   category?: string | null;
-  branchId: string | null;
-  value: number;
+  branchId?: string | null;
+  locationId?: string;
+  value: number | (() => Promise<number>);
   requestedById: string;
   /** Only this company's rules apply; another company's thresholds must never gate this one. */
   companyId: string;
 }): Promise<GateResult> {
+  if (!databaseEnabled && !resolveDatabaseUrl() && process.env.REQUIRE_DATABASE !== 'true') {
+    return { blocked: false };
+  }
   try {
     const rules = await prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: input.companyId } } });
-    const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId: input.branchId, value: input.value });
+    if (rules.length === 0) return { blocked: false };
+
+    let branchId = input.branchId ?? null;
+    if (input.locationId && rules.some((rule) => rule.branchId !== null)) {
+      const location = await prisma.location.findFirstOrThrow({
+        where: { id: input.locationId, companyId: input.companyId }, select: { branchId: true },
+      });
+      branchId = location.branchId;
+    }
+    const value = typeof input.value === 'function' ? await input.value() : input.value;
+    if (!Number.isFinite(value)) throw new Error('Invalid approval value');
+    const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId, value });
     if (!matched) return { blocked: false };
 
     const existingApproved = await prisma.approvalRequest.findFirst({
@@ -72,18 +85,21 @@ export async function checkApprovalGate(input: {
     const created = await prisma.approvalRequest.create({
       data: {
         ruleId: matched.id, triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
-        valueAtStake: input.value, requestedById: input.requestedById,
+        valueAtStake: value, requestedById: input.requestedById,
       },
     });
     await persistAudit(recordAudit({
       actorId: input.requestedById, actorRole: 'SYSTEM', action: 'APPROVAL_REQUESTED',
       entityType: input.entityType, entityId: input.entityId,
-      metadata: { ruleId: matched.id, ruleLabel: matched.label, value: input.value, requiredApproverRole: matched.requiredApproverRole },
+      metadata: { ruleId: matched.id, ruleLabel: matched.label, value, requiredApproverRole: matched.requiredApproverRole },
     }));
-    return { blocked: true, requestId: created.id, status: 'PENDING', reason: `Requires ${matched.requiredApproverRole} approval - value ₹${input.value.toFixed(0)} exceeds the "${matched.label}" threshold.`, requiredApproverRole: matched.requiredApproverRole };
+    return { blocked: true, requestId: created.id, status: 'PENDING', reason: `Requires ${matched.requiredApproverRole} approval - value ₹${value.toFixed(0)} exceeds the "${matched.label}" threshold.`, requiredApproverRole: matched.requiredApproverRole };
   } catch (error) {
-    console.error('checkApprovalGate failed (fail-open, non-blocking):', error instanceof Error ? error.message : error);
-    return { blocked: false };
+    const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
+    console.error('Approval policy evaluation failed', {
+      triggerType: input.triggerType, traceId: unavailable.traceId, errorType: error instanceof Error ? error.name : 'Unknown',
+    });
+    throw unavailable;
   }
 }
 

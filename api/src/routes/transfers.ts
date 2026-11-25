@@ -44,7 +44,7 @@ import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedge
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { isPooledPick, allocatePick, isPickableLot } from '../lib/kg-pick.js';
 import { validatePickInput, PICK_EXCEPTION_REASONS } from '../lib/warehouse-workflow.js';
-import { createExceptionCase, estimateValueAtRisk } from '../lib/exceptions.js';
+import { createExceptionCase, readValueAtRisk } from '../lib/exceptions.js';
 import { prisma } from '../lib/db.js';
 import { checkApprovalGate } from '../lib/approval-rules.js';
 import { persistConfirmedPickAllocations, databaseEnabled } from '../lib/persistence.js';
@@ -556,13 +556,12 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   // Blueprint §16.2: "transfer > ₹1 lakh -> regional manager approval."
   // Gate before touching stock - a confirmed allocation's total value
   // decides whether a configured ApprovalRule blocks this attempt.
-  const totalValue = (await Promise.all(
-    [...allocations.values()].map((allocation) => estimateValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
-  )).reduce((sum, value) => sum + (value ?? 0), 0);
-  const sourceLocation = await prisma.location.findUnique({ where: { id: transfer.sourceLocationId }, select: { branchId: true } }).catch(() => null);
   const gate = await checkApprovalGate({
     triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: transfer.id,
-    branchId: sourceLocation?.branchId ?? null, value: totalValue, requestedById: req.user!.id,
+    locationId: transfer.sourceLocationId, requestedById: req.user!.id,
+    value: async () => (await Promise.all(
+      [...allocations.values()].map((allocation) => readValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
+    )).reduce((sum, value) => sum + (value ?? 0), 0),
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   });
   if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });

@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+import { checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+
+test('a configured but unavailable policy source cannot authorize a command', async () => {
+  const previous = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = 'unavailable-approval-test';
+  try {
+    await assert.rejects(checkApprovalGate({
+      triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: 'test-transfer',
+      branchId: null, value: 1000, requestedById: 'test-user', companyId: 'test-company',
+    }), { code: 'APPROVAL_UNAVAILABLE' });
+  } finally {
+    if (previous === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previous;
+  }
+});
 
 test('roleMeetsRequirement lets a higher-ranked role satisfy a lower requirement', () => {
   assert.equal(roleMeetsRequirement('ADMIN', 'BRANCH_MANAGER'), true);

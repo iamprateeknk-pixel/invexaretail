@@ -14899,6 +14899,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     patchQcTemplatesId: {
@@ -18447,6 +18456,15 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     postStockCounts: {
@@ -19055,6 +19073,15 @@ export interface operations {
                         approvalRequestId?: string;
                         requiredApproverRole?: string;
                     };
+                };
+            };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

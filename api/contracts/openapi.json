@@ -20721,6 +20721,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -26591,6 +26601,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -27661,6 +27681,16 @@
                       "type": "string"
                     }
                   }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

@@ -17,7 +17,8 @@ function importStockContext(companyId: string): TenantContext {
   return { companyId, tenantId: DEFAULT_TENANT_ID, userId: 'import-planner', role: 'ADMIN' };
 }
 import { checkApprovalGate } from '../lib/approval-rules.js';
-import { estimateValueAtRisk } from '../lib/exceptions.js';
+import { readValueAtRisk } from '../lib/exceptions.js';
+import { isDomainError, statusForErrorCode } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 import { applyLateMovementsQuietly } from '../lib/late-movement-service.js';
 import { isOperationalItem, resolveItemByIdentity } from '../lib/item-master.js';
@@ -433,11 +434,11 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     // high-value category." Gated on the same requestId the client already
     // sends for idempotency, so resubmitting the identical form after
     // approval both finds the APPROVED request and proceeds.
-    const adjustmentValue = (await estimateValueAtRisk(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0;
-    const adjustmentLocation = await prisma.location.findUnique({ where: { id: location.id }, select: { branchId: true } }).catch(() => null);
     const gate = await checkApprovalGate({
       triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
-      category: item.category ?? null, branchId: adjustmentLocation?.branchId ?? null, value: adjustmentValue, requestedById: req.user!.id,
+      category: item.category ?? null, locationId: location.id,
+      value: async () => (await readValueAtRisk(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0,
+      requestedById: req.user!.id,
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return res.status(409).json({ message: gate.reason, approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole, requestId });
@@ -450,7 +451,12 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     if (result.committedRows) { recordDailyMovement(movement); if (!databaseEnabled) adjustStockLedger(item.id, lotId, location.id, qtyDelta); }
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_MANUALLY_UPDATED', entityType: 'StockLedger', entityId: `${item.id}|${lotId}|${location.id}`, metadata: movement.metadata }));
     return res.status(201).json({ message: result.committedRows ? `Stock updated from ${currentQty} to ${currentQty + qtyDelta}.` : 'This stock update was already applied.', itemId: item.id, lotId, locationId: location.id, previousQty: currentQty, qtyDelta, resultingQty: result.committedRows ? currentQty + qtyDelta : currentQty });
-  } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to update stock.' }); }
+  } catch (error) {
+    if (isDomainError(error) && error.code === 'APPROVAL_UNAVAILABLE') {
+      return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
+    }
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to update stock.' });
+  }
 });
 
 router.post('/stock-adjustments/import/preview', upload.single('file'), async (req: Request, res: Response) => {
