@@ -263,6 +263,8 @@ jobs:
     name: Mobile static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FLUTTER_VERSION: "3.47.2"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -271,6 +273,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install mobile dependencies
@@ -289,6 +292,8 @@ jobs:
     name: Mobile native target build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      FLUTTER_VERSION: "3.47.2"
     strategy:
       fail-fast: false
       matrix:
@@ -307,6 +312,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install mobile dependencies
