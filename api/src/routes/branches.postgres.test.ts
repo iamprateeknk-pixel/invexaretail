@@ -86,10 +86,8 @@ integration('creating a branch, then a duplicate code, then updating and archivi
 });
 
 integration('a branch with a location holding on-hand stock cannot be archived - the StockLedger fix made while porting from foundation.ts', async () => {
-  const companyId = `branch-test-${randomUUID()}`;
-  await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
-  const adminId = `branch-admin-${randomUUID()}`;
-  await prisma.user.create({ data: { id: adminId, name: 'Branch Admin', email: `${adminId}@test.invexa.local`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]', companyId } });
+  const companyId = findUserByEmail('admin@retail.local')?.companyId;
+  assert.ok(companyId, 'the seeded admin has a company session for this route fixture');
   const branchCode = `BR-${randomUUID().slice(0, 6)}`.toUpperCase();
   const branch = await prisma.branch.create({ data: { code: branchCode, name: 'Stocked Branch', type: 'WAREHOUSE', companyId } });
   const locationId = `branch-test-loc-${randomUUID()}`;
@@ -100,7 +98,7 @@ integration('a branch with a location holding on-hand stock cannot be archived -
   await prisma.stockLedger.create({ data: { itemId, lotId: lot.id, locationId, onHand: 5, companyId } });
 
   await withServer(async (call) => {
-    const admin = generateJWT(adminId, companyId);
+    const admin = tokenFor('admin@retail.local');
     const response = await call('POST', `/branches/${branch.id}/archive`, admin);
     assert.equal(response.status, 409);
     assert.equal(response.body.blockers.activeStock, 1);

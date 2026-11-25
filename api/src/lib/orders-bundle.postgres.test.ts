@@ -89,7 +89,7 @@ integration('a kit and one of its components on the same order are merged into o
   });
   const rice = order.lines.filter((line: { itemId: string }) => line.itemId === f.riceId);
   assert.equal(rice.length, 1);
-  assert.equal(rice[0].requestedQty, 7);
+  assert.equal(Number(rice[0].requestedQty), 7);
 });
 
 integration('another company cannot expand this company\'s bundle (a foreign kit id is just an unknown item)', async () => {
@@ -111,5 +111,5 @@ integration('items that are not bundles still order exactly as before', async ()
     fulfillmentLocationId: f.locationId, lines: [{ itemId: f.riceId, quantity: 3 }],
   });
   assert.equal(order.lines.length, 1);
-  assert.equal(order.lines[0].requestedQty, 3);
+  assert.equal(Number(order.lines[0].requestedQty), 3);
 });

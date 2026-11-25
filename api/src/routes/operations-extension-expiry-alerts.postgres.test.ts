@@ -128,5 +128,5 @@ integration('POST /expiry-alerts/:id/write-off posts one canonical journal row t
   assert.equal(rows[0].movementType, 'EXPIRY_WRITE_OFF');
   assert.equal(Number(rows[0].qtyDelta), -4);
   assert.equal(rows[0].companyId, a.companyId);
-  assert.equal(rows[0].afterBalance, 6);
+  assert.equal(Number(rows[0].afterBalance), 6);
 });
