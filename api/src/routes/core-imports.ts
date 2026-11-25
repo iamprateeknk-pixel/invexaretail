@@ -429,6 +429,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     const currentQty = (await findStockEntry(tenantContext(req), item.id, lotId, location.id))?.onHand ?? 0;
     const qtyDelta = stockUpdateDelta(mode, Number(req.body.quantity), currentQty);
     const requestId = String(req.body.requestId || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const expiryDate = !existingLot && req.body.expiryDate ? new Date(req.body.expiryDate).toISOString() : null;
 
     // Blueprint §16.2: "manual stock adjustment -> dual control for
     // high-value category." Gated on the same requestId the client already
@@ -438,6 +439,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
       triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: requestId,
       category: item.category ?? null, locationId: location.id,
       value: async () => (await readValueAtRisk(tenantContext(req), item.id, Math.abs(qtyDelta))) ?? 0,
+      intent: [item.id, lotId, lotNo, mode, Number(req.body.quantity), qtyDelta, expiryDate, reason],
       requestedById: req.user!.id,
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
@@ -445,7 +447,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
 
     const batchId = `adjust-manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const movement = { id: `move-${batchId}`, dedupeKey: `ADJUSTMENT|MANUAL|${requestId}`, itemId: item.id, lotId, locationId: location.id, movementType: `MANUAL_${mode}`, qtyDelta, transactionAt: new Date().toISOString(), sourceType: 'ADJUSTMENT' as const, sourceReference: requestId, importBatchId: batchId, createdById: req.user!.id, metadata: { reason, mode, requestedQuantity: Number(req.body.quantity), previousQty: currentQty, resultingQty: currentQty + qtyDelta } };
-    const newLots = existingLot ? [] : [{ id: lotId, itemId: item.id, lotNo, expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate).toISOString() : null, attributes: { source: 'manual-stock-update' } }];
+    const newLots = existingLot ? [] : [{ id: lotId, itemId: item.id, lotNo, expiryDate, attributes: { source: 'manual-stock-update' } }];
     const result = await persistDailyMovementImport({ batchId, importType: 'ADJUSTMENT', fileName: 'Manual stock update', importedBy: req.user!.id, totalRows: 1, invalidRows: 0, duplicateRows: 0, movements: [movement], lots: newLots, checkpoints: [], companyId: req.companyId ?? DEFAULT_COMPANY_ID });
     if (newLots[0]) ensureLotRecord(item.id, lotNo, newLots[0].expiryDate, newLots[0].attributes, lotId);
     if (result.committedRows) { recordDailyMovement(movement); if (!databaseEnabled) adjustStockLedger(item.id, lotId, location.id, qtyDelta); }

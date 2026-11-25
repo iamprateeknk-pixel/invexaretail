@@ -752,9 +752,11 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
 
   // Blueprint §27: approval is a policy gate (value / branch thresholds), not just a status flip.
   if (to === 'APPROVED') {
+    const lineRevisions = order.lines.map((line) => `${line.id}:${line.updatedAt.toISOString()}`).sort();
     const gate = await checkApprovalGate({
       triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: order.id,
       locationId: order.locationId, value: order.totalAmount, requestedById: req.user!.id,
+      intent: [order.supplierId, order.updatedAt.toISOString(), lineRevisions],
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });

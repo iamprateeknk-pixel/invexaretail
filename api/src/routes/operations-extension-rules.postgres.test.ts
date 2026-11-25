@@ -120,8 +120,8 @@ integration('rules and QC templates are company scoped: foreign lists are empty,
 
   // Re-activate A's rule, then prove it gates A but never B.
   await prisma.approvalRule.update({ where: { id: rule.id }, data: { active: true } });
-  const gateA = await checkApprovalGate({ triggerType, entityType: 'T', entityId: `e-${randomUUID()}`, branchId: null, value: 500, requestedById: a.userId, companyId: a.companyId });
-  const gateB = await checkApprovalGate({ triggerType, entityType: 'T', entityId: `e-${randomUUID()}`, branchId: null, value: 500, requestedById: b.userId, companyId: b.companyId });
+  const gateA = await checkApprovalGate({ triggerType, entityType: 'T', entityId: `e-${randomUUID()}`, branchId: null, value: 500, intent: [], requestedById: a.userId, companyId: a.companyId });
+  const gateB = await checkApprovalGate({ triggerType, entityType: 'T', entityId: `e-${randomUUID()}`, branchId: null, value: 500, intent: [], requestedById: b.userId, companyId: b.companyId });
   assert.equal(gateA.blocked, true, 'the owner\'s rule gates the owner');
   assert.equal(gateB.blocked, false, 'another company\'s rule must never gate this company');
 });

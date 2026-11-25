@@ -673,6 +673,8 @@ model ApprovalRequest {
   triggerType    String
   entityType     String
   entityId       String
+  // Older requests have no command binding and are retained for history.
+  intentFingerprint String? @db.VarChar(64)
   // Decimal migration pilot (docs/decimal-migration-plan.md): write-only in
   // application code (never used in arithmetic - checkApprovalGate compares
   // the plain-number `value` argument against ApprovalRule.valueThreshold,
@@ -689,6 +691,7 @@ model ApprovalRequest {
   updatedAt      DateTime  @updatedAt
 
   @@index([entityType, entityId, status])
+  @@index([intentFingerprint, status])
   @@index([status, triggerType])
 }
 

@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertApprovalReviewer, checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+import { approvalIntentFingerprint, assertApprovalReviewer, checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+
+test('approval fingerprints distinguish different command details at the same value', () => {
+  const first = approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-1', 3]]]);
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-1', 3]]]));
+  assert.notEqual(first, approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-2', 3]]]));
+});
 
 test('an approval decision requires a qualified reviewer other than the requester', () => {
   assert.throws(() => assertApprovalReviewer('requester', 'ADMIN', 'requester', 'BRANCH_MANAGER'), { code: 'SELF_REVIEW' });
@@ -14,7 +21,7 @@ test('a configured but unavailable policy source cannot authorize a command', as
   try {
     await assert.rejects(checkApprovalGate({
       triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: 'test-transfer',
-      branchId: null, value: 1000, requestedById: 'test-user', companyId: 'test-company',
+      branchId: null, value: 1000, intent: [], requestedById: 'test-user', companyId: 'test-company',
     }), { code: 'APPROVAL_UNAVAILABLE' });
   } finally {
     if (previous === undefined) delete process.env.DATABASE_URL;

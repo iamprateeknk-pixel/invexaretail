@@ -49,6 +49,11 @@ reject private hosts. See the [native setup](../mobile/README.md#run-locally).
 
 ## 3. Release
 
+After the approval binding migration, existing approval rows remain available
+for history. For an operation that is still pending, the original requester
+resubmits the command to create an approval linked to its current details.
+Verify the new request before retrying any stock movement or purchase order.
+
 1. CI green on the merge commit: API build/lint/tests, every real-Postgres suite,
    the migration matrix, web tests/build/E2E, audit gate, gitleaks.
 2. Staging first when one exists: migrate, then

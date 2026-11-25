@@ -556,12 +556,14 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   // Blueprint §16.2: "transfer > ₹1 lakh -> regional manager approval."
   // Gate before touching stock - a confirmed allocation's total value
   // decides whether a configured ApprovalRule blocks this attempt.
+  const acceptedPicks = [...allocations.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, pick]) => pick);
   const gate = await checkApprovalGate({
     triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: transfer.id,
     locationId: transfer.sourceLocationId, requestedById: req.user!.id,
     value: async () => (await Promise.all(
-      [...allocations.values()].map((allocation) => readValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
+      acceptedPicks.map((allocation) => readValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
     )).reduce((sum, value) => sum + (value ?? 0), 0),
+    intent: [transfer.destinationLocationId, acceptedPicks.map(({ itemId, lotId, quantity }) => [itemId, lotId, quantity])],
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   });
   if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });

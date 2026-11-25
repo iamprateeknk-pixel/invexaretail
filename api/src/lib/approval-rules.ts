@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import { prisma, resolveDatabaseUrl } from './db.js';
 import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
-import { recordAudit, rememberPersistedAudit } from './audit.js';
-import { databaseEnabled, persistAudit } from './persistence.js';
+import { rememberPersistedAudit } from './audit.js';
+import { databaseEnabled } from './persistence.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -34,6 +35,12 @@ export type GateResult =
   | { blocked: false }
   | { blocked: true; requestId: string; status: 'PENDING'; reason: string; requiredApproverRole: string };
 
+type IntentValue = string | number | boolean | null | readonly IntentValue[];
+
+export function approvalIntentFingerprint(parts: readonly IntentValue[]): string {
+  return createHash('sha256').update(JSON.stringify(['approval-v1', ...parts])).digest('hex');
+}
+
 /**
  * Checks whether `triggerType` is gated for this value/branch, and if so,
  * reuses an existing pending/approved request or opens a new one.
@@ -47,6 +54,8 @@ export async function checkApprovalGate(input: {
   branchId?: string | null;
   locationId?: string;
   value: number | (() => Promise<number>);
+  /** Normalized data the command would post. Use arrays in stable order. */
+  intent: readonly IntentValue[];
   requestedById: string;
   /** Only this company's rules apply; another company's thresholds must never gate this one. */
   companyId: string;
@@ -70,30 +79,40 @@ export async function checkApprovalGate(input: {
     const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId, value });
     if (!matched) return { blocked: false };
 
-    const existingApproved = await prisma.approvalRequest.findFirst({
-      where: { entityType: input.entityType, entityId: input.entityId, ruleId: matched.id, status: 'APPROVED' },
+    const intentFingerprint = approvalIntentFingerprint([
+      input.companyId, input.requestedById, input.triggerType, input.entityType, input.entityId,
+      input.locationId ?? null, input.category ?? null, branchId, value,
+      matched.id, matched.category, matched.branchId, matched.valueThreshold, matched.requiredApproverRole,
+      input.intent,
+    ]);
+    const metadata = { ruleId: matched.id, ruleLabel: matched.label, value, requiredApproverRole: matched.requiredApproverRole };
+    const { request, audit } = await prisma.$transaction(async (tx) => {
+      // Serialize identical requests across API replicas while retaining rejected rows for history.
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${intentFingerprint}, 0))`;
+      const existing = await tx.approvalRequest.findFirst({
+        where: { intentFingerprint, requestedById: input.requestedById, status: { in: ['APPROVED', 'PENDING'] } },
+        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      });
+      if (existing) return { request: existing, audit: null };
+      const request = await tx.approvalRequest.create({
+        data: {
+          ruleId: matched.id, triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
+          valueAtStake: value, requestedById: input.requestedById, intentFingerprint,
+        },
+      });
+      const audit = await tx.auditLog.create({
+        data: {
+          actorId: input.requestedById, actorRole: 'SYSTEM', action: 'APPROVAL_REQUESTED',
+          entityType: input.entityType, entityId: input.entityId, metadata: { ...metadata, requestId: request.id },
+        },
+      });
+      return { request, audit };
     });
-    if (existingApproved) return { blocked: false };
-
-    const existingPending = await prisma.approvalRequest.findFirst({
-      where: { entityType: input.entityType, entityId: input.entityId, ruleId: matched.id, status: 'PENDING' },
-    });
-    if (existingPending) {
-      return { blocked: true, requestId: existingPending.id, status: 'PENDING', reason: `Awaiting ${matched.requiredApproverRole} approval ("${matched.label}").`, requiredApproverRole: matched.requiredApproverRole };
+    if (request.status === 'APPROVED') return { blocked: false };
+    if (audit) {
+      rememberPersistedAudit({ ...audit, metadata: { ...metadata, requestId: request.id }, createdAt: audit.createdAt.toISOString() });
     }
-
-    const created = await prisma.approvalRequest.create({
-      data: {
-        ruleId: matched.id, triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
-        valueAtStake: value, requestedById: input.requestedById,
-      },
-    });
-    await persistAudit(recordAudit({
-      actorId: input.requestedById, actorRole: 'SYSTEM', action: 'APPROVAL_REQUESTED',
-      entityType: input.entityType, entityId: input.entityId,
-      metadata: { ruleId: matched.id, ruleLabel: matched.label, value, requiredApproverRole: matched.requiredApproverRole },
-    }));
-    return { blocked: true, requestId: created.id, status: 'PENDING', reason: `Requires ${matched.requiredApproverRole} approval - value ₹${value.toFixed(0)} exceeds the "${matched.label}" threshold.`, requiredApproverRole: matched.requiredApproverRole };
+    return { blocked: true, requestId: request.id, status: 'PENDING', reason: `Awaiting ${matched.requiredApproverRole} approval ("${matched.label}").`, requiredApproverRole: matched.requiredApproverRole };
   } catch (error) {
     const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
     console.error('Approval policy evaluation failed', {

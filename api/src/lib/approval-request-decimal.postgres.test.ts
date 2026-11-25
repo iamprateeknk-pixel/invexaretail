@@ -56,7 +56,7 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
     data: { code: companyId, name: 'Approval location', type: 'WAREHOUSE', companyId, branchId: branch.id },
   });
   const triggerType = `ard-trigger-${randomUUID()}`;
-  await prisma.approvalRule.create({
+  const rule = await prisma.approvalRule.create({
     data: { label: 'Decimal pilot rule', triggerType, valueThreshold: 100, requiredApproverRole: 'ADMIN', createdById: approverId, branchId: branch.id },
   });
 
@@ -64,15 +64,22 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
   await assert.rejects(checkApprovalGate({
     triggerType, entityType: 'TestEntity', entityId, locationId: location.id,
     value: async () => { throw new Error('Valuation store unavailable'); },
-    requestedById: requesterId, companyId,
+    requestedById: requesterId, companyId, intent: ['lot-a'],
   }), { code: 'APPROVAL_UNAVAILABLE' });
   assert.equal(await prisma.approvalRequest.count({ where: { entityId } }), 0);
 
-  const gate = await checkApprovalGate({
+  await prisma.approvalRequest.create({ data: {
+    triggerType, entityType: 'TestEntity', entityId, ruleId: rule.id, status: 'APPROVED',
+    valueAtStake: 1234.57, requestedById: requesterId, decidedById: approverId,
+  } });
+  const command = {
     triggerType, entityType: 'TestEntity', entityId, locationId: location.id,
-    value: 1234.567, requestedById: requesterId, companyId, // deliberately 3 decimal places to exercise the 2dp rounding policy
-  });
-  assert.equal(gate.blocked, true, JSON.stringify(gate));
+    value: 1234.567, requestedById: requesterId, companyId, intent: ['lot-a'],
+  };
+  const [gate, retry] = await Promise.all([checkApprovalGate(command), checkApprovalGate(command)]);
+  assert.ok(gate.blocked && retry.blocked, 'legacy approval cannot authorize a new command');
+  assert.equal(retry.requestId, gate.requestId, 'concurrent identical commands share one approval request');
+  assert.equal(await prisma.auditLog.count({ where: { entityId, action: 'APPROVAL_REQUESTED' } }), 1);
 
   const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: (gate as { requestId: string }).requestId } });
   assert.equal(Number(stored.valueAtStake), 1234.57, 'round-half-up to 2dp per the money rounding policy');
@@ -106,5 +113,20 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
     });
     assert.equal(audit.length, 1);
     assert.equal(audit[0].action, `APPROVAL_${final.status}`);
+
+    if (final.status === 'REJECTED') {
+      const newGate = await checkApprovalGate(command);
+      assert.ok(newGate.blocked);
+      const approved = await call('POST', `/approval-requests/${newGate.requestId}/decide`, token, { decision: 'APPROVED' });
+      assert.equal(approved.status, 200, JSON.stringify(approved.body));
+    }
+    assert.equal((await checkApprovalGate(command)).blocked, false, 'only the approved intent can proceed');
+    const changed = await checkApprovalGate({ ...command, intent: ['lot-b'] });
+    assert.ok(changed.blocked, 'a different lot needs approval even when its value is identical');
+    assert.notEqual(changed.requestId, gate.requestId);
+    assert.ok((await checkApprovalGate({ ...command, requestedById: approverId })).blocked,
+      'a different requester cannot reuse the decision');
+    await prisma.approvalRule.update({ where: { id: rule.id }, data: { valueThreshold: 110 } });
+    assert.ok((await checkApprovalGate(command)).blocked, 'a changed approval rule requires a new review');
   });
 });
