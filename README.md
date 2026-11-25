@@ -8,10 +8,10 @@ Multi-tenant retail inventory, warehouse-transfer, counting, procurement and ord
 
 | Path | What it is | Deployed as |
 |---|---|---|
-| `api/` | Express + Prisma + PostgreSQL backend, worker, OpenAPI contract | Render web service + worker (`render.yaml`) |
+| `api/` | Express + Prisma + PostgreSQL backend, worker, OpenAPI contract | Railway API + worker (`api/railway.json`, `api/railway.worker.json`); `render.yaml` is an alternative template |
 | `web/` | Vite/React operations workspace (shadcn/ui, design tokens) | Cloudflare (`web/wrangler.toml`) |
-| `admin-panel/` | SaaS control-plane UI (tenants, entitlements, API keys, kill switches) | separate build |
-| `mobile/` | Flutter Android client (counts, pick, receive, putaway, scan; offline SQLite queue) | signed AAB/APK, `.github/workflows/android-apk.yml` |
+| `admin-panel/` | SaaS control-plane UI (tenants, entitlements, API keys, kill switches) | Cloudflare Worker `invexaretail` |
+| `mobile/` | Flutter Android/iOS/Windows client (counts, pick, receive, putaway, scan; offline SQLite queue) | Android AAB/APK; Windows and iOS simulator builds run in CI; signing/store release remains pending |
 | `docs/` | ADRs, runbooks, per-week evidence, security/SLO policy | - |
 
 Architecture rules that bind every change live in [AGENTS.md](AGENTS.md) and [docs/adr/](docs/adr/) (ADR-001..006): one canonical stock journal, mandatory tenant scope, rotating refresh sessions, Prisma migrations as the only schema authority, bounded contexts, versioned contract + idempotency + outbox.
@@ -70,6 +70,6 @@ CI: `.github/workflows/ci.yml` (build, tests, architecture lint, contract, Postg
 - `core.ts` and `operations-extension.ts` are still large routers being extracted slice by slice.
 - Evidence uploads validate magic bytes and size and are served through signed expiring links, but there is no malware scan or object storage yet (infrastructure).
 - Physical-device validation, load tests at agreed volume, failure drills and the canary/rollback rehearsal have not been run; they need a staging environment and people.
-- iOS: there is no iOS build or release path, so iOS is **not supported**. Whether it stays out of scope is an open owner decision (see guide-status).
+- iOS simulator and Windows release builds are checked in to CI. iOS device signing, store distribution, physical-device validation and Windows installer distribution remain unverified release work.
 
 The previous, much longer README described a pre-Postgres prototype and made "production ready" claims the code does not support; it is archived at [docs/archive/README-legacy-v1.md](docs/archive/README-legacy-v1.md).

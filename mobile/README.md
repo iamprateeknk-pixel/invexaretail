@@ -2,6 +2,11 @@
 
 Native Flutter operations client for floor counts, stock, and transfers. The
 full web workspace remains available as an in-app browser for admin modules.
+Android, iOS and Windows native project scaffolds are checked in. Android has
+the signed release workflow; Windows opens the trusted workspace in the system
+browser and supports USB scanner/manual entry. Windows release and iOS simulator
+builds run in CI; Apple signing, store submission and physical-device validation
+remain release work.
 
 ## What it talks to
 
@@ -56,3 +61,11 @@ Android release workflow (`.github/workflows/android-apk.yml`) does not
 regenerate it. The workflow runs `flutter pub get --enforce-lockfile`,
 `flutter analyze` and `flutter test`, then builds the signed release
 AAB/APK with the version from `pubspec.yaml`.
+
+## Windows and iOS
+
+Windows release builds use `flutter build windows --release`; barcode input is
+provided through a USB scanner or manual entry because the camera plugin does
+not support Windows. iOS builds use `flutter build ios --simulator --no-codesign`
+in macOS CI. Device signing, App Store/TestFlight publication, camera permission
+validation and store review are not configured.

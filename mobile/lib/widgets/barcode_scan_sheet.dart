@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -24,16 +25,22 @@ class _BarcodeScanScreen extends StatefulWidget {
 }
 
 class _BarcodeScanScreenState extends State<_BarcodeScanScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-  );
+  MobileScannerController? _controller;
   final _manualCode = TextEditingController();
   bool _handled = false;
   String? _cameraError;
 
   @override
+  void initState() {
+    super.initState();
+    if (defaultTargetPlatform != TargetPlatform.windows) {
+      _controller = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
+    }
+  }
+
+  @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     _manualCode.dispose();
     super.dispose();
   }
@@ -57,36 +64,55 @@ class _BarcodeScanScreenState extends State<_BarcodeScanScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isWindows = defaultTargetPlatform == TargetPlatform.windows;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         title: Text(widget.title),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        actions: [
+        actions: isWindows ? const [] : [
           IconButton(
             icon: ValueListenableBuilder(
-              valueListenable: _controller,
+              valueListenable: _controller!,
               builder: (context, state, child) => Icon(
                 state.torchState == TorchState.on ? Icons.flash_on : Icons.flash_off,
               ),
             ),
-            onPressed: () => _controller.toggleTorch(),
+            onPressed: () => _controller!.toggleTorch(),
           ),
           IconButton(
             icon: const Icon(Icons.cameraswitch),
-            onPressed: () => _controller.switchCamera(),
+            onPressed: () => _controller!.switchCamera(),
           ),
         ],
       ),
       body: Column(
         children: [
           Expanded(
-            child: Stack(
+            child: isWindows
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.barcode_reader, size: 56, color: invexaEmerald),
+                          SizedBox(height: 16),
+                          Text(
+                            'Use a USB barcode scanner or enter the code below.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : Stack(
               fit: StackFit.expand,
               children: [
                 MobileScanner(
-                  controller: _controller,
+                  controller: _controller!,
                   onDetect: _onDetect,
                   errorBuilder: (context, error) {
                     _cameraError = error.errorDetails?.message ?? error.errorCode.name;
@@ -124,12 +150,13 @@ class _BarcodeScanScreenState extends State<_BarcodeScanScreen> {
                 Expanded(
                   child: TextField(
                     controller: _manualCode,
+                    autofocus: isWindows,
                     style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: 'Or type the code manually',
-                      hintStyle: TextStyle(color: invexaMuted),
-                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: invexaMuted)),
-                      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: invexaEmerald)),
+                    decoration: InputDecoration(
+                      hintText: isWindows ? 'Scan or type the code' : 'Or type the code manually',
+                      hintStyle: const TextStyle(color: invexaMuted),
+                      enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: invexaMuted)),
+                      focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: invexaEmerald)),
                     ),
                     onSubmitted: _accept,
                   ),

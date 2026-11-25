@@ -6,10 +6,13 @@ read those first if a rule below seems arbitrary.
 
 ## Repository layout
 
-- `api/` - the deployed backend (Express + Prisma + Postgres). This is the
-  only backend Render deploys (see `render.yaml`); it owns the database.
+- `api/` - the deployed backend (Express + Prisma + Postgres). Railway deploys
+  the API and worker from `api/railway.json` and `api/railway.worker.json`;
+  `render.yaml` is an alternative template. The API owns the database.
 - `web/` - the deployed frontend (Vite).
-- `admin-panel/`, `mobile/` - separate deployables, own package.json each.
+- `admin-panel/` and `mobile/` are separate deployables. The admin panel uses
+  npm; the Flutter app uses `pubspec.yaml`, with Android release, iOS simulator
+  and Windows release targets. Store signing and device validation remain gates.
 - `database/` was the pre-`api/` MySQL/Sequelize schema/migrations half of
   the legacy prototype - already removed (an earlier commit, "Migrate
   Invexa Retail to PostgreSQL and complete Week 1 controls"). `backend/`

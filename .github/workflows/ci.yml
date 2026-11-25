@@ -275,7 +275,7 @@ jobs:
 
       - name: Install mobile dependencies
         working-directory: mobile
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze mobile app
         working-directory: mobile
@@ -284,3 +284,35 @@ jobs:
       - name: Test mobile app
         working-directory: mobile
         run: flutter test
+
+  mobile-native-platform-builds:
+    name: Mobile native target build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            build-command: flutter build windows --release
+          - platform: ios-simulator
+            runner: macos-latest
+            build-command: flutter build ios --simulator --no-codesign
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build native target
+        working-directory: mobile
+        run: ${{ matrix.build-command }}
