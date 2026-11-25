@@ -20,11 +20,15 @@ Implementation branch: `codex/enterprise-2.0-p0`.
 - Contract validation, generated-client drift check and contract typecheck: passed.
 - Architecture lint: 0 new violations; 6 existing findings are now tracked. The transfer queries use the shared company scope helper; the stock parity harness writes fixtures. The control-plane floating-point values remain release debt and are described below.
 - API high/critical audit gate: passed with 0 exceptions.
+- Targeted control-plane HTTP regression: 7 passed. Stock adjustment now returns `503 CANONICAL_INVENTORY_REQUIRED` and leaves the separate control-plane ledger unchanged until canonical posting is wired.
+- Branch manager stock-count workflow: 4 passed, including denial of self-review.
+- GitHub CI built the final API runtime image, migrated and verified CI Postgres from that image, passed image startup smoke, architecture/contract checks, web/admin/mobile checks and all security jobs.
+- The GitHub migration matrix failed on existing schema drift between applied migrations and `schema.prisma`: migration-created defaults differ across tenant `companyId` and control-plane `updatedAt` fields. The matrix stopped before the later real-Postgres integration suites. This must be reconciled with a reviewed forward migration/schema change; migration history was not rewritten.
 
 ## Release blockers still open
 
-- Blueprint F01 remains open: `/sync/v1/mutations` still acknowledges stock adjustments through the separate `ControlPlaneLedger` path (`ControlPlaneSync`) rather than the canonical inventory posting service. This path stores quantities as floating-point values and has not been reconciled with the authoritative journal. Do not treat mobile offline stock posting as Enterprise-ready until it is migrated or safely retired with a tested replacement.
-- Other blueprint P0 workflows, including independent approval and self-review protection, have not been revalidated in this tranche.
-- The exact Docker image and real-Postgres workflow checks are pending the GitHub PR run. No production or staging environment was changed here.
+- Blueprint F01 remains open: `/sync/v1/mutations` no longer falsely acknowledges stock adjustment mutations, but returns `503 CANONICAL_INVENTORY_REQUIRED` until it can post through `InventoryPostingService`. Mobile offline stock posting is unavailable until that canonical integration has a tested replacement. The legacy `ControlPlaneLedger` simulation remains isolated for its unit-level scenarios.
+- The branch-manager stock-count flow denies self-review, as verified by its targeted HTTP suite. Broader approval-policy coverage from the blueprint remains open.
+- The migration matrix has exposed schema drift and prevented the remaining Postgres integration suites from running in CI. No production or staging environment was changed here.
 
 This tranche is not an Enterprise 2.0 release approval. Production promotion remains gated on the open P0/P1 work, CI evidence, staging rehearsal and the blueprint's data-integrity and rollback acceptance checks.

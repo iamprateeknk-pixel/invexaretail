@@ -834,6 +834,14 @@ syncRouter.post('/mutations', async (req: Request, res: Response) => {
     if (auth?.scope.companyId && requestedCompanyId) {
       controlPlane.assertCompanyScope(auth.scope, requestedCompanyId);
     }
+    const actionType = String(req.body?.actionType ?? 'STOCK_ADJUST');
+    if (actionType === 'STOCK_ADJUST' || actionType === 'POST_STOCK_ADJUSTMENT') {
+      throw new ControlPlaneError(
+        'Stock sync is unavailable until mutations are posted through the canonical inventory service.',
+        'CANONICAL_INVENTORY_REQUIRED',
+        503,
+      );
+    }
     const mutation = controlPlane.enqueueMutation({
       mutationId: String(req.body?.mutationId ?? ''),
       tenantId: controlPlane.tenantId,
@@ -841,7 +849,7 @@ syncRouter.post('/mutations', async (req: Request, res: Response) => {
       userId: String(req.body?.userId ?? auth?.scope.actorId ?? ''),
       deviceId: String(req.body?.deviceId ?? ''),
       entityType: String(req.body?.entityType ?? 'inventory'),
-      actionType: String(req.body?.actionType ?? 'STOCK_ADJUST'),
+      actionType,
       payload: req.body?.payload ?? {},
     });
     res.json({ success: true, mutation });

@@ -92,8 +92,9 @@ test('HTTP: platform login, company lock, studio publish and sync mutation', asy
         payload: { itemId: 'item-1', delta: -2 },
       }),
     });
-    assert.equal(mutation.status, 200);
-    assert.equal(mutation.body.mutation.status, 'synced');
+    assert.equal(mutation.status, 503);
+    assert.equal(mutation.body.code, 'CANONICAL_INVENTORY_REQUIRED');
+    assert.equal(controlPlane.stockOnHand('default-company', 'item-1'), 10);
 
     const cross = await json(url, '/sync/v1/mutations', {
       method: 'POST',
