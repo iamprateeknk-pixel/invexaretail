@@ -93,10 +93,9 @@ npm run deploy
 - `npm run deploy` runs `npx wrangler@4.137.0 deploy`, which needs a wrangler
   login for the Cloudflare account that owns the worker. Check with
   `npx wrangler@4.137.0 whoami`.
-- `VITE_API_BASE` does not need to be set: the fallback in
-  `web/src/lib/api-client.js` is the Railway production API. Set it only to
-  point the build at a different API (bash: `VITE_API_BASE=https://... npm run
-  build`; PowerShell: `$env:VITE_API_BASE="https://..."` before the build).
+- Set `VITE_API_BASE` to the target environment's public HTTPS API origin
+  before `npm run build`. In PowerShell, set `$env:VITE_API_BASE="https://..."`.
+  Builds require this value for staging and production.
 - Vite 8 needs Node 20.19+ or 22.12+.
 
 ### Control Plane (`invexaretail`)

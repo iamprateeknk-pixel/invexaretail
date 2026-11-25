@@ -5,7 +5,7 @@ import {
   writePersistedSession,
 } from './session.js';
 
-export const API_BASE = import.meta.env?.VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app';
+export const API_BASE = import.meta.env?.VITE_API_BASE ?? '';
 
 export class ApiError extends Error {
   constructor(message, status) {
