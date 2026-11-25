@@ -64,6 +64,17 @@ jobs:
       - name: Build API exactly as production does
         run: npm run build
 
+      - name: Test migration ownership and image verifier packaging
+        run: node --test scripts/deployment-config.test.cjs
+
+      - name: Build the final API runtime image
+        run: docker build --tag invexa-api:ci .
+
+      - name: Migrate and verify Postgres from the final API image
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+        run: docker run --rm --network host --env DATABASE_URL invexa-api:ci sh -ec 'npm run db:migrate && npm run db:verify'
+
       - name: Check architecture rules (AGENTS.md / ADR-001..006)
         run: npm run lint:arch
 
@@ -80,11 +91,6 @@ jobs:
 
       - name: Typecheck the generated contract client compiles standalone (Week 8)
         run: npm run contract:typecheck
-
-      - name: Deploy migrations to real Postgres
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Migration matrix - fresh database and upgrade from the previous release (Plan Area J)
         run: node scripts/migration-matrix.mjs --admin-url postgresql://ci:ci@127.0.0.1:5432/postgres --behind 3
@@ -137,15 +143,21 @@ jobs:
       - name: Test the migration matrix and dependency audit gate helpers (Plan Area J)
         run: node --test scripts/migration-matrix.test.mjs ../scripts/audit-gate.test.mjs
 
-      - name: Start API and verify health endpoint
+      - name: Start API from the final image and verify health endpoints
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          JWT_SECRET: invexa-ci-only-secret-1234567890-abcdefghijklmnopqrstuvwxyz
           SEED_PASSWORD: InvexaCiOnly123
-          PORT: 4100
         run: |
-          npm start > /tmp/invexa-api.log 2>&1 &
-          api_pid=$!
-          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-api.log' EXIT
+          docker run --detach --name invexa-api-image-ci --network host \
+            --env NODE_ENV=production \
+            --env REQUIRE_DATABASE=true \
+            --env DATABASE_URL \
+            --env JWT_SECRET \
+            --env SEED_PASSWORD \
+            --env PORT=4100 \
+            invexa-api:ci
+          trap 'docker rm --force invexa-api-image-ci >/dev/null 2>&1 || true' EXIT
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if curl --fail --silent --show-error http://127.0.0.1:4100/health \
               && curl --fail --silent --show-error http://127.0.0.1:4100/ready \
@@ -154,6 +166,7 @@ jobs:
             fi
             sleep 1
           done
+          docker logs invexa-api-image-ci
           exit 1
 
       - name: Verify API entry file (app.js) boots without a database

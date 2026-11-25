@@ -13,7 +13,11 @@ same repository and environment as the API and Postgres services.
 - `REQUIRE_DATABASE`: `true`
 - Healthcheck path: empty (the worker does not expose HTTP)
 
-The config runs `npm run db:migrate` before deployment and starts the compiled
+The API service is the only migration owner. Its pre-deploy command runs
+`npm run db:migrate && npm run db:verify`. The worker never runs migrations;
+before starting its schedulers it checks that every migration shipped with its
+image is applied. If the API deployment has not completed migration yet, the
+worker exits instead of running against an old schema. Start the compiled
 worker with `node dist/worker.js`. Railway service references use this form:
 
 ```text

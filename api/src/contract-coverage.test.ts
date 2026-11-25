@@ -23,12 +23,19 @@ import operationsExtensionRouter from './routes/operations-extension.js';
 import commandCenterRouter from './routes/command-center.js';
 import enterpriseAuthRouter from './routes/enterprise-auth.js';
 
-type Layer = { route?: { path: string | string[]; methods: Record<string, boolean> } };
+type Layer = {
+  route?: { path: string | string[]; methods: Record<string, boolean> };
+  path?: string;
+  handle?: { stack?: Layer[] };
+};
 
 function endpoints(router: Router, prefix = ''): string[] {
   const out: string[] = [];
   for (const layer of (router as unknown as { stack: Layer[] }).stack) {
-    if (!layer.route) continue;
+    if (!layer.route) {
+      if (layer.handle?.stack) out.push(...endpoints(layer.handle as unknown as Router, `${prefix}${layer.path ?? ''}`));
+      continue;
+    }
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     for (const path of paths) {
       if (typeof path !== 'string') continue;
@@ -37,6 +44,12 @@ function endpoints(router: Router, prefix = ''): string[] {
   }
   return out;
 }
+
+test('route inventory descends into mounted child routers', () => {
+  const child = { stack: [{ route: { path: '/items', methods: { get: true } } }] };
+  const parent = { stack: [{ handle: child, path: '' }] };
+  assert.deepEqual(endpoints(parent as unknown as Router), ['GET /items']);
+});
 
 const root = process.cwd();
 const spec = JSON.parse(readFileSync(join(root, 'contracts/openapi.json'), 'utf8')) as { paths: Record<string, Record<string, unknown>> };

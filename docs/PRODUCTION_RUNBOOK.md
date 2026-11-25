@@ -52,8 +52,11 @@ private hosts.
    the migration matrix, web tests/build/E2E, audit gate, gitleaks.
 2. Staging first when one exists: migrate, then
    `API_URL=<staging> LOAD_PASSWORD=<...> npm run load:test -- --duration 30 --concurrency 20 --p95-budget-ms 500`.
-3. Production: Railway runs `npm run db:migrate && npm run db:verify` as the
-   pre-deploy step (`prisma migrate deploy`; never `db push`).
+3. Production: the API service is the sole migration owner. Railway runs
+   `npm run db:migrate && npm run db:verify` before the API deploy
+   (`prisma migrate deploy`; never `db push`). The worker has no migration
+   pre-deploy command and refuses to start unless every migration shipped with
+   its image is already applied.
 4. Check `GET /health`, `/ready`, `/meta` report the new release and a ready schema.
 5. Deploy web (`cd web && npm ci && npm run build && npm run deploy`), confirm the
    `/assets/index-*.js` hash changed.

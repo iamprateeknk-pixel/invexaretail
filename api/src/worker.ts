@@ -11,6 +11,8 @@ import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
 import { deliverPersistedEvent } from './lib/event-bus.js';
 import { resolveDatabaseUrl } from './lib/db.js';
 import { assertProductionSecrets } from './lib/production-guard.js';
+import { verifySchemaVersion } from './lib/schema-version.js';
+import { assertWorkerSchemaCurrent } from './lib/worker-schema-guard.js';
 
 async function main() {
   if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
@@ -19,6 +21,9 @@ async function main() {
   // R9: in production the worker fails closed on placeholder secrets or a
   // missing database, exactly like the API (see lib/production-guard.ts).
   assertProductionSecrets();
+  if (resolveDatabaseUrl()) {
+    assertWorkerSchemaCurrent(await verifySchemaVersion());
+  }
   await withDistributedLock('boot-sweep', async () => {
     await campaignSchedulerTick();
     await orderSweepTick();
