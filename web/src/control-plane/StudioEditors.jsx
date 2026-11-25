@@ -265,8 +265,7 @@ export function MobilePolicyEditor({ controlToken, draft, onSaved }) {
   return (
     <StudioListEditor
       title="Mobile app, per role"
-      description="For each role: which screens the phone app shows, what it keeps for offline work, and how long it may stay offline before it must sync. Data on the phone is always encrypted."
-      notLive="Saved and published, but the phone app does not read this yet: it still shows its standard screens."
+      description="Choose each role’s screens and which downloaded data the app can show offline. The time limit applies to downloaded data."
       entries={entries}
       idOf={(policy) => policy.role}
       canAdd={entries.length < ROLE_OPTIONS.length}
@@ -283,12 +282,12 @@ export function MobilePolicyEditor({ controlToken, draft, onSaved }) {
             {isNew
               ? <Choice label="Role" value={policy.role} options={ROLE_OPTIONS.filter((role) => role.value === policy.role || !entries.some((entry) => entry.role === role.value))} onChange={(role) => set({ role })} />
               : <p className="grid gap-1 text-xs"><span className="font-medium text-muted-foreground">Role</span><span className="py-2 text-sm font-medium">{labelOf(ROLE_OPTIONS, policy.role)}</span></p>}
-            <Choice label="May stay offline for" value={String(policy.offlineMaxHours)}
-              options={[...new Set([...OFFLINE_HOURS_OPTIONS, Number(policy.offlineMaxHours)])].sort((a, b) => a - b).map((hours) => ({ value: String(hours), label: `${hours} hours` }))}
+            <Choice label="Show downloaded data for up to" value={String(policy.offlineMaxHours)}
+              options={[...new Set([0, ...OFFLINE_HOURS_OPTIONS, Number(policy.offlineMaxHours)])].sort((a, b) => a - b).map((hours) => ({ value: String(hours), label: hours === 0 ? 'Online only' : `${hours} hours` }))}
               onChange={(hours) => set({ offlineMaxHours: Number(hours) })} />
           </div>
           <ChipPicker label="Screens in the app (in this order)" options={MOBILE_SCREENS} value={policy.navigation} onChange={(navigation) => set({ navigation })} />
-          <ChipPicker label="Keep on the phone for offline work" options={MOBILE_SCREENS.filter((screen) => screen.value !== 'dashboard')} value={policy.syncScope} onChange={(syncScope) => set({ syncScope })} />
+          <ChipPicker label="Download for offline use" options={MOBILE_SCREENS} value={policy.syncScope} onChange={(syncScope) => set({ syncScope })} />
           <Advanced>
             <Text label="Navigation keys (comma separated)" mono value={policy.navigation.join(', ')} onChange={(raw) => set({ navigation: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
             <Text label="Sync scope keys (comma separated)" mono value={policy.syncScope.join(', ')} onChange={(raw) => set({ syncScope: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />

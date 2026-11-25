@@ -11,6 +11,7 @@ import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/screens/home_shell.dart' show snapshotAge;
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
+import 'package:invexaretail_mobile/services/mobile_offline_policy.dart';
 import 'package:invexaretail_mobile/services/native_database.dart';
 import 'package:invexaretail_mobile/state/session_controller.dart';
 
@@ -31,6 +32,19 @@ Map<String, Object> _feed(String path) {
 
 void main() {
   group('NativeDatabase read model', () {
+    test('policy metadata survives read-cache eviction and stays scoped to the role', () {
+      final db = NativeDatabase.memory();
+      const scope = 'co-a|alice|ADMIN';
+      db.saveMobilePolicy(scope, '{"offlineMaxHours":4}');
+      db.putReadModel(scope, '/api/v1/items', '{}');
+      db.clearReadModel(scope);
+      expect(db.loadMobilePolicy(scope), '{"offlineMaxHours":4}');
+      expect(db.loadMobilePolicy('co-a|alice|STORE_USER'), isNull);
+      db.saveMobilePolicy(scope, null);
+      expect(db.loadMobilePolicy(scope), isNull);
+      db.close();
+    });
+
     test('is scoped per identity, replaced in place, and cleared per scope', () {
       final db = NativeDatabase.memory();
       db.putReadModel('co-a|alice', '/api/v1/items', '{"items":[1]}');
@@ -117,6 +131,64 @@ void main() {
   });
 
   group('cold start with no network', () {
+    test('published policy survives restart, limits scope, and expires snapshots', () async {
+      const scope = 'co-a|alice|ADMIN';
+      final store = MemoryStore();
+      await store.saveSession(const PersistedSession(token: 'jwt', user: alice));
+      var online = true;
+      var syncScope = ['stock'];
+      var now = DateTime.now();
+      SessionController build() => SessionController(
+        api: InvexaApi(baseUrl: 'http://api.test', now: () => now, httpClient: MockClient((request) async {
+          if (!online) throw const SocketException('no network');
+          if (request.url.path == '/api/v1/runtime/config') {
+            return _json({'runtime': {'mobilePolicy': {
+              'offlineMaxHours': 1, 'syncScope': syncScope, 'navigation': ['dashboard', 'stock'],
+            }}});
+          }
+          return _json(_feed(request.url.path));
+        })),
+        store: store,
+      );
+      final first = build();
+      await first.restore();
+      first.stopLive();
+      expect(await store.getReadModel(scope, '/api/v1/items'), isNotNull);
+      expect(await store.getReadModel(scope, '/api/v1/transfers/list'), isNull);
+      expect(await store.getReadModel(scope, '/api/v1/counts'), isNull);
+
+      online = false;
+      now = DateTime.now().add(const Duration(minutes: 30));
+      final cold = build();
+      await cold.restore();
+      cold.stopLive();
+      expect(cold.mobileNavigation, ['dashboard', 'stock']);
+      expect(cold.items.single.name, 'Basmati Rice');
+      expect(cold.error, isNull);
+      expect(cold.offlineReadsUnavailable, isTrue);
+
+      // A snapshot already on screen must disappear when the window expires.
+      final savedAt = cold.snapshotFetchedAt!;
+      now = savedAt.add(const Duration(minutes: 59, seconds: 59));
+      await cold.refreshAll();
+      expect(cold.items, isNotEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(cold.items, isEmpty);
+      expect(cold.snapshotFetchedAt, isNull);
+
+      now = now.add(const Duration(hours: 1));
+      await cold.refreshAll();
+      expect(cold.items, isEmpty);
+      expect(cold.snapshotFetchedAt, isNull);
+      online = true;
+      syncScope = ['counts'];
+      await cold.refreshAll();
+      expect(await store.getReadModel(scope, '/api/v1/stock/loc-1'), isNull);
+      expect(await store.getReadModel(scope, '/api/v1/counts'), isNotNull);
+      await cold.logout(notify: false);
+      expect(await store.loadMobilePolicy(scope), isNull);
+    });
+
     test('restore() shows the last known data marked as a snapshot, and sign-out erases it', () async {
       final store = MemoryStore();
       await store.saveSession(const PersistedSession(token: 'jwt', refreshToken: 'r', user: alice));
@@ -149,9 +221,19 @@ void main() {
       expect(cold.snapshotFetchedAt, isNotNull);
 
       await cold.logout(notify: false);
-      final afterLogout = await store.getReadModel('co-a|alice', '/api/v1/items');
+      final afterLogout = await store.getReadModel('co-a|alice|ADMIN', '/api/v1/items');
       expect(afterLogout, isNull, reason: 'a signed-out phone keeps no stock data');
     });
+  });
+
+  test('scopes strip unrelated rows from mixed feeds and zero hours disables storage', () {
+    final policy = MobileOfflinePolicy.fromJson({'offlineMaxHours': 2, 'syncScope': ['receiving']});
+    expect(policy.cachePayload('/api/v1/mobile/work', {'countTasks': [1], 'receiveTasks': [2]}), {'receiveTasks': [2]});
+    expect(policy.cachePayload('/api/v1/transfers/list', {'transfers': [
+      {'status': 'DISPATCHED'}, {'status': 'PICKING'}, {'status': 'CANCELLED'},
+    ]}), {'transfers': [{'status': 'DISPATCHED'}]});
+    final disabled = MobileOfflinePolicy.fromJson({'offlineMaxHours': 0, 'syncScope': ['stock']});
+    expect(disabled.allows('/api/v1/items'), isFalse);
   });
 
   test('snapshotAge words the age of the data in plain terms', () {

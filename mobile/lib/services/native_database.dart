@@ -270,6 +270,20 @@ class NativeDatabase {
 
   void clearReadModel(String scope) => _db.execute('DELETE FROM read_model WHERE scope = ?', [scope]);
 
+  String? loadMobilePolicy(String scope) {
+    final rows = _db.select('SELECT value FROM device_meta WHERE key = ?', ['mobile_policy:$scope']);
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  void saveMobilePolicy(String scope, String? policy) {
+    final key = 'mobile_policy:$scope';
+    if (policy == null) {
+      _db.execute('DELETE FROM device_meta WHERE key = ?', [key]);
+    } else {
+      _db.execute('INSERT OR REPLACE INTO device_meta (key, value) VALUES (?, ?)', [key, policy]);
+    }
+  }
+
   // ---- count / action queues (stored as sync_commands of type COUNT / ACTION) ----------------
 
   int _nextSeq() => _db.select('SELECT COALESCE(MAX(created_seq), 0) + 1 AS next FROM sync_commands').first['next'] as int;

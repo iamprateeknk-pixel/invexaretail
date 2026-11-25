@@ -95,4 +95,8 @@ class SecureLocalStore implements LocalStore {
   Future<CachedRead?> getReadModel(String scope, String path) => delegate.getReadModel(scope, path);
   @override
   Future<void> clearReadModel(String scope) => delegate.clearReadModel(scope);
+  @override
+  Future<String?> loadMobilePolicy(String scope) => delegate.loadMobilePolicy(scope);
+  @override
+  Future<void> saveMobilePolicy(String scope, String? policy) => delegate.saveMobilePolicy(scope, policy);
 }

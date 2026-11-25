@@ -39,8 +39,8 @@ Future<void> main() async {
     api: InvexaApi(baseUrl: apiBase),
     store: await _openStore(apiBase),
   );
-  await controller.restore();
   runApp(InvexaRetailApp(controller: controller));
+  await controller.restore();
 }
 
 Future<SecureLocalStore> _openStore(String apiBase) async {

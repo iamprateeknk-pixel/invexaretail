@@ -66,8 +66,16 @@ device and replayed on the next successful refresh.
 
 ## Full workspace
 
-Home → browser icon opens `https://invexaretail.com/` in a trusted-host
-WebView (invexaretail.com and api.invexaretail.com only).
+Home → browser icon opens the configured workspace origin in a WebView or
+the default browser on Windows.
+
+## Published offline settings
+
+Refresh once online after upgrading to download the policy and snapshots for
+the current role. Studio controls which downloaded feeds can be read offline
+and how long those snapshots can be used. A zero-hour limit disables snapshot
+use. Scope or time changes take effect when the app refreshes the published
+policy. The durable queue for unsent work is separate from downloaded reads.
 
 ## Android APK
 

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/env.dart';
 import '../models/models.dart';
+import 'mobile_offline_policy.dart';
 
 /// The server accepted the first factor but wants an authenticator or backup
 /// code before it will issue a session. Not an error to show the user.
@@ -22,12 +23,15 @@ class InvexaApi {
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 25),
     this.onTokensUpdated,
+    DateTime Function()? now,
   })  : baseUrl = stripTrailingSlash(baseUrl ?? apiBaseFromEnvironment()),
+        _now = now ?? DateTime.now,
         httpClient = httpClient ?? http.Client();
 
   final String baseUrl;
   final http.Client httpClient;
   final Duration timeout;
+  final DateTime Function() _now;
   Future<void> Function(String token, String? refreshToken)? onTokensUpdated;
 
   /// Offline read model (see local_store.dart). When set together with [cacheScope], successful reads
@@ -36,7 +40,9 @@ class InvexaApi {
   Future<void> Function(String scope, String path, String body)? cachePut;
   Future<({String body, DateTime fetchedAt})?> Function(String scope, String path)? cacheGet;
   String? cacheScope;
+  MobileOfflinePolicy? offlinePolicy;
   DateTime? servedFromCacheAt;
+  void Function(Duration remaining)? onCachedSnapshot;
 
   static const _cacheablePrefixes = [
     '/api/v1/locations', '/api/v1/items', '/api/v1/dashboard', '/api/v1/counts', '/api/v1/transfers',
@@ -46,8 +52,10 @@ class InvexaApi {
   static bool isCacheable(String method, String path) {
     if (method != 'GET') return false;
     final clean = path.split('?').first;
-    return _cacheablePrefixes.any((prefix) => clean == prefix || clean.startsWith(prefix.endsWith('/') ? prefix : '$prefix/') || clean.startsWith(prefix));
+    return _cacheablePrefixes.any((prefix) => clean == prefix || clean.startsWith(prefix.endsWith('/') ? prefix : '$prefix/'));
   }
+
+  bool _canCache(String method, String path) => method == 'GET' && (offlinePolicy?.allows(path) ?? isCacheable(method, path));
 
   String? token;
   String? refreshToken;
@@ -73,7 +81,9 @@ class InvexaApi {
     bool auth = true,
     int attempt = 0,
     String? mutationId,
+    Duration? requestTimeout,
   }) async {
+    final scope = cacheScope;
     try {
       final uri = _uri(path);
       // X-Mutation-Id (plan P0-SYNC-003): created once when the person acts and reused on every
@@ -83,7 +93,7 @@ class InvexaApi {
       late http.Response response;
       switch (method) {
         case 'GET':
-          response = await httpClient.get(uri, headers: headers).timeout(timeout);
+          response = await httpClient.get(uri, headers: headers).timeout(requestTimeout ?? timeout);
         case 'POST':
           response = await httpClient.post(uri, headers: headers, body: encoded).timeout(timeout);
         case 'PATCH':
@@ -103,10 +113,9 @@ class InvexaApi {
       }
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        final scope = cacheScope;
-        if (scope != null && cachePut != null && isCacheable(method, path)) {
-          servedFromCacheAt = null;
-          await cachePut!(scope, path, response.body);
+        if (scope != null && scope == cacheScope && cachePut != null && _canCache(method, path)) {
+          final offlinePayload = offlinePolicy?.cachePayload(path, payload);
+          await cachePut!(scope, path, offlinePayload == null ? response.body : jsonEncode(offlinePayload));
         }
         return payload;
       }
@@ -114,7 +123,7 @@ class InvexaApi {
       if (response.statusCode == 401 && auth && attempt == 0) {
         final refreshed = await refreshAccessToken();
         if (refreshed) {
-          return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId);
+          return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId, requestTimeout: requestTimeout);
         }
       }
 
@@ -130,24 +139,31 @@ class InvexaApi {
     } on ApiException {
       rethrow;
     } on TimeoutException {
-      return await _offlineFallback(method, path);
+      return await _offlineFallback(method, path, scope);
     } on SocketException {
-      return await _offlineFallback(method, path);
+      return await _offlineFallback(method, path, scope);
     } on http.ClientException {
-      return await _offlineFallback(method, path);
+      return await _offlineFallback(method, path, scope);
     }
   }
 
   /// Unreachable network: serve the last good copy of a cacheable read, otherwise fail as before.
-  Future<Map<String, dynamic>> _offlineFallback(String method, String path) async {
-    final scope = cacheScope;
-    if (scope != null && cacheGet != null && isCacheable(method, path)) {
+  Future<Map<String, dynamic>> _offlineFallback(String method, String path, String? scope) async {
+    if (scope != null && scope == cacheScope && cacheGet != null && _canCache(method, path)) {
       final cached = await cacheGet!(scope, path);
-      if (cached != null) {
+      final policy = offlinePolicy;
+      if (cached != null && scope == cacheScope && _canCache(method, path) &&
+          (policy?.isFresh(cached.fetchedAt, _now()) ?? true)) {
         final decoded = jsonDecode(cached.body);
         if (decoded is Map) {
-          servedFromCacheAt = cached.fetchedAt;
-          return Map<String, dynamic>.from(decoded);
+          if (servedFromCacheAt == null || cached.fetchedAt.isBefore(servedFromCacheAt!)) {
+            servedFromCacheAt = cached.fetchedAt;
+          }
+          if (policy != null) {
+            onCachedSnapshot?.call(policy.maxAge - _now().difference(servedFromCacheAt!));
+          }
+          final payload = Map<String, dynamic>.from(decoded);
+          return policy?.cachePayload(path, payload) ?? payload;
         }
       }
     }
@@ -190,7 +206,8 @@ class InvexaApi {
 
   /// Published, role-resolved runtime settings. These are presentation hints;
   /// operational authorization is still enforced by each server endpoint.
-  Future<Map<String, dynamic>> runtimeConfig() => _send('GET', '/api/v1/runtime/config');
+  Future<Map<String, dynamic>> runtimeConfig() =>
+      _send('GET', '/api/v1/runtime/config', requestTimeout: const Duration(seconds: 4));
 
   Future<LoginResult> loginWithOtp(String email, String otpCode) async {
     final payload = await _send(

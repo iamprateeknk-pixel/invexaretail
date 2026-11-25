@@ -101,7 +101,7 @@ class _HomeShellState extends State<HomeShell> {
       ),
       body: Column(
         children: [
-          if (controller.snapshotFetchedAt != null)
+          if (controller.snapshotFetchedAt != null || controller.offlineReadsUnavailable)
             Semantics(
               liveRegion: true,
               child: Container(
@@ -110,7 +110,10 @@ class _HomeShellState extends State<HomeShell> {
                 color: Colors.amber.shade100,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Text(
-                  'Offline - showing data saved ${snapshotAge(controller.snapshotFetchedAt!)}. Changes you make are queued.',
+                  controller.snapshotFetchedAt == null
+                      ? 'Offline. Connect to load data unavailable under your mobile settings.'
+                      : 'Offline. Showing data saved ${snapshotAge(controller.snapshotFetchedAt!)}.'
+                        '${controller.offlineReadsUnavailable ? ' Some data needs a connection.' : ''}',
                   style: const TextStyle(fontSize: 12),
                 ),
               ),

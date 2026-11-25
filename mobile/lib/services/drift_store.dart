@@ -142,4 +142,10 @@ class DriftStore implements LocalStore {
 
   @override
   Future<void> clearReadModel(String scope) async => _db.clearReadModel(scope);
+
+  @override
+  Future<String?> loadMobilePolicy(String scope) async => _db.loadMobilePolicy(scope);
+
+  @override
+  Future<void> saveMobilePolicy(String scope, String? policy) async => _db.saveMobilePolicy(scope, policy);
 }

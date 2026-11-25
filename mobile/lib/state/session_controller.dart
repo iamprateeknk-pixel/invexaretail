@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../services/live_events.dart';
 import '../services/local_store.dart';
+import '../services/mobile_offline_policy.dart';
 import '../services/sync_resolution.dart';
 
 /// A key that is unique per user action and stays the same across retries.
@@ -27,11 +29,19 @@ class SessionController extends ChangeNotifier {
       final cached = await store.getReadModel(scope, path);
       return cached == null ? null : (body: cached.body, fetchedAt: cached.fetchedAt);
     };
+    api.onCachedSnapshot = _scheduleSnapshotExpiry;
   }
 
   /// The offline read model is only ever read or written for the signed-in identity.
-  String get _cacheScope => '$companyId|$_userId';
-  void _bindReadModel() => api.cacheScope = user == null ? null : _cacheScope;
+  String get _legacyCacheScope => '$companyId|$_userId';
+  String get _cacheScope => '$_legacyCacheScope|${user?.role ?? ''}';
+  void _bindReadModel() {
+    api.cacheScope = user == null ? null : _cacheScope;
+    if (_mobilePolicyIdentity != api.cacheScope) {
+      api.offlinePolicy = null;
+      mobileNavigation = null;
+    }
+  }
 
   /// When non-null, what is on screen is the last saved copy from this time (no network at start-up).
   DateTime? get snapshotFetchedAt => api.servedFromCacheAt;
@@ -65,6 +75,30 @@ class SessionController extends ChangeNotifier {
   /// the service has no policy or cannot be reached.
   List<String>? mobileNavigation;
   String? _mobilePolicyIdentity;
+  int _mobilePolicyRequest = 0;
+  Timer? _snapshotExpiry;
+  bool offlineReadsUnavailable = false;
+
+  void _scheduleSnapshotExpiry(Duration remaining) {
+    _snapshotExpiry?.cancel();
+    final scope = api.cacheScope;
+    _snapshotExpiry = Timer(remaining, () {
+      if (api.cacheScope != scope || api.servedFromCacheAt == null) return;
+      api.servedFromCacheAt = null;
+      offlineReadsUnavailable = true;
+      dashboard = null;
+      locations = [];
+      items = [];
+      stock = [];
+      counts = [];
+      assignments = [];
+      countTasks = [];
+      transfers = [];
+      putawayTasks = [];
+      selectedLocationId = null;
+      notifyListeners();
+    });
+  }
   // Set when sign-in needs a second factor; the login screen then asks for the code.
   String? twoFactorChallenge;
   // Set by the quick-scan sheet; the Count screen consumes it when it opens.
@@ -298,13 +332,21 @@ class SessionController extends ChangeNotifier {
 
   Future<void> logout({bool notify = true}) async {
     stopLive();
+    final scope = user == null ? null : _cacheScope;
+    final legacyScope = _legacyCacheScope;
+    _mobilePolicyIdentity = null;
+    _mobilePolicyRequest += 1;
+    api.cacheScope = null;
+    api.offlinePolicy = null;
     try {
       await api.logout();
     } catch (_) {}
-    final scope = user == null ? null : _cacheScope;
-    api.cacheScope = null;
     api.servedFromCacheAt = null;
-    if (scope != null) await store.clearReadModel(scope); // a signed-out phone keeps no stock data
+    if (scope != null) {
+      await store.clearReadModel(scope);
+      await store.clearReadModel(legacyScope);
+      await store.saveMobilePolicy(scope, null);
+    }
     user = null;
     dashboard = null;
     locations = [];
@@ -319,7 +361,7 @@ class SessionController extends ChangeNotifier {
     queuedActions = [];
     selectedLocationId = null;
     mobileNavigation = null;
-    _mobilePolicyIdentity = null;
+    offlineReadsUnavailable = false;
     api.clearToken();
     await store.clearSession();
     if (notify) notifyListeners();
@@ -352,11 +394,20 @@ class SessionController extends ChangeNotifier {
   void resumeLive() {
     if (!isSignedIn) return;
     startLive();
-    unawaited(_refreshMobileNavigation('$companyId|$_userId|${user?.role ?? ''}'));
     unawaited(_reconnectSync());
   }
 
   Future<void> _reconnectSync() async {
+    await _refreshMobilePolicy();
+    if (!isSignedIn) return;
+    if (api.offlinePolicy != null || api.servedFromCacheAt != null) {
+      try {
+        await refreshAll(refreshPolicy: false);
+      } on ApiException {
+        // Connection changes during a resume are retried on the next refresh.
+      }
+      return;
+    }
     await flushQueue();
     await _refreshSlices({'assignments', 'counts', 'stock'});
   }
@@ -365,6 +416,7 @@ class SessionController extends ChangeNotifier {
     _live?.stop();
     _live = null;
     _liveDebounce?.cancel();
+    _snapshotExpiry?.cancel();
     _pendingSlices.clear();
     liveStatus = LiveStatus.connecting;
   }
@@ -392,17 +444,17 @@ class SessionController extends ChangeNotifier {
       }
       final locationId = selectedLocationId;
       final jobs = <Future<void>>[
-        if (slices.contains('items')) api.items().then((value) => items = value),
-        if (slices.contains('counts')) api.counts().then((value) => counts = value),
+        if (slices.contains('items')) _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),
+        if (slices.contains('counts')) _policyRead(api.counts(), <CountRecord>[]).then((value) => counts = value),
         if (slices.contains('assignments') && isCountWorker)
-          api.myAssignments().then((value) => assignments = value),
+          _policyRead(api.myAssignments(), <CountAssignment>[]).then((value) => assignments = value),
         if ((slices.contains('assignments') || slices.contains('stock')) && isCountWorker)
           _loadCountTasks(),
-        if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
+        if (slices.contains('stock') && locationId != null) _policyRead(api.stock(locationId), <StockRow>[]).then((value) => stock = value),
         if (slices.contains('putaway') && locationId != null)
-          api.putawayTasks(locationId).then((value) => putawayTasks = value),
-        if (slices.contains('transfers')) api.transfers().then((value) => transfers = value),
-        if (slices.contains('dashboard')) api.dashboard().then((value) => dashboard = value),
+          _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]).then((value) => putawayTasks = value),
+        if (slices.contains('transfers')) _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
+        if (slices.contains('dashboard')) _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
       ];
       await Future.wait(jobs);
       notifyListeners();
@@ -417,28 +469,22 @@ class SessionController extends ChangeNotifier {
     await refreshStock();
   }
 
-  Future<void> refreshAll() async {
+  Future<void> refreshAll({bool refreshPolicy = true}) async {
     error = null;
+    _snapshotExpiry?.cancel();
+    offlineReadsUnavailable = false;
     api.servedFromCacheAt = null;
-    final policyIdentity = '$companyId|$_userId|${user?.role ?? ''}';
-    if (_mobilePolicyIdentity != policyIdentity) {
-      mobileNavigation = null;
-      _mobilePolicyIdentity = policyIdentity;
-    }
-    unawaited(_refreshMobileNavigation(policyIdentity));
-    final locationFuture = api.locations();
-    final itemFuture = api.items();
-    final dashFuture = api.dashboard();
-    final countFuture = api.counts();
-    final transferFuture = api.transfers();
-    locations = await locationFuture;
-    items = await itemFuture;
-    dashboard = await dashFuture;
-    counts = await countFuture;
-    transfers = await transferFuture;
+    if (refreshPolicy) await _refreshMobilePolicy();
+    await Future.wait<void>([
+      _policyRead(api.locations(), <LocationRecord>[]).then((value) => locations = value),
+      _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),
+      _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
+      _policyRead(api.counts(), <CountRecord>[]).then((value) => counts = value),
+      _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
+    ]);
     if (isCountWorker) {
       try {
-        assignments = await api.myAssignments();
+        assignments = await _policyRead(api.myAssignments(), <CountAssignment>[]);
       } on ApiException {
         assignments = [];
       }
@@ -454,19 +500,56 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _refreshMobileNavigation(String identity) async {
+  Future<T> _policyRead<T>(Future<T> request, T unavailable) async {
     try {
+      return await request;
+    } on ApiException catch (error) {
+      if (!error.isOffline || api.offlinePolicy == null) rethrow;
+      offlineReadsUnavailable = true;
+      return unavailable;
+    }
+  }
+
+  void _applyMobilePolicy(Map<String, dynamic>? policy) {
+    final navigation = policy?['navigation'];
+    mobileNavigation = navigation is List ? navigation.whereType<String>().toList(growable: false) : null;
+    api.offlinePolicy = policy == null ? null : MobileOfflinePolicy.fromJson(policy);
+  }
+
+  Future<void> _refreshMobilePolicy() async {
+    final identity = api.cacheScope;
+    if (identity == null || !isSignedIn) return;
+    final attempt = ++_mobilePolicyRequest;
+    bool current() => identity == api.cacheScope && attempt == _mobilePolicyRequest && isSignedIn;
+    try {
+      final saved = await store.loadMobilePolicy(identity);
+      if (!current()) return;
+      if (_mobilePolicyIdentity != identity) {
+        _mobilePolicyIdentity = identity;
+        if (saved == null) {
+          _applyMobilePolicy(null);
+        } else {
+          try {
+            _applyMobilePolicy(asMap(jsonDecode(saved)));
+          } on FormatException {
+            _applyMobilePolicy({});
+          }
+        }
+      }
       final response = await api.runtimeConfig();
       final runtime = response['runtime'];
-      final policy = runtime is Map ? runtime['mobilePolicy'] : null;
-      final navigation = policy is Map ? policy['navigation'] : null;
-      if (identity != _mobilePolicyIdentity || !isSignedIn) return;
-      mobileNavigation = navigation is List
-          ? navigation.whereType<String>().toList(growable: false)
-          : null;
+      if (!current() || runtime is! Map) return;
+      final policy = runtime['mobilePolicy'] is Map ? asMap(runtime['mobilePolicy']) : null;
+      final encoded = policy == null ? null : jsonEncode(policy);
+      _applyMobilePolicy(policy);
+      if (encoded != saved) {
+        await store.saveMobilePolicy(identity, encoded);
+        if (current()) await store.clearReadModel(identity);
+      }
+      if (!current()) return;
       notifyListeners();
     } on ApiException {
-      // Keep the role's safe built-in destinations when Studio is unavailable.
+      // Keep the last known policy when Studio is unavailable.
     } catch (_) {
       // A runtime presentation setting must not block sign-in or operational work.
     }
@@ -474,7 +557,7 @@ class SessionController extends ChangeNotifier {
 
   Future<void> _loadCountTasks() async {
     try {
-      countTasks = await api.countTasks();
+      countTasks = await _policyRead(api.countTasks(), <CountTask>[]);
     } on ApiException {
       // Older server (no /mobile/work) or offline: the count screen falls back
       // to the catalog + stock list it already had.
@@ -496,7 +579,7 @@ class SessionController extends ChangeNotifier {
       stock = [];
       return;
     }
-    stock = await api.stock(locationId);
+    stock = await _policyRead(api.stock(locationId), <StockRow>[]);
     notifyListeners();
   }
 
@@ -507,7 +590,7 @@ class SessionController extends ChangeNotifier {
       return;
     }
     try {
-      putawayTasks = await api.putawayTasks(locationId);
+      putawayTasks = await _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]);
     } on ApiException {
       putawayTasks = [];
     }
