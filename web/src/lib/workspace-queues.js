@@ -147,7 +147,11 @@ export function buildReportRows({
 export function rowsToCsv(rows) {
   if (!rows?.length) return '';
   const columns = Object.keys(rows[0]);
-  const escapeCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  const escapeCell = (value) => {
+    const text = String(value ?? '');
+    const safe = typeof value === 'string' && /^(?:\s*[=+@-]|[\t\r\n])/.test(text) ? `'${text}` : text;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
   return [columns.map(escapeCell).join(','), ...rows.map((row) => columns.map((column) => escapeCell(row[column])).join(','))].join('\n');
 }
 

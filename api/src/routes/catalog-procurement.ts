@@ -38,6 +38,8 @@ import type { TenantContext } from '../lib/tenant-context.js';
 import { applySavedViewFilter, type SavedViewFilterConfig } from '../lib/saved-view-filter.js';
 import { transitionPurchaseOrderStatus } from '../lib/domain-policies.js';
 import { sendError } from '../lib/errors.js';
+import { accessContext } from './core-shared.js';
+import { canAccessLocation } from '../lib/inventory.js';
 import { parseBody } from '../lib/validate.js';
 import {
   tagCreateSchema,
@@ -485,11 +487,20 @@ router.get('/suppliers/:id/score', async (req, res) => {
 // Bounded (audit O-8): newest first, at most `limit` (default 200, max 500) with a cursor for the next page,
 // instead of loading every purchase order the company has ever raised on each request.
 router.get('/purchase-orders', async (req, res) => {
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const locationId = typeof req.query.locationId === 'string' && req.query.locationId ? req.query.locationId : undefined;
+  if (locationId) {
+    const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+    if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
+    // Ownership was resolved from Postgres above. Apply role/location restrictions to that result.
+    const { role, assignedLocationIds } = accessContext(req.user!);
+    if (!canAccessLocation({ role, assignedLocationIds }, locationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
+  }
   const requested = Number(req.query.limit);
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 200;
   const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
   const rows = decimalsToNumbers(await prisma.purchaseOrder.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    where: { companyId, ...(locationId ? { locationId } : {}) },
     include: { supplier: true, lines: { include: { item: true } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,

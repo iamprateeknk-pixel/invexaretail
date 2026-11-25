@@ -105,7 +105,7 @@ export function useWorkspaceReports({
     }
   }
 
-  function downloadReportCsv(rows) {
+  function downloadReportCsv(rows, name = reportType) {
     const csv = rowsToCsv(rows);
     if (!csv) {
       showToast('This report has no rows to export.', 'warning');
@@ -114,7 +114,7 @@ export function useWorkspaceReports({
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${reportType}-${locationId}-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.download = `${name}-${locationId}-${new Date().toISOString().slice(0, 10)}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
     showToast('Report exported to CSV.', 'success');

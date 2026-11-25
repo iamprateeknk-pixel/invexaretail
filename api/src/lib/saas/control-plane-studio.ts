@@ -450,6 +450,7 @@ export class ControlPlaneStudio {
     modules: Record<string, boolean>;
     killSwitches: Record<string, boolean>;
     mobilePolicy?: MobilePolicy;
+    reports: ReportDefinition[];
   } {
     const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, 'system', 1, 'published');
     const page = clonePage(published.page);
@@ -467,6 +468,9 @@ export class ControlPlaneStudio {
       ),
       killSwitches: Object.fromEntries(this.store.safety.entries()),
       mobilePolicy: published.mobilePolicies.find((policy) => policy.role === role),
+      reports: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role)
+        ? structuredClone(published.reports ?? [])
+        : [],
     };
   }
 

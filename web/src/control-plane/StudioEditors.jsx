@@ -184,8 +184,7 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
   return (
     <StudioListEditor
       title="Reports"
-      description="Name a report, choose what it is about and tick the columns it shows, in the order you tick them."
-      notLive="Saved and published, but these reports do not appear in the app's Reports page yet."
+      description="Name a report and choose its columns. Published reports appear in the Reports workspace."
       entries={entries}
       idOf={(report) => report.key}
       newEntry={(current) => ({ key: slugKey('new report', current.map((report) => report.key)), name: 'New report', entity: 'inventory', columns: ['item_code', 'available'], filters: {} })}

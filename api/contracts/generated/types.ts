@@ -12050,6 +12050,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string;
+                /** @description Limit results to one authorized location. */
+                locationId?: string;
             };
             header?: never;
             path?: never;
@@ -12071,6 +12073,20 @@ export interface operations {
             };
             /** @description No or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller lacks access to the selected location. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected location was not found in the company. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

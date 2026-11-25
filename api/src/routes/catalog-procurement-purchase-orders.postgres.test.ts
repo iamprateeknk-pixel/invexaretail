@@ -84,6 +84,11 @@ integration('GET /purchase-orders only ever returns the caller\'s own company\'s
     const idsA = listA.body.purchaseOrders.map((po: { id: string }) => po.id);
     assert.ok(idsA.includes(poA.id), 'company A must see its own purchase order');
     assert.ok(!idsA.includes(poB.id), 'company A must not see company B\'s purchase order');
+    const locationList = await call('GET', `/purchase-orders?locationId=${a.locationId}`, a.token);
+    assert.equal(locationList.status, 200, JSON.stringify(locationList.body));
+    assert.deepEqual(locationList.body.purchaseOrders.map((po: { id: string }) => po.id), [poA.id]);
+    const foreignLocation = await call('GET', `/purchase-orders?locationId=${b.locationId}`, a.token);
+    assert.equal(foreignLocation.status, 404, JSON.stringify(foreignLocation.body));
   });
 });
 

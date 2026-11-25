@@ -1080,6 +1080,7 @@ export class ControlPlane {
     modules: Record<string, boolean>;
     killSwitches: Record<string, boolean>;
     mobilePolicy?: MobilePolicy;
+    reports: ReportDefinition[];
   } {
     return this.studioSvc.runtimeConfig(companyId, role);
   }

@@ -15795,6 +15795,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "Limit results to one authorized location.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -15824,6 +15833,12 @@
           },
           "401": {
             "description": "No or invalid credentials."
+          },
+          "403": {
+            "description": "Caller lacks access to the selected location."
+          },
+          "404": {
+            "description": "Selected location was not found in the company."
           }
         },
         "security": [
