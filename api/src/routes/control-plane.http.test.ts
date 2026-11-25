@@ -133,6 +133,28 @@ test('HTTP: platform login, company lock, studio publish and sync mutation', asy
     });
     assert.equal(crossRead.status, 403);
     assert.equal(crossRead.body.code, 'COMPANY_SCOPE_MISMATCH');
+
+    const registered = await json(url, '/sync/v1/devices/register', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ companyId: 'company-jaipur', userId: 'attacker', appVersion: '2.0.0' }),
+    });
+    assert.equal(registered.status, 201);
+    const storedDevice = controlPlane.devices.get(registered.body.device.id);
+    assert.equal(storedDevice?.companyId, 'default-company');
+    assert.equal(storedDevice?.userId, (await controlPlane.requireControlSessionFresh(controlToken)).scope.actorId);
+
+    const jaipur = await json(url, '/control/v1/sessions/select-company', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${platformToken}` },
+      body: JSON.stringify({ companyId: 'company-jaipur' }),
+    });
+    const foreignRevoke = await json(url, `/sync/v1/devices/${registered.body.device.id}/revoke`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jaipur.body.token}` },
+    });
+    assert.equal(foreignRevoke.status, 404);
+    assert.equal(controlPlane.devices.get(registered.body.device.id)?.status, 'trusted');
   });
 });
 

@@ -241,6 +241,9 @@ test('procurement: tags, custom fields, reorder rules, PO create/receive/status,
   bad(purchaseOrderCreateSchema, { supplierId: '', locationId: 'l', lines: [{ itemId: 'i', quantity: 1 }] });
   bad(purchaseOrderCreateSchema, { supplierId: 's', locationId: 'l', lines: [{ itemId: 'i', quantity: 1 }], expectedAt: 'nope' });
   ok(poReceiveSchema, { requestId: 'r-1', lines: [{ receivedQty: 2 }] });
+  assert.deepEqual(poReceiveSchema.parse({ requestId: 'r-2', lines: [{ lineId: 'line-1', receivedQty: 2, damagedQty: 1, excessQty: 0, lotNo: 'LOT-1', expiryDate: '2027-01-31' }] }).lines?.[0], {
+    lineId: 'line-1', receivedQty: 2, damagedQty: 1, excessQty: 0, lotNo: 'LOT-1', expiryDate: '2027-01-31',
+  });
   ok(poReceiveSchema, { requestId: 'r-1' });
   bad(poReceiveSchema, { requestId: '' });
   bad(poReceiveSchema, { requestId: 'r-1', lines: [] });

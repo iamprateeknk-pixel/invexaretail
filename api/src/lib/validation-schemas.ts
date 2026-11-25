@@ -426,9 +426,12 @@ export const purchaseOrderCreateSchema = z.object({
 });
 
 const poReceiptLineSchema = z.object({
+  lineId: z.string().trim().min(1).optional(),
   receivedQty: z.coerce.number().optional(),
   damagedQty: z.coerce.number().optional(),
   excessQty: z.coerce.number().optional(),
+  lotNo: z.string().optional(),
+  expiryDate: z.string().optional(),
 });
 
 /**

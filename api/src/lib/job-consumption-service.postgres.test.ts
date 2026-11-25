@@ -39,10 +39,10 @@ integration('two different consume actions at the same time both apply: stock an
   const [a, b] = await Promise.all([consume(f, 3, `req-${randomUUID()}`), consume(f, 4, `req-${randomUUID()}`)]);
   assert.equal(a.duplicate, false);
   assert.equal(b.duplicate, false);
-  assert.equal((await ledger(f)).onHand, 93, '100 - 3 - 4: neither request was swallowed as a "duplicate" of the other');
+  assert.equal(Number((await ledger(f)).onHand), 93, '100 - 3 - 4: neither request was swallowed as a "duplicate" of the other');
   const line = await lineNow(f);
-  assert.equal(line.issuedQty, 7);
-  assert.equal(line.usedQty, 7);
+  assert.equal(Number(line.issuedQty), 7);
+  assert.equal(Number(line.usedQty), 7);
   const movements = await prisma.stockMovement.findMany({ where: { sourceLineId: f.line.id } });
   assert.equal(movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0), -7, 'the journal sums to exactly what the line says was used');
 });
@@ -55,8 +55,8 @@ integration('a client retry of the same action (same requestId) after success co
   assert.equal(first.duplicate, false);
   assert.equal(retry.duplicate, true);
   assert.deepEqual(retry.allocations.map((a) => a.quantity), first.allocations.map((a) => a.quantity), 'the retry reports the original allocation');
-  assert.equal((await ledger(f)).onHand, 95, 'the old route consumed 5 more here');
-  assert.equal((await lineNow(f)).issuedQty, 5);
+  assert.equal(Number((await ledger(f)).onHand), 95, 'the old route consumed 5 more here');
+  assert.equal(Number((await lineNow(f)).issuedQty), 5);
 });
 
 integration('six simultaneous retries of one action run exactly once', async () => {
@@ -64,16 +64,16 @@ integration('six simultaneous retries of one action run exactly once', async () 
   const requestId = `req-${randomUUID()}`;
   const results = await Promise.all(Array.from({ length: 6 }, () => consume(f, 10, requestId)));
   assert.equal(results.filter((r) => !r.duplicate).length, 1, 'exactly one real execution');
-  assert.equal((await ledger(f)).onHand, 90);
-  assert.equal((await lineNow(f)).issuedQty, 10);
+  assert.equal(Number((await ledger(f)).onHand), 90);
+  assert.equal(Number((await lineNow(f)).issuedQty), 10);
   assert.equal(await prisma.stockMovement.count({ where: { sourceLineId: f.line.id } }), 1);
 });
 
 integration('the database decides availability: a shortage is refused and nothing is posted', async () => {
   const f = await makeFixture({ onHand: 4 });
   await assert.rejects(consume(f, 5, `req-${randomUUID()}`), (error) => error instanceof JobConsumeError && error.status === 409 && /Only 4/.test(error.message));
-  assert.equal((await ledger(f)).onHand, 4);
-  assert.equal((await lineNow(f)).issuedQty, 0);
+  assert.equal(Number((await ledger(f)).onHand), 4);
+  assert.equal(Number((await lineNow(f)).issuedQty), 0);
   assert.equal(await prisma.stockMovement.count({ where: { sourceLineId: f.line.id } }), 0);
 });
 
@@ -82,8 +82,8 @@ integration('stock reserved for orders or transfers is not available to a job', 
   await assert.rejects(consume(f, 5, `req-${randomUUID()}`), (error) => error instanceof JobConsumeError && error.status === 409);
   const ok = await consume(f, 2, `req-${randomUUID()}`);
   assert.equal(ok.duplicate, false);
-  assert.equal((await ledger(f)).onHand, 8);
-  assert.equal((await ledger(f)).reserved, 8, 'the reservation is untouched');
+  assert.equal(Number((await ledger(f)).onHand), 8);
+  assert.equal(Number((await ledger(f)).reserved), 8, 'the reservation is untouched');
 });
 
 integration('an inactive job, a foreign job and a foreign location are refused', async () => {
@@ -94,7 +94,7 @@ integration('an inactive job, a foreign job and a foreign location are refused',
   await prisma.job.update({ where: { id: f.job.id }, data: { status: 'ACTIVE' } });
   await assert.rejects(consumeJobLine({ tenant: other.tenant, jobId: f.job.id, lineId: f.line.id, quantity: 1, requestId: 'req-x1', strategy: 'FEFO', canAccessLocation: () => true }), (error) => error instanceof JobConsumeError && error.status === 404, 'another company sees a missing job, not a forbidden one');
   await assert.rejects(consume(f, 1, `req-${randomUUID()}`, { canAccessLocation: () => false }), (error) => error instanceof JobConsumeError && error.status === 403);
-  assert.equal((await ledger(f)).onHand, 100);
+  assert.equal(Number((await ledger(f)).onHand), 100);
 });
 
 integration('fractional or non-positive quantities and a missing key are rejected before any work', async () => {
@@ -103,7 +103,7 @@ integration('fractional or non-positive quantities and a missing key are rejecte
     await assert.rejects(consume(f, quantity, `req-${randomUUID()}`), (error) => error instanceof JobConsumeError && error.status === 400, String(quantity));
   }
   await assert.rejects(consume(f, 1, ''), (error) => error instanceof JobConsumeError && error.status === 400);
-  assert.equal((await ledger(f)).onHand, 100);
+  assert.equal(Number((await ledger(f)).onHand), 100);
 });
 
 integration('a consume across two lots takes FEFO order from the database and records one movement per lot', async () => {
@@ -116,5 +116,5 @@ integration('a consume across two lots takes FEFO order from the database and re
   const result = await consume(f, 4, `req-${randomUUID()}`);
   assert.deepEqual(result.allocations.map((a) => [a.lotId, a.quantity]), [[early.id, 2], [f.lotId, 2]], 'earliest expiry first');
   assert.equal(await prisma.stockMovement.count({ where: { sourceLineId: f.line.id } }), 2);
-  assert.equal((await lineNow(f)).issuedQty, 4);
+  assert.equal(Number((await lineNow(f)).issuedQty), 4);
 });

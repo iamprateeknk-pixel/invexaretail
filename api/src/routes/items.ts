@@ -13,6 +13,7 @@ import type { TenantContext } from '../lib/tenant-context.js';
 import { searchItems, assertItemOwnedByTenant, getCatalogueVersion, ItemNotFoundError } from '../lib/repositories/item-repository.js';
 import { getStockDetail } from '../lib/stock-detail-service.js';
 import { postInventoryMovement, reverseInventoryMovement, NegativeStockBlockedError, MovementNotFoundError, AlreadyReversedError } from '../lib/inventory-posting-service.js';
+import { decimalsToNumbers } from '../lib/decimal-json.js';
 import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { prisma } from '../lib/db.js';
 
@@ -123,11 +124,11 @@ router.post('/items/:itemId/adjust', requireAdjustRole, async (req: Request, res
       reason: body.reason.trim(),
       idempotencyKey: body.idempotencyKey.trim(),
     });
-    return res.status(result.duplicate ? 200 : 201).json({
+    return res.status(result.duplicate ? 200 : 201).json(decimalsToNumbers({
       duplicate: result.duplicate,
       movement: result.movement,
       balance: result.balance,
-    });
+    }));
   } catch (error) {
     if (error instanceof ItemNotFoundError) return res.status(404).json({ message: error.message });
     if (error instanceof NegativeStockBlockedError) return res.status(422).json({ message: error.message, code: 'INSUFFICIENT_STOCK' });
