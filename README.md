@@ -38,7 +38,7 @@ Set `DATABASE_URL`, `JWT_SECRET`, `SEED_PASSWORD` in your environment (see `api/
 
 ```bash
 cd web && npm ci && npm run dev            # workspace on the Vite dev server
-cd admin-panel && npm install && npm run build
+cd admin-panel && npm install && VITE_API_BASE=https://api.example.test VITE_WEB_APP_URL=https://workspace.example.test npm run build
 cd mobile && flutter pub get --enforce-lockfile && flutter run
 ```
 

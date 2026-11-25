@@ -1,9 +1,26 @@
-export const DEFAULT_API_BASE = 'https://invexaretail-api-production.up.railway.app';
-export const DEFAULT_WEB_APP_URL = 'https://invexaretail-web.iamprateek-nk.workers.dev';
+export class PanelConfigurationError extends Error {}
 
-export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT_WEB_APP_URL) {
-  const safeApiBase = String(apiBase || DEFAULT_API_BASE).replace(/\/$/, '').replace(/</g, '');
-  const safeWebAppUrl = String(webAppUrl || DEFAULT_WEB_APP_URL).replace(/\/$/, '').replace(/</g, '');
+function httpsOrigin(value, name) {
+  const input = typeof value === 'string' ? value.trim() : '';
+  if (/^https:\/\/[^\s/?#\\@]+\/?$/i.test(input)) {
+    try {
+      return new URL(input).origin;
+    } catch {
+      // Use the same configuration error for an invalid host or port.
+    }
+  }
+  throw new PanelConfigurationError(`${name} must be an explicit HTTPS origin.`);
+}
+
+export function panelOrigins(apiBase, webAppUrl) {
+  return {
+    api: httpsOrigin(apiBase, 'VITE_API_BASE'),
+    web: httpsOrigin(webAppUrl, 'VITE_WEB_APP_URL'),
+  };
+}
+
+export function controlPlaneHtml(apiBase, webAppUrl) {
+  const { api, web } = panelOrigins(apiBase, webAppUrl);
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -112,8 +129,8 @@ export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT
       </main>
     </div>
     <script>
-      const API_BASE = ${JSON.stringify(safeApiBase)};
-      const WEB_APP_URL = ${JSON.stringify(safeWebAppUrl)};
+      const API_BASE = ${JSON.stringify(api)};
+      const WEB_APP_URL = ${JSON.stringify(web)};
       const STORAGE_KEY = "invexa_control_session";
       let handoffStarted = false;
       const loginView = document.getElementById("login-view");

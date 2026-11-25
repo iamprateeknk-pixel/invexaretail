@@ -100,6 +100,13 @@ npm run deploy
 
 ### Control Plane (`invexaretail`)
 
+Set `VITE_API_BASE` and `VITE_WEB_APP_URL` to the target environment's API and
+workspace HTTPS origins in both the build environment and the Worker bindings.
+The top-level variables in `admin-panel/wrangler.toml` configure the production
+Worker. Configure both bindings explicitly for a separate staging Worker.
+The static build rejects invalid or missing values. The Worker returns 503 for
+login and `/health` until both bindings are valid.
+
 Same approach from `admin-panel/`, which has no `deploy` script:
 
 ```bash

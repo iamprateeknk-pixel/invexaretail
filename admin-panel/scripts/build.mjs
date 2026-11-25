@@ -1,14 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { controlPlaneHtml, DEFAULT_API_BASE } from '../src/login-html.js';
+import { controlPlaneHtml } from '../src/login-html.js';
 
 const root = dirname(fileURLToPath(new URL('.', import.meta.url)));
 const dist = join(root, 'dist');
-const apiBase = process.env.VITE_API_BASE || DEFAULT_API_BASE;
+const html = controlPlaneHtml(process.env.VITE_API_BASE, process.env.VITE_WEB_APP_URL);
 
 await mkdir(dist, { recursive: true });
-await writeFile(join(dist, 'index.html'), controlPlaneHtml(apiBase));
+await writeFile(join(dist, 'index.html'), html);
 await writeFile(
   join(dist, '_headers'),
   `/*
@@ -16,4 +16,4 @@ await writeFile(
   X-Invexa-Panel: control-plane
 `,
 );
-console.log(`Wrote Control Plane login to ${dist} (API ${apiBase})`);
+console.log(`Wrote Control Plane login to ${dist}`);
