@@ -54,6 +54,27 @@ void main() {
     }
   });
 
+  testWidgets('Windows sends the handoff to the configured staging workspace', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    Uri? opened;
+    try {
+      await tester.pumpWidget(MaterialApp(
+        home: WorkspaceScreen(
+          workspaceUri: Uri.parse('https://workspace.example.test/'),
+          fetchHandoffCode: () async => 'staging-code',
+          externalWorkspaceLauncher: (uri) async {
+            opened = uri;
+            return true;
+          },
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(opened.toString(), 'https://workspace.example.test/#/handoff?code=staging-code');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('Windows barcode input accepts a USB scanner value without camera support', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     String? result;

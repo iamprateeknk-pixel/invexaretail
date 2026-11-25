@@ -1,9 +1,24 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
 import 'package:invexaretail_mobile/services/secure_store.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('the platform vault separates API targets and retains the production key', () async {
+    FlutterSecureStorage.setMockInitialValues({secureSessionKey: 'production-session'});
+    final production = PlatformSessionVault();
+    final staging = PlatformSessionVault(scope: 'staging-target');
+    expect(await staging.read(), isNull);
+    await staging.write('staging-session');
+    expect(await staging.read(), 'staging-session');
+    await staging.clear();
+    expect(await staging.read(), isNull);
+    expect(await production.read(), 'production-session');
+  });
+
   test('session tokens live only in the secure vault', () async {
     final delegate = MemoryStore();
     final vault = MemorySessionVault();

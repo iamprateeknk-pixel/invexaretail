@@ -9,7 +9,7 @@ import '../config/env.dart';
 import '../config/theme.dart';
 
 class WorkspaceScreen extends StatefulWidget {
-  const WorkspaceScreen({super.key, this.fetchHandoffCode, this.externalWorkspaceLauncher});
+  const WorkspaceScreen({super.key, this.fetchHandoffCode, this.externalWorkspaceLauncher, this.workspaceUri});
 
   /// Asks the API for a one-time code so the workspace opens already signed in. Null or failing
   /// (offline, older server) falls back to the plain workspace, which then shows its own sign-in.
@@ -17,23 +17,22 @@ class WorkspaceScreen extends StatefulWidget {
 
   /// Allows desktop tests to verify the trusted external-browser handoff.
   final Future<bool> Function(Uri uri)? externalWorkspaceLauncher;
+  final Uri? workspaceUri;
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
 }
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
-  static final Uri _workspaceUri = Uri.parse(workspaceOrigin);
+  late final Uri _workspaceUri = widget.workspaceUri ?? workspaceFromEnvironment();
   late final WebViewController _controller;
   int _progress = 0;
   bool _mainFrameFailed = false;
   bool _externalLaunchFailed = false;
 
   bool _isTrusted(Uri? uri) {
-    if (uri == null || uri.scheme != 'https') return false;
-    return uri.host == 'invexaretail.com' ||
-        uri.host == 'www.invexaretail.com' ||
-        uri.host == 'api.invexaretail.com';
+    return uri != null && uri.scheme == _workspaceUri.scheme &&
+        uri.host == _workspaceUri.host && uri.port == _workspaceUri.port && uri.userInfo.isEmpty;
   }
 
   @override

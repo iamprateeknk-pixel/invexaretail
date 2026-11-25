@@ -3,10 +3,11 @@
 Point the app at an API with:
 
 ```bash
-flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
+flutter run --dart-define=INVEXA_ENV=development --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
 ```
 
-Empty `INVEXA_API_BASE` uses `https://invexaretail-api-production.up.railway.app`.
+See [the mobile README](README.md#run-locally) for workspace configuration and
+the defines required by staging builds.
 
 Seed/demo logins are created by the API seed (`api/prisma/seed.ts`, or the
 API's in-memory seed mode when `DATABASE_URL` is unset). Their password is

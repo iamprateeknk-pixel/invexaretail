@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 const productionApiBase = 'https://invexaretail-api-production.up.railway.app';
 const workspaceOrigin = 'https://invexaretail.com/';
 
@@ -13,8 +17,11 @@ InvexaEnvironment parseEnvironment(String value) {
       return InvexaEnvironment.development;
     case 'staging':
       return InvexaEnvironment.staging;
-    default:
+    case 'production':
+    case 'prod':
       return InvexaEnvironment.production;
+    default:
+      throw StateError('INVEXA_ENV must be production, staging, or development.');
   }
 }
 
@@ -40,23 +47,53 @@ bool _isPrivateHost(String host) {
 
 /// Null when [base] is acceptable for [environment], otherwise why it is not.
 String? apiBaseProblem(String base, InvexaEnvironment environment) {
+  return _originProblem(base, environment, 'INVEXA_API_BASE');
+}
+
+String? _originProblem(String value, InvexaEnvironment environment, String name) {
+  final input = value.trim();
+  final uri = Uri.tryParse(input);
+  if (uri == null || uri.host.isEmpty ||
+      !RegExp(r'^https?://[^\s/?#\\@]+/?$', caseSensitive: false).hasMatch(input)) {
+    return '$name must be an HTTP or HTTPS origin without a path, credentials, query, or fragment.';
+  }
   if (environment == InvexaEnvironment.development) return null;
-  final uri = Uri.tryParse(base);
-  if (uri == null || !uri.hasScheme || uri.host.isEmpty) return 'API base "$base" is not a valid URL.';
-  if (uri.scheme != 'https') return 'The ${environment.name} build requires an https API base, got "$base".';
-  if (_isPrivateHost(uri.host)) return 'The ${environment.name} build cannot use the private or local host "${uri.host}".';
+  if (uri.scheme != 'https') return '$name requires HTTPS in ${environment.name}.';
+  final host = uri.host.toLowerCase().replaceFirst(RegExp(r'\.$'), '');
+  if (_isPrivateHost(host)) return '$name requires a public host in ${environment.name}.';
+  if (environment == InvexaEnvironment.staging && _productionHosts.contains(host)) {
+    return '$name cannot use a production host in staging.';
+  }
   return null;
 }
 
-/// Empty or whitespace dart-defines fall back to production, matching web
-/// `VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app'`.
-/// A non-development build throws on an unsafe endpoint instead of running with it.
+final _productionHosts = {
+  Uri.parse(productionApiBase).host,
+  Uri.parse(workspaceOrigin).host,
+  'api.invexaretail.com',
+  'www.invexaretail.com',
+  'invexaretail-web.iamprateek-nk.workers.dev',
+};
+
 String resolveApiBase({String fromDefine = '', InvexaEnvironment environment = InvexaEnvironment.production}) {
-  final defined = stripTrailingSlash(fromDefine);
-  final base = defined.isNotEmpty ? defined : productionApiBase;
-  final problem = apiBaseProblem(base, environment);
+  return _resolveOrigin(fromDefine, environment, 'INVEXA_API_BASE', productionApiBase, 'http://127.0.0.1:4000');
+}
+
+Uri resolveWorkspaceOrigin({String fromDefine = '', InvexaEnvironment environment = InvexaEnvironment.production}) {
+  final origin = _resolveOrigin(fromDefine, environment, 'INVEXA_WEB_APP_URL', workspaceOrigin, 'http://127.0.0.1:5173');
+  return Uri.parse('$origin/');
+}
+
+String _resolveOrigin(String input, InvexaEnvironment environment, String name, String production, String development) {
+  final defined = input.trim();
+  final base = defined.isNotEmpty ? defined : switch (environment) {
+    InvexaEnvironment.production => production,
+    InvexaEnvironment.development => development,
+    InvexaEnvironment.staging => throw StateError('$name is required in staging.'),
+  };
+  final problem = _originProblem(base, environment, name);
   if (problem != null) throw StateError(problem);
-  return base;
+  return Uri.parse(base).origin;
 }
 
 InvexaEnvironment environmentFromDefines() =>
@@ -67,4 +104,16 @@ String apiBaseFromEnvironment() {
     fromDefine: const String.fromEnvironment('INVEXA_API_BASE'),
     environment: environmentFromDefines(),
   );
+}
+
+Uri workspaceFromEnvironment() => resolveWorkspaceOrigin(
+  fromDefine: const String.fromEnvironment('INVEXA_WEB_APP_URL'),
+  environment: environmentFromDefines(),
+);
+
+/// Keep the existing production store for upgrades. Other API targets get
+/// separate credentials, queued work, and cached reads even on the same device.
+String? localStorageScope(InvexaEnvironment environment, String apiOrigin) {
+  if (environment == InvexaEnvironment.production && apiOrigin == productionApiBase) return null;
+  return sha256.convert(utf8.encode('${environment.name}|$apiOrigin')).toString();
 }

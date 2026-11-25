@@ -157,9 +157,10 @@ class NativeDatabase {
     return db;
   }
 
-  static Future<NativeDatabase> openApp() async {
+  static Future<NativeDatabase> openApp({String? scope}) async {
     final dir = await getApplicationSupportDirectory();
-    return NativeDatabase.file(File(p.join(dir.path, 'invexa_drift.sqlite')));
+    final filename = scope == null ? 'invexa_drift.sqlite' : 'invexa_drift_$scope.sqlite';
+    return NativeDatabase.file(File(p.join(dir.path, filename)));
   }
 
   final sqlite.Database _db;

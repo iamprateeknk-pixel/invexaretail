@@ -17,17 +17,19 @@ class PlatformSessionVault implements SessionVault {
   // flutter_secure_storage 11.x removed AndroidOptions.encryptedSharedPreferences:
   // EncryptedSharedPreferences is now the only Android backend, so the flag
   // that used to opt into it no longer exists as a parameter.
-  PlatformSessionVault([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage(
+  PlatformSessionVault({FlutterSecureStorage? storage, String? scope})
+      : _key = scope == null ? secureSessionKey : '$secureSessionKey.$scope',
+        _storage = storage ?? const FlutterSecureStorage(
           aOptions: AndroidOptions(),
         );
   final FlutterSecureStorage _storage;
+  final String _key;
   @override
-  Future<void> write(String value) => _storage.write(key: secureSessionKey, value: value);
+  Future<void> write(String value) => _storage.write(key: _key, value: value);
   @override
-  Future<String?> read() => _storage.read(key: secureSessionKey);
+  Future<String?> read() => _storage.read(key: _key);
   @override
-  Future<void> clear() => _storage.delete(key: secureSessionKey);
+  Future<void> clear() => _storage.delete(key: _key);
 }
 
 class MemorySessionVault implements SessionVault {

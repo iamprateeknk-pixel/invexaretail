@@ -20,8 +20,8 @@ class DriftStore implements LocalStore {
     return DriftStore.native(file == null ? NativeDatabase.memory() : NativeDatabase.file(file));
   }
 
-  static Future<DriftStore> open() async {
-    return DriftStore.native(await NativeDatabase.openApp());
+  static Future<DriftStore> open({String? scope}) async {
+    return DriftStore.native(await NativeDatabase.openApp(scope: scope));
   }
 
   final NativeDatabase _db;

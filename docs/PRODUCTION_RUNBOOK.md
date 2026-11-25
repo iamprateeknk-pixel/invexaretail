@@ -42,9 +42,10 @@ API and worker (never commit values; set in the platform's secret store):
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | optional | Tracing; unset = off. |
 | `APP_VERSION` / `GITHUB_SHA` | set by CI | Reported by `/health` and `/meta`. |
 
-Web: `VITE_API_BASE` (public HTTPS API domain; build-time). Mobile: `INVEXA_ENV`
-(`production` default) and `INVEXA_API_BASE`; a production build refuses http and
-private hosts.
+Web uses `VITE_API_BASE` at build time. Native clients use `INVEXA_ENV`
+(`production` by default), `INVEXA_API_BASE`, and `INVEXA_WEB_APP_URL`.
+Staging requires both HTTPS origins explicitly. Production and staging
+reject private hosts. See the [native setup](../mobile/README.md#run-locally).
 
 ## 3. Release
 
