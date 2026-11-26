@@ -99,13 +99,17 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * an audit log entry and enqueues a durable outbox event - all four commit
  * together or not at all.
  */
-export async function postInventoryMovement(cmd: PostMovementCommand): Promise<PostMovementResult> {
+export async function postInventoryMovement(cmd: PostMovementCommand, beforePosting?: () => Promise<void>): Promise<PostMovementResult> {
   if (!cmd.idempotencyKey) throw new Error('idempotencyKey is required to post an inventory movement.');
   if (!cmd.lotId) throw new Error('lotId is required to post an inventory movement (StockLedger is lot-tracked).');
   if (!cmd.reason && !cmd.sourceDocument) throw new Error('A reason or sourceDocument is required to post an inventory movement.');
 
   const existing = await findByIdempotencyKey(cmd.tenant.companyId, cmd.idempotencyKey);
   if (existing) return { duplicate: true, movement: existing, balance: { onHand: Number(existing.afterBalance) } };
+
+  // Approval applies to new stock changes. A receipt for an existing movement
+  // remains available even if the policy has changed since that movement posted.
+  await beforePosting?.();
 
   const policy = await resolveNegativeStockPolicy(cmd.locationId);
   const correlationId = cmd.correlationId ?? randomUUID();

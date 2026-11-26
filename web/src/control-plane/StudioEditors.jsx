@@ -149,7 +149,7 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Rules"
-        description="All conditions must match. Published rules can stop or require approval for transfer confirmations and manual changes from Stock Update. Other rules can be simulated."
+        description="All conditions must match. Published rules can stop or require approval for transfer confirmations and manual adjustments from Stock Update or Item Stock Detail. Other rules can be simulated."
         entries={entries}
         idOf={(rule) => rule.key}
         newEntry={(current) => ({ key: slugKey('new rule', current.map((rule) => rule.key)), name: 'New rule', condition: { daysToExpiryLt: 30 }, outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' } })}
@@ -166,7 +166,7 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
             <Choice label="Then" value={outcomeToAction(rule.outcome)} options={RULE_ACTIONS.some((entry) => entry.value === outcomeToAction(rule.outcome)) ? RULE_ACTIONS : [...RULE_ACTIONS, { value: outcomeToAction(rule.outcome), label: outcomeToAction(rule.outcome) }]} onChange={(action) => set({ outcome: actionToOutcome(action) })} />
             <Choice label="Apply rule to" value={rule.liveFor ?? 'simulation'} options={[
               { value: 'simulation', label: 'Simulation only' },
-              { value: 'STOCK_ADJUSTMENT', label: 'Manual change from Stock Update after publication' },
+              { value: 'STOCK_ADJUSTMENT', label: 'Manual stock adjustment after publication' },
               { value: 'TRANSFER_CONFIRM', label: 'Transfer confirmation after publication' },
             ]} onChange={(liveFor) => set({ liveFor: liveFor === 'simulation' ? undefined : liveFor })} />
             {rule.liveFor && (

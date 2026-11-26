@@ -62,6 +62,34 @@ test('the submit button stays disabled until quantity, lot, location and a reaso
   assert.equal(button.disabled, false);
 });
 
+test('an approval retry keeps the adjustment key and a new successful command gets a new key', async () => {
+  const commands = [];
+  globalThis.fetch = async (_url, init) => {
+    commands.push(JSON.parse(init.body));
+    if (commands.length === 1) {
+      return { ok: false, status: 409, json: async () => ({ error: 'Awaiting admin approval', approvalRequestId: 'review-1' }) };
+    }
+    return { ok: true, json: async () => ({ movement: { id: 'mv-1' } }) };
+  };
+  let posted = 0;
+  render(React.createElement(AdjustmentWizard, { authToken: 'test-token', itemId: 'item-1', branches, lots, onPosted: () => { posted += 1; } }));
+  const fill = () => {
+    fireEvent.change(screen.getByLabelText('Quantity change'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'correction' } });
+  };
+  const submit = () => fireEvent.click(screen.getByRole('button', { name: 'Post adjustment' }));
+  fill();
+  submit();
+  await screen.findByText('Awaiting admin approval');
+  submit();
+  await waitFor(() => assert.equal(posted, 1));
+  assert.equal(commands[1].idempotencyKey, commands[0].idempotencyKey);
+  fill();
+  submit();
+  await waitFor(() => assert.equal(posted, 2));
+  assert.notEqual(commands[2].idempotencyKey, commands[1].idempotencyKey);
+});
+
 test('a quantity of zero is rejected client-side - never posted as a no-op movement', () => {
   render(React.createElement(AdjustmentWizard, { authToken: 'test-token', itemId: 'item-1', branches, lots, onPosted: () => {} }));
   fireEvent.change(screen.getByLabelText('Quantity change'), { target: { value: '0' } });

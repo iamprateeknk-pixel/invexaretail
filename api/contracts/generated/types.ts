@@ -133,7 +133,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice. */
+        /** Guided manual stock adjustment. A published policy can require approval or stop a new adjustment. Use the same idempotency key and payload after approval. An already posted adjustment returns its original result (200, duplicate: true). */
         post: operations["adjustItemStock"];
         delete?: never;
         options?: never;
@@ -4037,13 +4037,19 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
         /** @description The older, pre-Week-7 error shape most of these endpoints still use for validation/role failures (see each operation's 4xx responses for which shape applies). */
         LegacyErrorMessage: {
             message: string;
+        };
+        StockAdjustmentConflict: components["schemas"]["ErrorEnvelope"] & {
+            /** @description Present when this adjustment is awaiting review. */
+            approvalRequestId?: string;
+            /** @description The role required to review this adjustment. */
+            requiredApproverRole?: string;
         };
         TransferLine: {
             itemId: string;
@@ -6094,6 +6100,15 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
+            /** @description Awaiting approval or stopped by a published rule. The approval response includes the review request ID. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockAdjustmentConflict"];
+                };
+            };
             /** @description Negative-stock policy blocked the adjustment. */
             422: {
                 headers: {
@@ -6105,6 +6120,15 @@ export interface operations {
                         /** @constant */
                         code?: "INSUFFICIENT_STOCK";
                     };
+                };
+            };
+            /** @description The API could not verify the approval policy. No stock change was posted. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

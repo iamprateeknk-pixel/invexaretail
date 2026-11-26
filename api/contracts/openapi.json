@@ -67,7 +67,10 @@
               "CONCURRENT_UPDATE_CONFLICT",
               "DUPLICATE_REQUEST",
               "NOT_FOUND",
-              "VALIDATION_FAILED"
+              "VALIDATION_FAILED",
+              "CONFLICT",
+              "STUDIO_RULE_BLOCKED",
+              "APPROVAL_UNAVAILABLE"
             ]
           },
           "traceId": {
@@ -87,6 +90,18 @@
             "type": "string"
           }
         }
+      },
+      "StockAdjustmentConflict": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ErrorEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "approvalRequestId": { "type": "string", "description": "Present when this adjustment is awaiting review." },
+              "requiredApproverRole": { "type": "string", "description": "The role required to review this adjustment." }
+            }
+          }
+        ]
       },
       "TransferLine": {
         "type": "object",
@@ -6329,7 +6344,7 @@
     "/items/{itemId}/adjust": {
       "post": {
         "operationId": "adjustItemStock",
-        "summary": "Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice.",
+        "summary": "Guided manual stock adjustment. A published policy can require approval or stop a new adjustment. Use the same idempotency key and payload after approval. An already posted adjustment returns its original result (200, duplicate: true).",
         "tags": [
           "Items"
         ],
@@ -6412,6 +6427,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          "409": {
+            "description": "Awaiting approval or stopped by a published rule. The approval response includes the review request ID.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StockAdjustmentConflict" }
+              }
+            }
+          },
+          "503": {
+            "description": "The API could not verify the approval policy. No stock change was posted.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }

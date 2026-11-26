@@ -7,6 +7,7 @@ import test from 'node:test';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../lib/db.js';
+import { decideApprovalRequest } from '../lib/approval-rules.js';
 import { extractToken } from './enterprise-auth.js';
 import { enforceOperationalCompanyScope } from '../lib/saas/tenant-scope.js';
 import { generateJWT } from '../lib/otp-auth.js';
@@ -51,6 +52,7 @@ async function makeFixture() {
   const companyId = `items-route-test-${randomUUID()}`;
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
   const userId = `items-route-user-${randomUUID()}`;
+  await prisma.user.create({ data: { id: userId, companyId, email: `${userId}@test.invexa.local`, name: 'Items Route Test User', role: 'ADMIN', passwordHash: 'x', assignedLocations: '[]' } });
   createEnhancedUser({
     id: userId, companyId, email: `${userId}@test.invexa.local`, name: 'Items Route Test User',
     role: 'ADMIN', branchIds: [], locationIds: [], passwordHash: 'x', status: 'active',
@@ -93,6 +95,40 @@ integration('POST /items/:itemId/adjust posts once for two identical requests wi
 
     const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } });
     assert.equal(Number(ledger?.onHand), 10, 'a retried adjustment must not double-post');
+  });
+});
+
+integration('item adjustments wait for a published review and replay a completed post after policy changes', async () => {
+  const { companyId, itemId, locationId, lotId, token } = await makeFixture();
+  const reviewer = `items-reviewer-${randomUUID()}`;
+  await prisma.user.create({ data: { id: reviewer, companyId, email: `${reviewer}@test.invexa.local`, name: reviewer, role: 'ADMIN', passwordHash: 'x', assignedLocations: '[]' } });
+  const publish = (version: number, outcome: { requireApproval: string } | { action: string }) => prisma.controlPlaneConfig.create({
+    data: { versionId: randomUUID(), companyId, version, kind: 'published', status: 'published', payload: { rules: [
+      { key: 'adjustments', name: 'Adjustments', liveFor: 'STOCK_ADJUSTMENT', condition: { adjustmentValueGte: 0 }, outcome },
+    ] } },
+  });
+  await publish(2, { requireApproval: 'ADMIN' });
+  await withServer(async (call) => {
+    const path = `/items/${itemId}/adjust`;
+    const command = { locationId, lotId, qtyDelta: 5, reason: 'stock take correction', idempotencyKey: randomUUID() };
+    const pending = await call('POST', path, token, command);
+    assert.equal(pending.status, 409);
+    assert.equal(pending.body.requiredApproverRole, 'ADMIN');
+    assert.ok(pending.body.approvalRequestId);
+    assert.equal((await call('POST', path, token, command)).body.approvalRequestId, pending.body.approvalRequestId);
+    assert.equal(await prisma.stockMovement.count({ where: { companyId, itemId } }), 0);
+
+    await decideApprovalRequest(pending.body.approvalRequestId, reviewer, 'ADMIN', 'APPROVED', null, companyId);
+    const posted = await call('POST', path, token, command);
+    assert.equal(posted.status, 201);
+    await publish(3, { action: 'BLOCK' });
+    const replay = await call('POST', path, token, command);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.movement.id, posted.body.movement.id);
+    const rejected = await call('POST', path, token, { ...command, idempotencyKey: randomUUID() });
+    assert.equal(rejected.status, 409);
+    assert.equal(rejected.body.code, 'STUDIO_RULE_BLOCKED');
+    assert.equal(await prisma.stockMovement.count({ where: { companyId, itemId } }), 1);
   });
 });
 
