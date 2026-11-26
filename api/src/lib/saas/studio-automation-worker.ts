@@ -63,7 +63,10 @@ export async function enqueueStudioSchedules(now: Date): Promise<number> {
 
 export async function drainStudioAutomationRuns(now: Date): Promise<void> {
   const due = await prisma.studioAutomationRun.findMany({
-    where: { status: 'PENDING', nextAttemptAt: { lte: now } },
+    where: {
+      status: 'PENDING', nextAttemptAt: { lte: now },
+      ...(process.env.ENABLE_STUDIO_AUTOMATION_TASKS === 'true' ? {} : { actionKey: 'SEND_NOTIFICATION' }),
+    },
     orderBy: [{ nextAttemptAt: 'asc' }, { id: 'asc' }],
     take: 50,
   });

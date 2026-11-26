@@ -86,7 +86,13 @@ async function makeExceptionCase(companyId: string, reportedById: string) {
   });
 }
 
-integration('Studio delivers tasks exactly once and admins can claim and close them in the Exception Inbox', async () => {
+integration('Studio delivers opted-in tasks exactly once and admins can complete them with delivery paused', async (t) => {
+  const initialTaskFlag = process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
+  delete process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
+  t.after(() => {
+    if (initialTaskFlag === undefined) delete process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
+    else process.env.ENABLE_STUDIO_AUTOMATION_TASKS = initialTaskFlag;
+  });
   const a = await makeFixture();
   const b = await makeFixture();
   const managerId = randomUUID();
@@ -104,7 +110,14 @@ integration('Studio delivers tasks exactly once and admins can claim and close t
   await submit('new-task');
   await submit('new-task');
   const now = new Date();
+  await drainStudioAutomationRuns(now);
+  const paused = (await listStudioAutomationRuns(a.companyId)).find(({ actionKey }) => actionKey === 'CREATE_TASK');
+  assert.equal(paused?.status, 'PENDING');
+  assert.equal(paused?.attempts, 0);
+  assert.equal(await prisma.exceptionCase.count({ where: { companyId: a.companyId, type: 'AUTOMATION_TASK' } }), 0);
+  process.env.ENABLE_STUDIO_AUTOMATION_TASKS = 'true';
   await Promise.all([drainStudioAutomationRuns(now), drainStudioAutomationRuns(now)]);
+  delete process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
   const runs = await listStudioAutomationRuns(a.companyId);
   assert.deepEqual(runs.map(({ actionKey, status }) => [actionKey, status]).sort(), [['CREATE_TASK', 'DELIVERED'], ['SEND_NOTIFICATION', 'CANCELLED']]);
   const task = await prisma.exceptionCase.findFirstOrThrow({ where: { companyId: a.companyId, type: 'AUTOMATION_TASK' } });
