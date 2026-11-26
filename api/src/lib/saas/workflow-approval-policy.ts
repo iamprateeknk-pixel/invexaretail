@@ -5,6 +5,7 @@ const WORKFLOW_EVENTS = {
 } as const;
 
 const REVIEWER_ROLES = ['BRANCH_MANAGER', 'ADMIN_USER', 'ADMIN'] as const;
+export const STUDIO_APPROVAL_SNAPSHOT_TRIGGER = 'STUDIO_WORKFLOW_SNAPSHOT';
 
 export type StudioApprovalPolicy = {
   workflowKey: string;
@@ -30,7 +31,7 @@ export function workflowApprovalPolicy(input: unknown): StudioApprovalPolicy | n
   const role = config('approval').role;
   if (typeof event !== 'string' || !Object.hasOwn(WORKFLOW_EVENTS, event) ||
       condition.field !== 'value' || condition.op !== 'lte' || typeof threshold !== 'number' ||
-      !Number.isFinite(threshold) || threshold < 0 || threshold >= 1e12 ||
+      !Number.isFinite(threshold) || threshold < 0 || threshold > 999_999_999_999.99 ||
       !REVIEWER_ROLES.some((candidate) => candidate === role) ||
       typeof workflow.key !== 'string' || !workflow.key.trim() || typeof workflow.name !== 'string' || !workflow.name.trim()) {
     throw new Error('A live approval requires a supported operation, a nonnegative amount and a qualified reviewer.');

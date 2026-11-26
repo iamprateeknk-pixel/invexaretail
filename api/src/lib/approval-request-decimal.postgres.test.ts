@@ -175,7 +175,14 @@ integration('live Studio approvals use the published company version and keep a 
     const row = list.body.requests.find((request: { id: string }) => request.id === blocked.requestId);
     assert.equal(row?.rule.label, 'Purchase limit');
     assert.equal(row.workflowPolicy.configVersion, 2);
-    assert.equal(row.ruleId, null);
+    assert.match(row.ruleId, /^studio-snapshot:/);
+    const compatibilityRule = await prisma.approvalRule.findUniqueOrThrow({ where: { id: row.ruleId } });
+    assert.equal(compatibilityRule.active, false);
+    assert.equal(compatibilityRule.requiredApproverRole, 'BRANCH_MANAGER');
+    const rules = await call('GET', '/approval-rules', token);
+    assert.ok(!rules.body.rules.some((rule: { id: string }) => rule.id === row.ruleId));
+    const edit = await call('PATCH', `/approval-rules/${row.ruleId}`, token, { active: true });
+    assert.equal(edit.status, 404);
     const decided = await call('POST', `/approval-requests/${blocked.requestId}/decide`, token, { decision: 'APPROVED' });
     assert.equal(decided.status, 200, JSON.stringify(decided.body));
   });

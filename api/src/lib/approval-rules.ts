@@ -4,7 +4,7 @@ import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
 import { rememberPersistedAudit } from './audit.js';
 import { databaseEnabled } from './persistence.js';
-import { publishedWorkflowApprovals, storedWorkflowApproval, usesStudioApproval } from './saas/workflow-approval-policy.js';
+import { publishedWorkflowApprovals, storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER, usesStudioApproval } from './saas/workflow-approval-policy.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -102,7 +102,7 @@ export async function checkApprovalGate(input: {
       input.intent,
       ...(triggered.length && published ? [published.versionId, triggered.map((policy) => [policy.workflowKey, policy.threshold, policy.requiredApproverRole])] : []),
     ]);
-    const ruleId = workflowPolicy ? null : matched!.id;
+    const ruleId = workflowPolicy ? `studio-snapshot:${intentFingerprint}` : matched!.id;
     const metadata = { ruleId, ruleLabel: label, value, requiredApproverRole, ...(workflowPolicy ? { workflowPolicy } : {}) };
     const { request, audit } = await prisma.$transaction(async (tx) => {
       // Serialize identical requests across API replicas while retaining rejected rows for history.
@@ -112,6 +112,15 @@ export async function checkApprovalGate(input: {
         orderBy: [{ status: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       });
       if (existing) return { request: existing, audit: null };
+      if (workflowPolicy) {
+        // The inactive row keeps the required legacy relation during an application rollback.
+        await tx.approvalRule.upsert({
+          where: { id: ruleId }, update: {}, create: {
+            id: ruleId, label, triggerType: STUDIO_APPROVAL_SNAPSHOT_TRIGGER, active: false,
+            valueThreshold: workflowPolicy.threshold, requiredApproverRole, createdById: input.requestedById,
+          },
+        });
+      }
       const request = await tx.approvalRequest.create({
         data: {
           ruleId, ...(workflowPolicy ? { workflowPolicy } : {}), triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
@@ -152,7 +161,7 @@ export function assertApprovalReviewer(deciderId: string, deciderRole: string, r
 export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string, assignedLocations: readonly string[] = []) {
   const { updated, audit, metadata } = await prisma.$transaction(async (tx) => {
     // A request of another company is indistinguishable from a missing one.
-    const scope = { id: requestId, requestedBy: { companyId }, OR: [{ ruleId: null }, { rule: { createdBy: { companyId } } }] };
+    const scope = { id: requestId, requestedBy: { companyId }, rule: { createdBy: { companyId } } };
     const request = await tx.approvalRequest.findFirst({ where: scope, include: { rule: true } });
     if (!request) throw new DomainError('CONFLICT', 'Approval request was not found.');
     const workflowPolicy = storedWorkflowApproval(request.workflowPolicy);
@@ -161,15 +170,17 @@ export async function decideApprovalRequest(requestId: string, deciderId: string
       throw new DomainError('CONFLICT', 'Approval request was not found.');
     }
     if (request.status !== 'PENDING') throw new DomainError('CONFLICT', `This request is already ${request.status}.`);
-    const requiredRole = request.rule?.requiredApproverRole ?? workflowPolicy?.requiredApproverRole;
-    if (!requiredRole) throw new DomainError('CONFLICT', 'The approval policy for this request is unavailable.');
+    if (request.rule.triggerType === STUDIO_APPROVAL_SNAPSHOT_TRIGGER && !workflowPolicy) {
+      throw new DomainError('CONFLICT', 'The approval policy for this request is unavailable.');
+    }
+    const requiredRole = workflowPolicy?.requiredApproverRole ?? request.rule.requiredApproverRole;
     assertApprovalReviewer(deciderId, deciderRole, request.requestedById, requiredRole);
 
     const decidedAt = new Date();
     const [updated] = await tx.approvalRequest.updateManyAndReturn({
       where: {
         ...scope, status: 'PENDING', requestedById: request.requestedById, ruleId: request.ruleId,
-        ...(request.rule ? { rule: { createdBy: { companyId }, requiredApproverRole: requiredRole } } : {}),
+        ...(workflowPolicy ? {} : { rule: { ...scope.rule, requiredApproverRole: requiredRole } }),
       },
       data: { status: decision, decidedById: deciderId, decidedAt, decisionNotes: notes ?? null },
     });

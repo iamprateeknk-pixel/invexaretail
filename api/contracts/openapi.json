@@ -1286,11 +1286,8 @@
             "type": "string"
           },
           "ruleId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Legacy operational rule ID, or null for a published Studio workflow."
+            "type": "string",
+            "description": "Operational rule ID or an inactive snapshot rule for a Studio request."
           },
           "triggerType": {
             "type": "string"

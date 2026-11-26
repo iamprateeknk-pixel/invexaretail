@@ -7,7 +7,7 @@ import { type Request, Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { decideApprovalRequest } from '../lib/approval-rules.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
-import { storedWorkflowApproval } from '../lib/saas/workflow-approval-policy.js';
+import { storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER } from '../lib/saas/workflow-approval-policy.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { requireAdmin } from './opext-shared.js';
 
@@ -29,7 +29,7 @@ async function branchMissingInCompany(req: Request, branchId: unknown): Promise<
 router.get('/approval-rules', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const rules = await prisma.approvalRule.findMany({
-    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
+    where: { createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, triggerType: { not: STUDIO_APPROVAL_SNAPSHOT_TRIGGER } },
     include: { branch: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'desc' },
   }).catch(() => []);
@@ -40,6 +40,7 @@ router.post('/approval-rules', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const label = typeof req.body.label === 'string' ? req.body.label.trim() : '';
   const triggerType = typeof req.body.triggerType === 'string' ? req.body.triggerType.trim() : '';
+  if (triggerType === STUDIO_APPROVAL_SNAPSHOT_TRIGGER) return res.status(400).json({ message: 'This trigger is reserved for Studio approval history.' });
   const valueThreshold = Number(req.body.valueThreshold);
   const requiredApproverRole = typeof req.body.requiredApproverRole === 'string' ? req.body.requiredApproverRole : '';
   if (!label || !triggerType || !Number.isFinite(valueThreshold) || valueThreshold <= 0 || !requiredApproverRole) {
@@ -66,7 +67,7 @@ router.patch('/approval-rules/:id', async (req, res) => {
   if (req.body.valueThreshold !== undefined) data.valueThreshold = Number(req.body.valueThreshold);
   if (req.body.requiredApproverRole !== undefined) data.requiredApproverRole = req.body.requiredApproverRole;
   if (req.body.branchId !== undefined && await branchMissingInCompany(req, req.body.branchId)) return res.status(404).json({ message: 'Branch not found.' });
-  const ownedApprovalRule = await prisma.approvalRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } }, select: { id: true } }).catch(() => null);
+  const ownedApprovalRule = await prisma.approvalRule.findFirst({ where: { id: req.params.id, createdBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, triggerType: { not: STUDIO_APPROVAL_SNAPSHOT_TRIGGER } }, select: { id: true } }).catch(() => null);
   const rule = ownedApprovalRule ? await prisma.approvalRule.update({ where: { id: ownedApprovalRule.id }, data, include: { branch: { select: { id: true, name: true } } } }).catch(() => null) : null;
   if (!rule) return res.status(404).json({ message: 'Approval rule not found.' });
   return res.json({ rule: thresholdsAsNumbers(rule) });
@@ -76,7 +77,7 @@ router.get('/approval-requests', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const status = typeof req.query.status === 'string' ? req.query.status : 'PENDING';
   const branchScope = req.user!.role === 'BRANCH_MANAGER' ? {
-    OR: [{ ruleId: { not: null } }, ...(req.user!.locationIds ?? []).map((locationId) => ({
+    OR: [{ rule: { triggerType: { not: STUDIO_APPROVAL_SNAPSHOT_TRIGGER } } }, ...(req.user!.locationIds ?? []).map((locationId) => ({
       workflowPolicy: { path: ['locationId'], equals: locationId },
     }))],
   } : {};
@@ -97,7 +98,7 @@ router.get('/approval-requests', async (req, res) => {
     const workflow = storedWorkflowApproval(request.workflowPolicy);
     return {
       ...request, valueAtStake: Number(request.valueAtStake),
-      rule: request.rule ?? (workflow ? { id: workflow.workflowKey, label: workflow.label, requiredApproverRole: workflow.requiredApproverRole } : null),
+      rule: workflow ? { id: request.ruleId, label: workflow.label, requiredApproverRole: workflow.requiredApproverRole } : request.rule,
     };
   }) });
 });

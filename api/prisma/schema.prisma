@@ -668,8 +668,8 @@ model EvidenceRule {
 // trigger types do not need their own request table.
 model ApprovalRequest {
   id             String    @id @default(cuid())
-  ruleId         String?
-  rule           ApprovalRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  ruleId         String
+  rule           ApprovalRule @relation(fields: [ruleId], references: [id], onDelete: Restrict)
   workflowPolicy Json?
   triggerType    String
   entityType     String

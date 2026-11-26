@@ -4419,8 +4419,8 @@ export interface components {
         };
         ApprovalRequest: {
             id?: string;
-            /** @description Legacy operational rule ID, or null for a published Studio workflow. */
-            ruleId?: string | null;
+            /** @description Operational rule ID or an inactive snapshot rule for a Studio request. */
+            ruleId?: string;
             triggerType?: string;
             entityType?: string;
             entityId?: string;
