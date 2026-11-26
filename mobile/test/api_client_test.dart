@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -225,6 +226,59 @@ void main() {
       'POST /api/v1/auth/refresh-token',
       'GET /api/v1/dashboard',
     ]);
+  });
+
+  test('a previous account request is not retried using the next account', () async {
+    final started = Completer<void>();
+    final reply = Completer<http.Response>();
+    final paths = <String>[];
+    final api = InvexaApi(baseUrl: 'http://api.test', httpClient: MockClient((request) async {
+      paths.add(request.url.path);
+      if (request.url.path.endsWith('/refresh-token')) {
+        return _json({'token': 'refreshed-next-token', 'refreshToken': 'refreshed-next-session'});
+      }
+      if (!started.isCompleted) started.complete();
+      return reply.future;
+    }))
+      ..token = 'old-token'
+      ..refreshToken = 'old-session';
+    final oldRequest = api.sendRaw('POST', '/api/v1/putaway-tasks/one', body: {});
+    final denied = expectLater(oldRequest, throwsA(isA<ApiException>()));
+    await started.future;
+    api.clearToken();
+    api.token = 'next-token';
+    api.refreshToken = 'next-session';
+    reply.complete(_json({}, status: 401));
+    await denied;
+    expect(paths, ['/api/v1/putaway-tasks/one']);
+    expect(api.token, 'next-token');
+  });
+
+  test('a refresh response received after sign-out cannot restore the previous account', () async {
+    final started = Completer<void>();
+    final reply = Completer<http.Response>();
+    var persisted = 0;
+    final api = InvexaApi(
+      baseUrl: 'http://api.test',
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/api/v1/auth/refresh-token');
+        started.complete();
+        return reply.future;
+      }),
+      onTokensUpdated: (_, _) async { persisted += 1; },
+    )
+      ..token = 'old-token'
+      ..refreshToken = 'old-session';
+    final refresh = api.refreshAccessToken();
+    await started.future;
+    api.clearToken();
+    api.token = 'next-token';
+    api.refreshToken = 'next-session';
+    reply.complete(_json({'token': 'old-refreshed-token', 'refreshToken': 'old-refreshed-session'}));
+    expect(await refresh, isFalse);
+    expect(persisted, 0);
+    expect(api.token, 'next-token');
+    expect(api.refreshToken, 'next-session');
   });
 
   test('unreachable API is treated as offline so counts can queue', () async {

@@ -59,6 +59,8 @@ class InvexaApi {
 
   String? token;
   String? refreshToken;
+  int _sessionGeneration = 0;
+  int get sessionGeneration => _sessionGeneration;
   // Plan P1-AUTH-001: every request that hits a 401 at the same time awaits this ONE refresh,
   // instead of the second one seeing a boolean lock and giving up.
   Future<bool>? _refreshInFlight;
@@ -84,6 +86,13 @@ class InvexaApi {
     Duration? requestTimeout,
   }) async {
     final scope = cacheScope;
+    final generation = _sessionGeneration;
+    void checkSession() {
+      if (auth && generation != _sessionGeneration) {
+        throw ApiException('The signed-in account changed.', statusCode: 401);
+      }
+    }
+
     try {
       final uri = _uri(path);
       // X-Mutation-Id (plan P0-SYNC-003): created once when the person acts and reused on every
@@ -102,6 +111,7 @@ class InvexaApi {
           throw ApiException('Unsupported method $method');
       }
 
+      checkSession();
       Map<String, dynamic> payload = {};
       if (response.body.isNotEmpty) {
         final decoded = jsonDecode(response.body);
@@ -117,11 +127,13 @@ class InvexaApi {
           final offlinePayload = offlinePolicy?.cachePayload(path, payload);
           await cachePut!(scope, path, offlinePayload == null ? response.body : jsonEncode(offlinePayload));
         }
+        checkSession();
         return payload;
       }
 
       if (response.statusCode == 401 && auth && attempt == 0) {
         final refreshed = await refreshAccessToken();
+        checkSession();
         if (refreshed) {
           return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId, requestTimeout: requestTimeout);
         }
@@ -139,10 +151,13 @@ class InvexaApi {
     } on ApiException {
       rethrow;
     } on TimeoutException {
+      checkSession();
       return await _offlineFallback(method, path, scope);
     } on SocketException {
+      checkSession();
       return await _offlineFallback(method, path, scope);
     } on http.ClientException {
+      checkSession();
       return await _offlineFallback(method, path, scope);
     }
   }
@@ -179,8 +194,7 @@ class InvexaApi {
     );
     _throwIfTwoFactor(payload);
     final result = LoginResult.fromJson(payload);
-    token = result.token;
-    refreshToken = result.refreshToken;
+    _startSession(result);
     return result;
   }
 
@@ -218,8 +232,7 @@ class InvexaApi {
     );
     _throwIfTwoFactor(payload);
     final result = LoginResult.fromJson(payload);
-    token = result.token;
-    refreshToken = result.refreshToken;
+    _startSession(result);
     return result;
   }
 
@@ -238,21 +251,29 @@ class InvexaApi {
       auth: false,
     );
     final result = LoginResult.fromJson(payload);
+    _startSession(result);
+    return result;
+  }
+
+  void _startSession(LoginResult result) {
+    clearToken();
     token = result.token;
     refreshToken = result.refreshToken;
-    return result;
   }
 
   /// Refreshes the access token. Concurrent callers share one network call and one result.
   Future<bool> refreshAccessToken() {
     final running = _refreshInFlight;
     if (running != null) return running;
-    final next = _refreshOnce().whenComplete(() => _refreshInFlight = null);
+    final generation = _sessionGeneration;
+    final next = _refreshOnce(generation).whenComplete(() {
+      if (generation == _sessionGeneration) _refreshInFlight = null;
+    });
     _refreshInFlight = next;
     return next;
   }
 
-  Future<bool> _refreshOnce() async {
+  Future<bool> _refreshOnce(int generation) async {
     final currentRefresh = refreshToken;
     if (currentRefresh == null || currentRefresh.isEmpty) return false;
     try {
@@ -263,12 +284,12 @@ class InvexaApi {
         auth: false,
       );
       final nextToken = asString(payload['token']);
-      if (nextToken.isEmpty) return false;
+      if (nextToken.isEmpty || generation != _sessionGeneration) return false;
       token = nextToken;
       final nextRefresh = payload['refreshToken'] == null ? currentRefresh : asString(payload['refreshToken']);
       refreshToken = nextRefresh.isEmpty ? currentRefresh : nextRefresh;
       await onTokensUpdated?.call(token!, refreshToken);
-      return true;
+      return generation == _sessionGeneration;
     } on ApiException {
       return false;
     }
@@ -276,6 +297,7 @@ class InvexaApi {
 
   Future<void> logout() async {
     final currentRefresh = refreshToken;
+    clearToken();
     if (currentRefresh != null && currentRefresh.isNotEmpty) {
       try {
         await _send(
@@ -288,7 +310,6 @@ class InvexaApi {
         // Local sign-out still proceeds.
       }
     }
-    clearToken();
   }
 
   Future<DashboardSummary> dashboard() async {
@@ -481,6 +502,8 @@ class InvexaApi {
   }
 
   void clearToken() {
+    _sessionGeneration += 1;
+    _refreshInFlight = null;
     token = null;
     refreshToken = null;
   }

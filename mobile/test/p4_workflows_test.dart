@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,13 +9,14 @@ import 'package:http/testing.dart';
 import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/screens/conflict_center_screen.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
+import 'package:invexaretail_mobile/services/drift_store.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
 import 'package:invexaretail_mobile/state/session_controller.dart';
 
-SessionController _controller(Future<http.Response> Function(http.Request request) handler) {
+SessionController _controller(Future<http.Response> Function(http.Request request) handler, {LocalStore? store}) {
   final controller = SessionController(
     api: InvexaApi(baseUrl: 'http://api.test', httpClient: MockClient(handler)),
-    store: MemoryStore(),
+    store: store ?? MemoryStore(),
   )
     ..restoring = false
     ..user = const AuthUser(id: 'u1', name: 'Store', email: 'store@retail.local', role: 'STORE_USER')
@@ -119,6 +121,70 @@ void main() {
     expect(controller.attentionCount, 1);
     await controller.flushQueue();
     expect(calls, 1, reason: 'a rejected item is not retried automatically');
+  });
+
+  test('concurrent local captures keep both writes in SQLite', () async {
+    final store = DriftStore.inMemory();
+    addTearDown(store.close);
+    final controller = _controller((request) async => _json({}), store: store);
+    await Future.wait([
+      controller.enqueueCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 1, requestId: 'first-count'),
+      controller.enqueueCount(itemId: 'i2', locationId: 'loc-1', physicalQuantity: 2, requestId: 'second-count'),
+      for (final key in ['first-action', 'second-action'])
+        controller.enqueueAction(type: 'PUTAWAY', method: 'POST', path: '/api/v1/putaway-tasks/t1/confirm', body: {}, mutationId: key),
+    ]);
+    expect((await controller.store.loadQueuedCounts('default-company', 'u1')).map((row) => row.requestId), ['first-count', 'second-count']);
+    expect((await controller.store.loadQueuedActions('default-company', 'u1')).map((row) => row.mutationId), ['first-action', 'second-action']);
+  });
+
+  test('overlapping sync calls send once and preserve work added during replay', () async {
+    final started = Completer<void>();
+    final reply = Completer<http.Response>();
+    final sent = <String>[];
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/stock-counts')) {
+        sent.add(jsonDecode(request.body)['requestId'] as String);
+        if (!started.isCompleted) started.complete();
+        return reply.future;
+      }
+      return _json({});
+    });
+    await controller.enqueueCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 1, requestId: 'first');
+    final first = controller.flushQueue();
+    await started.future;
+    final overlapping = controller.flushQueue();
+    await controller.enqueueCount(itemId: 'i2', locationId: 'loc-1', physicalQuantity: 2, requestId: 'new');
+    reply.complete(_json({'count': {'id': 'c1'}}));
+    await Future.wait([first, overlapping]);
+    expect(sent, ['first']);
+    expect((await controller.store.loadQueuedCounts('default-company', 'u1')).map((row) => row.requestId), ['new']);
+  });
+
+  test('sign-out stops the old replay and leaves its unconfirmed items with their original identity', () async {
+    final started = Completer<void>();
+    final reply = Completer<http.Response>();
+    final sent = <String>[];
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/stock-counts')) {
+        sent.add(jsonDecode(request.body)['requestId'] as String);
+        if (!started.isCompleted) started.complete();
+        return reply.future;
+      }
+      return _json({});
+    });
+    await controller.enqueueCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 1, requestId: 'first');
+    await controller.enqueueCount(itemId: 'i2', locationId: 'loc-1', physicalQuantity: 2, requestId: 'second');
+    final replay = controller.flushQueue();
+    await started.future;
+    await controller.logout();
+    controller.user = const AuthUser(id: 'u2', name: 'Picker', email: 'picker@retail.local', role: 'WAREHOUSE_PICKER');
+    controller.api.token = 'another-jwt';
+    await controller.enqueueCount(itemId: 'i3', locationId: 'loc-1', physicalQuantity: 3, requestId: 'new-account');
+    reply.complete(_json({'count': {'id': 'c1'}}));
+    await replay;
+    expect(sent, ['first']);
+    expect((await controller.store.loadQueuedCounts('default-company', 'u1')).map((row) => row.requestId), ['first', 'second']);
+    expect((await controller.store.loadQueuedCounts('default-company', 'u2')).map((row) => row.requestId), ['new-account']);
   });
 
   testWidgets('the Conflict Center lists what needs a decision, with the reason, and can discard it', (tester) async {

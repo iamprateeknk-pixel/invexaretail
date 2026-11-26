@@ -69,6 +69,7 @@ class SessionController extends ChangeNotifier {
   List<CountTask> countTasks = [];
   List<QueuedCount> queuedCounts = [];
   List<QueuedAction> queuedActions = [];
+  ({int generation, Future<void> completion})? _queueReplay;
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
   /// Published screens for this role. Null uses the built-in role home when
@@ -133,8 +134,14 @@ class SessionController extends ChangeNotifier {
   /// Loads this user's own queued work (plan P0-SYNC-001). Anything queued by another
   /// user or company on this phone is neither shown nor replayed.
   Future<void> _loadQueues() async {
-    queuedCounts = await store.loadQueuedCounts(companyId, _userId);
-    queuedActions = await store.loadQueuedActions(companyId, _userId);
+    final generation = api.sessionGeneration;
+    final company = companyId;
+    final actor = _userId;
+    final storedCounts = await store.loadQueuedCounts(company, actor);
+    final storedActions = await store.loadQueuedActions(company, actor);
+    if (generation != api.sessionGeneration) return;
+    queuedCounts = storedCounts;
+    queuedActions = storedActions;
   }
 
   @visibleForTesting
@@ -362,7 +369,6 @@ class SessionController extends ChangeNotifier {
     selectedLocationId = null;
     mobileNavigation = null;
     offlineReadsUnavailable = false;
-    api.clearToken();
     await store.clearSession();
     if (notify) notifyListeners();
   }
@@ -604,7 +610,10 @@ class SessionController extends ChangeNotifier {
     required Map<String, dynamic> body,
     String? mutationId,
   }) async {
-    final localId = 'act-${DateTime.now().microsecondsSinceEpoch}';
+    final generation = api.sessionGeneration;
+    final deviceId = await _device();
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
+    final localId = newRequestId();
     queuedActions = [
       ...queuedActions,
       QueuedAction(
@@ -614,7 +623,7 @@ class SessionController extends ChangeNotifier {
         mutationId: mutationId ?? localId,
         companyId: companyId,
         userId: _userId,
-        deviceId: await _device(),
+        deviceId: deviceId,
         type: type,
         method: method,
         path: path,
@@ -623,8 +632,10 @@ class SessionController extends ChangeNotifier {
       ),
     ];
     await _saveActions();
-    notice = 'Offline. $type queued and will sync when the API is reachable.';
-    notifyListeners();
+    if (generation == api.sessionGeneration) {
+      notice = 'Offline. $type queued and will sync when the API is reachable.';
+      notifyListeners();
+    }
     return true;
   }
 
@@ -707,7 +718,7 @@ class SessionController extends ChangeNotifier {
       return true;
     } on ApiException catch (err) {
       if (err.isOffline) {
-        await enqueueCount(
+        final queued = await enqueueCount(
           itemId: itemId,
           locationId: locationId,
           physicalQuantity: physicalQuantity,
@@ -715,8 +726,8 @@ class SessionController extends ChangeNotifier {
           mode: weight ? 'weight' : 'manual',
           requestId: requestId,
         );
-        notice = 'Offline. Count queued and will sync when the API is reachable.';
-        return true;
+        if (queued && isSignedIn) notice = 'Offline. Count queued and will sync when the API is reachable.';
+        return queued;
       }
       error = err.message;
       return false;
@@ -739,7 +750,7 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> enqueueCount({
+  Future<bool> enqueueCount({
     required String itemId,
     required String locationId,
     required double physicalQuantity,
@@ -747,13 +758,16 @@ class SessionController extends ChangeNotifier {
     String mode = 'manual',
     String? requestId,
   }) async {
-    final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
+    final generation = api.sessionGeneration;
+    final deviceId = await _device();
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
+    final localId = newRequestId();
     queuedCounts = [
       ...queuedCounts,
       QueuedCount(
         localId: localId,
         userId: _userId,
-        deviceId: await _device(),
+        deviceId: deviceId,
         requestId: requestId ?? localId,
         itemId: itemId,
         locationId: locationId,
@@ -764,7 +778,8 @@ class SessionController extends ChangeNotifier {
       ),
     ];
     await _saveCounts();
-    notifyListeners();
+    if (generation == api.sessionGeneration) notifyListeners();
+    return true;
   }
 
   Future<void> dismissQueued(String localId) async {
@@ -808,33 +823,43 @@ class SessionController extends ChangeNotifier {
     await flushQueue();
   }
 
-  Future<void> flushQueue({DateTime? now, Random? random}) async {
-    if (!isSignedIn) return;
-    if (queuedCounts.isEmpty && queuedActions.isEmpty) return;
-    final clock = now ?? DateTime.now();
+  Future<void> flushQueue({DateTime? now, Random? random}) {
+    if (!isSignedIn) return Future.value();
+    final generation = api.sessionGeneration;
+    final running = _queueReplay;
+    if (running?.generation == generation) return running!.completion;
+    if (queuedCounts.isEmpty && queuedActions.isEmpty) return Future.value();
+    final owner = user;
+    final completion = _replayQueue(
+      clock: now ?? DateTime.now(),
+      random: random,
+      active: () => api.sessionGeneration == generation && identical(user, owner) && isSignedIn,
+    ).whenComplete(() {
+      if (_queueReplay?.generation == generation) _queueReplay = null;
+    });
+    _queueReplay = (generation: generation, completion: completion);
+    return completion;
+  }
+
+  Future<void> _replayQueue({required DateTime clock, required bool Function() active, Random? random}) async {
+    final company = companyId;
     final me = _userId;
+    final countsToReplay = [...queuedCounts];
+    final actionsToReplay = [...queuedActions];
     var sent = 0;
 
     // Never replay under a different identity (plan P0-SYNC-001): the lists are loaded per
     // user, and this guard keeps that true even if something stale is ever in memory.
     bool mine(String itemUser) => itemUser.isEmpty || itemUser == me;
 
-    final remainingCounts = <QueuedCount>[];
-    var stopCounts = false;
-    for (final item in queuedCounts) {
+    for (final item in countsToReplay) {
+      if (!active()) return;
       // A conflict/rejected item waits for the user's explicit retry (retryQueuedCount) - never
       // resubmitted silently. A backed-off item waits for its time. Anything after a transient
       // failure waits too, so the order the person worked in is preserved.
-      if (item.status != 'pending' || !mine(item.userId)) {
-        remainingCounts.add(item);
-        continue;
-      }
+      if (!queuedCounts.contains(item) || item.status != 'pending' || !mine(item.userId)) continue;
       // A pending item that is backing off holds back everything queued after it.
-      if (stopCounts || !isDueForAttempt(item.nextAttemptAt, clock)) {
-        stopCounts = true;
-        remainingCounts.add(item);
-        continue;
-      }
+      if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
       try {
         if (item.mode == 'weight') {
           await api.submitWeightCount(
@@ -853,58 +878,67 @@ class SessionController extends ChangeNotifier {
             requestId: item.requestId,
           );
         }
-        sent += 1;
       } on ApiException catch (err) {
+        if (!active()) return;
+        if (!queuedCounts.contains(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
         final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
-          stopCounts = true;
         } else {
           item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        remainingCounts.add(item);
+        await _saveCounts();
+        if (outcome == SyncOutcome.retry) break;
+        continue;
       }
+      if (!active()) return;
+      queuedCounts = queuedCounts.where((queued) => !identical(queued, item)).toList();
+      await _saveCounts();
+      sent += 1;
     }
-    queuedCounts = remainingCounts;
-    await _saveCounts();
 
-    final remainingActions = <QueuedAction>[];
-    var stopActions = false;
-    for (final item in queuedActions) {
-      if (item.status != 'pending' || !mine(item.userId)) {
-        remainingActions.add(item);
-        continue;
-      }
-      if (stopActions || !isDueForAttempt(item.nextAttemptAt, clock)) {
-        stopActions = true;
-        remainingActions.add(item);
-        continue;
-      }
+    for (final item in actionsToReplay) {
+      if (!active()) return;
+      if (!queuedActions.contains(item) || item.status != 'pending' || !mine(item.userId) || item.companyId != company) continue;
+      if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
       try {
         await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
-        sent += 1;
       } on ApiException catch (err) {
+        if (!active()) return;
+        if (!queuedActions.contains(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
         final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
-          stopActions = true;
         } else {
           item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        remainingActions.add(item);
+        await _saveActions();
+        if (outcome == SyncOutcome.retry) break;
+        continue;
       }
+      if (!active()) return;
+      queuedActions = queuedActions.where((queued) => !identical(queued, item)).toList();
+      await _saveActions();
+      sent += 1;
     }
-    queuedActions = remainingActions;
-    await _saveActions();
+    if (!active()) return;
     if (sent > 0) {
       notice = sent == 1 ? 'Synced 1 queued action.' : 'Synced $sent queued actions.';
-      counts = await api.counts();
-      dashboard = await api.dashboard();
+      try {
+        final updatedCounts = await api.counts();
+        if (!active()) return;
+        final updatedDashboard = await api.dashboard();
+        if (!active()) return;
+        counts = updatedCounts;
+        dashboard = updatedDashboard;
+      } on ApiException {
+        // The sends are already recorded. The next refresh can update the dashboard.
+      }
     }
-    notifyListeners();
+    if (active()) notifyListeners();
   }
 }
