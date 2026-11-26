@@ -168,3 +168,25 @@ test('an event notification can be enabled only for a supported business event',
     assert.deepEqual(saved, [{ ...automation, expression: 'transfer.created', enforce: true }]);
   } finally { globalThis.fetch = original; }
 });
+
+test('a failed run can be retried using the failure shown in Studio', async () => {
+  const original = globalThis.fetch;
+  const requests = [];
+  const failure = { id: 'run-1', name: 'Count submitted', occurrence: 'count.submitted:count-1', configVersion: 2,
+    status: 'DEAD_LETTER', attempts: 5, finishedAt: '2027-02-01T10:30:00.000Z', failureCode: 'NO_ACTIVE_ADMINS' };
+  globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return Response.json({ runs: [requests.length ? { ...failure, status: 'PENDING', attempts: 0, failureCode: null } : failure] });
+    requests.push({ url, body: JSON.parse(init.body) });
+    return Response.json({ success: true });
+  };
+  try {
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [] } }));
+    const retry = await screen.findByRole('button', { name: 'Retry Count submitted' });
+    retry.focus();
+    assert.equal(document.activeElement, retry);
+    fireEvent.click(retry);
+    await screen.findByText('Retry queued.');
+    assert.match(requests[0].url, /\/automations\/runs\/run-1\/retry$/);
+    assert.deepEqual(requests[0].body, { finishedAt: failure.finishedAt });
+  } finally { globalThis.fetch = original; }
+});

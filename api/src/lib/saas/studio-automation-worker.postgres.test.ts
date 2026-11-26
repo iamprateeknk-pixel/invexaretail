@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
-import { drainStudioAutomationRuns, enqueueStudioSchedules, listStudioAutomationRuns } from './studio-automation-worker.js';
+import { drainStudioAutomationRuns, enqueueStudioSchedules, listStudioAutomationRuns, retryStudioAutomationRun } from './studio-automation-worker.js';
+import type { ScopeContext } from './control-plane.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 const now = new Date('2027-02-01T03:31:00Z');
@@ -65,4 +66,27 @@ integration('failed notifications back off and become visible dead letters; a di
   assert.equal(dead.attempts, 5);
   assert.equal(dead.failureCode, 'NO_ACTIVE_ADMINS');
   assert.equal(await prisma.userNotification.count({ where: { companyId: { in: [failure.companyId, cancelled.companyId] } } }), 0);
+
+  const scope: ScopeContext = { companyId: failure.companyId, tenantId: 'platform', actorId: 'operator', actorType: 'platform',
+    sessionType: 'control', companySessionId: 'session', role: 'ADMIN' };
+  assert.ok(dead.finishedAt);
+  const requeueAt = new Date(dead.finishedAt.getTime() + 60_000);
+  assert.equal(await retryStudioAutomationRun({ ...scope, companyId: cancelled.companyId }, dead.id, dead.finishedAt, requeueAt), 'missing');
+  assert.equal(await retryStudioAutomationRun({ ...scope, sessionType: 'platform' }, dead.id, dead.finishedAt, requeueAt), 'forbidden');
+  assert.equal(await retryStudioAutomationRun(scope, dead.id, now, requeueAt), 'changed');
+  await failure.publish(2, false);
+  assert.equal(await retryStudioAutomationRun(scope, dead.id, dead.finishedAt, requeueAt), 'disabled');
+  await failure.publish(3, true);
+  await prisma.user.create({ data: { companyId: failure.companyId, name: 'Admin', email: `${failure.companyId}@example.test`,
+    passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]' } });
+  const replay = () => retryStudioAutomationRun(scope, dead.id, dead.finishedAt!, requeueAt);
+  assert.deepEqual((await Promise.all([replay(), replay()])).sort(), ['changed', 'queued']);
+  const audits = await prisma.controlPlaneAudit.findMany({ where: { companyId: failure.companyId, entityId: dead.id } });
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].actorUserId, scope.actorId);
+  assert.deepEqual(audits[0].before, { status: 'DEAD_LETTER', attempts: 5, failureCode: 'NO_ACTIVE_ADMINS', finishedAt: dead.finishedAt.toISOString() });
+  await Promise.all([drainStudioAutomationRuns(requeueAt), drainStudioAutomationRuns(requeueAt)]);
+  assert.equal((await listStudioAutomationRuns(failure.companyId))[0].status, 'DELIVERED');
+  assert.equal(await prisma.userNotification.count({ where: { companyId: failure.companyId } }), 1);
+  assert.equal(await replay(), 'changed');
 });

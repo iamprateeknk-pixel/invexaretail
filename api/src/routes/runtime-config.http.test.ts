@@ -95,6 +95,9 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     const nonControlRuns = await json(url, '/studio/v1/automations/runs', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(nonControlRuns.status, 401);
     assert.deepEqual((await json(url, '/studio/v1/automations/runs', { headers: studioAuth })).body.runs, []);
+    const retryPath = '/studio/v1/automations/runs/example/retry';
+    assert.equal((await json(url, retryPath, { method: 'POST', headers: { Authorization: `Bearer ${grocery}` }, body: '{}' })).status, 401);
+    assert.equal((await json(url, retryPath, { method: 'POST', headers: studioAuth, body: '{}' })).status, 400);
 
     const columnKey = `runtime_min_${Date.now().toString(36)}`;
     const column = await json(url, '/studio/v1/draft/stock/columns', {

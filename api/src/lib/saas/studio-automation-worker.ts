@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma, resolveDatabaseUrl } from '../db.js';
 import { BUSINESS_TIMEZONE, validTimezone } from '../timezone-context.js';
+import type { ScopeContext } from './control-plane.js';
 import { enabledStudioAutomations, isStudioBusinessEvent, STUDIO_EVENT_MESSAGES } from './studio-automation-config.js';
 import { scheduledStudioOccurrence } from './studio-schedule.js';
 
@@ -8,6 +11,17 @@ const FIRST_RETRY_MS = 60_000;
 let timer: NodeJS.Timeout | undefined;
 
 class NoActiveAdmins extends Error {}
+
+async function runIsEnabled(tx: Prisma.TransactionClient, run: { companyId: string; automationKey: string; expression: string }): Promise<boolean> {
+  const current = await tx.controlPlaneConfig.findFirst({
+    where: { companyId: run.companyId, kind: 'published', status: 'published' },
+    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
+    select: { payload: true },
+  });
+  const lifecycle = await tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } });
+  return lifecycle?.status !== 'suspended' &&
+    enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression);
+}
 
 export async function enqueueStudioSchedules(now: Date): Promise<number> {
   const configs = await prisma.controlPlaneConfig.findMany({
@@ -52,20 +66,13 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
     take: 50,
   });
   for (const run of due) {
-    const claim = { id: run.id, companyId: run.companyId, status: 'PENDING', attempts: run.attempts };
+    const claim = { id: run.id, companyId: run.companyId, status: 'PENDING', attempts: run.attempts, nextAttemptAt: run.nextAttemptAt };
     try {
       await prisma.$transaction(async (tx) => {
         // Hold the claim through notification insertion and completion. A crash rolls all three back.
         const claimed = await tx.studioAutomationRun.updateMany({ where: claim, data: { attempts: { increment: 1 } } });
         if (!claimed.count) return;
-        const current = await tx.controlPlaneConfig.findFirst({
-          where: { companyId: run.companyId, kind: 'published', status: 'published' },
-          orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
-          select: { payload: true },
-        });
-        const lifecycle = await tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } });
-        const stillEnabled = lifecycle?.status !== 'suspended' &&
-          enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression);
+        const stillEnabled = await runIsEnabled(tx, run);
         if (stillEnabled) {
           const recipients = await tx.user.findMany({
             where: { companyId: run.companyId, status: 'ACTIVE', role: { in: ['ADMIN', 'ADMIN_USER'] } },
@@ -104,6 +111,31 @@ export async function listStudioAutomationRuns(companyId: string) {
   return prisma.studioAutomationRun.findMany({
     where: { companyId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
     select: { id: true, name: true, expression: true, occurrence: true, createdAt: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
+  });
+}
+
+export async function retryStudioAutomationRun(scope: ScopeContext, id: string, finishedAt: Date, now = new Date()) {
+  if (scope.sessionType !== 'control' || !scope.companyId) return 'forbidden' as const;
+  const companyId = scope.companyId;
+  if (!resolveDatabaseUrl()) return 'unavailable' as const;
+  return prisma.$transaction(async (tx) => {
+    const run = await tx.studioAutomationRun.findUnique({ where: { id, companyId } });
+    if (!run) return 'missing' as const;
+    if (run.status !== 'DEAD_LETTER' || run.finishedAt?.getTime() !== finishedAt.getTime()) return 'changed' as const;
+    if (!await runIsEnabled(tx, run)) return 'disabled' as const;
+    const retried = await tx.studioAutomationRun.updateMany({
+      where: { id, companyId, status: 'DEAD_LETTER', finishedAt },
+      data: { status: 'PENDING', attempts: 0, nextAttemptAt: now, finishedAt: null, failureCode: null },
+    });
+    if (!retried.count) return 'changed' as const;
+    await tx.controlPlaneAudit.create({ data: {
+      id: randomUUID(), actorUserId: scope.actorId, actorType: scope.actorType, tenantId: scope.tenantId,
+      companyId, sessionId: scope.companySessionId, action: 'STUDIO_AUTOMATION_RETRIED',
+      entityType: 'StudioAutomationRun', entityId: id,
+      before: { status: run.status, attempts: run.attempts, failureCode: run.failureCode, finishedAt: finishedAt.toISOString() },
+      after: { status: 'PENDING', nextAttemptAt: now.toISOString() }, timestamp: now.toISOString(),
+    } });
+    return 'queued' as const;
   });
 }
 

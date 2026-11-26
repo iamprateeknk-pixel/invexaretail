@@ -289,6 +289,8 @@ const AUTOMATION_RUN_STATUS = {
 function AutomationRunHistory({ controlToken }) {
   const [history, setHistory] = useState(null);
   const [refresh, setRefresh] = useState(0);
+  const [retrying, setRetrying] = useState(null);
+  const [retryResult, setRetryResult] = useState(null);
   useEffect(() => {
     let active = true;
     controlRequest('/studio/v1/automations/runs', { token: controlToken })
@@ -296,6 +298,20 @@ function AutomationRunHistory({ controlToken }) {
       .catch((error) => { if (active) setHistory({ error: error.message }); });
     return () => { active = false; };
   }, [controlToken, refresh]);
+
+  async function retryRun(run) {
+    setRetrying(run.id);
+    setRetryResult(null);
+    try {
+      await post(controlToken, `/studio/v1/automations/runs/${encodeURIComponent(run.id)}/retry`, { finishedAt: run.finishedAt });
+      setRetryResult({ message: 'Retry queued.' });
+      setRefresh((version) => version + 1);
+    } catch (error) {
+      setRetryResult({ error: error.message });
+    } finally {
+      setRetrying(null);
+    }
+  }
 
   return (
     <Card>
@@ -306,7 +322,9 @@ function AutomationRunHistory({ controlToken }) {
       <CardContent>
         {!history && <p role="status" className="text-sm text-muted-foreground">Loading runs…</p>}
         {history?.error && <p role="alert" className="text-sm text-destructive">{history.error}</p>}
-        {history?.runs?.length === 0 && <p className="text-sm text-muted-foreground">No scheduled runs yet.</p>}
+        {retryResult?.error && <p role="alert" className="text-sm text-destructive">{retryResult.error}</p>}
+        {retryResult?.message && <p role="status" className="text-sm">{retryResult.message}</p>}
+        {history?.runs?.length === 0 && <p className="text-sm text-muted-foreground">No automation runs yet.</p>}
         {history?.runs?.length > 0 && (
           <ul className="divide-y">
             {history.runs.map((run) => (
@@ -319,6 +337,11 @@ function AutomationRunHistory({ controlToken }) {
                 <div>
                   <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry' : AUTOMATION_RUN_STATUS[run.status]}</p>
                   {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins' : 'Notification could not be delivered'}</p>}
+                  {run.status === 'DEAD_LETTER' && run.finishedAt && (
+                    <Button type="button" variant="outline" size="sm" aria-label={`Retry ${run.name}`} disabled={retrying !== null} onClick={() => retryRun(run)}>
+                      {retrying === run.id ? 'Queuing…' : 'Retry'}
+                    </Button>
+                  )}
                 </div>
               </li>
             ))}

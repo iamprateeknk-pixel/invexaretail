@@ -267,6 +267,7 @@ export const STUDIO_ROUTES: string[] = [
   'POST /reports',
   'POST /automations',
   'GET /automations/runs',
+  'POST /automations/runs/:runId/retry',
   'GET /mobile-policy',
   'POST /mobile-policy',
   'DELETE /:kind/:key',

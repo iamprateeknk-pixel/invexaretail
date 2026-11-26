@@ -9,7 +9,7 @@ import { validateEmail } from '../lib/otp-auth.js';
 import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
 import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
-import { listStudioAutomationRuns } from '../lib/saas/studio-automation-worker.js';
+import { listStudioAutomationRuns, retryStudioAutomationRun } from '../lib/saas/studio-automation-worker.js';
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof ControlPlaneError) {
@@ -804,6 +804,26 @@ studioRouter.post('/automations', (req: Request, res: Response) => {
 studioRouter.get('/automations/runs', async (req: Request, res: Response) => {
   try {
     res.json({ success: true, runs: await listStudioAutomationRuns(scopedCompany(req)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.post('/automations/runs/:runId/retry', async (req: Request, res: Response) => {
+  try {
+    const value: unknown = req.body?.finishedAt;
+    const finishedAt = new Date(typeof value === 'string' ? value : '');
+    if (!Number.isFinite(finishedAt.getTime()) || value !== finishedAt.toISOString()) {
+      throw new ControlPlaneError('Select a failed run from the current history.', 'INVALID_AUTOMATION_RETRY', 400);
+    }
+    const result = await retryStudioAutomationRun(requireScope(req), param(req, 'runId'), finishedAt);
+    if (result === 'forbidden') throw new ControlPlaneError('A company control session is required.', 'FORBIDDEN', 403);
+    if (result === 'unavailable') throw new ControlPlaneError('Automation history is unavailable.', 'AUTOMATION_UNAVAILABLE', 503);
+    if (result === 'missing') throw new ControlPlaneError('Automation run not found.', 'AUTOMATION_RUN_NOT_FOUND', 404);
+    if (result === 'changed') throw new ControlPlaneError('This run has changed. Refresh the history before retrying.', 'AUTOMATION_RUN_CHANGED', 409);
+    if (result === 'disabled') throw new ControlPlaneError('Enable and publish this automation before retrying.', 'AUTOMATION_DISABLED', 409);
+    res.locals.studioPersisted = true;
+    res.status(202).json({ success: true });
   } catch (error) {
     sendError(res, error);
   }
