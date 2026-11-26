@@ -1,7 +1,7 @@
 import type { RuleDefinition } from './control-plane.js';
 
 const suffixes = ['Gte', 'Lte', 'Gt', 'Lt'] as const;
-const valueFields = { STOCK_ADJUSTMENT: 'adjustmentValue', TRANSFER_CONFIRM: 'transferValue' } as const;
+const valueFields = { STOCK_ADJUSTMENT: 'adjustmentValue', TRANSFER_CONFIRM: 'transferValue', EXPIRY_SWEEP: 'daysToExpiry' } as const;
 export type LiveRuleTrigger = keyof typeof valueFields;
 
 export function ruleConditionMatches(condition: Record<string, unknown>, context: Record<string, unknown>): boolean {
@@ -29,6 +29,12 @@ export function validateLiveStudioRule(rule: RuleDefinition): void {
   const keys = new Set([field, ...suffixes.map((suffix) => `${field}${suffix}`)]);
   if (!conditions.length || conditions.some(([key, value]) => !keys.has(key) || typeof value !== 'number' || !Number.isFinite(value))) {
     throw new Error(`Live rules for this command require conditions on ${field} with numeric values.`);
+  }
+  if (rule.liveFor === 'EXPIRY_SWEEP') {
+    if (rule.outcome?.action !== 'CREATE_TASK:EXPIRY_ACTION' || rule.outcome.requireApproval) {
+      throw new Error('A live expiry rule must create an expiry task.');
+    }
+    return;
   }
   const role = rule.outcome?.requireApproval;
   if (rule.outcome?.action !== 'BLOCK' && role !== 'ADMIN' && role !== 'BRANCH_MANAGER') {

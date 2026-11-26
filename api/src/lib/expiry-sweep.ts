@@ -3,6 +3,7 @@ import { prisma } from './db.js';
 import { isExpiredOn } from './expiry-date.js';
 import { loadCompanyTimezones } from './company-timezone.js';
 import { companyTimezone } from './timezone-context.js';
+import { sweepStudioExpiryTasks } from './studio-expiry-sweep.js';
 
 // Audit S-3: nothing ever moved a lot to EXPIRED when its date passed - the status was
 // only set as a side effect of a manual write-off - so reports, transfers and any path
@@ -37,10 +38,15 @@ export async function sweepExpiredLots(now: Date = new Date()): Promise<{ expire
   return { expired: result.count };
 }
 
+export async function runExpirySweep(now = new Date()): Promise<void> {
+  await sweepExpiredLots(now);
+  await sweepStudioExpiryTasks(now);
+}
+
 /** Runs once at start-up and then every `intervalMs` (default 6 h, so a lot flips within hours of IST midnight). */
 export function startExpirySweep(intervalMs = 6 * 60 * 60 * 1000): void {
   if (timer) return;
-  const run = () => sweepExpiredLots().catch((error) => console.error('[expiry-sweep] failed', error));
+  const run = () => runExpirySweep().catch((error) => console.error('[expiry-sweep] failed', error));
   void run();
   timer = setInterval(run, intervalMs);
   timer.unref?.();

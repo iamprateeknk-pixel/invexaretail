@@ -1188,7 +1188,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lots at a location that hold stock and have an expiry date, soonest first, computed live from the ledger. Requires access to the location. */
+        /** Lots at an accessible location that hold stock and have an expiry date. Filter by source=studio to list open and acknowledged expiry tasks created by Studio. */
         get: operations["getExpiryAlerts"];
         put?: never;
         post?: never;
@@ -4869,7 +4869,7 @@ export interface components {
             companyId: string;
         };
         LiveExpiryAlert: {
-            /** @description Stable hash of item, lot and location; not a stored row. */
+            /** @description Stable hash of item, lot and location. Studio tasks use this ID for their stored alert. */
             id: string;
             itemId: string;
             lotId: string;
@@ -9620,6 +9620,7 @@ export interface operations {
         parameters: {
             query: {
                 locationId: string;
+                source?: "studio";
             };
             header?: never;
             path?: never;
@@ -14549,6 +14550,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+            /** @description The alert was resolved or changed concurrently. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

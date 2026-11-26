@@ -2955,7 +2955,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Stable hash of item, lot and location; not a stored row."
+            "description": "Stable hash of item, lot and location. Studio tasks use this ID for their stored alert."
           },
           "itemId": {
             "type": "string"
@@ -11539,7 +11539,7 @@
     "/expiry-alerts": {
       "get": {
         "operationId": "getExpiryAlerts",
-        "summary": "Lots at a location that hold stock and have an expiry date, soonest first, computed live from the ledger. Requires access to the location.",
+        "summary": "Lots at an accessible location that hold stock and have an expiry date. Filter by source=studio to list open and acknowledged expiry tasks created by Studio.",
         "tags": [
           "Expiry"
         ],
@@ -11551,6 +11551,11 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["studio"] }
           }
         ],
         "responses": {
@@ -20151,6 +20156,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The alert was resolved or changed concurrently."
           }
         },
         "security": [

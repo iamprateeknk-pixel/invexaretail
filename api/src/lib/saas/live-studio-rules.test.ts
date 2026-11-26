@@ -20,3 +20,11 @@ test('unsupported conditions and outcomes stay simulation-only', () => {
   assert.throws(() => validateLiveStudioRule({ ...cap, outcome: { action: 'SEND_NOTIFICATION' } }), /Live rules can stop/);
   assert.equal(ruleConditionMatches({ adjustmentValueLt: 25 }, { adjustmentValue: null }), false);
 });
+
+test('an opted-in expiry rule evaluates calendar days and only creates an expiry task', () => {
+  const expiry: RuleDefinition = { key: 'expiry', name: 'Expiry task', liveFor: 'EXPIRY_SWEEP', condition: { daysToExpiryLt: 5 }, outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' } };
+  validateLiveStudioRule(expiry);
+  assert.deepEqual(matchingLiveStudioRules([expiry], 'EXPIRY_SWEEP', 5), []);
+  assert.deepEqual(matchingLiveStudioRules([expiry], 'EXPIRY_SWEEP', 4), [expiry]);
+  assert.throws(() => validateLiveStudioRule({ ...expiry, outcome: { action: 'BLOCK' } }), /expiry task/i);
+});

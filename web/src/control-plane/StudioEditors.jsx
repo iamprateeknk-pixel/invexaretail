@@ -149,7 +149,7 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Rules"
-        description="All conditions must match. Published rules can stop or require approval for transfer confirmations and manual adjustments from Stock Update or Item Stock Detail. Other rules can be simulated."
+        description="All conditions must match. Published rules can create expiry tasks or enforce limits on transfer confirmations and manual stock adjustments."
         entries={entries}
         idOf={(rule) => rule.key}
         newEntry={(current) => ({ key: slugKey('new rule', current.map((rule) => rule.key)), name: 'New rule', condition: { daysToExpiryLt: 30 }, outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' } })}
@@ -168,8 +168,11 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
               { value: 'simulation', label: 'Simulation only' },
               { value: 'STOCK_ADJUSTMENT', label: 'Manual stock adjustment after publication' },
               { value: 'TRANSFER_CONFIRM', label: 'Transfer confirmation after publication' },
+              { value: 'EXPIRY_SWEEP', label: 'Expiry task sweep after publication' },
             ]} onChange={(liveFor) => set({ liveFor: liveFor === 'simulation' ? undefined : liveFor })} />
-            {rule.liveFor && (
+            {rule.liveFor === 'EXPIRY_SWEEP' ? (
+              <p className="text-xs text-muted-foreground">Use Days to expiry for each condition and choose Create an expiry task. Matching stocked lots appear in the Expiry workspace after the next sweep.</p>
+            ) : rule.liveFor && (
               <p className="text-xs text-muted-foreground">
                 Use {rule.liveFor === 'STOCK_ADJUSTMENT' ? 'stock adjustment value' : 'transfer value'} for each condition. Choose Stop the action or ask a branch manager or administrator to approve.
               </p>
