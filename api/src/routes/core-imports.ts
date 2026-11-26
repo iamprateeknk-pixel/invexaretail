@@ -454,7 +454,7 @@ router.post('/stock-adjustments/manual', async (req: Request, res: Response) => 
     await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_MANUALLY_UPDATED', entityType: 'StockLedger', entityId: `${item.id}|${lotId}|${location.id}`, metadata: movement.metadata }));
     return res.status(201).json({ message: result.committedRows ? `Stock updated from ${currentQty} to ${currentQty + qtyDelta}.` : 'This stock update was already applied.', itemId: item.id, lotId, locationId: location.id, previousQty: currentQty, qtyDelta, resultingQty: result.committedRows ? currentQty + qtyDelta : currentQty });
   } catch (error) {
-    if (isDomainError(error) && error.code === 'APPROVAL_UNAVAILABLE') {
+    if (isDomainError(error) && ['APPROVAL_UNAVAILABLE', 'STUDIO_RULE_BLOCKED'].includes(error.code)) {
       return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
     }
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to update stock.' });

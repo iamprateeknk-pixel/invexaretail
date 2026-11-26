@@ -149,8 +149,7 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Rules"
-        description="If-this-then-that checks, for example: when days left to expiry is less than 30, create an expiry task. Every condition of a rule must be true for it to fire."
-        notLive="Saved, published and testable below, but the app does not run these rules on its own yet."
+        description="All conditions must match. Published rules can stop or require approval for transfer confirmations and manual changes from Stock Update. Other rules can be simulated."
         entries={entries}
         idOf={(rule) => rule.key}
         newEntry={(current) => ({ key: slugKey('new rule', current.map((rule) => rule.key)), name: 'New rule', condition: { daysToExpiryLt: 30 }, outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' } })}
@@ -165,6 +164,16 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
             <Text label="Rule name" value={rule.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
             <RuleConditions rule={rule} set={set} />
             <Choice label="Then" value={outcomeToAction(rule.outcome)} options={RULE_ACTIONS.some((entry) => entry.value === outcomeToAction(rule.outcome)) ? RULE_ACTIONS : [...RULE_ACTIONS, { value: outcomeToAction(rule.outcome), label: outcomeToAction(rule.outcome) }]} onChange={(action) => set({ outcome: actionToOutcome(action) })} />
+            <Choice label="Apply rule to" value={rule.liveFor ?? 'simulation'} options={[
+              { value: 'simulation', label: 'Simulation only' },
+              { value: 'STOCK_ADJUSTMENT', label: 'Manual change from Stock Update after publication' },
+              { value: 'TRANSFER_CONFIRM', label: 'Transfer confirmation after publication' },
+            ]} onChange={(liveFor) => set({ liveFor: liveFor === 'simulation' ? undefined : liveFor })} />
+            {rule.liveFor && (
+              <p className="text-xs text-muted-foreground">
+                Use {rule.liveFor === 'STOCK_ADJUSTMENT' ? 'stock adjustment value' : 'transfer value'} for each condition. Choose Stop the action or ask a branch manager or administrator to approve.
+              </p>
+            )}
             <Advanced>
               <Text label="Technical key" mono value={rule.key} onChange={(key) => isNew && set({ key })} />
               <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[11px]">{JSON.stringify({ condition: rule.condition, outcome: rule.outcome }, null, 2)}</pre>

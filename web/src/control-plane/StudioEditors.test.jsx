@@ -58,6 +58,23 @@ test('editing a rule and saving sends only that rule, as an upsert', async () =>
   }
 });
 
+test('a rule stays in simulation until explicitly assigned to a live command', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  const rule = { ...draft.rules[0], condition: { adjustmentValueGt: 10000 } };
+  try {
+    mount(React.createElement(RulesEditor, { controlToken: 't', draft: { rules: [rule] } }));
+    const target = screen.getByRole('combobox', { name: 'Apply rule to' });
+    assert.equal(target.value, 'simulation');
+    fireEvent.change(target, { target: { value: 'STOCK_ADJUSTMENT' } });
+    assert.ok(screen.getByText(/Use stock adjustment value for each condition/));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(calls.map(({ body }) => body), [{ ...rule, liveFor: 'STOCK_ADJUSTMENT' }]);
+  } finally {
+    restore();
+  }
+});
+
 test('removing a role policy sends a delete for that role', async () => {
   const calls = [];
   const restore = stubFetch(calls);

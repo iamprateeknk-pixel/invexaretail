@@ -191,4 +191,24 @@ integration('live Studio approvals use the published company version and keep a 
   const stricter = await checkApprovalGate(input);
   assert.ok(stricter.blocked);
   assert.equal(stricter.requiredApproverRole, 'ADMIN');
+
+  const adjustment = { ...input, triggerType: 'STOCK_ADJUSTMENT', entityType: 'StockAdjustment', entityId: randomUUID() };
+  const studioRules = [
+    { key: 'review-adjustment', name: 'Review adjustment', liveFor: 'STOCK_ADJUSTMENT', condition: { adjustmentValueGt: 100 }, outcome: { requireApproval: 'ADMIN' } },
+    { key: 'stop-adjustment', name: 'Adjustment cap', liveFor: 'STOCK_ADJUSTMENT', condition: { adjustmentValueGt: 500 }, outcome: { action: 'BLOCK' } },
+  ];
+  await prisma.controlPlaneConfig.create({ data: { versionId: randomUUID(), companyId, version: 3, kind: 'draft', status: 'draft', payload: { rules: studioRules } } });
+  assert.equal((await checkApprovalGate(adjustment)).blocked, false);
+  await prisma.controlPlaneConfig.create({ data: { versionId: randomUUID(), companyId, version: 3, kind: 'published', status: 'published', payload: { rules: studioRules } } });
+  assert.equal((await checkApprovalGate({ ...adjustment, value: 100 })).blocked, false);
+  const review = await checkApprovalGate(adjustment);
+  assert.ok(review.blocked);
+  assert.equal(review.requiredApproverRole, 'ADMIN');
+  for (let retry = 0; retry < 2; retry += 1) {
+    await assert.rejects(checkApprovalGate({ ...adjustment, value: 501 }), { code: 'STUDIO_RULE_BLOCKED' });
+  }
+  assert.equal(await prisma.auditLog.count({ where: { entityId: adjustment.entityId, action: 'STUDIO_RULE_BLOCKED' } }), 1);
+  assert.equal(await prisma.approvalRequest.count({ where: { entityId: adjustment.entityId } }), 1, 'blocked commands create no pending review');
+  await prisma.controlPlaneConfig.create({ data: { versionId: randomUUID(), companyId, version: 4, kind: 'published', status: 'published', payload: { rules: [] } } });
+  assert.equal((await checkApprovalGate({ ...adjustment, value: 501 })).blocked, false);
 });

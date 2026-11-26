@@ -5,6 +5,7 @@ import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableCo
 import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, PageDefinition, ConfigurationVersion, WorkflowDefinition, RuleDefinition, ReportDefinition, AutomationDefinition, DraftEntryKind, MobilePolicy, TableKey, AuditEvent, ConfigStatus } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';
+import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
 
 function validateLiveApproval(workflow: WorkflowDefinition): void {
   try {
@@ -24,21 +25,12 @@ export interface ControlPlaneStudioHost {
   isFeatureEnabled(companyId: string, featureKey: string): boolean;
 }
 
-const COMPARATOR_SUFFIXES = ['Gte', 'Lte', 'Gt', 'Lt'] as const;
-
-function ruleConditionMatches(condition: Record<string, unknown>, context: Record<string, unknown>): boolean {
-  return Object.entries(condition).every(([key, expected]) => {
-    const comparator = COMPARATOR_SUFFIXES.find((suffix) => key.endsWith(suffix));
-    if (!comparator) return context[key] === expected;
-    const field = key.slice(0, -comparator.length);
-    const actual = Number(context[field]);
-    const threshold = Number(expected);
-    if (Number.isNaN(actual) || Number.isNaN(threshold)) return false;
-    if (comparator === 'Gt') return actual > threshold;
-    if (comparator === 'Gte') return actual >= threshold;
-    if (comparator === 'Lt') return actual < threshold;
-    return actual <= threshold;
-  });
+function validateRuleForPublish(rule: RuleDefinition): void {
+  try {
+    validateLiveStudioRule(rule);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live rule.', 'INVALID_RULE', 400);
+  }
 }
 
 function ruleOutcomeAction(outcome: Record<string, unknown>): string {
@@ -399,6 +391,15 @@ export class ControlPlaneStudio {
       previousWorkflows.delete(workflow.key);
     }
     for (const [key, workflow] of previousWorkflows) changes.push({ op: '-', path: `workflows.${key}`, from: workflow });
+    const previousRules = new Map(published.rules.map((entry) => [entry.key, entry]));
+    for (const rule of draft.rules) {
+      const previous = previousRules.get(rule.key);
+      if (JSON.stringify(previous) !== JSON.stringify(rule)) {
+        changes.push({ op: previous ? '~' : '+', path: `rules.${rule.key}`, from: previous, to: rule });
+      }
+      previousRules.delete(rule.key);
+    }
+    for (const [key, rule] of previousRules) changes.push({ op: '-', path: `rules.${key}`, from: rule });
     return changes;
   }
 
@@ -407,6 +408,8 @@ export class ControlPlaneStudio {
     this.host.assertBillingWritable(companyId);
     const draft = this.ensureDraft(scope);
     for (const workflow of draft.workflows) validateLiveApproval(workflow);
+    for (const rule of draft.rules) validateRuleForPublish(rule);
+    const diff = this.diff(companyId);
     draft.status = 'published';
     draft.publishedAt = nowIso();
     this.store.published.set(companyId, JSON.parse(JSON.stringify(draft)) as ConfigurationVersion);
@@ -425,7 +428,7 @@ export class ControlPlaneStudio {
       entityType: 'configuration',
       entityId: String(draft.version),
       before: { parent: draft.parentVersion },
-      after: { version: draft.version, diff: this.diff(companyId) },
+      after: { version: draft.version, diff },
     });
     return draft;
   }
@@ -562,6 +565,7 @@ export class ControlPlaneStudio {
 
   upsertRule(scope: ScopeContext, rule: RuleDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateRuleForPublish(rule);
     const index = draft.rules.findIndex((entry) => entry.key === rule.key);
     if (index >= 0) draft.rules[index] = rule;
     else draft.rules.push(rule);

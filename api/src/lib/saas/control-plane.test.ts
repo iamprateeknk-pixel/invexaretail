@@ -153,7 +153,10 @@ test('Rule Builder: a rule created through Studio fires the same generic engine 
     condition: { daysToExpiryLt: 30 },
     outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' },
   });
+  const diff = plane.diff('default-company');
+  assert.equal(diff.find((change) => change.path === 'rules.expiry_task')?.op, '+');
   plane.publish(scope);
+  assert.deepEqual(plane.audit.at(-1)?.after, { version: 2, diff });
 
   assert.deepEqual(plane.evaluateRule('default-company', { daysToExpiry: 10 }), ['CREATE_TASK:EXPIRY_ACTION']);
   // Above threshold: the new rule should not fire, and the seeded high-value

@@ -28,6 +28,7 @@ export const ERROR_CODES = [
   'NOT_SUPPORTED',
   'UPSTREAM_ERROR',
   'APPROVAL_UNAVAILABLE',
+  'STUDIO_RULE_BLOCKED',
   // Codes already sent ad hoc inside error bodies before P3, now named here.
   'QC_REQUIRED',
   'SELF_REVIEW',
@@ -147,6 +148,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'SELF_REVIEW':
       return 403;
     case 'CONFLICT':
+    case 'STUDIO_RULE_BLOCKED':
     case 'RECOUNT_REQUIRED':
     case 'RECOUNT_NOT_INDEPENDENT':
       return 409;

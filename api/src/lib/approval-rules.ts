@@ -4,7 +4,8 @@ import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
 import { rememberPersistedAudit } from './audit.js';
 import { databaseEnabled } from './persistence.js';
-import { publishedWorkflowApprovals, storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER, usesStudioApproval } from './saas/workflow-approval-policy.js';
+import { publishedWorkflowApprovals, storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER, usesStudioApproval, type StudioApprovalPolicy } from './saas/workflow-approval-policy.js';
+import { matchingLiveStudioRules, publishedLiveStudioRules } from './saas/live-studio-rules.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -74,7 +75,8 @@ export async function checkApprovalGate(input: {
       }) : null,
     ]);
     const workflowPolicies = publishedWorkflowApprovals(published?.payload, input.triggerType);
-    if (rules.length === 0 && workflowPolicies.length === 0) return { blocked: false };
+    const studioRules = publishedLiveStudioRules(published?.payload, input.triggerType);
+    if (rules.length === 0 && workflowPolicies.length === 0 && !studioRules.length) return { blocked: false };
 
     let branchId = input.branchId ?? null;
     if (input.locationId && rules.some((rule) => rule.branchId !== null)) {
@@ -86,7 +88,24 @@ export async function checkApprovalGate(input: {
     const value = typeof input.value === 'function' ? await input.value() : input.value;
     if (!Number.isFinite(value)) throw new Error('Invalid approval value');
     const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId, value });
-    const triggered = workflowPolicies.filter((policy) => value > policy.threshold)
+    const matchingRules = matchingLiveStudioRules(studioRules, input.triggerType, value);
+    const stop = matchingRules.find((rule) => rule.outcome.action === 'BLOCK');
+    if (stop && published) {
+      const auditId = approvalIntentFingerprint(['studio-block', input.companyId, input.requestedById, input.triggerType,
+        input.entityId, published.versionId, stop.key, value, input.intent]);
+      await prisma.auditLog.upsert({ where: { id: auditId }, update: {}, create: {
+        id: auditId, actorId: input.requestedById, actorRole: 'SYSTEM', action: 'STUDIO_RULE_BLOCKED',
+        entityType: input.entityType, entityId: input.entityId, metadata: { ruleKey: stop.key, version: published.version, value },
+      } });
+      throw new DomainError('STUDIO_RULE_BLOCKED', `The published Studio rule “${stop.name}” stopped this command.`);
+    }
+    const ruleApprovals = matchingRules.flatMap<StudioApprovalPolicy>((rule) => {
+      const role = rule.outcome.requireApproval;
+      return role === 'ADMIN' || role === 'BRANCH_MANAGER' ? [{
+        workflowKey: `rule:${rule.key}`, label: rule.name, triggerType: input.triggerType, threshold: 0, requiredApproverRole: role,
+      }] : [];
+    });
+    const triggered = [...workflowPolicies.filter((policy) => value > policy.threshold), ...ruleApprovals]
       .sort((a, b) => ROLE_RANK[b.requiredApproverRole] - ROLE_RANK[a.requiredApproverRole] || a.workflowKey.localeCompare(b.workflowKey));
     const strongest = triggered[0];
     if (!matched && !strongest) return { blocked: false };
@@ -141,6 +160,7 @@ export async function checkApprovalGate(input: {
     }
     return { blocked: true, requestId: request.id, status: 'PENDING', reason: `Awaiting ${requiredApproverRole} approval ("${label}").`, requiredApproverRole };
   } catch (error) {
+    if (error instanceof DomainError && error.code === 'STUDIO_RULE_BLOCKED') throw error;
     const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
     console.error('Approval policy evaluation failed', {
       triggerType: input.triggerType, traceId: unavailable.traceId, errorType: error instanceof Error ? error.name : 'Unknown',

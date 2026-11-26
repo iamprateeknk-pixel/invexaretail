@@ -251,6 +251,7 @@ export type WorkflowDefinition = {
 };
 
 export type RuleDefinition = {
+  liveFor?: import('./live-studio-rules.js').LiveRuleTrigger;
   key: string;
   name: string;
   condition: Record<string, unknown>;
