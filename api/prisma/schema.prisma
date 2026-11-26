@@ -2780,3 +2780,11 @@ model PasskeyCredential {
 
   @@index([userId])
 }
+
+model StudioLowStockState {
+  companyId String
+  ruleId    String
+  episodeId String?
+
+  @@id([companyId, ruleId])
+}

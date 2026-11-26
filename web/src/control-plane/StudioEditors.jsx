@@ -229,7 +229,7 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 
 // ---- automations --------------------------------------------------------------
 
-const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created', 'item.near_expiry']);
+const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created', 'item.near_expiry', 'inventory.low_stock']);
 
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];
@@ -270,6 +270,9 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
             )}
             {automation.trigger === 'event' && automation.expression === 'item.near_expiry' && (
               <p className="text-sm text-muted-foreground">Admins receive one reminder per stocked lot, location, and expiry date within the next 30 days.</p>
+            )}
+            {automation.trigger === 'event' && automation.expression === 'inventory.low_stock' && (
+              <p className="text-sm text-muted-foreground">Admins are notified when the worker sees on-hand stock at or below the location’s reorder minimum. Stock must recover before another alert is sent.</p>
             )}
             <Advanced>
               <Text label="Technical key" mono value={automation.key} onChange={(key) => isNew && set({ key })} />

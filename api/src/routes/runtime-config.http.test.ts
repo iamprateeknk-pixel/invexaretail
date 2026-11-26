@@ -143,7 +143,8 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     assert.equal((await requestAutomation({ ...automation, actionKey: 'SEND_EMAIL' })).status, 400);
     assert.equal((await requestAutomation(automation)).status, 200);
     const eventAutomation = { ...automation, key: 'count-notification', trigger: 'event', expression: 'count.submitted' };
-    assert.equal((await requestAutomation({ ...eventAutomation, expression: 'inventory.low_stock' })).status, 400);
+    assert.equal((await requestAutomation({ ...eventAutomation, expression: 'inventory.unknown' })).status, 400);
+    assert.equal((await requestAutomation({ ...eventAutomation, key: 'low-stock', expression: 'inventory.low_stock' })).status, 200);
     assert.equal((await requestAutomation(eventAutomation)).status, 200);
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);

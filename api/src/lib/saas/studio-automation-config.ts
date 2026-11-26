@@ -6,6 +6,7 @@ export const STUDIO_EVENT_MESSAGES = {
   'transfer.created': 'A transfer was created.',
   'order.created': 'A sales order was created.',
   'item.near_expiry': 'A stocked lot is approaching expiry.',
+  'inventory.low_stock': 'Stock has reached its reorder level.',
 } as const;
 
 export type StudioBusinessEvent = keyof typeof STUDIO_EVENT_MESSAGES;
@@ -19,7 +20,7 @@ export function validateLiveAutomation(automation: AutomationDefinition): void {
   const supported = automation.trigger === 'schedule' ? isStudioSchedule(automation.expression)
     : automation.trigger === 'event' && isStudioBusinessEvent(automation.expression);
   if (!supported || automation.actionKey !== 'SEND_NOTIFICATION') {
-    throw new Error('Live in-app notifications support schedules, submitted counts, new transfers, new sales orders, and near-expiry lots.');
+    throw new Error('Live in-app notifications require a supported event or schedule and the notification action.');
   }
   if (typeof automation.key !== 'string' || !automation.key.trim() || automation.key.length > 100 ||
       typeof automation.name !== 'string' || !automation.name.trim() || automation.name.length > 160) {

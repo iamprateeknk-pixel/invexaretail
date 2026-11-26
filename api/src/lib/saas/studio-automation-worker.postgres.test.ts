@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { drainStudioAutomationRuns, enqueueStudioSchedules, listStudioAutomationRuns, retryStudioAutomationRun } from './studio-automation-worker.js';
 import type { ScopeContext } from './control-plane.js';
+import { scanStudioLowStock } from './low-stock-notification.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 const now = new Date('2027-02-01T03:31:00Z');
@@ -23,6 +24,51 @@ async function fixture(withAdmin: boolean) {
   } });
   return { companyId, publish };
 }
+
+integration('low-stock notifications cover an observed shortage once, rearm after recovery and respect company scope', async () => {
+  const { companyId } = await fixture(true);
+  const other = await fixture(true);
+  const location = await prisma.location.create({ data: { companyId, name: 'Store A', code: randomUUID(), type: 'store' } });
+  const foreignLocation = await prisma.location.create({ data: { companyId: other.companyId, name: 'Store B', code: randomUUID(), type: 'store' } });
+  const item = await prisma.item.create({ data: { companyId, code: randomUUID(), name: 'Rice' } });
+  const stockLot = async (locationId: string, onHand: number) => {
+    const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: randomUUID() } });
+    return prisma.stockLedger.create({ data: { companyId, itemId: item.id, locationId, lotId: lot.id, onHand } });
+  };
+  const [ledger] = await Promise.all([stockLot(location.id, 2), stockLot(location.id, 4), stockLot(foreignLocation.id, 0)]);
+  await prisma.reorderRule.createMany({ data: [location.id, foreignLocation.id].map((locationId) => ({
+    companyId, itemId: item.id, locationId, minQty: 5,
+  })) });
+  const config = {
+    companyId, versionId: randomUUID(), version: 3,
+    payload: { automations: [{ key: 'low', name: 'Reorder reminder', enforce: true, trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' }] },
+  };
+  const setOnHand = (onHand: number) => prisma.stockLedger.update({ where: { id: ledger.id, companyId }, data: { onHand } });
+  await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'draft', status: 'draft' } });
+  await setOnHand(1);
+  await scanStudioLowStock(now);
+  assert.deepEqual(await listStudioAutomationRuns(companyId), []);
+  await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'published', status: 'published' } });
+  await setOnHand(2);
+  await scanStudioLowStock(now);
+  assert.deepEqual(await listStudioAutomationRuns(companyId), [], 'both lots contribute to on-hand stock');
+  await setOnHand(1);
+  await Promise.all([scanStudioLowStock(now), scanStudioLowStock(now)]);
+  await scanStudioLowStock(now);
+  assert.equal((await listStudioAutomationRuns(companyId)).length, 1);
+  await drainStudioAutomationRuns(now);
+  const notices = await prisma.userNotification.findMany({ where: { companyId } });
+  assert.deepEqual(notices.map(({ body }) => body), ['Rice at Store A has 5 on hand. The reorder minimum is 5.']);
+  await setOnHand(2);
+  await scanStudioLowStock(now);
+  await setOnHand(0);
+  await scanStudioLowStock(now);
+  assert.equal((await listStudioAutomationRuns(companyId)).length, 2);
+  await setOnHand(2);
+  await drainStudioAutomationRuns(now);
+  assert.deepEqual((await listStudioAutomationRuns(companyId)).map(({ status }) => status).sort(), ['CANCELLED', 'DELIVERED']);
+  assert.deepEqual(await listStudioAutomationRuns(other.companyId), []);
+});
 
 integration('a published schedule sends one company-scoped notification under overlapping workers', async () => {
   const a = await fixture(true);

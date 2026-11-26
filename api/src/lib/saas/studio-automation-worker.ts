@@ -6,6 +6,7 @@ import type { ScopeContext } from './control-plane.js';
 import { enabledStudioAutomations, isStudioBusinessEvent, STUDIO_EVENT_MESSAGES } from './studio-automation-config.js';
 import { scheduledStudioOccurrence } from './studio-schedule.js';
 import { nearExpiryNotification } from './near-expiry-notification.js';
+import { lowStockNotification, scanStudioLowStock } from './low-stock-notification.js';
 
 const MAX_ATTEMPTS = 5;
 const FIRST_RETRY_MS = 60_000;
@@ -74,8 +75,12 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
         const claimed = await tx.studioAutomationRun.updateMany({ where: claim, data: { attempts: { increment: 1 } } });
         if (!claimed.count) return;
         const stillEnabled = await runIsEnabled(tx, run);
-        const body = !stillEnabled ? null : run.expression === 'item.near_expiry' ? await nearExpiryNotification(tx, run, now)
-          : isStudioBusinessEvent(run.expression) ? STUDIO_EVENT_MESSAGES[run.expression] : `Scheduled reminder for ${run.occurrence}.`;
+        let body: string | null = null;
+        if (stillEnabled) {
+          if (run.expression === 'inventory.low_stock') body = await lowStockNotification(tx, run);
+          else if (run.expression === 'item.near_expiry') body = await nearExpiryNotification(tx, run, now);
+          else body = isStudioBusinessEvent(run.expression) ? STUDIO_EVENT_MESSAGES[run.expression] : `Scheduled reminder for ${run.occurrence}.`;
+        }
         if (body !== null) {
           const recipients = await tx.user.findMany({
             where: { companyId: run.companyId, status: 'ACTIVE', role: { in: ['ADMIN', 'ADMIN_USER'] } },
@@ -150,6 +155,7 @@ export function startStudioAutomationWorker(intervalMs = 60_000): void {
     try {
       const now = new Date();
       await enqueueStudioSchedules(now);
+      await scanStudioLowStock(now).catch((error) => console.error('[studio-low-stock] scan unavailable', error));
       await drainStudioAutomationRuns(now);
     } catch (error) {
       console.error('[studio-schedule] worker tick failed', error);
