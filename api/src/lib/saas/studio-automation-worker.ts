@@ -14,7 +14,7 @@ let timer: NodeJS.Timeout | undefined;
 
 class NoActiveAdmins extends Error {}
 
-async function runIsEnabled(tx: Prisma.TransactionClient, run: { companyId: string; automationKey: string; expression: string }): Promise<boolean> {
+async function runIsEnabled(tx: Prisma.TransactionClient, run: { companyId: string; automationKey: string; expression: string; actionKey: string }): Promise<boolean> {
   const current = await tx.controlPlaneConfig.findFirst({
     where: { companyId: run.companyId, kind: 'published', status: 'published' },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
@@ -22,7 +22,7 @@ async function runIsEnabled(tx: Prisma.TransactionClient, run: { companyId: stri
   });
   const lifecycle = await tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } });
   return lifecycle?.status !== 'suspended' &&
-    enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression);
+    enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression && item.actionKey === run.actionKey);
 }
 
 export async function enqueueStudioSchedules(now: Date): Promise<number> {
@@ -49,7 +49,7 @@ export async function enqueueStudioSchedules(now: Date): Promise<number> {
       const rows = schedules.flatMap((automation) => {
         const occurrence = scheduledStudioOccurrence(automation.expression, now, timezone, publishedAt);
         return occurrence ? [{
-          companyId: config.companyId, automationKey: automation.key, name: automation.name, expression: automation.expression, occurrence,
+          companyId: config.companyId, automationKey: automation.key, name: automation.name, actionKey: automation.actionKey, expression: automation.expression, occurrence,
           configVersion: config.version, versionId: config.versionId, nextAttemptAt: now,
         }] : [];
       });
@@ -84,12 +84,22 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
         if (body !== null) {
           const recipients = await tx.user.findMany({
             where: { companyId: run.companyId, status: 'ACTIVE', role: { in: ['ADMIN', 'ADMIN_USER'] } },
-            select: { id: true },
+            select: { id: true }, orderBy: { id: 'asc' },
           });
           if (!recipients.length) throw new NoActiveAdmins();
-          await tx.userNotification.createMany({ data: recipients.map(({ id }) => ({
-            userId: id, companyId: run.companyId, title: run.name, body, type: 'studio.automation',
-          })) });
+          if (run.actionKey === 'CREATE_TASK') {
+            const task = await tx.exceptionCase.create({ data: {
+              companyId: run.companyId, type: 'AUTOMATION_TASK', title: run.name, description: body,
+              reportedById: recipients[0].id, sourceDocument: run.id, dueAt: new Date(now.getTime() + 86_400_000),
+              metadata: { source: 'studio', expression: run.expression, occurrence: run.occurrence, configVersion: run.configVersion },
+            } });
+            await tx.auditLog.create({ data: { actorId: 'system', actorRole: 'SYSTEM', action: 'STUDIO_TASK_CREATED',
+              entityType: 'ExceptionCase', entityId: task.id, metadata: { studioTaskCompanyId: run.companyId, runId: run.id } } });
+          } else {
+            await tx.userNotification.createMany({ data: recipients.map(({ id }) => ({
+              userId: id, companyId: run.companyId, title: run.name, body, type: 'studio.automation',
+            })) });
+          }
         }
         await tx.studioAutomationRun.update({
           where: { id: run.id, companyId: run.companyId },
@@ -117,7 +127,7 @@ export async function listStudioAutomationRuns(companyId: string) {
   if (!resolveDatabaseUrl()) return [];
   return prisma.studioAutomationRun.findMany({
     where: { companyId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
-    select: { id: true, name: true, expression: true, occurrence: true, createdAt: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
+    select: { id: true, name: true, actionKey: true, expression: true, occurrence: true, createdAt: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
   });
 }
 

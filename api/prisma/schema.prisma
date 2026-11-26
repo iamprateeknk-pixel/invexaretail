@@ -94,6 +94,7 @@ enum ExceptionType {
   TRANSFER_DISCREPANCY
   COUNT_VARIANCE
   QUARANTINE
+  AUTOMATION_TASK
 }
 
 enum ExceptionStatus {
@@ -2346,6 +2347,7 @@ model StudioAutomationRun {
   configVersion Int
   versionId     String
   name          String
+  actionKey     String   @default("SEND_NOTIFICATION")
   status        String   @default("PENDING")
   attempts      Int      @default(0)
   nextAttemptAt DateTime

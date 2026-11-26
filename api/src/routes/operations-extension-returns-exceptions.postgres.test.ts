@@ -12,6 +12,9 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../lib/db.js';
 import { generateJWT } from '../lib/otp-auth.js';
 import { createEnhancedUser } from '../lib/enterprise-repository.js';
+import { queueStudioBusinessEvent } from '../lib/saas/studio-business-events.js';
+import { drainStudioAutomationRuns, listStudioAutomationRuns } from '../lib/saas/studio-automation-worker.js';
+import { getExceptionQueueSummary, listOpenExceptions } from '../lib/reporting-repository.js';
 import operationsExtensionRouter from './operations-extension.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -82,6 +85,63 @@ async function makeExceptionCase(companyId: string, reportedById: string) {
     data: { type: 'DAMAGE', title: 'Test damage case', reportedById, companyId },
   });
 }
+
+integration('Studio delivers tasks exactly once and admins can claim and close them in the Exception Inbox', async () => {
+  const a = await makeFixture();
+  const b = await makeFixture();
+  const managerId = randomUUID();
+  createEnhancedUser({ id: managerId, companyId: a.companyId, name: 'Branch reviewer', email: `${managerId}@test.invexa.local`,
+    passwordHash: 'x', status: 'active', role: 'BRANCH_MANAGER', branchIds: [], locationIds: [a.locationId] });
+  const managerToken = generateJWT(managerId, a.companyId);
+  const publish = (version: number, actionKey: string) => prisma.controlPlaneConfig.create({ data: {
+    companyId: a.companyId, versionId: randomUUID(), kind: 'published', status: 'published', version,
+    payload: { automations: [{ key: 'review-count', name: 'Review count submission', enforce: true, trigger: 'event', expression: 'count.submitted', actionKey }] },
+  } });
+  const submit = (entityId: string) => prisma.$transaction((tx) => queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId: a.companyId, entityId }));
+  await publish(1, 'SEND_NOTIFICATION');
+  await submit('old-action');
+  await publish(2, 'CREATE_TASK');
+  await submit('new-task');
+  await submit('new-task');
+  const now = new Date();
+  await Promise.all([drainStudioAutomationRuns(now), drainStudioAutomationRuns(now)]);
+  const runs = await listStudioAutomationRuns(a.companyId);
+  assert.deepEqual(runs.map(({ actionKey, status }) => [actionKey, status]).sort(), [['CREATE_TASK', 'DELIVERED'], ['SEND_NOTIFICATION', 'CANCELLED']]);
+  const task = await prisma.exceptionCase.findFirstOrThrow({ where: { companyId: a.companyId, type: 'AUTOMATION_TASK' } });
+  assert.equal(task.title, 'Review count submission');
+  assert.equal(await prisma.exceptionCase.count({ where: { companyId: a.companyId, type: 'AUTOMATION_TASK' } }), 1);
+  assert.equal(await prisma.userNotification.count({ where: { companyId: a.companyId } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { action: 'STUDIO_TASK_CREATED', entityId: task.id } }), 1);
+  const adminContext = { companyId: a.companyId, tenantId: 'default-tenant', userId: a.userId, role: 'ADMIN' } as const;
+  const managerContext = { ...adminContext, userId: managerId, role: 'BRANCH_MANAGER' } as const;
+  const otherContext = { ...adminContext, companyId: b.companyId, userId: b.userId };
+  assert.deepEqual((await listOpenExceptions(adminContext)).items.map(({ id }) => id), [task.id]);
+  assert.equal((await getExceptionQueueSummary(adminContext)).open, 1);
+  for (const context of [managerContext, otherContext]) {
+    assert.deepEqual((await listOpenExceptions(context)).items, []);
+    assert.equal((await getExceptionQueueSummary(context)).open, 0);
+  }
+  await withServer(async (call) => {
+    const query = `/exceptions?locationId=${a.locationId}&type=AUTOMATION_TASK`;
+    const own = await call('GET', query, a.token);
+    assert.equal(own.status, 200);
+    assert.deepEqual(own.body.cases.map((row: { id: string }) => row.id), [task.id]);
+    assert.deepEqual((await call('GET', query, managerToken)).body.cases, []);
+    const comments = `/comments/exception/${task.id}`;
+    assert.equal((await call('GET', comments, a.token)).status, 200);
+    assert.equal((await call('GET', comments, managerToken)).status, 404);
+    assert.equal((await call('GET', comments, b.token)).status, 404);
+    const path = `/exceptions/${task.id}`;
+    assert.equal((await call('PATCH', path, b.token, { status: 'IN_PROGRESS' })).status, 404);
+    assert.equal((await call('PATCH', path, managerToken, { status: 'IN_PROGRESS' })).status, 404);
+    const claim = () => call('PATCH', path, a.token, { status: 'IN_PROGRESS' });
+    assert.deepEqual((await Promise.all([claim(), claim()])).map((result) => result.status).sort(), [200, 409]);
+    const claimed = await prisma.exceptionCase.findUniqueOrThrow({ where: { id: task.id } });
+    assert.equal(claimed.ownerId, a.userId);
+    assert.equal((await call('POST', path + '/resolve', a.token, { disposition: 'WRITE_OFF' })).status, 400);
+    assert.equal((await call('POST', path + '/resolve', a.token, { disposition: 'NONE', resolutionNotes: 'Verified count' })).body.case.status, 'CLOSED');
+  });
+});
 
 integration('PATCH /returns/:id/status: another company\'s return request id resolves 404, not a status change', async () => {
   const a = await makeFixture();

@@ -18,6 +18,7 @@
 // a time afterward, documented in `docs/tenant-scope-coverage.md`.
 import { prisma } from './db.js';
 import type { TenantContext } from './tenant-context.js';
+import { visibleStudioTaskFilter } from './saas/studio-task-access.js';
 
 // This week's product decision on "at risk"/"SLA" per queue. Transfer and
 // ReturnRequest have no due-date field in the schema, so their breach
@@ -50,16 +51,17 @@ export type ExceptionQueueSummary = {
 
 /** Counts over ExceptionCase, the existing cross-module exception inbox (blueprint Module H) - genuinely company-scoped as of this week. */
 export async function getExceptionQueueSummary(ctx: TenantContext): Promise<ExceptionQueueSummary> {
+  const scope = { companyId: ctx.companyId, ...visibleStudioTaskFilter(ctx.role) };
   const [statusGroups, priorityGroups, breached] = await Promise.all([
-    prisma.exceptionCase.groupBy({ by: ['status'], where: { companyId: ctx.companyId }, _count: { _all: true } }),
+    prisma.exceptionCase.groupBy({ by: ['status'], where: scope, _count: { _all: true } }),
     prisma.exceptionCase.groupBy({
       by: ['priority'],
-      where: { companyId: ctx.companyId, status: { in: [...OPEN_EXCEPTION_STATUSES] } },
+      where: { ...scope, status: { in: [...OPEN_EXCEPTION_STATUSES] } },
       _count: { _all: true },
     }),
     prisma.exceptionCase.count({
       where: {
-        companyId: ctx.companyId,
+        ...scope,
         status: { in: [...OPEN_EXCEPTION_STATUSES] },
         dueAt: { lt: new Date() },
       },
@@ -103,7 +105,7 @@ const MAX_LIST_LIMIT = 100;
 export async function listOpenExceptions(ctx: TenantContext, options: { cursor?: string; limit?: number } = {}): Promise<ExceptionListPage> {
   const limit = Math.min(options.limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
   const rows = await prisma.exceptionCase.findMany({
-    where: { companyId: ctx.companyId, status: { in: [...OPEN_EXCEPTION_STATUSES] } },
+    where: { companyId: ctx.companyId, ...visibleStudioTaskFilter(ctx.role), status: { in: [...OPEN_EXCEPTION_STATUSES] } },
     orderBy: [{ dueAt: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
     take: limit + 1,
     ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),

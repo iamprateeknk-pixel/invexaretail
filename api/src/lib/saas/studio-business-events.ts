@@ -3,13 +3,13 @@ import { enabledStudioAutomations, type StudioBusinessEvent } from './studio-aut
 
 export function studioBusinessEventRun(
   config: { companyId: string; version: number; versionId: string },
-  automation: { key: string; name: string },
+  automation: { key: string; name: string; actionKey: string },
   event: StudioBusinessEvent,
   entityId: string,
   now: Date,
 ): Prisma.StudioAutomationRunCreateManyInput {
   return {
-    companyId: config.companyId, automationKey: automation.key, name: automation.name, expression: event,
+    companyId: config.companyId, automationKey: automation.key, name: automation.name, actionKey: automation.actionKey, expression: event,
     occurrence: `${event}:${entityId}`, configVersion: config.version, versionId: config.versionId, nextAttemptAt: now,
   };
 }

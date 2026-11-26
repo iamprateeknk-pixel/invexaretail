@@ -1170,7 +1170,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The caller's company exception cases, highest priority first (max 300), with their item, lot, location, owner and reporter. Closed and rejected cases are hidden unless status asks for them. Managers and auditors see all locations; others only their assigned ones; mine=true limits to cases they own. */
+        /** Company exception cases, highest priority first (max 300). Closed and rejected cases are hidden unless requested. Managers and auditors can see all locations, and mine=true limits results to cases the caller owns. Company admins also see unlocated Studio tasks when a location is selected. */
         get: operations["getExceptions"];
         put?: never;
         /** Open an exception case. Any item, lot or owner named must belong to the caller's company (404 otherwise). Priority and the value at risk are derived; the due time defaults to 24 hours. */
@@ -4787,7 +4787,7 @@ export interface components {
         ExceptionCase: {
             id: string;
             /** @enum {string} */
-            type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+            type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE" | "AUTOMATION_TASK";
             /** @enum {string} */
             status: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
             /**
@@ -9497,7 +9497,7 @@ export interface operations {
             query?: {
                 locationId?: string;
                 status?: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
-                type?: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+                type?: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE" | "AUTOMATION_TASK";
                 mine?: "true" | "false";
             };
             header?: never;

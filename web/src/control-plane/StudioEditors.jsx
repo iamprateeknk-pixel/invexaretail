@@ -237,7 +237,7 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
     <StudioListEditor
       title="Automations"
-      description="Send in-app reminders to active company admins on a schedule or for staff submissions and stock events."
+      description="Send reminders or create Exception Inbox tasks for company admins on a schedule or when an event occurs."
       entries={entries}
       idOf={(automation) => automation.key}
       newEntry={(current) => ({ key: slugKey('new automation', current.map((automation) => automation.key)), name: 'New automation', trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' })}
@@ -262,10 +262,11 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
               })} />
               <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey, enforce: undefined })} />
             </div>
-            {supportsLive && automation.actionKey === 'SEND_NOTIFICATION' && (
+            {supportsLive && ['SEND_NOTIFICATION', 'CREATE_TASK'].includes(automation.actionKey) && (
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox checked={automation.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
-                {automation.trigger === 'schedule' ? 'Send after publishing, using the company timezone' : 'Send for new events after publishing'}
+                {automation.actionKey === 'CREATE_TASK' ? 'Create tasks after publishing'
+                  : automation.trigger === 'schedule' ? 'Send after publishing, using the company timezone' : 'Send for new events after publishing'}
               </label>
             )}
             {automation.trigger === 'event' && automation.expression === 'item.near_expiry' && (
@@ -341,7 +342,8 @@ function AutomationRunHistory({ controlToken }) {
                   {LIVE_AUTOMATION_EVENTS.has(run.expression) && <p className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</p>}
                 </div>
                 <div>
-                  <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry' : AUTOMATION_RUN_STATUS[run.status]}</p>
+                  <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry'
+                    : run.status === 'DELIVERED' && run.actionKey === 'CREATE_TASK' ? 'Task created' : AUTOMATION_RUN_STATUS[run.status]}</p>
                   {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins' : 'Notification could not be delivered'}</p>}
                   {run.status === 'DEAD_LETTER' && run.finishedAt && (
                     <Button type="button" variant="outline" size="sm" aria-label={`Retry ${run.name}`} disabled={retrying !== null} onClick={() => retryRun(run)}>

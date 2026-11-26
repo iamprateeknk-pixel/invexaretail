@@ -2636,7 +2636,8 @@
               "QC_FAIL",
               "TRANSFER_DISCREPANCY",
               "COUNT_VARIANCE",
-              "QUARANTINE"
+              "QUARANTINE",
+              "AUTOMATION_TASK"
             ]
           },
           "status": {
@@ -11286,7 +11287,7 @@
     "/exceptions": {
       "get": {
         "operationId": "getExceptions",
-        "summary": "The caller's company exception cases, highest priority first (max 300), with their item, lot, location, owner and reporter. Closed and rejected cases are hidden unless status asks for them. Managers and auditors see all locations; others only their assigned ones; mine=true limits to cases they own.",
+        "summary": "Company exception cases, highest priority first (max 300). Closed and rejected cases are hidden unless requested. Managers and auditors can see all locations, and mine=true limits results to cases the caller owns. Company admins also see unlocated Studio tasks when a location is selected.",
         "tags": [
           "Exceptions"
         ],
@@ -11331,7 +11332,8 @@
                 "QC_FAIL",
                 "TRANSFER_DISCREPANCY",
                 "COUNT_VARIANCE",
-                "QUARANTINE"
+                "QUARANTINE",
+                "AUTOMATION_TASK"
               ]
             }
           },

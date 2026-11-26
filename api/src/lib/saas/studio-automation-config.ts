@@ -19,8 +19,8 @@ export function validateLiveAutomation(automation: AutomationDefinition): void {
   if (automation.enforce !== true) return;
   const supported = automation.trigger === 'schedule' ? isStudioSchedule(automation.expression)
     : automation.trigger === 'event' && isStudioBusinessEvent(automation.expression);
-  if (!supported || automation.actionKey !== 'SEND_NOTIFICATION') {
-    throw new Error('Live in-app notifications require a supported event or schedule and the notification action.');
+  if (!supported || !['SEND_NOTIFICATION', 'CREATE_TASK'].includes(automation.actionKey)) {
+    throw new Error('Choose a supported event or schedule and either an in-app notification or a task.');
   }
   if (typeof automation.key !== 'string' || !automation.key.trim() || automation.key.length > 100 ||
       typeof automation.name !== 'string' || !automation.name.trim() || automation.name.length > 160) {

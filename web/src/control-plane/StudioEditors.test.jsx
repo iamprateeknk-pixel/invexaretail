@@ -145,7 +145,7 @@ test('scheduled reminders require explicit activation and failed runs show their
   } finally { globalThis.fetch = previous; }
 });
 
-test('an event automation can be enabled only with the notification action', async () => {
+test('an event automation can be enabled with a supported action and a fresh opt-in', async () => {
   const original = globalThis.fetch;
   const saved = [];
   globalThis.fetch = async (_url, init) => {
@@ -161,12 +161,13 @@ test('an event automation can be enabled only with the notification action', asy
     const action = screen.getByRole('combobox', { name: 'Then' });
     fireEvent.change(action, { target: { value: 'SEND_EMAIL' } });
     assert.ok(!screen.queryByRole('checkbox', { name: 'Send for new events after publishing' }));
-    fireEvent.change(action, { target: { value: 'SEND_NOTIFICATION' } });
+    fireEvent.change(action, { target: { value: 'CREATE_TASK' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'What happens' }), { target: { value: 'inventory.low_stock' } });
-    assert.equal(screen.getByRole('checkbox', { name: 'Send for new events after publishing' }).getAttribute('aria-checked'), 'false');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Send for new events after publishing' }));
+    const taskToggle = screen.getByRole('checkbox', { name: 'Create tasks after publishing' });
+    assert.equal(taskToggle.getAttribute('aria-checked'), 'false');
+    fireEvent.click(taskToggle);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
-    assert.deepEqual(saved, [{ ...automation, expression: 'inventory.low_stock', enforce: true }]);
+    assert.deepEqual(saved, [{ ...automation, expression: 'inventory.low_stock', actionKey: 'CREATE_TASK', enforce: true }]);
   } finally { globalThis.fetch = original; }
 });
 

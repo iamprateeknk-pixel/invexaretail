@@ -9,6 +9,7 @@ import { persistAudit } from '../lib/persistence.js';
 import { createExceptionCase, applyExceptionDisposition, serializeExceptionCase } from '../lib/exceptions.js';
 import { recordQcInspection, DEFAULT_QC_CHECKS, type QcCheckResult, listMemoryQcTemplates, listMemoryQcInspections, createMemoryQcTemplate, patchMemoryQcTemplate } from '../lib/qc-inspection.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { canManageStudioTasks, visibleStudioTaskFilter } from '../lib/saas/studio-task-access.js';
 import { canAccessLocation, requireAdmin } from './opext-shared.js';
 
 const router = Router();
@@ -172,16 +173,18 @@ router.get('/exceptions', async (req, res) => {
   if (locationId && !canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
 
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const canManageAutomation = canManageStudioTasks(req.user!.role);
   const scope = mine
     ? { ownerId: req.user!.id }
     : EXCEPTION_MANAGER_ROLES.includes(req.user!.role) || req.user!.role === 'AUDITOR'
-      ? (locationId ? { locationId } : {})
+      ? (locationId ? canManageAutomation ? { OR: [{ locationId }, { type: 'AUTOMATION_TASK' as const, locationId: null }] } : { locationId } : {})
       : { locationId: { in: req.user!.locationIds ?? [] } };
 
   const cases = await prisma.exceptionCase.findMany({
     where: {
       companyId,
       ...scope,
+      ...visibleStudioTaskFilter(req.user!.role),
       ...(status ? { status: status as never } : { status: { notIn: ['CLOSED', 'REJECTED'] as never } }),
       ...(type ? { type: type as never } : {}),
     },
@@ -244,6 +247,7 @@ router.post('/exceptions', async (req, res) => {
 router.patch('/exceptions/:id', async (req, res) => {
   const existing = await prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!existing) return res.status(404).json({ message: 'Exception case not found.' });
+  if (existing.type === 'AUTOMATION_TASK' && !canManageStudioTasks(req.user!.role)) return res.status(404).json({ message: 'Exception case not found.' });
   const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user!.role);
   const isOwner = existing.ownerId === req.user!.id;
   if (!isManager && !isOwner) return res.status(403).json({ message: 'You do not have access to this exception case.' });
@@ -265,12 +269,21 @@ router.patch('/exceptions/:id', async (req, res) => {
     if (!EXCEPTION_STATUSES.includes(req.body.status)) return res.status(400).json({ message: 'Invalid status.' });
     data.status = req.body.status;
   }
+  if (existing.type === 'AUTOMATION_TASK') {
+    if (existing.status !== 'OPEN' || req.body.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Only an open automation task can be claimed.' });
+    data.ownerId = req.user!.id;
+  }
   if (!Object.keys(data).length) return res.status(400).json({ message: 'No updatable fields were provided.' });
 
-  const updated = await prisma.exceptionCase.update({ where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, data });
+  const [updated] = await prisma.exceptionCase.updateManyAndReturn({
+    where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID, ...(existing.type === 'AUTOMATION_TASK' ? { status: 'OPEN' } : {}) },
+    data,
+  });
+  if (!updated) return res.status(409).json({ message: 'This exception case has changed.' });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role,
-    action: 'EXCEPTION_UPDATED', entityType: 'ExceptionCase', entityId: existing.id, metadata: data,
+    action: 'EXCEPTION_UPDATED', entityType: 'ExceptionCase', entityId: existing.id,
+    metadata: existing.type === 'AUTOMATION_TASK' ? { ...data, studioTaskCompanyId: existing.companyId } : data,
   }));
   return res.json({ case: serializeExceptionCase(updated) });
 });
@@ -278,24 +291,28 @@ router.patch('/exceptions/:id', async (req, res) => {
 router.post('/exceptions/:id/resolve', async (req, res) => {
   const existing = await prisma.exceptionCase.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!existing) return res.status(404).json({ message: 'Exception case not found.' });
+  if (existing.type === 'AUTOMATION_TASK' && !canManageStudioTasks(req.user!.role)) return res.status(404).json({ message: 'Exception case not found.' });
   const isManager = EXCEPTION_MANAGER_ROLES.includes(req.user!.role);
   if (!isManager && existing.ownerId !== req.user!.id) return res.status(403).json({ message: 'You do not have access to resolve this exception case.' });
   const disposition = typeof req.body.disposition === 'string' ? req.body.disposition : '';
   if (!EXCEPTION_DISPOSITIONS.includes(disposition)) {
     return res.status(400).json({ message: `disposition must be one of ${EXCEPTION_DISPOSITIONS.join(', ')}.` });
   }
+  if (existing.type === 'AUTOMATION_TASK' && disposition !== 'NONE') return res.status(400).json({ message: 'Automation tasks cannot post a stock disposition.' });
   if (['CLOSED', 'REJECTED'].includes(existing.status)) return res.status(409).json({ message: 'This exception case is already closed.' });
   const resolutionNotes = typeof req.body.resolutionNotes === 'string' ? req.body.resolutionNotes.trim().slice(0, 4000) : null;
   const now = new Date();
   await applyExceptionDisposition(existing, disposition as never, req.user!.id);
-  const updated = await prisma.exceptionCase.update({
-    where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+  const [updated] = await prisma.exceptionCase.updateManyAndReturn({
+    where: { id: existing.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID, ...(existing.type === 'AUTOMATION_TASK' ? { status: existing.status } : {}) },
     data: { disposition: disposition as never, resolutionNotes, status: 'CLOSED', resolvedAt: now, closedAt: now },
   });
+  if (!updated) return res.status(409).json({ message: 'This exception case has changed.' });
   await persistAudit(recordAudit({
     actorId: req.user!.id, actorRole: req.user!.role,
     action: 'EXCEPTION_RESOLVED', entityType: 'ExceptionCase', entityId: existing.id,
-    metadata: { disposition, resolutionNotes: resolutionNotes ?? undefined },
+    metadata: { disposition, resolutionNotes: resolutionNotes ?? undefined,
+      ...(existing.type === 'AUTOMATION_TASK' ? { studioTaskCompanyId: existing.companyId } : {}) },
   }));
   return res.json({ case: serializeExceptionCase(updated) });
 });

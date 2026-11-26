@@ -145,6 +145,8 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     const eventAutomation = { ...automation, key: 'count-notification', trigger: 'event', expression: 'count.submitted' };
     assert.equal((await requestAutomation({ ...eventAutomation, expression: 'inventory.unknown' })).status, 400);
     assert.equal((await requestAutomation({ ...eventAutomation, key: 'low-stock', expression: 'inventory.low_stock' })).status, 200);
+    const taskAutomation = { ...eventAutomation, key: 'count-review-task', actionKey: 'CREATE_TASK' };
+    assert.equal((await requestAutomation(taskAutomation)).status, 200);
     assert.equal((await requestAutomation(eventAutomation)).status, 200);
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);
@@ -153,6 +155,7 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     assert.deepEqual(published.body.published.workflows.find((entry: { key: string }) => entry.key === workflow.key), workflow);
     assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === automation.key), automation);
     assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === eventAutomation.key), eventAutomation);
+    assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === taskAutomation.key), taskAutomation);
 
     try {
       const after = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });

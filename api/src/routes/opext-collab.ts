@@ -4,20 +4,21 @@
 import { type Request, type Response, Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { visibleStudioTaskFilter } from '../lib/saas/studio-task-access.js';
 
 const router = Router();
 
 // P0-SEC-003: comments are company scoped, only known entity types are accepted, and the
 // entity must belong to the caller's company (a foreign entity id is indistinguishable from a
 // missing one). Add a resolver here when a new entity type gets a comment thread.
-const COMMENT_ENTITY_RESOLVERS: Record<string, (companyId: string, entityId: string) => Promise<boolean>> = {
+const COMMENT_ENTITY_RESOLVERS: Record<string, (companyId: string, entityId: string, role: string) => Promise<boolean>> = {
   item: async (companyId, id) => Boolean(await prisma.item.findFirst({ where: { id, companyId }, select: { id: true } })),
   lot: async (companyId, id) => Boolean(await prisma.lot.findFirst({ where: { id, item: { companyId } }, select: { id: true } })),
   location: async (companyId, id) => Boolean(await prisma.location.findFirst({ where: { id, companyId }, select: { id: true } })),
   transfer: async (companyId, id) => Boolean(await prisma.transfer.findFirst({ where: { id, companyId }, select: { id: true } })),
   order: async (companyId, id) => Boolean(await prisma.order.findFirst({ where: { id, companyId }, select: { id: true } })),
   count: async (companyId, id) => Boolean(await prisma.stockCount.findFirst({ where: { id, companyId }, select: { id: true } })),
-  exception: async (companyId, id) => Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId }, select: { id: true } })),
+  exception: async (companyId, id, role) => Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId, ...visibleStudioTaskFilter(role) }, select: { id: true } })),
   'purchase-order': async (companyId, id) => Boolean(await prisma.purchaseOrder.findFirst({ where: { id, companyId }, select: { id: true } })),
 };
 
@@ -30,7 +31,7 @@ async function resolveCommentTarget(req: Request, res: Response): Promise<{ comp
     res.status(400).json({ message: `Comments are not available for "${entityType}".` });
     return null;
   }
-  if (!(await resolver(companyId, entityId))) {
+  if (!(await resolver(companyId, entityId, req.user!.role))) {
     res.status(404).json({ message: 'Record not found.' });
     return null;
   }
