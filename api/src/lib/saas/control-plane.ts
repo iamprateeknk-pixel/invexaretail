@@ -267,6 +267,7 @@ export type ReportDefinition = {
 };
 
 export type AutomationDefinition = {
+  enforce?: boolean;
   key: string;
   name: string;
   trigger: 'schedule' | 'event';

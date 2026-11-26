@@ -9,6 +9,7 @@ import { validateEmail } from '../lib/otp-auth.js';
 import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
 import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
+import { listStudioAutomationRuns } from '../lib/saas/studio-automation-worker.js';
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof ControlPlaneError) {
@@ -795,6 +796,14 @@ studioRouter.post('/reports', (req: Request, res: Response) => {
 studioRouter.post('/automations', (req: Request, res: Response) => {
   try {
     res.json({ success: true, draft: controlPlane.upsertAutomation(requireScope(req), req.body) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.get('/automations/runs', async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, runs: await listStudioAutomationRuns(scopedCompany(req)) });
   } catch (error) {
     sendError(res, error);
   }

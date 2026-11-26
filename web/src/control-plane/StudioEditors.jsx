@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -232,10 +232,10 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];
   return (
+    <div className="grid gap-4">
     <StudioListEditor
       title="Automations"
-      description="Something happens (or a time comes round) and Invexa does something for you - for example, when stock falls low, send a notification."
-      notLive="Saved and published, but the app does not carry these out on its own yet."
+      description="Schedule in-app reminders for active company admins. Event triggers and other actions can be saved for later."
       entries={entries}
       idOf={(automation) => automation.key}
       newEntry={(current) => ({ key: slugKey('new automation', current.map((automation) => automation.key)), name: 'New automation', trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' })}
@@ -253,10 +253,16 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
             <Text label="Automation name" value={automation.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
             <div className="grid gap-3 md:grid-cols-3">
               <Choice label="Starts" value={automation.trigger} options={[{ value: 'event', label: 'When something happens' }, { value: 'schedule', label: 'On a schedule' }]}
-                onChange={(trigger) => set({ trigger, expression: (trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS)[0].value })} />
+                onChange={(trigger) => set({ trigger, expression: (trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS)[0].value, enforce: undefined })} />
               <Choice label={automation.trigger === 'schedule' ? 'When' : 'What happens'} value={automation.expression} options={options} onChange={(expression) => set({ expression })} />
-              <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey })} />
+              <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey, enforce: undefined })} />
             </div>
+            {automation.trigger === 'schedule' && automation.actionKey === 'SEND_NOTIFICATION' && (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={automation.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
+                Send after publishing, using the company timezone
+              </label>
+            )}
             <Advanced>
               <Text label="Technical key" mono value={automation.key} onChange={(key) => isNew && set({ key })} />
               <Text label="Event or schedule expression" mono value={automation.expression} onChange={(expression) => set({ expression })} />
@@ -266,6 +272,54 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
         );
       }}
     />
+    <AutomationRunHistory key={controlToken} controlToken={controlToken} />
+    </div>
+  );
+}
+
+const AUTOMATION_RUN_STATUS = {
+  PENDING: 'Pending', DELIVERED: 'Delivered', CANCELLED: 'Cancelled', DEAD_LETTER: 'Failed after retries',
+};
+
+function AutomationRunHistory({ controlToken }) {
+  const [history, setHistory] = useState(null);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let active = true;
+    controlRequest('/studio/v1/automations/runs', { token: controlToken })
+      .then(({ runs }) => { if (active) setHistory({ runs }); })
+      .catch((error) => { if (active) setHistory({ error: error.message }); });
+    return () => { active = false; };
+  }, [controlToken, refresh]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Recent automation runs</CardTitle>
+        <Button type="button" size="sm" variant="outline" onClick={() => { setHistory(null); setRefresh((version) => version + 1); }}>Refresh</Button>
+      </CardHeader>
+      <CardContent>
+        {!history && <p role="status" className="text-sm text-muted-foreground">Loading runs…</p>}
+        {history?.error && <p role="alert" className="text-sm text-destructive">{history.error}</p>}
+        {history?.runs?.length === 0 && <p className="text-sm text-muted-foreground">No scheduled runs yet.</p>}
+        {history?.runs?.length > 0 && (
+          <ul className="divide-y">
+            {history.runs.map((run) => (
+              <li key={run.id} className="flex flex-wrap justify-between gap-2 py-2 text-sm">
+                <div>
+                  <p className="font-medium">{run.name}</p>
+                  <p className="text-muted-foreground">{run.occurrence} · Configuration {run.configVersion}</p>
+                </div>
+                <div>
+                  <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry' : AUTOMATION_RUN_STATUS[run.status]}</p>
+                  {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins' : 'Notification could not be delivered'}</p>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -2337,6 +2337,27 @@ model ControlPlaneConfig {
   @@index([companyId, kind])
 }
 
+model StudioAutomationRun {
+  id            String   @id @default(cuid())
+  companyId     String
+  automationKey String
+  occurrence    String
+  expression    String
+  configVersion Int
+  versionId     String
+  name          String
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime
+  finishedAt    DateTime?
+  failureCode   String?
+  createdAt     DateTime @default(now())
+
+  @@unique([companyId, automationKey, occurrence])
+  @@index([status, nextAttemptAt])
+  @@index([companyId, createdAt])
+}
+
 model ControlPlaneAudit {
   id          String   @id
   actorUserId String

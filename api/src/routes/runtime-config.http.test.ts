@@ -92,6 +92,9 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     });
     const studioAuth = { Authorization: `Bearer ${groceryLock.body.token}` };
     const previousVersion = before.body.runtime.version;
+    const nonControlRuns = await json(url, '/studio/v1/automations/runs', { headers: { Authorization: `Bearer ${grocery}` } });
+    assert.equal(nonControlRuns.status, 401);
+    assert.deepEqual((await json(url, '/studio/v1/automations/runs', { headers: studioAuth })).body.runs, []);
 
     const columnKey = `runtime_min_${Date.now().toString(36)}`;
     const column = await json(url, '/studio/v1/draft/stock/columns', {
@@ -132,11 +135,16 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     const workflowDraft = await json(url, '/studio/v1/workflows', { method: 'POST', headers: studioAuth, body: JSON.stringify(workflow) });
     assert.equal(workflowDraft.status, 200);
     assert.ok(workflowDraft.body.draft.workflows.find((entry: { key: string; enforce: boolean }) => entry.key === workflow.key && entry.enforce));
+    const automation = { key: 'daily-reminder', name: 'Daily reminder', enforce: true, trigger: 'schedule', expression: 'daily@09:00', actionKey: 'SEND_NOTIFICATION' };
+    const requestAutomation = (body: unknown) => json(url, '/studio/v1/automations', { method: 'POST', headers: studioAuth, body: JSON.stringify(body) });
+    assert.equal((await requestAutomation({ ...automation, actionKey: 'SEND_EMAIL' })).status, 400);
+    assert.equal((await requestAutomation(automation)).status, 200);
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);
     const published = await json(url, '/studio/v1/publish', { method: 'POST', headers: studioAuth });
     assert.equal(published.status, 200);
     assert.deepEqual(published.body.published.workflows.find((entry: { key: string }) => entry.key === workflow.key), workflow);
+    assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === automation.key), automation);
 
     try {
       const after = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });

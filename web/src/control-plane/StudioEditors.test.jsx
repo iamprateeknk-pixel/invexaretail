@@ -3,7 +3,7 @@ import test from 'node:test';
 import 'global-jsdom/register';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
-import { MobilePolicyEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
+import { AutomationsEditor, MobilePolicyEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
 import { modelToWorkflow } from './studio-catalog.js';
 import { ModeSwitch, StudioModeProvider } from './studio-mode.jsx';
 
@@ -119,4 +119,28 @@ test('count approval uses a variance value threshold and can be enabled for live
     assert.equal(calls[0].body.enforce, true);
     assert.equal(calls[0].body.graph.nodes[0].config.event, 'count.created');
   } finally { restore(); }
+});
+
+test('scheduled reminders require explicit activation and failed runs show their reason', async () => {
+  const previous = globalThis.fetch;
+  const saved = [];
+  globalThis.fetch = async (url, init) => {
+    assert.match(url, /\/studio\/v1\/automations/);
+    if (init.method === 'GET') return Response.json({ runs: [{
+      id: 'run-1', name: 'Daily reminder', occurrence: '2027-02-01', configVersion: 2, status: 'DEAD_LETTER', attempts: 5, failureCode: 'NO_ACTIVE_ADMINS',
+    }] });
+    saved.push(JSON.parse(init.body));
+    return Response.json({ success: true });
+  };
+  try {
+    const automation = { key: 'reminder', name: 'Daily reminder', trigger: 'schedule', expression: 'daily@09:00', actionKey: 'SEND_NOTIFICATION' };
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [automation] } }));
+    await screen.findByText('Failed after retries');
+    assert.ok(screen.getByText('No active company admins'));
+    const checkbox = screen.getByRole('checkbox', { name: 'Send after publishing, using the company timezone' });
+    assert.equal(checkbox.getAttribute('aria-checked'), 'false');
+    fireEvent.click(checkbox);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(saved, [{ ...automation, enforce: true }]);
+  } finally { globalThis.fetch = previous; }
 });

@@ -32,7 +32,7 @@
   {
     "rule": "float-money",
     "file": "prisma/schema.prisma",
-    "line": 2386,
+    "line": 2407,
     "snippet": "value     Float"
   }
 ]

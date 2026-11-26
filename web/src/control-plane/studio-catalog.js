@@ -182,8 +182,8 @@ export const AUTOMATION_EVENTS = [
 export const AUTOMATION_SCHEDULES = [
   { value: 'daily@09:00', label: 'Every day at 9 am' },
   { value: 'daily@18:00', label: 'Every day at 6 pm' },
-  { value: 'weekly@mon', label: 'Every Monday' },
-  { value: 'monthly@1', label: 'On the 1st of every month' },
+  { value: 'weekly@mon', label: 'Every Monday at 9 am' },
+  { value: 'monthly@1', label: 'On the 1st of every month at 9 am' },
 ];
 
 export const AUTOMATION_ACTIONS = [

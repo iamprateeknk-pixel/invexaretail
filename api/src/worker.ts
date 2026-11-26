@@ -5,6 +5,7 @@ import { withDistributedLock } from './lib/distributed-lock.js';
 import { startImportWorker, drainImportCommitsOnce } from './lib/import-worker.js';
 import { startOutboxRetention, pruneOutboxOnce } from './lib/outbox-retention.js';
 import { startExpirySweep } from './lib/expiry-sweep.js';
+import { startStudioAutomationWorker } from './lib/saas/studio-automation-worker.js';
 import { startReconciliationSchedule } from './lib/reconciliation-schedule.js';
 import { startAlertSweep } from './lib/alerting.js';
 import { drainOutboxOnce, startOutboxWorker } from './lib/outbox-worker.js';
@@ -47,6 +48,7 @@ async function main() {
   startOutboxWorker(deliverPersistedEvent);
   startOutboxRetention();
   startExpirySweep();
+  startStudioAutomationWorker();
   // Plan Area B WP4: nightly journal-vs-balance reconciliation, recorded per company.
   startReconciliationSchedule();
   // Release checklist (Operations): breaches of the ops SLOs are pushed to ALERT_WEBHOOK_URL (a no-op when unset).

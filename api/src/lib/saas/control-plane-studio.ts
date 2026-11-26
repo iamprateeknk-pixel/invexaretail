@@ -6,6 +6,7 @@ import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, Pa
 import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';
 import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
+import { validateLiveAutomation } from './studio-schedule.js';
 
 function validateLiveApproval(workflow: WorkflowDefinition): void {
   try {
@@ -30,6 +31,14 @@ function validateRuleForPublish(rule: RuleDefinition): void {
     validateLiveStudioRule(rule);
   } catch (error) {
     throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live rule.', 'INVALID_RULE', 400);
+  }
+}
+
+function validateAutomationForPublish(automation: AutomationDefinition): void {
+  try {
+    validateLiveAutomation(automation);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live automation.', 'INVALID_AUTOMATION', 400);
   }
 }
 
@@ -382,24 +391,17 @@ export class ControlPlaneStudio {
         changes.push({ op: action.enabled ? '+' : '-', path: `actions.${action.key}`, from: previous.enabled, to: action.enabled });
       }
     }
-    const previousWorkflows = new Map(published.workflows.map((entry) => [entry.key, entry]));
-    for (const workflow of draft.workflows) {
-      const previous = previousWorkflows.get(workflow.key);
-      if (JSON.stringify(previous) !== JSON.stringify(workflow)) {
-        changes.push({ op: previous ? '~' : '+', path: `workflows.${workflow.key}`, from: previous, to: workflow });
+    for (const kind of ['workflows', 'rules', 'automations'] as const) {
+      const previousEntries = new Map((published[kind] ?? []).map((entry) => [entry.key, entry] as const));
+      for (const entry of draft[kind] ?? []) {
+        const previous = previousEntries.get(entry.key);
+        if (JSON.stringify(previous) !== JSON.stringify(entry)) {
+          changes.push({ op: previous ? '~' : '+', path: `${kind}.${entry.key}`, from: previous, to: entry });
+        }
+        previousEntries.delete(entry.key);
       }
-      previousWorkflows.delete(workflow.key);
+      for (const [key, entry] of previousEntries) changes.push({ op: '-', path: `${kind}.${key}`, from: entry });
     }
-    for (const [key, workflow] of previousWorkflows) changes.push({ op: '-', path: `workflows.${key}`, from: workflow });
-    const previousRules = new Map(published.rules.map((entry) => [entry.key, entry]));
-    for (const rule of draft.rules) {
-      const previous = previousRules.get(rule.key);
-      if (JSON.stringify(previous) !== JSON.stringify(rule)) {
-        changes.push({ op: previous ? '~' : '+', path: `rules.${rule.key}`, from: previous, to: rule });
-      }
-      previousRules.delete(rule.key);
-    }
-    for (const [key, rule] of previousRules) changes.push({ op: '-', path: `rules.${key}`, from: rule });
     return changes;
   }
 
@@ -409,6 +411,7 @@ export class ControlPlaneStudio {
     const draft = this.ensureDraft(scope);
     for (const workflow of draft.workflows) validateLiveApproval(workflow);
     for (const rule of draft.rules) validateRuleForPublish(rule);
+    for (const automation of draft.automations ?? []) validateAutomationForPublish(automation);
     const diff = this.diff(companyId);
     draft.status = 'published';
     draft.publishedAt = nowIso();
@@ -582,6 +585,7 @@ export class ControlPlaneStudio {
 
   upsertAutomation(scope: ScopeContext, automation: AutomationDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateAutomationForPublish(automation);
     const index = draft.automations.findIndex((entry) => entry.key === automation.key);
     if (index >= 0) draft.automations[index] = automation;
     else draft.automations.push(automation);
