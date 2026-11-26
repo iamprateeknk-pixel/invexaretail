@@ -1286,7 +1286,11 @@
             "type": "string"
           },
           "ruleId": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Legacy operational rule ID, or null for a published Studio workflow."
           },
           "triggerType": {
             "type": "string"
@@ -1317,6 +1321,27 @@
               "string",
               "null"
             ]
+          },
+          "workflowPolicy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Pinned Studio approval workflow details when the request uses a published policy.",
+            "properties": {
+              "workflowKey": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "requiredApproverRole": {
+                "type": "string"
+              },
+              "configVersion": {
+                "type": "integer"
+              }
+            }
           }
         }
       },

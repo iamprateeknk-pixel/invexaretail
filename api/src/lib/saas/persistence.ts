@@ -19,6 +19,7 @@ function databaseEnabled(): boolean {
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let persistInFlight: Promise<void> | undefined;
+let persistQueue: Promise<void> = Promise.resolve();
 
 // ADR-004: ControlPlaneState is a Prisma model; `prisma migrate deploy` owns
 // its schema. No-op kept so existing call sites do not need to change.
@@ -49,7 +50,9 @@ export async function saveControlPlaneSnapshot(
   snapshot: ControlPlaneSnapshot = serializeControlPlane(controlPlane),
 ): Promise<void> {
   if (!databaseEnabled()) return;
-  await persistControlPlaneRows(controlPlane, snapshot);
+  const write = persistQueue.then(async () => { await persistControlPlaneRows(controlPlane, snapshot); });
+  persistQueue = write.catch(() => undefined);
+  await write;
 }
 
 export async function hydrateControlPlaneFromStore(): Promise<'skipped' | 'seeded' | 'restored'> {

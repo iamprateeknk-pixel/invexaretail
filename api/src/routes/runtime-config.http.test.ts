@@ -122,10 +122,21 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     const report = { key: reportKey, name: 'Dispatch report', entity: 'transfers', columns: ['status', 'to'], filters: { status: 'DISPATCHED' } };
     const reportDraft = await json(url, '/studio/v1/reports', { method: 'POST', headers: studioAuth, body: JSON.stringify(report) });
     assert.equal(reportDraft.status, 200);
+    const workflow = {
+      key: 'dispatch.live', name: 'Dispatch review', version: 1, enforce: true, graph: { nodes: [
+        { id: 'start', type: 'trigger', config: { event: 'transfer.created' } },
+        { id: 'limit', type: 'condition', config: { field: 'value', op: 'lte', amount: 150 } },
+        { id: 'review', type: 'approval', config: { role: 'ADMIN' } },
+      ] },
+    };
+    const workflowDraft = await json(url, '/studio/v1/workflows', { method: 'POST', headers: studioAuth, body: JSON.stringify(workflow) });
+    assert.equal(workflowDraft.status, 200);
+    assert.ok(workflowDraft.body.draft.workflows.find((entry: { key: string; enforce: boolean }) => entry.key === workflow.key && entry.enforce));
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);
     const published = await json(url, '/studio/v1/publish', { method: 'POST', headers: studioAuth });
     assert.equal(published.status, 200);
+    assert.deepEqual(published.body.published.workflows.find((entry: { key: string }) => entry.key === workflow.key), workflow);
 
     try {
       const after = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });

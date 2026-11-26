@@ -4,6 +4,7 @@ import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
 import { rememberPersistedAudit } from './audit.js';
 import { databaseEnabled } from './persistence.js';
+import { publishedWorkflowApprovals, storedWorkflowApproval, usesStudioApproval } from './saas/workflow-approval-policy.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -64,8 +65,16 @@ export async function checkApprovalGate(input: {
     return { blocked: false };
   }
   try {
-    const rules = await prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: input.companyId } } });
-    if (rules.length === 0) return { blocked: false };
+    const [rules, published] = await Promise.all([
+      prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: input.companyId } } }),
+      usesStudioApproval(input.triggerType) ? prisma.controlPlaneConfig.findFirst({
+        where: { companyId: input.companyId, kind: 'published', status: 'published' },
+        orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
+        select: { version: true, versionId: true, payload: true },
+      }) : null,
+    ]);
+    const workflowPolicies = publishedWorkflowApprovals(published?.payload, input.triggerType);
+    if (rules.length === 0 && workflowPolicies.length === 0) return { blocked: false };
 
     let branchId = input.branchId ?? null;
     if (input.locationId && rules.some((rule) => rule.branchId !== null)) {
@@ -77,15 +86,24 @@ export async function checkApprovalGate(input: {
     const value = typeof input.value === 'function' ? await input.value() : input.value;
     if (!Number.isFinite(value)) throw new Error('Invalid approval value');
     const matched = findTriggeredRule(rules.map(thresholdsAsNumbers), { category: input.category ?? null, branchId, value });
-    if (!matched) return { blocked: false };
+    const triggered = workflowPolicies.filter((policy) => value > policy.threshold)
+      .sort((a, b) => ROLE_RANK[b.requiredApproverRole] - ROLE_RANK[a.requiredApproverRole] || a.workflowKey.localeCompare(b.workflowKey));
+    const strongest = triggered[0];
+    if (!matched && !strongest) return { blocked: false };
+    const useStudio = strongest && published && (!matched || roleMeetsRequirement(strongest.requiredApproverRole, matched.requiredApproverRole));
+    const workflowPolicy = useStudio ? { ...strongest, configVersion: published.version, versionId: published.versionId, locationId: input.locationId ?? null } : null;
+    const requiredApproverRole = workflowPolicy?.requiredApproverRole ?? matched!.requiredApproverRole;
+    const label = workflowPolicy?.label ?? matched!.label;
 
     const intentFingerprint = approvalIntentFingerprint([
       input.companyId, input.requestedById, input.triggerType, input.entityType, input.entityId,
       input.locationId ?? null, input.category ?? null, branchId, value,
-      matched.id, matched.category, matched.branchId, matched.valueThreshold, matched.requiredApproverRole,
+      matched?.id ?? null, matched?.category ?? null, matched?.branchId ?? null, matched?.valueThreshold ?? null, matched?.requiredApproverRole ?? null,
       input.intent,
+      ...(triggered.length && published ? [published.versionId, triggered.map((policy) => [policy.workflowKey, policy.threshold, policy.requiredApproverRole])] : []),
     ]);
-    const metadata = { ruleId: matched.id, ruleLabel: matched.label, value, requiredApproverRole: matched.requiredApproverRole };
+    const ruleId = workflowPolicy ? null : matched!.id;
+    const metadata = { ruleId, ruleLabel: label, value, requiredApproverRole, ...(workflowPolicy ? { workflowPolicy } : {}) };
     const { request, audit } = await prisma.$transaction(async (tx) => {
       // Serialize identical requests across API replicas while retaining rejected rows for history.
       await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${intentFingerprint}, 0))`;
@@ -96,7 +114,7 @@ export async function checkApprovalGate(input: {
       if (existing) return { request: existing, audit: null };
       const request = await tx.approvalRequest.create({
         data: {
-          ruleId: matched.id, triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
+          ruleId, ...(workflowPolicy ? { workflowPolicy } : {}), triggerType: input.triggerType, entityType: input.entityType, entityId: input.entityId,
           valueAtStake: value, requestedById: input.requestedById, intentFingerprint,
         },
       });
@@ -112,7 +130,7 @@ export async function checkApprovalGate(input: {
     if (audit) {
       rememberPersistedAudit({ ...audit, metadata: { ...metadata, requestId: request.id }, createdAt: audit.createdAt.toISOString() });
     }
-    return { blocked: true, requestId: request.id, status: 'PENDING', reason: `Awaiting ${matched.requiredApproverRole} approval ("${matched.label}").`, requiredApproverRole: matched.requiredApproverRole };
+    return { blocked: true, requestId: request.id, status: 'PENDING', reason: `Awaiting ${requiredApproverRole} approval ("${label}").`, requiredApproverRole };
   } catch (error) {
     const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
     console.error('Approval policy evaluation failed', {
@@ -131,26 +149,33 @@ export function assertApprovalReviewer(deciderId: string, deciderRole: string, r
   }
 }
 
-export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string) {
+export async function decideApprovalRequest(requestId: string, deciderId: string, deciderRole: string, decision: 'APPROVED' | 'REJECTED', notes: string | null | undefined, companyId: string, assignedLocations: readonly string[] = []) {
   const { updated, audit, metadata } = await prisma.$transaction(async (tx) => {
     // A request of another company is indistinguishable from a missing one.
-    const scope = { id: requestId, requestedBy: { companyId }, rule: { createdBy: { companyId } } };
+    const scope = { id: requestId, requestedBy: { companyId }, OR: [{ ruleId: null }, { rule: { createdBy: { companyId } } }] };
     const request = await tx.approvalRequest.findFirst({ where: scope, include: { rule: true } });
     if (!request) throw new DomainError('CONFLICT', 'Approval request was not found.');
+    const workflowPolicy = storedWorkflowApproval(request.workflowPolicy);
+    if (workflowPolicy && deciderRole === 'BRANCH_MANAGER' &&
+        (!workflowPolicy.locationId || !assignedLocations.includes(workflowPolicy.locationId))) {
+      throw new DomainError('CONFLICT', 'Approval request was not found.');
+    }
     if (request.status !== 'PENDING') throw new DomainError('CONFLICT', `This request is already ${request.status}.`);
-    assertApprovalReviewer(deciderId, deciderRole, request.requestedById, request.rule.requiredApproverRole);
+    const requiredRole = request.rule?.requiredApproverRole ?? workflowPolicy?.requiredApproverRole;
+    if (!requiredRole) throw new DomainError('CONFLICT', 'The approval policy for this request is unavailable.');
+    assertApprovalReviewer(deciderId, deciderRole, request.requestedById, requiredRole);
 
     const decidedAt = new Date();
     const [updated] = await tx.approvalRequest.updateManyAndReturn({
       where: {
         ...scope, status: 'PENDING', requestedById: request.requestedById, ruleId: request.ruleId,
-        rule: { ...scope.rule, requiredApproverRole: request.rule.requiredApproverRole },
+        ...(request.rule ? { rule: { createdBy: { companyId }, requiredApproverRole: requiredRole } } : {}),
       },
       data: { status: decision, decidedById: deciderId, decidedAt, decisionNotes: notes ?? null },
     });
     if (!updated) throw new DomainError('CONFLICT', 'The approval request or its rule has changed. Refresh to see the current state.');
 
-    const metadata = { requestId, ruleId: request.ruleId, ...(notes ? { notes } : {}) };
+    const metadata = { requestId, ruleId: request.ruleId, ...(workflowPolicy ? { workflowPolicy } : {}), ...(notes ? { notes } : {}) };
     const audit = await tx.auditLog.create({
       data: {
         actorId: deciderId, actorRole: deciderRole, action: `APPROVAL_${decision}`,

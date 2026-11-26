@@ -3,7 +3,8 @@ import test from 'node:test';
 import 'global-jsdom/register';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
-import { MobilePolicyEditor, RulesEditor } from './StudioEditors.jsx';
+import { MobilePolicyEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
+import { modelToWorkflow } from './studio-catalog.js';
 import { ModeSwitch, StudioModeProvider } from './studio-mode.jsx';
 
 test.afterEach(() => cleanup());
@@ -69,4 +70,21 @@ test('removing a role policy sends a delete for that role', async () => {
   } finally {
     restore();
   }
+});
+
+test('a workflow stays in simulation until explicitly enabled', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  try {
+    const workflow = modelToWorkflow({ key: 'dispatch', name: 'Dispatch', target: 'transfer', threshold: '500', approverRole: 'ADMIN' });
+    mount(React.createElement(WorkflowsEditor, { controlToken: 't', draft: { workflows: [workflow] } }));
+    const toggle = screen.getByRole('checkbox', { name: 'Enforce on live commands after publishing' });
+    toggle.focus();
+    assert.equal(document.activeElement, toggle);
+    assert.equal(toggle.getAttribute('aria-checked'), 'false');
+    fireEvent.click(toggle);
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(calls.map((call) => call.body?.enforce), [true]);
+  } finally { restore(); }
 });

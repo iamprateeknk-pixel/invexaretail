@@ -246,6 +246,7 @@ export type WorkflowDefinition = {
   key: string;
   name: string;
   version: number;
+  enforce?: boolean;
   graph: { nodes: Array<{ id: string; type: string; config: Record<string, unknown> }> };
 };
 
@@ -1097,7 +1098,7 @@ export class ControlPlane {
     return this.studioSvc.upsertWorkflow(scope, workflow);
   }
 
-  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }): { outcome: string; pinnedVersion: number } {
+  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }) {
     return this.studioSvc.simulateWorkflow(companyId, workflowKey, context);
   }
   evaluateRule(companyId: string, context: Record<string, unknown>): string[] {

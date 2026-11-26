@@ -4,6 +4,15 @@ import { ACTION_REGISTRY, MODULE_REGISTRY, TABLE_RULES } from './control-plane-d
 import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane.js';
 import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, PageDefinition, ConfigurationVersion, WorkflowDefinition, RuleDefinition, ReportDefinition, AutomationDefinition, DraftEntryKind, MobilePolicy, TableKey, AuditEvent, ConfigStatus } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
+import { workflowApprovalPolicy } from './workflow-approval-policy.js';
+
+function validateLiveApproval(workflow: WorkflowDefinition): void {
+  try {
+    workflowApprovalPolicy(workflow);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live approval workflow.', 'INVALID_WORKFLOW', 400);
+  }
+}
 
 /** Cross-calls the studio area needs from the facade (they stay on ControlPlane). */
 export interface ControlPlaneStudioHost {
@@ -381,6 +390,15 @@ export class ControlPlaneStudio {
         changes.push({ op: action.enabled ? '+' : '-', path: `actions.${action.key}`, from: previous.enabled, to: action.enabled });
       }
     }
+    const previousWorkflows = new Map(published.workflows.map((entry) => [entry.key, entry]));
+    for (const workflow of draft.workflows) {
+      const previous = previousWorkflows.get(workflow.key);
+      if (JSON.stringify(previous) !== JSON.stringify(workflow)) {
+        changes.push({ op: previous ? '~' : '+', path: `workflows.${workflow.key}`, from: previous, to: workflow });
+      }
+      previousWorkflows.delete(workflow.key);
+    }
+    for (const [key, workflow] of previousWorkflows) changes.push({ op: '-', path: `workflows.${key}`, from: workflow });
     return changes;
   }
 
@@ -388,6 +406,7 @@ export class ControlPlaneStudio {
     const companyId = this.requireLockedCompany(scope);
     this.host.assertBillingWritable(companyId);
     const draft = this.ensureDraft(scope);
+    for (const workflow of draft.workflows) validateLiveApproval(workflow);
     draft.status = 'published';
     draft.publishedAt = nowIso();
     this.store.published.set(companyId, JSON.parse(JSON.stringify(draft)) as ConfigurationVersion);
@@ -427,6 +446,11 @@ export class ControlPlaneStudio {
       status: 'published' as const,
     };
     this.store.published.set(companyId, restored);
+    const draft = this.store.drafts.get(companyId);
+    if (draft) {
+      draft.version = restored.version + 1;
+      draft.parentVersion = restored.version;
+    }
     history.push(restored);
     this.host.auditEvent({
       actorUserId: scope.actorId,
@@ -496,21 +520,24 @@ export class ControlPlaneStudio {
 
   upsertWorkflow(scope: ScopeContext, workflow: WorkflowDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateLiveApproval(workflow);
     const index = draft.workflows.findIndex((entry) => entry.key === workflow.key);
     if (index >= 0) draft.workflows[index] = workflow;
     else draft.workflows.push(workflow);
     return draft;
   }
 
-  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }): { outcome: string; pinnedVersion: number } {
+  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }) {
     const published = this.store.published.get(companyId);
     const workflow = published?.workflows.find((entry) => entry.key === workflowKey);
     if (!workflow) throw new ControlPlaneError('Workflow not found', 'WORKFLOW_NOT_FOUND', 404);
     const thresholdNode = workflow.graph.nodes.find((node) => node.type === 'condition');
     const amount = Number(thresholdNode?.config.amount ?? 100000);
+    const reviewer = workflow.graph.nodes.find((node) => node.type === 'approval')?.config.role;
     return {
       outcome: context.value <= amount ? 'auto_approve' : 'manager_approval',
       pinnedVersion: workflow.version,
+      reviewerRole: typeof reviewer === 'string' ? reviewer : 'BRANCH_MANAGER',
     };
   }
 

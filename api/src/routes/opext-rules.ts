@@ -7,6 +7,7 @@ import { type Request, Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { decideApprovalRequest } from '../lib/approval-rules.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
+import { storedWorkflowApproval } from '../lib/saas/workflow-approval-policy.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { requireAdmin } from './opext-shared.js';
 
@@ -74,8 +75,13 @@ router.patch('/approval-rules/:id', async (req, res) => {
 router.get('/approval-requests', async (req, res) => {
   if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role)) return res.status(403).json({ message: 'Admin or Branch Manager access required.' });
   const status = typeof req.query.status === 'string' ? req.query.status : 'PENDING';
+  const branchScope = req.user!.role === 'BRANCH_MANAGER' ? {
+    OR: [{ ruleId: { not: null } }, ...(req.user!.locationIds ?? []).map((locationId) => ({
+      workflowPolicy: { path: ['locationId'], equals: locationId },
+    }))],
+  } : {};
   const requests = await prisma.approvalRequest.findMany({
-    where: { requestedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...(status === 'all' ? {} : { status }) },
+    where: { requestedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID }, ...branchScope, ...(status === 'all' ? {} : { status }) },
     include: {
       rule: { select: { id: true, label: true, requiredApproverRole: true } },
       requestedBy: { select: { id: true, name: true } },
@@ -87,7 +93,13 @@ router.get('/approval-requests', async (req, res) => {
   // valueAtStake is a Decimal column (docs/decimal-migration-plan.md) - JSON.stringify would
   // otherwise serialize it as a string (Prisma.Decimal's toJSON), silently changing the API
   // contract for every existing consumer that expects a number.
-  return res.json({ requests: requests.map((request) => ({ ...request, valueAtStake: Number(request.valueAtStake) })) });
+  return res.json({ requests: requests.map((request) => {
+    const workflow = storedWorkflowApproval(request.workflowPolicy);
+    return {
+      ...request, valueAtStake: Number(request.valueAtStake),
+      rule: request.rule ?? (workflow ? { id: workflow.workflowKey, label: workflow.label, requiredApproverRole: workflow.requiredApproverRole } : null),
+    };
+  }) });
 });
 
 router.post('/approval-requests/:id/decide', async (req, res) => {
@@ -96,7 +108,7 @@ router.post('/approval-requests/:id/decide', async (req, res) => {
   const notes = req.body.notes;
   if (notes != null && typeof notes !== 'string') return res.status(400).json({ message: 'notes must be text.' });
   try {
-    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, notes || null, req.companyId ?? DEFAULT_COMPANY_ID);
+    const request = await decideApprovalRequest(req.params.id, req.user!.id, req.user!.role, decision, notes || null, req.companyId ?? DEFAULT_COMPANY_ID, req.user!.locationIds);
     // valueAtStake is Decimal (docs/decimal-migration-plan.md) - see the same note on GET /approval-requests.
     return res.json({ request: { ...request, valueAtStake: Number(request.valueAtStake) } });
   } catch (error) {

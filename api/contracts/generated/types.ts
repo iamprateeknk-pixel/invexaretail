@@ -4419,7 +4419,8 @@ export interface components {
         };
         ApprovalRequest: {
             id?: string;
-            ruleId?: string;
+            /** @description Legacy operational rule ID, or null for a published Studio workflow. */
+            ruleId?: string | null;
             triggerType?: string;
             entityType?: string;
             entityId?: string;
@@ -4429,6 +4430,13 @@ export interface components {
             status?: "PENDING" | "APPROVED" | "REJECTED";
             requestedById?: string;
             decidedById?: string | null;
+            /** @description Pinned Studio approval workflow details when the request uses a published policy. */
+            workflowPolicy?: {
+                workflowKey?: string;
+                label?: string;
+                requiredApproverRole?: string;
+                configVersion?: number;
+            } | null;
         };
         Entity360: {
             /** @enum {string} */

@@ -54,6 +54,14 @@ for history. For an operation that is still pending, the original requester
 resubmits the command to create an approval linked to its current details.
 Verify the new request before retrying any stock movement or purchase order.
 
+Studio approval workflows start in simulation. Once the new API is staged,
+enable and publish a workflow, then verify the exact threshold, an independent
+reviewer, and the required location assignment for a branch manager. Rehearse
+rollback before enabling live policies in production. After a Studio-backed
+request exists, use a rollback image that understands Studio approval records
+or a compatible forward fix. Older API images expect every request to have a
+legacy rule ID and may fail to read the approval queue.
+
 1. CI green on the merge commit: API build/lint/tests, every real-Postgres suite,
    the migration matrix, web tests/build/E2E, audit gate, gitleaks.
 2. Staging first when one exists: migrate, then

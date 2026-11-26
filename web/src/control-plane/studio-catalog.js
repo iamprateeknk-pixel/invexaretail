@@ -235,6 +235,7 @@ export function workflowToModel(workflow) {
     target,
     threshold: String(nodes.find((node) => node.type === 'condition')?.config?.amount ?? ''),
     approverRole: String(nodes.find((node) => node.type === 'approval')?.config?.role ?? 'BRANCH_MANAGER'),
+    ...(workflow.enforce === true ? { enforce: true } : {}),
   };
 }
 
@@ -243,6 +244,7 @@ export function modelToWorkflow(model) {
     key: model.key,
     name: model.name,
     version: Number(model.version) || 1,
+    ...(model.enforce === true ? { enforce: true } : {}),
     graph: {
       nodes: [
         { id: 'start', type: 'trigger', config: { event: `${model.target}.created` } },
@@ -257,7 +259,7 @@ export function modelToWorkflow(model) {
 export function describeWorkflow(model) {
   const amount = Number(model.threshold);
   const rupees = Number.isFinite(amount) ? `₹${amount.toLocaleString('en-IN')}` : '—';
-  return `${labelOf(WORKFLOW_TARGETS, model.target)} up to ${rupees} are approved automatically; above that a ${labelOf(ROLE_OPTIONS, model.approverRole).toLowerCase()} must approve.`;
+  return `${labelOf(WORKFLOW_TARGETS, model.target)} above ${rupees} require review by a ${labelOf(ROLE_OPTIONS, model.approverRole).toLowerCase()}.`;
 }
 
 // ---- list editing -----------------------------------------------------------

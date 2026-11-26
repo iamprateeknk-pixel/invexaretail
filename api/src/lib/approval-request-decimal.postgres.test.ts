@@ -130,3 +130,58 @@ integration('valueAtStake rounds to 2dp in the database and serializes as a JSON
     assert.ok((await checkApprovalGate(command)).blocked, 'a changed approval rule requires a new review');
   });
 });
+
+integration('live Studio approvals use the published company version and keep a stricter legacy gate', async () => {
+  const companyId = `wf-co-${randomUUID()}`;
+  const requester = `wf-user-${randomUUID()}`;
+  const reviewer = `wf-reviewer-${randomUUID()}`;
+  const manager = `wf-manager-${randomUUID()}`;
+  const locationId = `wf-location-${randomUUID()}`;
+  await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
+  await prisma.location.create({ data: { id: locationId, code: locationId, name: 'Workflow location', type: 'STORE', companyId } });
+  for (const id of [requester, reviewer, manager]) {
+    const email = `${id}@test.invexa.local`;
+    const role = id === manager ? 'BRANCH_MANAGER' : 'ADMIN';
+    await prisma.user.create({ data: { id, name: id, email, passwordHash: 'x', role, assignedLocations: '[]', companyId } });
+    createEnhancedUser({ id, companyId, email, name: id, passwordHash: 'x', role, branchIds: [], locationIds: [], status: 'active' });
+  }
+  const versionId = randomUUID();
+  const workflow = { key: 'purchase.approval', name: 'Purchase limit', enforce: true, graph: { nodes: [
+    { type: 'trigger', config: { event: 'purchase_order.created' } },
+    { type: 'condition', config: { field: 'value', op: 'lte', amount: 100 } },
+    { type: 'approval', config: { role: 'BRANCH_MANAGER' } },
+  ] } };
+  const input = {
+    triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: randomUUID(),
+    value: 101, intent: ['order revision'], requestedById: requester, companyId, locationId,
+  };
+  await prisma.controlPlaneConfig.create({ data: { versionId, companyId, version: 2, kind: 'draft', status: 'draft', payload: { workflows: [workflow] } } });
+  assert.equal((await checkApprovalGate(input)).blocked, false);
+  await prisma.controlPlaneConfig.create({ data: { versionId, companyId, version: 2, kind: 'published', status: 'published', payload: { workflows: [workflow] } } });
+  assert.equal((await checkApprovalGate({ ...input, value: 100 })).blocked, false);
+  const blocked = await checkApprovalGate(input);
+  assert.ok(blocked.blocked);
+  assert.equal(blocked.requiredApproverRole, 'BRANCH_MANAGER');
+  await withServer(async (call) => {
+    const managerToken = generateJWT(manager, companyId);
+    const outside = await call('GET', '/approval-requests', managerToken);
+    assert.equal(outside.status, 200);
+    assert.deepEqual(outside.body.requests, []);
+    const denied = await call('POST', `/approval-requests/${blocked.requestId}/decide`, managerToken, { decision: 'APPROVED' });
+    assert.equal(denied.status, 409);
+    assert.match(denied.body.message, /not found/i);
+    const token = generateJWT(reviewer, companyId);
+    const list = await call('GET', '/approval-requests', token);
+    const row = list.body.requests.find((request: { id: string }) => request.id === blocked.requestId);
+    assert.equal(row?.rule.label, 'Purchase limit');
+    assert.equal(row.workflowPolicy.configVersion, 2);
+    assert.equal(row.ruleId, null);
+    const decided = await call('POST', `/approval-requests/${blocked.requestId}/decide`, token, { decision: 'APPROVED' });
+    assert.equal(decided.status, 200, JSON.stringify(decided.body));
+  });
+  assert.equal((await checkApprovalGate(input)).blocked, false);
+  await prisma.approvalRule.create({ data: { label: 'Legacy admin gate', triggerType: input.triggerType, requiredApproverRole: 'ADMIN', valueThreshold: 100, createdById: reviewer } });
+  const stricter = await checkApprovalGate(input);
+  assert.ok(stricter.blocked);
+  assert.equal(stricter.requiredApproverRole, 'ADMIN');
+});

@@ -313,7 +313,8 @@ function WorkflowSimulator({ controlToken, models }) {
     try {
       const response = await post(controlToken, '/studio/v1/workflows/simulate', { key: chosen?.key, value: Number(value) });
       const auto = response.simulation.outcome === 'auto_approve';
-      setResult(auto ? `Approved automatically (published version ${response.simulation.pinnedVersion}).` : `Needs approval from a ${labelOf(ROLE_OPTIONS, chosen?.approverRole ?? 'BRANCH_MANAGER').toLowerCase()} (published version ${response.simulation.pinnedVersion}).`);
+      const reviewer = labelOf(ROLE_OPTIONS, response.simulation.reviewerRole ?? 'BRANCH_MANAGER').toLowerCase();
+      setResult(auto ? 'This limit does not require review.' : `This limit requires review by a ${reviewer}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Check failed');
     }
@@ -349,8 +350,7 @@ export function WorkflowsEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Approval limits"
-        description="Set a value limit: anything at or under it is approved automatically, anything above it waits for the person you choose."
-        notLive="Saved, published and testable below. Live approvals in the app still use the approval rules set in the main app (Settings), not these yet."
+        description="Enable a limit for live commands and publish it. Commands above the limit require a reviewer. Existing approval rules can still require review."
         entries={models}
         idOf={(model) => model.key}
         newEntry={(current) => {
@@ -370,9 +370,15 @@ export function WorkflowsEditor({ controlToken, draft, onSaved }) {
               {isNew
                 ? <Choice label="For" value={model.target} options={WORKFLOW_TARGETS} onChange={(target) => set({ target, key: workflowKey(target, others), name: `${labelOf(WORKFLOW_TARGETS, target)} approval` })} />
                 : <p className="grid gap-1 text-xs"><span className="font-medium text-muted-foreground">For</span><span className="py-2 text-sm">{labelOf(WORKFLOW_TARGETS, model.target)}</span></p>}
-              <Text label="Approve automatically up to (₹)" type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
-              <Choice label="Above that, who approves" value={model.approverRole} options={ROLE_OPTIONS.filter((role) => ['ADMIN', 'BRANCH_MANAGER'].includes(role.value))} onChange={(approverRole) => set({ approverRole })} />
+              <Text label="Approval threshold (₹)" type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
+              <Choice label="Above that, who approves" value={model.approverRole} options={ROLE_OPTIONS.filter((role) => ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role.value))} onChange={(approverRole) => set({ approverRole })} />
             </div>
+            {model.target === 'count' ? <p className="text-xs text-muted-foreground">Stock count workflows are available for simulation.</p> : (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={model.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
+                Enforce on live commands after publishing
+              </label>
+            )}
             <p className="text-xs text-muted-foreground">{describeWorkflow(model)}</p>
             <Advanced>
               <Text label="Technical key" mono value={model.key} onChange={(key) => isNew && set({ key })} />

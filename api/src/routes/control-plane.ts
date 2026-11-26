@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
+import { flushControlPlanePersist, saveControlPlaneSnapshot, scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
@@ -83,7 +83,7 @@ export const syncRouter = Router();
 
 function persistOnSuccess(req: Request, res: Response, next: NextFunction): void {
   res.on('finish', () => {
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && res.statusCode < 400) {
+    if (!res.locals.studioPersisted && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && res.statusCode < 400) {
       scheduleControlPlanePersist();
     }
   });
@@ -707,18 +707,24 @@ studioRouter.post('/preview', (req: Request, res: Response) => {
   }
 });
 
-studioRouter.post('/publish', (req: Request, res: Response) => {
+studioRouter.post('/publish', async (req: Request, res: Response) => {
   try {
+    await flushControlPlanePersist();
     const published = controlPlane.publish(requireScope(req));
+    await saveControlPlaneSnapshot();
+    res.locals.studioPersisted = true;
     res.json({ success: true, published, runtime: controlPlane.runtimeConfig(scopedCompany(req)) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-studioRouter.post('/rollback', (req: Request, res: Response) => {
+studioRouter.post('/rollback', async (req: Request, res: Response) => {
   try {
+    await flushControlPlanePersist();
     const published = controlPlane.rollback(requireScope(req), Number(req.body?.version));
+    await saveControlPlaneSnapshot();
+    res.locals.studioPersisted = true;
     res.json({ success: true, published });
   } catch (error) {
     sendError(res, error);
