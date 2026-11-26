@@ -229,7 +229,7 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 
 // ---- automations --------------------------------------------------------------
 
-const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created']);
+const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created', 'item.near_expiry']);
 
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];
@@ -237,7 +237,7 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
     <StudioListEditor
       title="Automations"
-      description="Send in-app reminders to active company admins on a schedule or when a count, transfer, or sales order is created."
+      description="Send in-app reminders to active company admins on a schedule or for staff submissions and stock events."
       entries={entries}
       idOf={(automation) => automation.key}
       newEntry={(current) => ({ key: slugKey('new automation', current.map((automation) => automation.key)), name: 'New automation', trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' })}
@@ -267,6 +267,9 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
                 <Checkbox checked={automation.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
                 {automation.trigger === 'schedule' ? 'Send after publishing, using the company timezone' : 'Send for new events after publishing'}
               </label>
+            )}
+            {automation.trigger === 'event' && automation.expression === 'item.near_expiry' && (
+              <p className="text-sm text-muted-foreground">Admins receive one reminder per stocked lot, location, and expiry date within the next 30 days.</p>
             )}
             <Advanced>
               <Text label="Technical key" mono value={automation.key} onChange={(key) => isNew && set({ key })} />

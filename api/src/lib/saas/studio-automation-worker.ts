@@ -5,6 +5,7 @@ import { BUSINESS_TIMEZONE, validTimezone } from '../timezone-context.js';
 import type { ScopeContext } from './control-plane.js';
 import { enabledStudioAutomations, isStudioBusinessEvent, STUDIO_EVENT_MESSAGES } from './studio-automation-config.js';
 import { scheduledStudioOccurrence } from './studio-schedule.js';
+import { nearExpiryNotification } from './near-expiry-notification.js';
 
 const MAX_ATTEMPTS = 5;
 const FIRST_RETRY_MS = 60_000;
@@ -73,20 +74,21 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
         const claimed = await tx.studioAutomationRun.updateMany({ where: claim, data: { attempts: { increment: 1 } } });
         if (!claimed.count) return;
         const stillEnabled = await runIsEnabled(tx, run);
-        if (stillEnabled) {
+        const body = !stillEnabled ? null : run.expression === 'item.near_expiry' ? await nearExpiryNotification(tx, run, now)
+          : isStudioBusinessEvent(run.expression) ? STUDIO_EVENT_MESSAGES[run.expression] : `Scheduled reminder for ${run.occurrence}.`;
+        if (body !== null) {
           const recipients = await tx.user.findMany({
             where: { companyId: run.companyId, status: 'ACTIVE', role: { in: ['ADMIN', 'ADMIN_USER'] } },
             select: { id: true },
           });
           if (!recipients.length) throw new NoActiveAdmins();
-          const body = isStudioBusinessEvent(run.expression) ? STUDIO_EVENT_MESSAGES[run.expression] : `Scheduled reminder for ${run.occurrence}.`;
           await tx.userNotification.createMany({ data: recipients.map(({ id }) => ({
             userId: id, companyId: run.companyId, title: run.name, body, type: 'studio.automation',
           })) });
         }
         await tx.studioAutomationRun.update({
           where: { id: run.id, companyId: run.companyId },
-          data: { status: stillEnabled ? 'DELIVERED' : 'CANCELLED', finishedAt: now, failureCode: null },
+          data: { status: body !== null ? 'DELIVERED' : 'CANCELLED', finishedAt: now, failureCode: null },
         });
       });
     } catch (error) {

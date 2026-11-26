@@ -12,6 +12,7 @@ import { prisma } from '../lib/db.js';
 import { generateJWT } from '../lib/otp-auth.js';
 import { createEnhancedUser } from '../lib/enterprise-repository.js';
 import { runExpirySweep } from '../lib/expiry-sweep.js';
+import { drainStudioAutomationRuns, listStudioAutomationRuns } from '../lib/saas/studio-automation-worker.js';
 import operationsExtensionRouter from './operations-extension.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -75,6 +76,47 @@ async function makeAlert(a: Awaited<ReturnType<typeof makeFixture>>) {
     },
   });
 }
+
+integration('published near-expiry notifications send once per stocked lot, location and expiry date', async () => {
+  const company = await makeFixture();
+  const foreign = await makeFixture();
+  const now = new Date('2027-03-01T12:00:00Z');
+  const config = {
+    companyId: company.companyId, versionId: randomUUID(), version: 2,
+    payload: { automations: [{ key: 'expiry', name: 'Near expiry reminder', enforce: true, trigger: 'event', expression: 'item.near_expiry', actionKey: 'SEND_NOTIFICATION' }] },
+  };
+  const addLot = async (expiry: string, quantity: number, owner = company) => {
+    const lot = await prisma.lot.create({ data: { itemId: owner.itemId, lotNo: randomUUID(), expiryDate: new Date(expiry) } });
+    await prisma.stockLedger.create({ data: { itemId: owner.itemId, lotId: lot.id, locationId: owner.locationId, companyId: owner.companyId, onHand: quantity } });
+    return lot;
+  };
+  const due = await addLot('2027-03-31', 2);
+  await addLot('2027-04-01', 2);
+  await addLot('2027-02-28', 2);
+  await addLot('2027-03-08', 0);
+  await addLot('2027-03-08', 2, foreign);
+  await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'draft', status: 'draft' } });
+  await runExpirySweep(now);
+  assert.deepEqual(await listStudioAutomationRuns(company.companyId), []);
+  await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'published', status: 'published' } });
+  await Promise.all([runExpirySweep(now), runExpirySweep(now)]);
+  const queued = await listStudioAutomationRuns(company.companyId);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].expression, 'item.near_expiry');
+  assert.equal(queued[0].configVersion, 2);
+  await drainStudioAutomationRuns(now);
+  const delivered = await prisma.userNotification.findMany({ where: { companyId: company.companyId, userId: company.userId } });
+  assert.equal(delivered.length, 1);
+  assert.match(delivered[0].body, /Test Item, lot .+, expires on 2027-03-31 at Test Loc/);
+  assert.deepEqual(await listStudioAutomationRuns(foreign.companyId), []);
+  await prisma.lot.update({ where: { id: due.id }, data: { expiryDate: new Date('2027-03-30') } });
+  await runExpirySweep(now);
+  assert.equal((await listStudioAutomationRuns(company.companyId)).length, 2);
+  await prisma.lot.update({ where: { id: due.id }, data: { expiryDate: new Date('2027-05-01') } });
+  await drainStudioAutomationRuns(now);
+  assert.deepEqual((await listStudioAutomationRuns(company.companyId)).map((row) => row.status).sort(), ['CANCELLED', 'DELIVERED']);
+  assert.equal(await prisma.expiryAlert.count({ where: { companyId: company.companyId } }), 0, 'notifications do not create expiry tasks');
+});
 
 integration('the worker creates one auditable expiry task from a published company rule and preserves its resolution', async () => {
   const a = await makeFixture();

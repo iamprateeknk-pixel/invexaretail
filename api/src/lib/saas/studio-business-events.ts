@@ -1,6 +1,19 @@
 import type { Prisma } from '@prisma/client';
 import { enabledStudioAutomations, type StudioBusinessEvent } from './studio-automation-config.js';
 
+export function studioBusinessEventRun(
+  config: { companyId: string; version: number; versionId: string },
+  automation: { key: string; name: string },
+  event: StudioBusinessEvent,
+  entityId: string,
+  now: Date,
+): Prisma.StudioAutomationRunCreateManyInput {
+  return {
+    companyId: config.companyId, automationKey: automation.key, name: automation.name, expression: event,
+    occurrence: `${event}:${entityId}`, configVersion: config.version, versionId: config.versionId, nextAttemptAt: now,
+  };
+}
+
 /** Commit the configured notification runs together with the business record. */
 export async function queueStudioBusinessEvent(tx: Prisma.TransactionClient, input: {
   event: StudioBusinessEvent;
@@ -18,10 +31,7 @@ export async function queueStudioBusinessEvent(tx: Prisma.TransactionClient, inp
   if (!matches.length) return;
   const now = new Date();
   await tx.studioAutomationRun.createMany({
-    data: matches.map((automation) => ({
-      companyId, automationKey: automation.key, name: automation.name, expression: event, occurrence: `${event}:${entityId}`,
-      configVersion: config.version, versionId: config.versionId, nextAttemptAt: now,
-    })),
+    data: matches.map((automation) => studioBusinessEventRun({ ...config, companyId }, automation, event, entityId, now)),
     skipDuplicates: true,
   });
 }
