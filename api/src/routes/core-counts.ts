@@ -33,6 +33,7 @@ import {
   cycleCountAssignSchema,
 } from '../lib/validation-schemas.js';
 import { recordAudit } from '../lib/audit.js';
+import { enforcePublishedCountApproval } from '../lib/approval-rules.js';
 import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
 import { allocateWeightCount, totalVariance } from '../lib/weight-allocation.js';
 import { publishEvent } from '../lib/event-bus.js';
@@ -433,10 +434,14 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
         return sendError(res, 409, 'RECOUNT_NOT_INDEPENDENT', 'A recount must be done by a different person than the first count.');
       }
     }
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    const workflowPolicy = status === 'APPROVED' ? await enforcePublishedCountApproval({
+      companyId, itemId: current.itemId, variance: current.physicalQuantity - current.bookQty, reviewerRole: req.user!.role,
+    }) : null;
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, req.companyId ?? DEFAULT_COMPANY_ID);
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, companyId, workflowPolicy);
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason, reasonCode);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
@@ -456,6 +461,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       metadata: {
         reviewReason,
         reasonCode,
+        ...(workflowPolicy ? { workflowPolicy } : {}),
         ...(status === 'APPROVED' ? { bookQty: updated.bookQty, physicalQuantity: updated.physicalQuantity, variance, movementId: updated.varianceMovementId } : {}),
         ...(status === 'RECOUNT' ? { recountAssignmentId: recountAssignment?.id } : {}),
       },

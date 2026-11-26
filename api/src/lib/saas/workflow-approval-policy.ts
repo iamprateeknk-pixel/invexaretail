@@ -2,6 +2,7 @@ const WORKFLOW_EVENTS = {
   'transfer.created': 'TRANSFER_CONFIRM',
   'adjustment.created': 'STOCK_ADJUSTMENT',
   'purchase_order.created': 'PO_APPROVE',
+  'count.created': 'COUNT_APPROVE',
 } as const;
 
 const REVIEWER_ROLES = ['BRANCH_MANAGER', 'ADMIN_USER', 'ADMIN'] as const;
@@ -14,6 +15,8 @@ export type StudioApprovalPolicy = {
   threshold: number;
   requiredApproverRole: typeof REVIEWER_ROLES[number];
 };
+
+export type AppliedCountWorkflow = { workflowKey: string; configVersion: number };
 
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};

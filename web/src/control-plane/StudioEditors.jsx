@@ -323,7 +323,9 @@ function WorkflowSimulator({ controlToken, models }) {
       const response = await post(controlToken, '/studio/v1/workflows/simulate', { key: chosen?.key, value: Number(value) });
       const auto = response.simulation.outcome === 'auto_approve';
       const reviewer = labelOf(ROLE_OPTIONS, response.simulation.reviewerRole ?? 'BRANCH_MANAGER').toLowerCase();
-      setResult(auto ? 'This limit does not require review.' : `This limit requires review by a ${reviewer}.`);
+      setResult(auto
+        ? chosen.target === 'count' ? 'The regular independent count review applies.' : 'This limit does not require review.'
+        : `This limit requires review by a ${reviewer}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Check failed');
     }
@@ -337,7 +339,7 @@ function WorkflowSimulator({ controlToken, models }) {
       </CardHeader>
       <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
         <Choice label="Approval" value={chosen?.key ?? ''} options={models.map((model) => ({ value: model.key, label: model.name }))} onChange={setKey} />
-        <Text label="Value (₹)" type="number" value={value} onChange={setValue} />
+        <Text label={chosen?.target === 'count' ? 'Estimated variance value (₹)' : 'Value (₹)'} type="number" value={value} onChange={setValue} />
         <Button type="button" variant="outline" onClick={run}>Check</Button>
         {result && <p aria-live="polite" className="text-sm md:col-span-3">{result}</p>}
         {error && <p role="alert" className="text-sm text-destructive md:col-span-3">{error}</p>}
@@ -379,14 +381,17 @@ export function WorkflowsEditor({ controlToken, draft, onSaved }) {
               {isNew
                 ? <Choice label="For" value={model.target} options={WORKFLOW_TARGETS} onChange={(target) => set({ target, key: workflowKey(target, others), name: `${labelOf(WORKFLOW_TARGETS, target)} approval` })} />
                 : <p className="grid gap-1 text-xs"><span className="font-medium text-muted-foreground">For</span><span className="py-2 text-sm">{labelOf(WORKFLOW_TARGETS, model.target)}</span></p>}
-              <Text label="Approval threshold (₹)" type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
+              <Text label={model.target === 'count' ? 'Variance value threshold (₹)' : 'Approval threshold (₹)'} type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
               <Choice label="Above that, who approves" value={model.approverRole} options={ROLE_OPTIONS.filter((role) => ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role.value))} onChange={(approverRole) => set({ approverRole })} />
             </div>
-            {model.target === 'count' ? <p className="text-xs text-muted-foreground">Stock count workflows are available for simulation.</p> : (
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={model.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
-                Enforce on live commands after publishing
-              </label>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={model.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
+              Enforce on live commands after publishing
+            </label>
+            {model.target === 'count' && (
+              <p className="text-xs text-muted-foreground">
+                All counts still need an independent reviewer. The limit uses the latest known purchase cost to value the difference. If the cost is missing, the highest published reviewer role applies to a nonzero difference.
+              </p>
             )}
             <p className="text-xs text-muted-foreground">{describeWorkflow(model)}</p>
             <Advanced>

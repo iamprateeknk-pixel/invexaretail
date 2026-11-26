@@ -105,3 +105,18 @@ test('a workflow stays in simulation until explicitly enabled', async () => {
     assert.deepEqual(calls.map((call) => call.body?.enforce), [true]);
   } finally { restore(); }
 });
+
+test('count approval uses a variance value threshold and can be enabled for live review', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  try {
+    const workflow = modelToWorkflow({ key: 'count.approval', name: 'Count variance', target: 'count', threshold: '100', approverRole: 'ADMIN' });
+    mount(React.createElement(WorkflowsEditor, { controlToken: 't', draft: { workflows: [workflow] } }));
+    assert.equal(screen.getByLabelText('Variance value threshold (₹)').value, '100');
+    const toggle = screen.getByRole('checkbox', { name: 'Enforce on live commands after publishing' });
+    fireEvent.click(toggle);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.equal(calls[0].body.enforce, true);
+    assert.equal(calls[0].body.graph.nodes[0].config.event, 'count.created');
+  } finally { restore(); }
+});

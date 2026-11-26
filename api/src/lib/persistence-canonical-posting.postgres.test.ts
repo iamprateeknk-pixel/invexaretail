@@ -4,9 +4,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import express from 'express';
 import { prisma } from './db.js';
 import { persistConfirmedPickAllocations, persistCountBatch, persistCountReview } from './persistence.js';
-import type { CountRecord } from './repository.js';
+import { createCountRecord, type CountRecord } from './repository.js';
+import { createEnhancedUser } from './enterprise-repository.js';
+import { generateJWT } from './otp-auth.js';
+import { enforceOperationalCompanyScope, registerLocationCompany } from './saas/tenant-scope.js';
+import { extractToken } from '../routes/enterprise-auth.js';
+import coreRouter from '../routes/core.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -58,6 +64,76 @@ integration('a count on a lot with no ledger row yet establishes stock at the ph
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
   assert.equal(Number(ledger.onHand), 6);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
+});
+
+integration('published count workflows require the configured reviewer before any stock is posted', async () => {
+  const f = await fixture(10);
+  registerLocationCompany(f.loc.id, f.companyId);
+  const addReviewer = async (role: 'BRANCH_MANAGER' | 'ADMIN', id: string = randomUUID()) => {
+    const email = `reviewer-${id}@test.invexa.local`;
+    const user = { id, email, companyId: f.companyId, name: 'Count reviewer', passwordHash: 'x', role };
+    if (id !== f.userId) await prisma.user.create({ data: { ...user, assignedLocations: JSON.stringify([f.loc.id]) } });
+    createEnhancedUser({ ...user, branchIds: [], locationIds: [f.loc.id], status: 'active' });
+    return generateJWT(id, f.companyId);
+  };
+  const [manager, admin, submitter] = await Promise.all([addReviewer('BRANCH_MANAGER'), addReviewer('ADMIN'), addReviewer('ADMIN', f.userId)]);
+  const addCount = async (physical: number) => createCountRecord({ ...await pendingCount(f, physical, 10), companyId: f.companyId, status: 'PENDING_REVIEW' });
+  const atLimit = await addCount(9);
+  const above = await addCount(7);
+  const draftOnly = await addCount(6);
+  const unpriced = await addCount(9);
+  const supplier = await prisma.supplier.create({ data: { name: 'Count cost supplier', companyId: f.companyId } });
+  const order = await prisma.purchaseOrder.create({ data: {
+    number: `cost-${randomUUID()}`, supplierId: supplier.id, companyId: f.companyId, locationId: f.loc.id, createdById: f.userId,
+    lines: { create: { itemId: f.item.id, quantity: 1, unitCost: 100 } },
+  } });
+  const config = { versionId: randomUUID(), companyId: f.companyId, version: 2, payload: { workflows: [
+    { key: 'count.approval', name: 'Count variance', enforce: true, graph: { nodes: [
+      { type: 'trigger', config: { event: 'count.created' } },
+      { type: 'condition', config: { field: 'value', op: 'lte', amount: 100 } },
+      { type: 'approval', config: { role: 'ADMIN' } },
+    ] } },
+  ] } };
+  await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'draft', status: 'draft' } });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, coreRouter);
+  const server = app.listen(0);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const approve = async (id: string, token: string) => fetch(`http://127.0.0.1:${address.port}/api/v1/stock-counts/${id}/review`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'APPROVED', reviewReason: 'Checked the count independently.' }),
+  });
+  try {
+    const draftReview = await approve(draftOnly.id, manager);
+    assert.equal(draftReview.status, 200, await draftReview.text());
+    await prisma.controlPlaneConfig.create({ data: { ...config, kind: 'published', status: 'published' } });
+    const denied = await approve(above.id, manager);
+    assert.equal(denied.status, 403, await denied.text());
+    const self = await approve(above.id, submitter);
+    assert.equal(self.status, 403);
+    assert.equal((await self.json()).code, 'SELF_REVIEW');
+    assert.equal(await prisma.stockMovement.count({ where: { companyId: f.companyId, sourceDocument: above.id } }), 0);
+    const cleared = await approve(atLimit.id, manager);
+    assert.equal(cleared.status, 200, await cleared.text());
+    await prisma.purchaseOrderLine.updateMany({ where: { purchaseOrderId: order.id }, data: { unitCost: 0 } });
+    const unpricedReview = await approve(unpriced.id, manager);
+    assert.equal(unpricedReview.status, 403, await unpricedReview.text());
+    const approved = await approve(above.id, admin);
+    assert.equal(approved.status, 200, await approved.text());
+    assert.equal((await approve(above.id, admin)).status, 409);
+    const movements = await prisma.stockMovement.findMany({ where: { companyId: f.companyId, sourceDocument: above.id } });
+    assert.equal(movements.length, 1);
+    const applied = { workflowKey: 'count.approval', configVersion: 2 };
+    assert.deepEqual((movements[0].metadata as { workflowPolicy?: unknown }).workflowPolicy, applied);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'STOCK_COUNT_APPROVED', entityId: above.id } });
+    assert.deepEqual((audit.metadata as { workflowPolicy?: unknown }).workflowPolicy, applied);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 integration('a failed multi-lot count batch leaves no partial StockCount rows', async () => {

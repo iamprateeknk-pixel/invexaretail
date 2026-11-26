@@ -11,6 +11,7 @@ import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
+import type { AppliedCountWorkflow } from './saas/workflow-approval-policy.js';
 import { itemRowToRecord } from './item-record-mapper.js';
 import { transferRowToRecord, transferCartonRowToRecord } from './transfer-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
@@ -966,7 +967,7 @@ export async function persistCountReconciliation(count: CountRecord, companyId: 
   });
 }
 
-export async function persistCountReview(count: CountRecord, companyId: string): Promise<void> {
+export async function persistCountReview(count: CountRecord, companyId: string, workflowPolicy?: AppliedCountWorkflow | null): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
 
@@ -1018,7 +1019,7 @@ export async function persistCountReview(count: CountRecord, companyId: string):
         movementType: 'COUNT_VARIANCE', qtyDelta: ledger ? variance : count.physicalQuantity,
         idempotencyKey: `count-variance:${count.id}`,
         reason: count.reviewReason ?? 'Approved stock count variance', sourceDocument: count.id, sourceLineId: count.id, correlationId: count.id,
-        metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty },
+        metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty, ...(workflowPolicy ? { workflowPolicy } : {}) },
       });
     }
   });

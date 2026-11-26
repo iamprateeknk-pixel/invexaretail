@@ -2678,7 +2678,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Approve, reject or request a recount. Approval posts the variance to the ledger exactly once. Optional enforcement requires a recount when variance is out of tolerance and that a recount is done by a different person. Admin, Admin user and Branch manager. */
+        /** Approve, reject or request a recount. Approval requires an independent reviewer and posts the variance exactly once. Published count workflows can require a higher reviewer role based on the variance value. Optional recount enforcement applies independently. */
         patch: operations["patchStockCountsCountIdReview"];
         trace?: never;
     };
@@ -4037,7 +4037,7 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
@@ -15227,13 +15227,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Role or location not allowed. */
+            /** @description Role or location not allowed, self-review, or the published count workflow requires a higher reviewer role. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Count not found (also for another company's count). */
@@ -15252,6 +15252,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The published approval policy could not be verified. The count was not approved. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

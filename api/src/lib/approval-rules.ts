@@ -4,8 +4,9 @@ import { DomainError } from './errors.js';
 import { thresholdsAsNumbers } from './decimal-json.js';
 import { rememberPersistedAudit } from './audit.js';
 import { databaseEnabled } from './persistence.js';
-import { publishedWorkflowApprovals, storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER, usesStudioApproval, type StudioApprovalPolicy } from './saas/workflow-approval-policy.js';
+import { publishedWorkflowApprovals, storedWorkflowApproval, STUDIO_APPROVAL_SNAPSHOT_TRIGGER, usesStudioApproval, type AppliedCountWorkflow, type StudioApprovalPolicy } from './saas/workflow-approval-policy.js';
 import { matchingLiveStudioRules, publishedLiveStudioRules } from './saas/live-studio-rules.js';
+import { readValueAtRisk } from './exceptions.js';
 
 // Blueprint section 16.2 (Workflow Builder): "transfer > ₹1 lakh -> regional
 // manager approval." Distinct from ToleranceRule (count-tolerance.ts),
@@ -17,6 +18,59 @@ const ROLE_RANK: Record<string, number> = { ADMIN: 4, ADMIN_USER: 3, BRANCH_MANA
 
 export function roleMeetsRequirement(role: string, requiredRole: string): boolean {
   return (ROLE_RANK[role] ?? 0) >= (ROLE_RANK[requiredRole] ?? Infinity);
+}
+
+function compareApprovalPolicies(a: StudioApprovalPolicy, b: StudioApprovalPolicy): number {
+  return ROLE_RANK[b.requiredApproverRole] - ROLE_RANK[a.requiredApproverRole] || a.workflowKey.localeCompare(b.workflowKey);
+}
+
+function usesApprovalDatabase(): boolean {
+  return databaseEnabled || Boolean(resolveDatabaseUrl()) || process.env.REQUIRE_DATABASE === 'true';
+}
+
+function loadPublishedApprovalConfig(companyId: string) {
+  return prisma.controlPlaneConfig.findFirst({
+    where: { companyId, kind: 'published', status: 'published' },
+    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
+    select: { version: true, versionId: true, payload: true },
+  });
+}
+
+function approvalUnavailable(triggerType: string, error: unknown): DomainError {
+  const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
+  console.error('Approval policy evaluation failed', {
+    triggerType, traceId: unavailable.traceId, errorType: error instanceof Error ? error.name : 'Unknown',
+  });
+  return unavailable;
+}
+
+/** The count already has an independent review step. Apply its role policy there. */
+export async function enforcePublishedCountApproval(input: {
+  companyId: string;
+  itemId: string;
+  variance: number;
+  reviewerRole: string;
+}): Promise<AppliedCountWorkflow | null> {
+  if (!usesApprovalDatabase() || input.variance === 0) return null;
+  const triggerType = 'COUNT_APPROVE';
+  try {
+    const published = await loadPublishedApprovalConfig(input.companyId);
+    if (!published) return null;
+    const policies = publishedWorkflowApprovals(published.payload, triggerType);
+    if (policies.length === 0) return null;
+    const value = await readValueAtRisk(input, input.itemId, Math.abs(input.variance));
+    if (value !== null && !Number.isFinite(value)) throw new Error('Invalid count variance value');
+    // An unpriced variance must still meet the strongest published role.
+    const policy = policies.filter((rule) => value === null || value > rule.threshold).sort(compareApprovalPolicies)[0];
+    if (!policy) return null;
+    if (!roleMeetsRequirement(input.reviewerRole, policy.requiredApproverRole)) {
+      throw new DomainError('FORBIDDEN', `A reviewer with the ${policy.requiredApproverRole} role or higher must approve this count.`);
+    }
+    return { workflowKey: policy.workflowKey, configVersion: published.version };
+  } catch (error) {
+    if (error instanceof DomainError && error.code === 'FORBIDDEN') throw error;
+    throw approvalUnavailable(triggerType, error);
+  }
 }
 
 export type ApprovalRuleLike = { id: string; category: string | null; branchId: string | null; valueThreshold: number; requiredApproverRole: string };
@@ -62,17 +116,13 @@ export async function checkApprovalGate(input: {
   /** Only this company's rules apply; another company's thresholds must never gate this one. */
   companyId: string;
 }): Promise<GateResult> {
-  if (!databaseEnabled && !resolveDatabaseUrl() && process.env.REQUIRE_DATABASE !== 'true') {
+  if (!usesApprovalDatabase()) {
     return { blocked: false };
   }
   try {
     const [rules, published] = await Promise.all([
       prisma.approvalRule.findMany({ where: { triggerType: input.triggerType, active: true, createdBy: { companyId: input.companyId } } }),
-      usesStudioApproval(input.triggerType) ? prisma.controlPlaneConfig.findFirst({
-        where: { companyId: input.companyId, kind: 'published', status: 'published' },
-        orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
-        select: { version: true, versionId: true, payload: true },
-      }) : null,
+      usesStudioApproval(input.triggerType) ? loadPublishedApprovalConfig(input.companyId) : null,
     ]);
     const workflowPolicies = publishedWorkflowApprovals(published?.payload, input.triggerType);
     const studioRules = publishedLiveStudioRules(published?.payload, input.triggerType);
@@ -106,7 +156,7 @@ export async function checkApprovalGate(input: {
       }] : [];
     });
     const triggered = [...workflowPolicies.filter((policy) => value > policy.threshold), ...ruleApprovals]
-      .sort((a, b) => ROLE_RANK[b.requiredApproverRole] - ROLE_RANK[a.requiredApproverRole] || a.workflowKey.localeCompare(b.workflowKey));
+      .sort(compareApprovalPolicies);
     const strongest = triggered[0];
     if (!matched && !strongest) return { blocked: false };
     const useStudio = strongest && published && (!matched || roleMeetsRequirement(strongest.requiredApproverRole, matched.requiredApproverRole));
@@ -161,11 +211,7 @@ export async function checkApprovalGate(input: {
     return { blocked: true, requestId: request.id, status: 'PENDING', reason: `Awaiting ${requiredApproverRole} approval ("${label}").`, requiredApproverRole };
   } catch (error) {
     if (error instanceof DomainError && error.code === 'STUDIO_RULE_BLOCKED') throw error;
-    const unavailable = new DomainError('APPROVAL_UNAVAILABLE', 'Approval could not be verified. Retry when the service is available.');
-    console.error('Approval policy evaluation failed', {
-      triggerType: input.triggerType, traceId: unavailable.traceId, errorType: error instanceof Error ? error.name : 'Unknown',
-    });
-    throw unavailable;
+    throw approvalUnavailable(input.triggerType, error);
   }
 }
 

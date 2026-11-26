@@ -70,7 +70,9 @@
               "VALIDATION_FAILED",
               "CONFLICT",
               "STUDIO_RULE_BLOCKED",
-              "APPROVAL_UNAVAILABLE"
+              "APPROVAL_UNAVAILABLE",
+              "FORBIDDEN",
+              "SELF_REVIEW"
             ]
           },
           "traceId": {
@@ -21177,7 +21179,7 @@
     "/stock-counts/{countId}/review": {
       "patch": {
         "operationId": "patchStockCountsCountIdReview",
-        "summary": "Approve, reject or request a recount. Approval posts the variance to the ledger exactly once. Optional enforcement requires a recount when variance is out of tolerance and that a recount is done by a different person. Admin, Admin user and Branch manager.",
+        "summary": "Approve, reject or request a recount. Approval requires an independent reviewer and posts the variance exactly once. Published count workflows can require a higher reviewer role based on the variance value. Optional recount enforcement applies independently.",
         "tags": [
           "Stock counts"
         ],
@@ -21253,11 +21255,11 @@
             }
           },
           "403": {
-            "description": "Role or location not allowed.",
+            "description": "Role or location not allowed, self-review, or the published count workflow requires a higher reviewer role.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -21279,6 +21281,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/LegacyErrorMessage"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The published approval policy could not be verified. The count was not approved.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
