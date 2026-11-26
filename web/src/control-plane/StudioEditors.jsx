@@ -229,13 +229,15 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 
 // ---- automations --------------------------------------------------------------
 
+const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created']);
+
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];
   return (
     <div className="grid gap-4">
     <StudioListEditor
       title="Automations"
-      description="Schedule in-app reminders for active company admins. Event triggers and other actions can be saved for later."
+      description="Send in-app reminders to active company admins on a schedule or when a count, transfer, or sales order is created."
       entries={entries}
       idOf={(automation) => automation.key}
       newEntry={(current) => ({ key: slugKey('new automation', current.map((automation) => automation.key)), name: 'New automation', trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' })}
@@ -248,19 +250,22 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
       renderEntry={(automation, set, { isNew, others }) => {
         const list = automation.trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS;
         const options = list.some((entry) => entry.value === automation.expression) ? list : [...list, { value: automation.expression, label: automation.expression }];
+        const supportsLive = automation.trigger === 'schedule' || LIVE_AUTOMATION_EVENTS.has(automation.expression);
         return (
           <>
             <Text label="Automation name" value={automation.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
             <div className="grid gap-3 md:grid-cols-3">
               <Choice label="Starts" value={automation.trigger} options={[{ value: 'event', label: 'When something happens' }, { value: 'schedule', label: 'On a schedule' }]}
                 onChange={(trigger) => set({ trigger, expression: (trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS)[0].value, enforce: undefined })} />
-              <Choice label={automation.trigger === 'schedule' ? 'When' : 'What happens'} value={automation.expression} options={options} onChange={(expression) => set({ expression })} />
+              <Choice label={automation.trigger === 'schedule' ? 'When' : 'What happens'} value={automation.expression} options={options} onChange={(expression) => set({
+                expression, enforce: automation.trigger === 'schedule' || LIVE_AUTOMATION_EVENTS.has(expression) ? automation.enforce : undefined,
+              })} />
               <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey, enforce: undefined })} />
             </div>
-            {automation.trigger === 'schedule' && automation.actionKey === 'SEND_NOTIFICATION' && (
+            {supportsLive && automation.actionKey === 'SEND_NOTIFICATION' && (
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox checked={automation.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
-                Send after publishing, using the company timezone
+                {automation.trigger === 'schedule' ? 'Send after publishing, using the company timezone' : 'Send for new events after publishing'}
               </label>
             )}
             <Advanced>
@@ -308,7 +313,8 @@ function AutomationRunHistory({ controlToken }) {
               <li key={run.id} className="flex flex-wrap justify-between gap-2 py-2 text-sm">
                 <div>
                   <p className="font-medium">{run.name}</p>
-                  <p className="text-muted-foreground">{run.occurrence} · Configuration {run.configVersion}</p>
+                  <p className="text-muted-foreground">{LIVE_AUTOMATION_EVENTS.has(run.expression) ? labelOf(AUTOMATION_EVENTS, run.expression) : run.occurrence} · Configuration {run.configVersion}</p>
+                  {LIVE_AUTOMATION_EVENTS.has(run.expression) && <p className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</p>}
                 </div>
                 <div>
                   <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry' : AUTOMATION_RUN_STATUS[run.status]}</p>

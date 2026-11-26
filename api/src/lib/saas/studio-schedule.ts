@@ -1,5 +1,3 @@
-import type { AutomationDefinition } from './control-plane.js';
-
 const schedules = {
   'daily@09:00': { time: '09:00:00' },
   'daily@18:00': { time: '18:00:00' },
@@ -7,20 +5,13 @@ const schedules = {
   'monthly@1': { time: '09:00:00', day: '01' },
 } as const;
 
-export function validateLiveAutomation(automation: AutomationDefinition): void {
-  if (automation.enforce !== true) return;
-  if (automation.trigger !== 'schedule' || !Object.hasOwn(schedules, automation.expression) || automation.actionKey !== 'SEND_NOTIFICATION') {
-    throw new Error('Live automations currently support scheduled in-app notifications.');
-  }
-  if (typeof automation.key !== 'string' || !automation.key.trim() || automation.key.length > 100 ||
-      typeof automation.name !== 'string' || !automation.name.trim() || automation.name.length > 160) {
-    throw new Error('Give the automation a key and a name of 160 characters or fewer.');
-  }
+export function isStudioSchedule(expression: string): boolean {
+  return Object.hasOwn(schedules, expression);
 }
 
 /** Returns the local date of a due run. Missed runs can catch up on their scheduled day. */
 export function scheduledStudioOccurrence(expression: string, now: Date, timezone: string, publishedAt: Date): string | null {
-  if (!Object.hasOwn(schedules, expression) || !Number.isFinite(publishedAt.getTime()) || publishedAt > now) return null;
+  if (!isStudioSchedule(expression) || !Number.isFinite(publishedAt.getTime()) || publishedAt > now) return null;
   const schedule = schedules[expression as keyof typeof schedules];
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',

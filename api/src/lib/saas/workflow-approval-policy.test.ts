@@ -19,5 +19,7 @@ test('only explicitly enabled workflows apply to a supported live command', () =
   }]);
   assert.deepEqual(publishedWorkflowApprovals({ workflows: [enabled] }, 'PO_APPROVE'), []);
   const count = { ...enabled, graph: { nodes: [{ type: 'trigger', config: { event: 'count.created' } }, ...workflow.graph.nodes.slice(1)] } };
-  assert.throws(() => workflowApprovalPolicy(count), /supported operation/);
+  assert.equal(workflowApprovalPolicy(count)?.triggerType, 'COUNT_APPROVE');
+  const unsupported = { ...enabled, graph: { nodes: [{ type: 'trigger', config: { event: 'count.deleted' } }, ...workflow.graph.nodes.slice(1)] } };
+  assert.throws(() => workflowApprovalPolicy(unsupported), /supported operation/);
 });

@@ -6,7 +6,10 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { prisma } from './db.js';
-import { persistConfirmedPickAllocations, persistCountBatch, persistCountReview } from './persistence.js';
+import { persistConfirmedPickAllocations, persistCount, persistCountBatch, persistCountReview, persistTransfer } from './persistence.js';
+import { createOrderWithReservation } from './orders.js';
+import { drainStudioAutomationRuns, listStudioAutomationRuns } from './saas/studio-automation-worker.js';
+import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 import { createCountRecord, type CountRecord } from './repository.js';
 import { createEnhancedUser } from './enterprise-repository.js';
 import { generateJWT } from './otp-auth.js';
@@ -64,6 +67,58 @@ integration('a count on a lot with no ledger row yet establishes stock at the ph
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
   assert.equal(Number(ledger.onHand), 6);
   assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
+});
+
+integration('live business notifications are queued by committed submissions and delivered once per action', async () => {
+  const f = await fixture(20);
+  const other = await fixture(20);
+  const events = ['count.submitted', 'transfer.created', 'order.created'];
+  const policy = {
+    companyId: f.companyId, versionId: randomUUID(), version: 2,
+    payload: { automations: events.map((expression) => ({
+      key: expression, name: expression, enforce: true, trigger: 'event', expression, actionKey: 'SEND_NOTIFICATION',
+    })) },
+  };
+  const count = {
+    id: randomUUID(), itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id, physicalQuantity: 20,
+    bookQty: 20, mode: 'manual', submittedBy: f.userId, role: 'ADMIN', createdAt: new Date().toISOString(),
+  } satisfies CountRecord;
+  await prisma.controlPlaneConfig.create({ data: { ...policy, kind: 'draft', status: 'draft' } });
+  await persistCount(count, f.companyId);
+  assert.deepEqual(await listStudioAutomationRuns(f.companyId), []);
+  await prisma.controlPlaneConfig.create({ data: { ...policy, kind: 'published', status: 'published' } });
+  await persistCount(count, f.companyId);
+  assert.deepEqual(await listStudioAutomationRuns(f.companyId), [], 'updating a pre-publication submission does not create an event');
+  await assert.rejects(persistCountBatch([{ ...count, id: randomUUID(), lotId: 'missing-lot' }], f.companyId));
+  await assert.rejects(prisma.$transaction(async (tx) => {
+    await queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId: f.companyId, entityId: 'rolled-back' });
+    throw new Error('rollback after queuing');
+  }), /rollback after queuing/);
+  assert.deepEqual(await listStudioAutomationRuns(f.companyId), []);
+  const newCount = { ...count, id: randomUUID() };
+  await persistCount(newCount, f.companyId);
+  await persistCount(newCount, f.companyId);
+  await persistCountBatch([{ ...count, id: randomUUID() }, { ...count, id: randomUUID() }], f.companyId);
+  const transfer = {
+    id: randomUUID(), sourceLocationId: f.loc.id, destinationLocationId: f.dst.id, requestedBy: f.userId,
+    status: 'REQUESTED', role: 'ADMIN', createdAt: new Date().toISOString(),
+    lines: [{ itemId: f.item.id, lotId: f.lot.id, quantity: 2 }],
+  } as const;
+  await persistTransfer({ ...transfer, lines: [...transfer.lines] }, f.companyId);
+  await persistTransfer({ ...transfer, lines: [...transfer.lines] }, f.companyId);
+  const order = {
+    companyId: f.companyId, channel: 'AMAZON', externalReference: randomUUID(), createdById: f.userId,
+    fulfillmentLocationId: f.loc.id, lines: [{ itemId: f.item.id, quantity: 2 }],
+  };
+  await createOrderWithReservation(order);
+  assert.equal((await createOrderWithReservation(order)).duplicate, true);
+  const queued = await listStudioAutomationRuns(f.companyId);
+  assert.deepEqual(queued.map((entry) => entry.expression).sort(), ['count.submitted', 'count.submitted', 'order.created', 'transfer.created']);
+  assert.ok(queued.every((entry) => entry.status === 'PENDING' && entry.configVersion === 2));
+  await Promise.all([drainStudioAutomationRuns(new Date()), drainStudioAutomationRuns(new Date())]);
+  assert.ok((await listStudioAutomationRuns(f.companyId)).every((entry) => entry.status === 'DELIVERED'));
+  assert.equal(await prisma.userNotification.count({ where: { companyId: f.companyId, userId: f.userId } }), 4);
+  assert.equal(await prisma.userNotification.count({ where: { companyId: other.companyId } }), 0);
 });
 
 integration('published count workflows require the configured reviewer before any stock is posted', async () => {

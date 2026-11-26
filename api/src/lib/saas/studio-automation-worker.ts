@@ -1,20 +1,13 @@
 import { prisma, resolveDatabaseUrl } from '../db.js';
 import { BUSINESS_TIMEZONE, validTimezone } from '../timezone-context.js';
-import type { AutomationDefinition } from './control-plane.js';
-import { scheduledStudioOccurrence, validateLiveAutomation } from './studio-schedule.js';
+import { enabledStudioAutomations, isStudioBusinessEvent, STUDIO_EVENT_MESSAGES } from './studio-automation-config.js';
+import { scheduledStudioOccurrence } from './studio-schedule.js';
 
 const MAX_ATTEMPTS = 5;
 const FIRST_RETRY_MS = 60_000;
 let timer: NodeJS.Timeout | undefined;
 
 class NoActiveAdmins extends Error {}
-
-function enabledSchedules(payload: unknown): AutomationDefinition[] {
-  if (!payload || typeof payload !== 'object' || !('automations' in payload) || !Array.isArray(payload.automations)) return [];
-  const enabled = payload.automations.filter((row): row is AutomationDefinition => row?.enforce === true);
-  enabled.forEach(validateLiveAutomation);
-  return enabled;
-}
 
 export async function enqueueStudioSchedules(now: Date): Promise<number> {
   const configs = await prisma.controlPlaneConfig.findMany({
@@ -26,7 +19,7 @@ export async function enqueueStudioSchedules(now: Date): Promise<number> {
   let queued = 0;
   for (const config of configs) {
     try {
-      const schedules = enabledSchedules(config.payload);
+      const schedules = enabledStudioAutomations(config.payload).filter((entry) => entry.trigger === 'schedule');
       if (!schedules.length) continue;
       const payload = config.payload as { publishedAt?: string };
       const publishedAt = new Date(payload.publishedAt ?? '');
@@ -65,24 +58,23 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
         // Hold the claim through notification insertion and completion. A crash rolls all three back.
         const claimed = await tx.studioAutomationRun.updateMany({ where: claim, data: { attempts: { increment: 1 } } });
         if (!claimed.count) return;
-        const [current, lifecycle] = await Promise.all([
-          tx.controlPlaneConfig.findFirst({
-            where: { companyId: run.companyId, kind: 'published', status: 'published' },
-            orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
-            select: { payload: true },
-          }),
-          tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } }),
-        ]);
+        const current = await tx.controlPlaneConfig.findFirst({
+          where: { companyId: run.companyId, kind: 'published', status: 'published' },
+          orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
+          select: { payload: true },
+        });
+        const lifecycle = await tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } });
         const stillEnabled = lifecycle?.status !== 'suspended' &&
-          enabledSchedules(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression);
+          enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression);
         if (stillEnabled) {
           const recipients = await tx.user.findMany({
             where: { companyId: run.companyId, status: 'ACTIVE', role: { in: ['ADMIN', 'ADMIN_USER'] } },
             select: { id: true },
           });
           if (!recipients.length) throw new NoActiveAdmins();
+          const body = isStudioBusinessEvent(run.expression) ? STUDIO_EVENT_MESSAGES[run.expression] : `Scheduled reminder for ${run.occurrence}.`;
           await tx.userNotification.createMany({ data: recipients.map(({ id }) => ({
-            userId: id, companyId: run.companyId, title: run.name, body: `Scheduled reminder for ${run.occurrence}.`, type: 'studio.scheduled',
+            userId: id, companyId: run.companyId, title: run.name, body, type: 'studio.automation',
           })) });
         }
         await tx.studioAutomationRun.update({
@@ -111,7 +103,7 @@ export async function listStudioAutomationRuns(companyId: string) {
   if (!resolveDatabaseUrl()) return [];
   return prisma.studioAutomationRun.findMany({
     where: { companyId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
-    select: { id: true, name: true, occurrence: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
+    select: { id: true, name: true, expression: true, occurrence: true, createdAt: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
   });
 }
 

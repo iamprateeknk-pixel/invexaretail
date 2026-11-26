@@ -139,12 +139,16 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     const requestAutomation = (body: unknown) => json(url, '/studio/v1/automations', { method: 'POST', headers: studioAuth, body: JSON.stringify(body) });
     assert.equal((await requestAutomation({ ...automation, actionKey: 'SEND_EMAIL' })).status, 400);
     assert.equal((await requestAutomation(automation)).status, 200);
+    const eventAutomation = { ...automation, key: 'count-notification', trigger: 'event', expression: 'count.submitted' };
+    assert.equal((await requestAutomation({ ...eventAutomation, expression: 'inventory.low_stock' })).status, 400);
+    assert.equal((await requestAutomation(eventAutomation)).status, 200);
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);
     const published = await json(url, '/studio/v1/publish', { method: 'POST', headers: studioAuth });
     assert.equal(published.status, 200);
     assert.deepEqual(published.body.published.workflows.find((entry: { key: string }) => entry.key === workflow.key), workflow);
     assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === automation.key), automation);
+    assert.deepEqual(published.body.published.automations.find((entry: { key: string }) => entry.key === eventAutomation.key), eventAutomation);
 
     try {
       const after = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });

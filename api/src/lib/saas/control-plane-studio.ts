@@ -6,7 +6,7 @@ import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, Pa
 import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';
 import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
-import { validateLiveAutomation } from './studio-schedule.js';
+import { validateLiveAutomation } from './studio-automation-config.js';
 
 function validateLiveApproval(workflow: WorkflowDefinition): void {
   try {

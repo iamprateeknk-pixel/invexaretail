@@ -12,6 +12,7 @@ import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
 import type { AppliedCountWorkflow } from './saas/workflow-approval-policy.js';
+import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 import { itemRowToRecord } from './item-record-mapper.js';
 import { transferRowToRecord, transferCartonRowToRecord } from './transfer-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
@@ -895,27 +896,24 @@ export async function persistCountDeletion(id: string, companyId: string): Promi
 export async function persistCount(count: CountRecord, companyId: string): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  await prisma.stockCount.upsert({
-    where: { id: count.id, companyId },
-    update: {
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.stockCount.findUnique({ where: { id: count.id, companyId }, select: { id: true } });
+    const fields = {
       physicalQty: count.physicalQuantity,
       bookQty: count.bookQty,
       mode: count.mode,
       parentCountId: count.parentCountId ?? null,
-    },
-    create: {
-      id: count.id,
-      itemId: count.itemId,
-      lotId: count.lotId,
-      locationId: count.locationId,
-      physicalQty: count.physicalQuantity,
-      bookQty: count.bookQty,
-      mode: count.mode,
-      submittedById: count.submittedBy,
-      parentCountId: count.parentCountId ?? null,
-      requestId: count.requestId ?? null,
-      companyId,
-    } as never,
+    };
+    await tx.stockCount.upsert({
+      where: { id: count.id, companyId },
+      update: fields,
+      create: {
+        ...fields,
+        id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId,
+        submittedById: count.submittedBy, requestId: count.requestId ?? null, companyId,
+      } as never,
+    });
+    if (!existing) await queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId, entityId: count.id });
   });
 }
 
@@ -941,6 +939,8 @@ export async function persistCountBatch(countBatch: readonly CountRecord[], comp
         companyId,
       })) as never,
     });
+    // A pooled submission is one operator action even though it saves several lot counts.
+    await queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId, entityId: countBatch[0].id });
   });
 }
 
@@ -1080,20 +1080,19 @@ export async function persistTransfer(transfer: TransferRecord, companyId: strin
   if (!databaseEnabled) return;
   requireDatabase();
   const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
-  await prisma.transfer.upsert({
-    where: { id: transfer.id, companyId },
-    update: { status: status as any, notes: transfer.notes, cartonCount: transfer.cartonCount ?? null },
-    create: {
-      id: transfer.id,
-      sourceLocationId: transfer.sourceLocationId,
-      destinationLocationId: transfer.destinationLocationId,
-      requestedById: transfer.requestedBy,
-      status: status as any,
-      notes: transfer.notes,
-      cartonCount: transfer.cartonCount ?? null,
-      companyId,
-      lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
-    },
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.transfer.findUnique({ where: { id: transfer.id, companyId }, select: { id: true } });
+    const fields = { status: status as any, notes: transfer.notes, cartonCount: transfer.cartonCount ?? null };
+    await tx.transfer.upsert({
+      where: { id: transfer.id, companyId },
+      update: fields,
+      create: {
+        ...fields, id: transfer.id, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId,
+        requestedById: transfer.requestedBy, companyId,
+        lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
+      },
+    });
+    if (!existing) await queueStudioBusinessEvent(tx, { event: 'transfer.created', companyId, entityId: transfer.id });
   });
 }
 

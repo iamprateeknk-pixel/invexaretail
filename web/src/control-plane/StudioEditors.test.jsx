@@ -144,3 +144,27 @@ test('scheduled reminders require explicit activation and failed runs show their
     assert.deepEqual(saved, [{ ...automation, enforce: true }]);
   } finally { globalThis.fetch = previous; }
 });
+
+test('an event notification can be enabled only for a supported business event', async () => {
+  const original = globalThis.fetch;
+  const saved = [];
+  globalThis.fetch = async (_url, init) => {
+    if (init.method === 'GET') return Response.json({ runs: [] });
+    saved.push(JSON.parse(init.body));
+    return Response.json({ success: true });
+  };
+  try {
+    const automation = { key: 'count', name: 'Count submitted', trigger: 'event', expression: 'count.submitted', actionKey: 'SEND_NOTIFICATION' };
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [automation] } }));
+    const toggle = screen.getByRole('checkbox', { name: 'Send for new events after publishing' });
+    fireEvent.click(toggle);
+    const event = screen.getByRole('combobox', { name: 'What happens' });
+    fireEvent.change(event, { target: { value: 'inventory.low_stock' } });
+    assert.ok(!screen.queryByRole('checkbox', { name: 'Send for new events after publishing' }));
+    fireEvent.change(event, { target: { value: 'transfer.created' } });
+    assert.equal(screen.getByRole('checkbox', { name: 'Send for new events after publishing' }).getAttribute('aria-checked'), 'false');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Send for new events after publishing' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(saved, [{ ...automation, expression: 'transfer.created', enforce: true }]);
+  } finally { globalThis.fetch = original; }
+});
