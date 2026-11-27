@@ -771,7 +771,13 @@ class QueuedAction extends QueuedOperation {
   String? lastError;
   @override
   String? lastErrorCode;
-  bool get requiresRescan => const {'PUTAWAY_TASK_CHANGED', 'TRANSFER_RECEIVE_CHANGED', 'TRANSFER_PICK_CHANGED'}.contains(lastErrorCode);
+  bool get requiresRescan => const {
+    'PUTAWAY_TASK_CHANGED',
+    'TRANSFER_RECEIVE_CHANGED',
+    'TRANSFER_PICK_CHANGED',
+    'OFFLINE_WAREHOUSE_POLICY_REJECTED',
+    'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE',
+  }.contains(lastErrorCode);
   // See QueuedCount.status - same conflict/rejected/pending contract.
   @override
   String status;

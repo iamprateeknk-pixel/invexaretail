@@ -42,6 +42,7 @@ class SessionController extends ChangeNotifier {
       mobileNavigation = null;
       _countPermitsRequired = false;
       _offlineCountPermit = null;
+      _offlineWarehousePermits = null;
     }
   }
 
@@ -80,8 +81,10 @@ class SessionController extends ChangeNotifier {
   String? _mobilePolicyIdentity;
   int _mobilePolicyRequest = 0;
   bool _countPermitsRequired = false;
-  OfflineCountPermit? _offlineCountPermit;
+  OfflinePermit? _offlineCountPermit;
+  Map<String, OfflinePermit?>? _offlineWarehousePermits;
   String _countPermitScope(String identity) => 'offline-count|$identity';
+  String _warehousePermitScope(String identity) => 'offline-warehouse|$identity';
   Timer? _snapshotExpiry;
   bool offlineReadsUnavailable = false;
 
@@ -350,6 +353,7 @@ class SessionController extends ChangeNotifier {
     _mobilePolicyRequest += 1;
     _countPermitsRequired = false;
     _offlineCountPermit = null;
+    _offlineWarehousePermits = null;
     api.cacheScope = null;
     api.offlinePolicy = null;
     try {
@@ -361,6 +365,7 @@ class SessionController extends ChangeNotifier {
       await store.clearReadModel(legacyScope);
       await store.saveMobilePolicy(scope, null);
       await store.saveMobilePolicy(_countPermitScope(scope), null);
+      await store.saveMobilePolicy(_warehousePermitScope(scope), null);
     }
     user = null;
     dashboard = null;
@@ -535,6 +540,14 @@ class SessionController extends ChangeNotifier {
     api.offlinePolicy = policy == null ? null : MobileOfflinePolicy.fromJson(policy);
   }
 
+  Map<String, OfflinePermit?> _decodeWarehousePermits(Object? raw) {
+    final permits = asMap(raw);
+    return {
+      for (final scope in ['picks', 'receiving', 'putaway'])
+        scope: OfflinePermit.fromJson(permits[scope]),
+    };
+  }
+
   Future<void> _refreshMobilePolicy() async {
     final identity = api.cacheScope;
     if (identity == null || !isSignedIn) return;
@@ -545,14 +558,23 @@ class SessionController extends ChangeNotifier {
       if (!current()) return;
       if (_mobilePolicyIdentity != identity) {
         final savedPermit = await store.loadMobilePolicy(_countPermitScope(identity));
+        final savedWarehouse = await store.loadMobilePolicy(_warehousePermitScope(identity));
         if (!current()) return;
         _countPermitsRequired = savedPermit != null;
         _offlineCountPermit = null;
         if (savedPermit != null) {
           try {
-            _offlineCountPermit = OfflineCountPermit.fromJson(jsonDecode(savedPermit));
+            _offlineCountPermit = OfflinePermit.fromJson(jsonDecode(savedPermit));
           } on FormatException {
             // A damaged grant cannot authorize newly captured work.
+          }
+        }
+        _offlineWarehousePermits = null;
+        if (savedWarehouse != null) {
+          try {
+            _offlineWarehousePermits = _decodeWarehousePermits(jsonDecode(savedWarehouse));
+          } on FormatException {
+            _offlineWarehousePermits = {};
           }
         }
         _mobilePolicyIdentity = identity;
@@ -574,8 +596,14 @@ class SessionController extends ChangeNotifier {
       _applyMobilePolicy(policy);
       _countPermitsRequired = runtime.containsKey('offlineCountPermit');
       final rawPermit = runtime['offlineCountPermit'];
-      _offlineCountPermit = OfflineCountPermit.fromJson(rawPermit);
-      await store.saveMobilePolicy(_countPermitScope(identity), _countPermitsRequired ? jsonEncode(rawPermit) : null);
+      _offlineCountPermit = OfflinePermit.fromJson(rawPermit);
+      final rawWarehouse = runtime['offlineWarehousePermits'];
+      final warehousePermitsRequired = runtime.containsKey('offlineWarehousePermits');
+      _offlineWarehousePermits = warehousePermitsRequired ? _decodeWarehousePermits(rawWarehouse) : null;
+      await Future.wait([
+        store.saveMobilePolicy(_countPermitScope(identity), _countPermitsRequired ? jsonEncode(rawPermit) : null),
+        store.saveMobilePolicy(_warehousePermitScope(identity), warehousePermitsRequired ? jsonEncode(rawWarehouse) : null),
+      ]);
       if (!current()) return;
       if (encoded != saved) {
         await store.saveMobilePolicy(identity, encoded);
@@ -638,6 +666,7 @@ class SessionController extends ChangeNotifier {
     required String path,
     required Map<String, dynamic> body,
     String? mutationId,
+    bool requiresRescan = false,
   }) async {
     final generation = api.sessionGeneration;
     final deviceId = await _device();
@@ -656,13 +685,18 @@ class SessionController extends ChangeNotifier {
         type: type,
         method: method,
         path: path,
-        body: body,
+        body: Map.of(body),
+        status: requiresRescan ? 'rejected' : 'pending',
+        lastErrorCode: requiresRescan ? 'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE' : null,
+        lastError: requiresRescan ? 'Offline permission or a current task revision was unavailable.' : null,
         createdAt: DateTime.now().toIso8601String(),
       ),
     ];
     await _saveActions();
     if (generation == api.sessionGeneration) {
-      notice = 'Offline. $type queued and will sync when the API is reachable.';
+      notice = requiresRescan
+          ? 'Action saved in Sync Center. Reconnect and refresh the task before trying again.'
+          : 'Offline. $type queued and will sync when the API is reachable.';
       notifyListeners();
     }
     return true;
@@ -686,13 +720,34 @@ class SessionController extends ChangeNotifier {
     // One idempotency key per user action: the body's own requestId when it has one (pick, receive),
     // otherwise a fresh one. It is reused by the offline queue and every later retry.
     final mutationId = body['requestId']?.toString().isNotEmpty == true ? body['requestId'].toString() : newRequestId();
+    final generation = api.sessionGeneration;
+    final warehousePermits = _offlineWarehousePermits;
+    final workflow = switch (type) {
+      'PICK' => (scope: 'picks', revision: 'pickRevision'),
+      'TRANSFER_RECEIVE' => (scope: 'receiving', revision: 'receiveRevision'),
+      'PUTAWAY' => (scope: 'putaway', revision: 'taskRevision'),
+      _ => null,
+    };
+    // Keep the authority that was available when the action began. The
+    // server can replay a committed receipt even if the permit now expired.
+    final capturedPermit = workflow == null ? null : warehousePermits?[workflow.scope]?.currentToken;
     try {
       await api.sendRaw(method, path, body: body, mutationId: mutationId);
+      if (generation != api.sessionGeneration || !isSignedIn) return false;
       notice = '$type saved.';
       await refreshAll();
       return true;
     } on ApiException catch (err) {
+      if (generation != api.sessionGeneration || !isSignedIn) return false;
       if (err.isOffline) {
+        if (warehousePermits != null && workflow != null) {
+          final hasRevision = asString(body[workflow.revision]).isNotEmpty;
+          final hasRequestId = type == 'PUTAWAY' || asString(body['requestId']).isNotEmpty;
+          final canReplay = capturedPermit != null && hasRevision && hasRequestId;
+          return enqueueAction(type: type, method: method, path: path, mutationId: mutationId,
+            body: {...body, if (canReplay) 'offlinePermit': capturedPermit},
+            requiresRescan: !canReplay);
+        }
         if (type == 'PICK' && asString(body['pickRevision']).isEmpty) {
           error = 'Connect and refresh this pick task before saving it offline.';
           return false;
@@ -724,7 +779,7 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
     final requestId = newRequestId();
     final generation = api.sessionGeneration;
-    final permit = _offlineCountPermit;
+    final offlinePermit = _offlineCountPermit?.currentToken;
     final permitsRequired = _countPermitsRequired;
     try {
       if (weight) {
@@ -763,7 +818,6 @@ class SessionController extends ChangeNotifier {
     } on ApiException catch (err) {
       if (generation != api.sessionGeneration || !isSignedIn) return false;
       if (err.isOffline) {
-        final offlinePermit = permit != null && DateTime.now().isBefore(permit.expiresAt) ? permit.token : null;
         final requiresRecount = permitsRequired && (offlinePermit == null || stockRevision == null);
         final queued = await enqueueCount(
           itemId: itemId,

@@ -189,9 +189,9 @@ class _EntryCard extends StatelessWidget {
               count?.requiresRecount == true
                   ? 'Recount required. Open the count task again and enter a fresh quantity.'
                   : entry.action?.requiresRescan == true
-                      ? switch (entry.action?.lastErrorCode) {
-                          'TRANSFER_RECEIVE_CHANGED' => 'Refresh the transfer and review the remaining quantities before receiving again.',
-                          'TRANSFER_PICK_CHANGED' => 'Refresh the pick task and scan its items again.',
+                      ? switch (entry.action?.type) {
+                          'TRANSFER_RECEIVE' => 'Refresh the transfer and review the remaining quantities before receiving again.',
+                          'PICK' => 'Refresh the pick task and scan its items again.',
                           _ => 'Refresh your putaway tasks and scan the destination bin again.',
                         }
                       : syncReason(entry.status),
@@ -200,7 +200,8 @@ class _EntryCard extends StatelessWidget {
             if (entry.lastError != null && attention) ...[
               const SizedBox(height: 6),
               Text(
-                count?.lastErrorCode == 'LOCAL_OFFLINE_COUNT_UNAVAILABLE'
+                count?.lastErrorCode == 'LOCAL_OFFLINE_COUNT_UNAVAILABLE' ||
+                    entry.action?.lastErrorCode == 'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE'
                     ? entry.lastError!
                     : 'Server said: ${entry.lastError}',
                 style: TextStyle(color: color, fontSize: 12),

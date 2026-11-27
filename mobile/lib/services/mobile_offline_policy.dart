@@ -1,16 +1,18 @@
-class OfflineCountPermit {
-  const OfflineCountPermit(this.token, this.expiresAt);
+class OfflinePermit {
+  const OfflinePermit(this.token, this.expiresAt);
 
   final String token;
   final DateTime expiresAt;
 
-  static OfflineCountPermit? fromJson(Object? value) {
+  String? get currentToken => DateTime.now().isBefore(expiresAt) ? token : null;
+
+  static OfflinePermit? fromJson(Object? value) {
     if (value is! Map) return null;
     final token = value['token'];
     final expiry = value['expiresAt'];
     final expiresAt = expiry is String ? DateTime.tryParse(expiry) : null;
     if (token is! String || token.isEmpty || expiresAt == null) return null;
-    return OfflineCountPermit(token, expiresAt);
+    return OfflinePermit(token, expiresAt);
   }
 }
 

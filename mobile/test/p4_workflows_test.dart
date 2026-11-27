@@ -30,6 +30,91 @@ SessionController _controller(Future<http.Response> Function(http.Request reques
 http.Response _json(Object body, [int status = 200]) => http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
 
 void main() {
+  test('warehouse replays retain each captured permit across restart and refresh', () async {
+    final store = DriftStore.inMemory();
+    addTearDown(store.close);
+    const commands = [
+      (type: 'PICK', path: '/api/v1/picker/transfers/p1/pick-slips', scope: 'picks', revision: 'pickRevision'),
+      (type: 'TRANSFER_RECEIVE', path: '/api/v1/transfers/r1/receive', scope: 'receiving', revision: 'receiveRevision'),
+      (type: 'PUTAWAY', path: '/api/v1/putaway-tasks/b1/confirm', scope: 'putaway', revision: 'taskRevision'),
+    ];
+    final attempts = <String, List<({Map<String, dynamic> body, String? mutationId})>>{};
+    var offline = true;
+    var policyAvailable = true;
+    var tokenVersion = 'original';
+    Future<http.Response> handle(http.Request request) async {
+      if (request.url.path.endsWith('/runtime/config')) {
+        if (!policyAvailable) throw const SocketException('offline policy');
+        return _json({'runtime': {'offlineWarehousePermits': {
+          for (final command in commands) command.scope: {
+            'token': '$tokenVersion-${command.scope}',
+            'expiresAt': DateTime.now().toUtc().add(const Duration(hours: 1)).toIso8601String(),
+          },
+        }}});
+      }
+      if (request.method != 'POST') return _json({});
+      attempts.putIfAbsent(request.url.path, () => []).add((
+        body: jsonDecode(request.body) as Map<String, dynamic>,
+        mutationId: request.headers['x-mutation-id'],
+      ));
+      if (offline) throw const SocketException('warehouse offline');
+      if (request.url.path.endsWith('/receive')) {
+        return _json({'code': 'OFFLINE_WAREHOUSE_POLICY_REJECTED', 'error': 'Offline permission changed.'}, 403);
+      }
+      return _json({'success': true});
+    }
+
+    SessionController session() => _controller(handle, store: store)..api.cacheScope = 'default-company|u1|STORE_USER';
+    await session().refreshAll();
+    policyAvailable = false;
+    final capturing = session();
+    await capturing.refreshAll();
+    for (final command in commands) {
+      expect(await capturing.runOrQueue(type: command.type, method: 'POST', path: command.path,
+        body: {command.revision: 'revision-${command.scope}', 'requestId': 'req-${command.scope}'}), isTrue);
+    }
+    offline = false;
+    policyAvailable = true;
+    tokenVersion = 'replacement';
+    final restarted = session();
+    await restarted.loadQueuesForTest();
+    await restarted.refreshAll();
+    for (final command in commands) {
+      final [online, queued] = attempts[command.path]!;
+      expect(online.body.containsKey('offlinePermit'), isFalse);
+      expect(queued.body, {...online.body, 'offlinePermit': 'original-${command.scope}'});
+      expect(online.mutationId, 'req-${command.scope}');
+      expect(queued.mutationId, online.mutationId);
+    }
+    final saved = (await store.loadQueuedActions('default-company', 'u1')).single;
+    expect(saved.requiresRescan, isTrue);
+    await restarted.retryQueuedAction(saved.localId);
+    expect(attempts[saved.path], hasLength(2));
+  });
+
+  test('warehouse work with no current offline permission stays visible without replay', () async {
+    var sends = 0;
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/runtime/config')) {
+        return _json({'runtime': {'offlineWarehousePermits': {'putaway': null}}});
+      }
+      if (request.method == 'POST') {
+        sends += 1;
+        throw const SocketException('offline');
+      }
+      return _json({});
+    })..api.cacheScope = 'default-company|u1|STORE_USER';
+    await controller.refreshAll();
+    const scan = {'taskRevision': 'revision', 'scannedBinCode': 'BIN-A'};
+    expect(await controller.runOrQueue(type: 'PUTAWAY', method: 'POST',
+      path: '/api/v1/putaway-tasks/b1/confirm', body: scan), isTrue);
+    final saved = controller.queuedActions.single;
+    expect(saved.body, scan);
+    expect(saved.requiresRescan, isTrue);
+    await controller.flushQueue();
+    expect(sends, 1);
+  });
+
   test('a restarted count replays the original permit and retains revoked work for recount', () async {
     final store = DriftStore.inMemory();
     addTearDown(store.close);
