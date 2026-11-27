@@ -40,6 +40,8 @@ class SessionController extends ChangeNotifier {
     if (_mobilePolicyIdentity != api.cacheScope) {
       api.offlinePolicy = null;
       mobileNavigation = null;
+      _countPermitsRequired = false;
+      _offlineCountPermit = null;
     }
   }
 
@@ -77,6 +79,9 @@ class SessionController extends ChangeNotifier {
   List<String>? mobileNavigation;
   String? _mobilePolicyIdentity;
   int _mobilePolicyRequest = 0;
+  bool _countPermitsRequired = false;
+  OfflineCountPermit? _offlineCountPermit;
+  String _countPermitScope(String identity) => 'offline-count|$identity';
   Timer? _snapshotExpiry;
   bool offlineReadsUnavailable = false;
 
@@ -343,6 +348,8 @@ class SessionController extends ChangeNotifier {
     final legacyScope = _legacyCacheScope;
     _mobilePolicyIdentity = null;
     _mobilePolicyRequest += 1;
+    _countPermitsRequired = false;
+    _offlineCountPermit = null;
     api.cacheScope = null;
     api.offlinePolicy = null;
     try {
@@ -353,6 +360,7 @@ class SessionController extends ChangeNotifier {
       await store.clearReadModel(scope);
       await store.clearReadModel(legacyScope);
       await store.saveMobilePolicy(scope, null);
+      await store.saveMobilePolicy(_countPermitScope(scope), null);
     }
     user = null;
     dashboard = null;
@@ -536,6 +544,17 @@ class SessionController extends ChangeNotifier {
       final saved = await store.loadMobilePolicy(identity);
       if (!current()) return;
       if (_mobilePolicyIdentity != identity) {
+        final savedPermit = await store.loadMobilePolicy(_countPermitScope(identity));
+        if (!current()) return;
+        _countPermitsRequired = savedPermit != null;
+        _offlineCountPermit = null;
+        if (savedPermit != null) {
+          try {
+            _offlineCountPermit = OfflineCountPermit.fromJson(jsonDecode(savedPermit));
+          } on FormatException {
+            // A damaged grant cannot authorize newly captured work.
+          }
+        }
         _mobilePolicyIdentity = identity;
         if (saved == null) {
           _applyMobilePolicy(null);
@@ -553,6 +572,11 @@ class SessionController extends ChangeNotifier {
       final policy = runtime['mobilePolicy'] is Map ? asMap(runtime['mobilePolicy']) : null;
       final encoded = policy == null ? null : jsonEncode(policy);
       _applyMobilePolicy(policy);
+      _countPermitsRequired = runtime.containsKey('offlineCountPermit');
+      final rawPermit = runtime['offlineCountPermit'];
+      _offlineCountPermit = OfflineCountPermit.fromJson(rawPermit);
+      await store.saveMobilePolicy(_countPermitScope(identity), _countPermitsRequired ? jsonEncode(rawPermit) : null);
+      if (!current()) return;
       if (encoded != saved) {
         await store.saveMobilePolicy(identity, encoded);
         if (current()) await store.clearReadModel(identity);
@@ -699,6 +723,9 @@ class SessionController extends ChangeNotifier {
     busy = true;
     notifyListeners();
     final requestId = newRequestId();
+    final generation = api.sessionGeneration;
+    final permit = _offlineCountPermit;
+    final permitsRequired = _countPermitsRequired;
     try {
       if (weight) {
         final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity,
@@ -734,7 +761,10 @@ class SessionController extends ChangeNotifier {
       unawaited(_refreshDashboardQuietly());
       return true;
     } on ApiException catch (err) {
+      if (generation != api.sessionGeneration || !isSignedIn) return false;
       if (err.isOffline) {
+        final offlinePermit = permit != null && DateTime.now().isBefore(permit.expiresAt) ? permit.token : null;
+        final requiresRecount = permitsRequired && (offlinePermit == null || stockRevision == null);
         final queued = await enqueueCount(
           itemId: itemId,
           locationId: locationId,
@@ -743,8 +773,14 @@ class SessionController extends ChangeNotifier {
           mode: weight ? 'weight' : 'manual',
           requestId: requestId,
           stockRevision: stockRevision,
+          offlineCountPermit: requiresRecount ? null : offlinePermit,
+          requiresRecount: requiresRecount,
         );
-        if (queued && isSignedIn) notice = 'Offline. Count queued and will sync when the API is reachable.';
+        if (queued && generation == api.sessionGeneration && isSignedIn) {
+          notice = requiresRecount
+              ? 'Count saved in Sync Center. Reconnect and refresh the task to count again.'
+              : 'Offline. Count queued and will sync when the API is reachable.';
+        }
         return queued;
       }
       error = err.message;
@@ -777,6 +813,8 @@ class SessionController extends ChangeNotifier {
     String mode = 'manual',
     String? requestId,
     String? stockRevision,
+    String? offlineCountPermit,
+    bool requiresRecount = false,
   }) async {
     final generation = api.sessionGeneration;
     final deviceId = await _device();
@@ -790,6 +828,10 @@ class SessionController extends ChangeNotifier {
         deviceId: deviceId,
         requestId: requestId ?? localId,
         stockRevision: stockRevision,
+        offlineCountPermit: offlineCountPermit,
+        status: requiresRecount ? 'rejected' : 'pending',
+        lastErrorCode: requiresRecount ? 'LOCAL_OFFLINE_COUNT_UNAVAILABLE' : null,
+        lastError: requiresRecount ? 'Offline count permission or a current task revision was unavailable.' : null,
         itemId: itemId,
         locationId: locationId,
         physicalQuantity: physicalQuantity,
@@ -957,6 +999,7 @@ class SessionController extends ChangeNotifier {
         totalQuantity: item.physicalQuantity,
         requestId: item.requestId,
         stockRevision: item.stockRevision,
+        offlineCountPermit: item.offlineCountPermit,
       );
       return;
     }
@@ -968,6 +1011,7 @@ class SessionController extends ChangeNotifier {
       mode: item.mode,
       requestId: item.requestId,
       stockRevision: item.stockRevision,
+      offlineCountPermit: item.offlineCountPermit,
     );
   }
 

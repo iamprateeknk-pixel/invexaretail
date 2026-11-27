@@ -345,6 +345,7 @@ class InvexaApi {
     String mode = 'manual',
     String? requestId,
     String? stockRevision,
+    String? offlineCountPermit,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts', body: {
       'itemId': itemId,
@@ -354,6 +355,7 @@ class InvexaApi {
       if (lotNo != null && lotNo.isNotEmpty) 'lotNo': lotNo,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
       if (stockRevision != null) 'stockRevision': stockRevision,
+      if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
     }, mutationId: requestId);
     return CountRecord.fromJson(asMap(payload['count']));
   }
@@ -366,6 +368,7 @@ class InvexaApi {
     required double totalQuantity,
     String? requestId,
     String? stockRevision,
+    String? offlineCountPermit,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts/weight', body: {
       'itemId': itemId,
@@ -373,6 +376,7 @@ class InvexaApi {
       'totalQuantity': totalQuantity,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
       if (stockRevision != null) 'stockRevision': stockRevision,
+      if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
     }, mutationId: requestId);
     return asList(payload['counts']).map((row) => CountRecord.fromJson(asMap(row))).toList();
   }

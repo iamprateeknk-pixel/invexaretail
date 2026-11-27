@@ -199,7 +199,12 @@ class _EntryCard extends StatelessWidget {
             ),
             if (entry.lastError != null && attention) ...[
               const SizedBox(height: 6),
-              Text('Server said: ${entry.lastError}', style: TextStyle(color: color, fontSize: 12)),
+              Text(
+                count?.lastErrorCode == 'LOCAL_OFFLINE_COUNT_UNAVAILABLE'
+                    ? entry.lastError!
+                    : 'Server said: ${entry.lastError}',
+                style: TextStyle(color: color, fontSize: 12),
+              ),
             ],
             const SizedBox(height: 4),
             Text(

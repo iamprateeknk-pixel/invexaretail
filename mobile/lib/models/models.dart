@@ -604,6 +604,7 @@ class QueuedCount extends QueuedOperation {
     this.deviceId = '',
     this.nextAttemptAt,
     this.stockRevision,
+    this.offlineCountPermit,
     this.lastErrorCode,
   }) : requestId = requestId ?? localId;
 
@@ -627,6 +628,7 @@ class QueuedCount extends QueuedOperation {
   // after a timeout or a reconnect can never record the count twice.
   final String requestId;
   final String? stockRevision;
+  final String? offlineCountPermit;
   @override
   final String createdAt;
   @override
@@ -635,7 +637,11 @@ class QueuedCount extends QueuedOperation {
   String? lastError;
   @override
   String? lastErrorCode;
-  bool get requiresRecount => lastErrorCode == 'COUNT_STOCK_CHANGED';
+  bool get requiresRecount => const {
+    'COUNT_STOCK_CHANGED',
+    'OFFLINE_COUNT_POLICY_REJECTED',
+    'LOCAL_OFFLINE_COUNT_UNAVAILABLE',
+  }.contains(lastErrorCode);
   // 'pending' auto-retries on the next flush; 'conflict'/'rejected' stop
   // auto-retrying and wait for the user to retry or discard (see
   // classifySyncFailure in sync_resolution.dart).
@@ -659,6 +665,7 @@ class QueuedCount extends QueuedOperation {
       deviceId: asString(json['deviceId']),
       nextAttemptAt: json['nextAttemptAt'] == null ? null : asString(json['nextAttemptAt']),
       stockRevision: json['stockRevision'] as String?,
+      offlineCountPermit: json['offlineCountPermit'] as String?,
       lastErrorCode: json['lastErrorCode'] as String?,
     );
   }
@@ -670,6 +677,7 @@ class QueuedCount extends QueuedOperation {
         'nextAttemptAt': nextAttemptAt,
         'requestId': requestId,
         if (stockRevision != null) 'stockRevision': stockRevision,
+        if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
         if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
         'itemId': itemId,
         'locationId': locationId,

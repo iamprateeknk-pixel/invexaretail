@@ -30,6 +30,81 @@ SessionController _controller(Future<http.Response> Function(http.Request reques
 http.Response _json(Object body, [int status = 200]) => http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
 
 void main() {
+  test('a restarted count replays the original permit and retains revoked work for recount', () async {
+    final store = DriftStore.inMemory();
+    addTearDown(store.close);
+    var permit = 'original';
+    var offline = true;
+    var policyAvailable = true;
+    final attempts = <Map<String, dynamic>>[];
+    Future<http.Response> handle(http.Request request) async {
+      if (request.url.path.endsWith('/runtime/config')) {
+        if (!policyAvailable) throw const SocketException('offline');
+        return _json({'runtime': {
+          'offlineCountPermit': {
+            'token': permit,
+            'expiresAt': DateTime.now().toUtc().add(const Duration(hours: 1)).toIso8601String(),
+          },
+        }});
+      }
+      if (request.url.path.endsWith('/stock-counts/weight')) {
+        attempts.add(jsonDecode(request.body) as Map<String, dynamic>);
+        if (offline) throw const SocketException('offline');
+        return _json({'code': 'OFFLINE_COUNT_POLICY_REJECTED', 'error': 'Offline count permission changed.'}, 403);
+      }
+      return _json({});
+    }
+    final first = _controller(handle, store: store);
+    first.api.cacheScope = 'default-company|u1|STORE_USER';
+    await first.refreshAll();
+    policyAvailable = false;
+    final capturing = _controller(handle, store: store);
+    capturing.api.cacheScope = 'default-company|u1|STORE_USER';
+    await capturing.refreshAll();
+    expect(await capturing.submitCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 2.5,
+      weight: true, stockRevision: 'original-revision'), isTrue);
+    expect(attempts.single.containsKey('offlineCountPermit'), isFalse);
+    permit = 'replacement';
+    policyAvailable = true;
+    offline = false;
+    final restarted = _controller(handle, store: store);
+    restarted.api.cacheScope = 'default-company|u1|STORE_USER';
+    await restarted.loadQueuesForTest();
+    await restarted.refreshAll();
+    expect(attempts, hasLength(2));
+    expect(attempts.last['offlineCountPermit'], 'original');
+    expect(attempts.last['requestId'], attempts.first['requestId']);
+    expect(attempts.last['stockRevision'], 'original-revision');
+    final saved = (await store.loadQueuedCounts('default-company', 'u1')).single;
+    expect(saved.requiresRecount, isTrue);
+    expect(saved.physicalQuantity, 2.5);
+    await restarted.retryQueuedCount(saved.localId);
+    expect(attempts, hasLength(2));
+  });
+
+  test('a count saved without permitted offline access stays in Sync Center', () async {
+    final attempts = <http.Request>[];
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/runtime/config')) {
+        return _json({'runtime': {'offlineCountPermit': null}});
+      }
+      if (request.url.path.endsWith('/stock-counts')) {
+        attempts.add(request);
+        throw const SocketException('offline');
+      }
+      return _json({});
+    });
+    controller.api.cacheScope = 'default-company|u1|STORE_USER';
+    await controller.refreshAll();
+    expect(await controller.submitCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 2,
+      stockRevision: 'saved-revision'), isTrue);
+    final saved = controller.queuedCounts.single;
+    expect(saved.requiresRecount, isTrue);
+    expect(saved.physicalQuantity, 2);
+    await controller.flushQueue();
+    expect(attempts, hasLength(1));
+  });
+
   testWidgets('offline putaway retains the scanned bin and task revision until reconciliation', (tester) async {
     final sent = <Map<String, dynamic>>[];
     var offline = true;
