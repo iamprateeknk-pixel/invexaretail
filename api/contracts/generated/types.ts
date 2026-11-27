@@ -3728,7 +3728,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Receive a dispatched transfer at its destination. Retries use requestId. An optional receive revision verifies that the expected quantities are current. */
+        /** Receive a dispatched transfer at its destination. Matching retries recover the original receipt. An optional receive revision verifies that the expected quantities are current. */
         post: operations["postTransfersTransferIdReceive"];
         delete?: never;
         options?: never;
@@ -19405,7 +19405,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Retry key; a repeat returns the recorded receipt with duplicate=true. */
+                    /** @description Retry key; send the original receipt details to recover the recorded result with duplicate=true. */
                     requestId: string;
                     /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
                     receiveRevision?: string;
@@ -19483,13 +19483,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description The receive revision changed, the request ID is unavailable, or a matching receipt is still being processed. */
+            /** @description The receive revision changed, the request ID is unavailable, or the same ID was submitted with changed receipt details. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

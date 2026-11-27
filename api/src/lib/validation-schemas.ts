@@ -138,6 +138,7 @@ export const pickSlipSchema = z
   });
 
 const transferReceiptLineSchema = z.object({
+  lineId: z.string().optional(),
   itemId: z.string().min(1),
   lotId: z.string().min(1),
   // The handler maps receivedQty with plain Number(): a missing value is

@@ -52,7 +52,7 @@ import { checkApprovalGate } from '../lib/approval-rules.js';
 import { persistConfirmedPickAllocations, databaseEnabled } from '../lib/persistence.js';
 import { DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
 import { canReceiveTransfer, type ReceiptLineInput, validateReceiptLines } from '../lib/receipt-validation.js';
-import { findReceiptByRequestId, beginReceiptRequest, persistTransferReceipt, rememberReceipt, endReceiptRequest } from '../lib/transfer-receipt.js';
+import { findReceiptByRequestId, beginReceiptRequest, persistTransferReceipt, rememberReceipt, endReceiptRequest, receiptRequestFingerprint, receiptRequestReused } from '../lib/transfer-receipt.js';
 import { isReceivableStatus } from '../lib/transfer-lifecycle.js';
 import { transferReceiveChanged } from '../lib/receive-revision.js';
 import { requireEvidenceForDamage } from '../lib/evidence-rules.js';
@@ -678,14 +678,13 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   // through answers with the recorded result - before the status gate, because
   // that receipt may itself have completed the transfer.
   const prior = await findReceiptByRequestId(ctx, requestId);
-  if (prior) {
-    if (prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
-    return res.json({
+  if (prior && prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
+  const replay = (saved: NonNullable<typeof prior>) => res.json({
       success: true, duplicate: true, transfer,
-      receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
-    });
-  }
-  if (!isReceivableStatus(transfer.status) && req.body.receiveRevision === undefined) {
+      receipt: { requestId, receiptId: saved.receiptId, transferId, receivedAt: saved.receivedAt, receivedBy: saved.receivedBy, receivedQty: saved.receivedQty, damagedQty: saved.damagedQty, shortageQty: saved.shortageQty, excessQty: saved.excessQty, status: saved.status, notes: saved.notes ?? '' },
+  });
+  if (prior && !prior.requestFingerprint) return replay(prior);
+  if (!prior && !isReceivableStatus(transfer.status) && req.body.receiveRevision === undefined) {
     return sendError(res, 400, 'INVALID_TRANSITION', 'Only dispatched, in-transit or partially received transfers can be received.');
   }
   // Shape validation for the receipt lines runs here, after the
@@ -693,15 +692,6 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   // where it was, ahead of the retry lookup).
   const input = parseBody(req, res, transferReceiveSchema);
   if (input === null) return;
-  if (input.receiveRevision) {
-    if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Receive revisions require a connected database.');
-    if (!isReceivableStatus(transfer.status) || transfer.receiveRevision !== input.receiveRevision) {
-      const conflict = transferReceiveChanged();
-      return sendError(res, 409, conflict.code, conflict.message);
-    }
-  }
-  if (!beginReceiptRequest(ctx, requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt request ID is unavailable.');
-  try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
   if (Array.isArray(req.body.lines)) {
@@ -726,6 +716,25 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   } else {
     return sendError(res, 400, 'VALIDATION_FAILED', 'Multi-lot transfers require a separate receipt line for every item and lot.');
   }
+  const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
+  const requestFingerprint = receiptRequestFingerprint({ notes, lines: receiptLines,
+    expectedRevision: input.receiveRevision, qcInspections: bodyInspections });
+  if (prior) {
+    if (prior.requestFingerprint !== requestFingerprint) {
+      const conflict = receiptRequestReused();
+      return sendError(res, 409, conflict.code, conflict.message);
+    }
+    return replay(prior);
+  }
+  if (input.receiveRevision) {
+    if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Receive revisions require a connected database.');
+    if (!isReceivableStatus(transfer.status) || transfer.receiveRevision !== input.receiveRevision) {
+      const conflict = transferReceiveChanged();
+      return sendError(res, 409, conflict.code, conflict.message);
+    }
+  }
+  if (!beginReceiptRequest(ctx, requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt request ID is unavailable.');
+  try {
 
   const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
   if (damagedLines.length > 0) {
@@ -747,7 +756,6 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const inspections = databaseEnabled
       ? await prisma.qcInspection.findMany({ where: { sourceDocument: transferId, inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcInspections())
       : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
-    const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
     const itemsById = new Map(listItems().map((item) => [item.id, item]));
     const qc = assertReceiptQcComplete(
       receiptLines.map((line) => ({
@@ -774,7 +782,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
-      tenant: ctx, expectedRevision: input.receiveRevision,
+      tenant: ctx, expectedRevision: input.receiveRevision, requestFingerprint,
     });
 
     let status: TransferRecord['status'];
@@ -902,6 +910,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     rememberReceipt(ctx, {
       requestId, transferId, receiptId: persisted?.receiptId, status: status as 'RECEIVED' | 'PARTIAL_RECEIVED', receivedBy: req.user!.id,
       receivedAt, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+      requestFingerprint,
     });
     return res.json({
       success: true, duplicate: persisted?.duplicate ?? false,
@@ -909,6 +918,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt, receivedBy: req.user!.id, ...summary, status, notes },
     });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'DUPLICATE_REQUEST') return sendError(res, 409, error.code, error.message);
     if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to process receipt.');
   }

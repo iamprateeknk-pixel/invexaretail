@@ -231,6 +231,11 @@ test('a partial receipt keeps the transfer open and a retry of it still posts on
     assert.equal(first.body.receipt.status, 'PARTIAL_RECEIVED');
     const retry = await call('POST', `/transfers/${id}/receive`, store, partial);
     assert.equal(retry.body.duplicate, true);
+    const changed = await call('POST', `/transfers/${id}/receive`, store, {
+      ...partial, lines: [{ ...partial.lines[0], receivedQty: 4 }],
+    });
+    assert.equal(changed.status, 409);
+    assert.equal(changed.body.code, 'DUPLICATE_REQUEST');
     assert.equal(findStockLedgerEntry('item-1001', 'lot-1001', 'loc-1')?.onHand, before + 3);
     assert.equal(listTransfers().find((row) => row.id === id)?.status, 'PARTIAL_RECEIVED');
   });

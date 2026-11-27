@@ -27969,7 +27969,7 @@
     "/transfers/{transferId}/receive": {
       "post": {
         "operationId": "postTransfersTransferIdReceive",
-        "summary": "Receive a dispatched transfer at its destination. Retries use requestId. An optional receive revision verifies that the expected quantities are current.",
+        "summary": "Receive a dispatched transfer at its destination. Matching retries recover the original receipt. An optional receive revision verifies that the expected quantities are current.",
         "tags": [
           "transfers"
         ],
@@ -28037,11 +28037,11 @@
             }
           },
           "409": {
-            "description": "The receive revision changed, the request ID is unavailable, or a matching receipt is still being processed.",
+            "description": "The receive revision changed, the request ID is unavailable, or the same ID was submitted with changed receipt details.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -28076,7 +28076,7 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 191,
-                    "description": "Retry key; a repeat returns the recorded receipt with duplicate=true."
+                    "description": "Retry key; send the original receipt details to recover the recorded result with duplicate=true."
                   },
                   "receiveRevision": {
                     "type": "string",

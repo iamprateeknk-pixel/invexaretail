@@ -1002,6 +1002,7 @@ model TransferReceipt {
   receivedById String
   status       String
   notes        String?  @db.Text
+  requestFingerprint String?
   createdAt    DateTime @default(now())
   lines        TransferReceiptLine[]
   tenantId    String   @default("tenant-invexa")

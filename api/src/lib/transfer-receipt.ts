@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { prisma, queryRaw, executeRaw } from './db.js';
 import { databaseEnabled } from './persistence.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
@@ -38,7 +38,27 @@ export type StoredReceipt = {
   shortageQty: number;
   excessQty: number;
   notes?: string;
+  requestFingerprint?: string;
 };
+
+export function receiptRequestFingerprint(input: {
+  lines: ReceiptLineInput[];
+  notes: string;
+  expectedRevision?: string;
+  qcInspections?: unknown[];
+}): string {
+  const lines = input.lines.map((line) => [
+    line.lineId || null, line.itemId, line.lotId, line.receivedQty, line.damagedQty, line.shortageQty, line.excessQty ?? 0,
+  ]);
+  const command = JSON.stringify([input.expectedRevision ?? null, input.notes, lines, input.qcInspections ?? []],
+    (_key, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+      : value);
+  return createHash('sha256').update(command).digest('hex');
+}
+
+export const receiptRequestReused = () =>
+  new DomainError('DUPLICATE_REQUEST', 'This request ID already belongs to a different transfer receipt submission.');
 
 // Blueprint v4 §18: "duplicate receive request returns prior result rather
 // than double-posting". The database keeps the durable copy (TransferReceipt
@@ -70,8 +90,8 @@ export async function findReceiptByRequestId(ctx: TenantContext, requestId: stri
     const receipt = memoryReceipts.get(receiptKey(ctx.companyId, requestId));
     return receipt?.receivedBy === ctx.userId ? receipt : null;
   }
-  const rows = await queryRaw<Array<{ id: string; transferId: string; receivedById: string; status: 'RECEIVED' | 'PARTIAL_RECEIVED'; notes: string | null; createdAt: Date }>>(prisma,
-    `SELECT r.id, r."transferId", r."receivedById", r.status, r.notes, r."createdAt"
+  const rows = await queryRaw<Array<{ id: string; transferId: string; receivedById: string; status: 'RECEIVED' | 'PARTIAL_RECEIVED'; notes: string | null; createdAt: Date; requestFingerprint: string | null }>>(prisma,
+    `SELECT r.id, r."transferId", r."receivedById", r.status, r.notes, r."createdAt", r."requestFingerprint"
      FROM "TransferReceipt" AS r JOIN "Transfer" AS t ON t.id = r."transferId"
      WHERE r."requestId" = ? AND t."companyId" = ? AND r."receivedById" = ?`,
     requestId, ctx.companyId, ctx.userId);
@@ -85,6 +105,7 @@ export async function findReceiptByRequestId(ctx: TenantContext, requestId: stri
     requestId, transferId: row.transferId, receiptId: row.id, status: row.status, receivedBy: row.receivedById,
     receivedAt: row.createdAt.toISOString(), receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty),
     shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), notes: row.notes ?? undefined,
+    requestFingerprint: row.requestFingerprint ?? undefined,
   };
 }
 
@@ -97,9 +118,11 @@ export async function persistTransferReceipt(input: {
   lines: ReceiptLineInput[];
   tenant: TenantContext;
   expectedRevision?: string;
+  requestFingerprint?: string;
 }): Promise<PersistedReceiptResult | null> {
   if (!databaseEnabled) return null;
   if (input.receivedById !== input.tenant.userId) throw new DomainError('FORBIDDEN', 'The receiver must match the signed-in account.');
+  const requestFingerprint = input.requestFingerprint ?? receiptRequestFingerprint(input);
 
   return prisma.$transaction(async (tx) => {
     // The existing receipt key is globally unique. Lock that same key across
@@ -109,12 +132,13 @@ export async function persistTransferReceipt(input: {
       'SELECT status FROM "Transfer" WHERE id = ? AND "companyId" = ? AND "destinationLocationId" = ? FOR UPDATE',
       input.transferId, input.tenant.companyId, input.destinationLocationId);
     if (!transfers[0]) throw new DomainError('NOT_FOUND', 'Transfer was not found.');
-    const duplicate = await queryRaw<Array<{ id: string; transferId: string; receivedById: string; createdAt: Date; notes: string | null; status: 'RECEIVED' | 'PARTIAL_RECEIVED' }>>(tx,
-      'SELECT id, "transferId", "receivedById", "createdAt", notes, status FROM "TransferReceipt" WHERE "requestId" = ?', input.requestId);
+    const duplicate = await queryRaw<Array<{ id: string; transferId: string; receivedById: string; createdAt: Date; notes: string | null; status: 'RECEIVED' | 'PARTIAL_RECEIVED'; requestFingerprint: string | null }>>(tx,
+      'SELECT id, "transferId", "receivedById", "createdAt", notes, status, "requestFingerprint" FROM "TransferReceipt" WHERE "requestId" = ?', input.requestId);
     if (duplicate[0]) {
       if (duplicate[0].transferId !== input.transferId || duplicate[0].receivedById !== input.tenant.userId) {
         throw new DomainError('CONFLICT', 'This receipt request ID is unavailable.');
       }
+      if (duplicate[0].requestFingerprint && duplicate[0].requestFingerprint !== requestFingerprint) throw receiptRequestReused();
       const totals = await queryRaw<Array<{ receivedQty: number; damagedQty: number; shortageQty: number; excessQty: number }>>(tx,
         'SELECT COALESCE(SUM("receivedQty"),0) "receivedQty", COALESCE(SUM("damagedQty"),0) "damagedQty", COALESCE(SUM("shortageQty"),0) "shortageQty", COALESCE(SUM("excessQty"),0) "excessQty" FROM "TransferReceiptLine" WHERE "receiptId" = ?',
         duplicate[0].id);
@@ -144,8 +168,8 @@ export async function persistTransferReceipt(input: {
     const receiptId = `receipt-${randomUUID()}`;
 
     const [receipt] = await queryRaw<Array<{ createdAt: Date }>>(tx,
-      'INSERT INTO "TransferReceipt" (id,"requestId","transferId","receivedById",status,notes) VALUES (?,?,?,?,?,?) RETURNING "createdAt"',
-      receiptId, input.requestId, input.transferId, input.receivedById, status, input.notes || null);
+      'INSERT INTO "TransferReceipt" (id,"requestId","transferId","receivedById",status,notes,"requestFingerprint") VALUES (?,?,?,?,?,?,?) RETURNING "createdAt"',
+      receiptId, input.requestId, input.transferId, input.receivedById, status, input.notes || null, requestFingerprint);
     for (const line of input.lines) {
       const dbLine = dbLines.find((candidate) => line.lineId ? candidate.id === line.lineId : candidate.itemId === line.itemId && candidate.lotId === line.lotId)!;
       const excessQty = Number(line.excessQty ?? 0);

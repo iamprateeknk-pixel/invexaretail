@@ -35,7 +35,7 @@ Picker task detail includes a revision covering the assignment, requested lines,
 
 Transfer-out locks the same transfer row as pick-slip saves. Before posting source stock, it checks that the status, locations and slip IDs still match those used for approval evaluation. A change returns a conflict so the supervisor can refresh and review the updated transfer.
 
-Transfer receiving checks the company's transfer and destination inside the receipt transaction. Concurrent API requests with the same receipt ID use one transaction result, and the receiving account can recover that receipt after a restart. The existing global receipt ID constraint and receipt payload format are unchanged.
+Transfer receiving checks the company's transfer and destination inside the receipt transaction. Matching requests with the same receipt ID recover one result, even after restart. New receipts bind the ID to the submitted quantities, notes, inspections and revision before QC can reclassify a line. Reusing the ID for a different submission returns a conflict. Receipts saved before the nullable fingerprint was added keep their original lookup. The migration leaves historical rows and the existing global request ID constraint intact.
 
 The transfer list and carton lookup issue a receiving revision for receivable transfers. The app keeps the revision from the opened transfer with the queued receipt. PostgreSQL verifies it against the locked transfer and lines before recording stock. A stale receipt stays in Sync Center until the operator refreshes and checks the remaining quantities. An already committed receipt can still replay. Keep a revision-aware API available during the native pilot and rollback while devices have queued receipts.
 

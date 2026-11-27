@@ -52,6 +52,9 @@ integration('transfer receipt posts a TRANSFER_IN journal row that matches the l
   assert.equal(first?.status, 'PARTIAL_RECEIVED');
   const retry = await persistTransferReceipt(input);
   assert.equal(retry?.duplicate, true);
+  await assert.rejects(persistTransferReceipt({
+    ...input, lines: [{ ...input.lines[0], receivedQty: 6 }],
+  }), { code: 'DUPLICATE_REQUEST' });
 
   const ledger = await prisma.stockLedger.findMany({ where: { itemId: f.item.id, locationId: f.dst.id } });
   assert.equal(ledger.length, 1);
@@ -112,12 +115,13 @@ integration('the receiving route replays a committed receipt without a transfer 
   const server = app.listen(0);
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
+  const submit = (body: object) => fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${f.transfer.id}/receive`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${generateJWT(f.userId, f.tenant.companyId)}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   try {
-    const result = await fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${f.transfer.id}/receive`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${generateJWT(f.userId, f.tenant.companyId)}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requestId, lines, notes: 'Five checked' }),
-    });
+    const result = await submit({ requestId, lines, notes: 'Five checked' });
     const body = await result.json();
     assert.equal(result.status, 200, JSON.stringify(body));
     assert.equal(body.duplicate, true);
@@ -125,6 +129,13 @@ integration('the receiving route replays a committed receipt without a transfer 
     assert.equal(body.receipt.receiptId, prior?.receiptId);
     assert.equal(body.receipt.receivedAt, prior?.receivedAt);
     assert.equal(body.receipt.notes, 'Five checked');
+    const altered = await submit({ requestId, lines, notes: 'Different notes' });
+    assert.equal(altered.status, 409);
+    assert.equal((await altered.json()).code, 'DUPLICATE_REQUEST');
+    await prisma.transferReceipt.update({ where: { requestId }, data: { requestFingerprint: null } });
+    const historical = await submit({ requestId });
+    assert.equal(historical.status, 200);
+    assert.equal((await historical.json()).receipt.receiptId, prior?.receiptId);
     assert.equal((await journal(f.item.id, f.dst.id)).length, 1);
   } finally {
     server.closeAllConnections();
@@ -178,6 +189,9 @@ integration('a carton scan gives the current receive revision and a stale offlin
     assert.equal(replay.status, 200, JSON.stringify(replay.body));
     assert.equal(replay.body.duplicate, true);
     assert.equal(replay.body.receipt.receiptId, saved.body.receipt.receiptId);
+    const modified = await call(receive, { ...savedCommand, lines: [{ ...lines[0], receivedQty: 3 }] });
+    assert.equal(modified.status, 409);
+    assert.equal(modified.body.code, 'DUPLICATE_REQUEST');
     assert.equal((await journal(f.item.id, f.dst.id)).length, 1);
 
     // Distinct commands may reach persistence after both read the same state.
