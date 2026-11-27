@@ -2790,3 +2790,14 @@ model StudioLowStockState {
 
   @@id([companyId, ruleId])
 }
+
+model CountSubmissionReceipt {
+  companyId   String
+  actorId     String
+  requestId   String
+  fingerprint String
+  countIds    String[]
+  createdAt   DateTime @default(now())
+
+  @@id([companyId, actorId, requestId])
+}

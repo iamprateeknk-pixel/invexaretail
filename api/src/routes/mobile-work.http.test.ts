@@ -238,3 +238,21 @@ test('warehouse pickers are also assigned counts, and their own work feed offers
     assert.equal(submitted.body.count.bookQty, undefined, 'a picker\'s count is blind, same as a store user\'s');
   });
 });
+
+test('pooled warehouse counts require an assignment and stay blind on submission and replay', async () => {
+  await withServer(async (call) => {
+    const picker = tokenFor('picker@retail.local');
+    const { item, lots } = weightItem(unique());
+    for (const lot of lots) adjustStockLedger(item.id, lot.id, 'wh-1', 2);
+    const body = { itemId: item.id, locationId: 'wh-1', totalQuantity: 5, requestId: `picker-${unique()}` };
+    assert.equal((await call('POST', '/stock-counts/weight', picker, body)).status, 403);
+    createCountAssignment({ id: `asg-${unique()}`, locationId: 'wh-1', itemId: item.id,
+      assignedToId: 'user-picker-1', assignedById: 'user-admin-1', countDate: '2026-09-19' });
+    const submitted = await call('POST', '/stock-counts/weight', picker, body);
+    assert.equal(submitted.status, 201);
+    assert.deepEqual(submitted.body, { success: true, lots: 3 });
+    const replay = await call('POST', '/stock-counts/weight', picker, body);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replay.body, { success: true, duplicate: true, lots: 3 });
+  });
+});

@@ -3541,7 +3541,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A repeat requestId returns the original (200, duplicate true). Whole units unless the item is weight/decimal. */
+        /** Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A matching requestId replays the committed count (200, duplicate true). Whole units unless the item is weight/decimal. */
         post: operations["postStockCounts"];
         delete?: never;
         options?: never;
@@ -3558,7 +3558,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit one decimal total for a weight-counted item; the server spreads it over the item's lots in FEFO/FIFO order and creates a count per lot, all or nothing. Store users get only the number of lots, never the split. */
+        /** Submit one decimal total for a weight-counted item. The server allocates it over the lots in FEFO/FIFO order and saves the counts together. Store users and Warehouse pickers get the number of lots. A matching requestId replays the committed counts. */
         post: operations["postStockCountsWeight"];
         delete?: never;
         options?: never;
@@ -18617,7 +18617,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description This lot is already submitted and waiting for review. */
+            /** @description The lot already has a count awaiting review or the request ID belongs to a different submission. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -18699,7 +18699,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Already submitted, or already being saved. */
+            /** @description The item already has a count awaiting review or the request ID belongs to a different submission. */
             409: {
                 headers: {
                     [name: string]: unknown;

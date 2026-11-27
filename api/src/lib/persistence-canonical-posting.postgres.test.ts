@@ -10,12 +10,14 @@ import { persistConfirmedPickAllocations, persistCount, persistCountBatch, persi
 import { createOrderWithReservation } from './orders.js';
 import { drainStudioAutomationRuns, listStudioAutomationRuns } from './saas/studio-automation-worker.js';
 import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
-import { createCountRecord, type CountRecord } from './repository.js';
-import { createEnhancedUser } from './enterprise-repository.js';
+import { createCountRecord, items, type CountRecord } from './repository.js';
+import { createEnhancedUser, findUserById as findEnhancedUser } from './enterprise-repository.js';
+import { mutationIdempotency } from './mutation-idempotency.js';
 import { generateJWT } from './otp-auth.js';
-import { enforceOperationalCompanyScope, registerLocationCompany } from './saas/tenant-scope.js';
+import { enforceOperationalCompanyScope, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
 import { extractToken } from '../routes/enterprise-auth.js';
 import coreRouter from '../routes/core.js';
+import { countSubmissionFingerprint } from './count-submission-receipts.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -193,6 +195,9 @@ integration('published count workflows require the configured reviewer before an
 
 integration('a failed multi-lot count batch leaves no partial StockCount rows', async () => {
   const f = await fixture(10);
+  const requestId = randomUUID();
+  const fingerprint = countSubmissionFingerprint({ requestId, kind: 'POOLED', itemId: f.item.id,
+    locationId: f.loc.id, mode: 'weight', quantity: 6 });
   const valid: CountRecord = {
     id: `count-${randomUUID()}`,
     itemId: f.item.id,
@@ -205,6 +210,7 @@ integration('a failed multi-lot count batch leaves no partial StockCount rows', 
     role: 'ADMIN',
     createdAt: new Date().toISOString(),
     status: 'PENDING_REVIEW',
+    requestId,
   };
   const invalid = {
     ...valid,
@@ -215,8 +221,78 @@ integration('a failed multi-lot count batch leaves no partial StockCount rows', 
     reviewedAt: undefined,
   };
 
-  await assert.rejects(persistCountBatch([valid, invalid], f.companyId));
+  await assert.rejects(persistCountBatch([valid, invalid], f.companyId, fingerprint));
   assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, itemId: f.item.id } }), 0);
+  assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId } }), 0);
+  await persistCountBatch([valid], f.companyId, fingerprint);
+  assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId } }), 1);
+});
+
+integration('count retries use committed PostgreSQL receipts and bind the request ID to its contents', async () => {
+  const f = await fixture(10);
+  const other = await fixture(10);
+  for (const own of [f, other]) {
+    registerLocationCompany(own.loc.id, own.companyId);
+    registerItemCompany(own.item.id, own.companyId);
+    items.push({ id: own.item.id, code: own.item.code, name: own.item.name, status: 'ACTIVE',
+      countMethod: 'ITEM_WEIGHT', decimalQuantity: true, lots: [{ id: own.lot.id, itemId: own.item.id, lotNo: own.lot.lotNo }] });
+    createEnhancedUser({ id: own.userId, companyId: own.companyId, email: `${own.userId}@test.invexa.local`,
+      name: 'Counter', passwordHash: 'x', role: 'ADMIN', branchIds: [], locationIds: [own.loc.id], status: 'active' });
+  }
+  const historicKey = randomUUID();
+  const historic = await prisma.stockCount.create({ data: {
+    companyId: f.companyId, submittedById: f.userId, itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id,
+    bookQty: 10, physicalQty: 8, requestId: historicKey, reviewStatus: 'APPROVED',
+  } });
+  const secondLot = await prisma.lot.create({ data: { itemId: f.item.id, lotNo: `L-${randomUUID()}` } });
+  await prisma.stockLedger.create({ data: { companyId: f.companyId, itemId: f.item.id, lotId: secondLot.id, locationId: f.loc.id, onHand: 5 } });
+  items.find(({ id }) => id === f.item.id)!.lots.push({ id: secondLot.id, itemId: f.item.id, lotNo: secondLot.lotNo });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, mutationIdempotency(), coreRouter);
+  const server = app.listen(0);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const submit = (scope: typeof f, body: Record<string, unknown>, weight = false) => fetch(
+    `http://127.0.0.1:${address.port}/api/v1/stock-counts${weight ? '/weight' : ''}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${generateJWT(scope.userId, scope.companyId)}`, 'Content-Type': 'application/json',
+        'X-Mutation-Id': String(body.requestId) },
+      body: JSON.stringify({ itemId: scope.item.id, locationId: scope.loc.id, ...body }),
+    },
+  ).then(async (response) => ({ status: response.status, body: await response.json() }));
+  try {
+    const retried = await submit(f, { requestId: historicKey, physicalQuantity: 8 });
+    assert.equal(retried.status, 200, JSON.stringify(retried.body));
+    assert.equal(retried.body.count.id, historic.id);
+    assert.equal((await submit(f, { requestId: historicKey, physicalQuantity: 9 })).status, 409);
+    const otherCommand = { requestId: historicKey, physicalQuantity: 9 };
+    const otherResults = await Promise.all(Array.from({ length: 4 }, () => submit(other, otherCommand)));
+    const created = otherResults.filter((result) => result.status === 201);
+    assert.equal(created.length, 1, JSON.stringify(otherResults));
+    assert.ok(otherResults.every((result) => [200, 201].includes(result.status)), JSON.stringify(otherResults));
+    assert.ok(otherResults.every((result) => result.body.count.id === created[0].body.count.id));
+    assert.notEqual(created[0].body.count.id, historic.id);
+
+    const requestId = randomUUID();
+    const command = { requestId, totalQuantity: 6.5 };
+    const results = await Promise.all(Array.from({ length: 5 }, () => submit(f, command, true)));
+    assert.equal(results.filter((result) => result.status === 201).length, 1, JSON.stringify(results));
+    assert.ok(results.every((result) => [200, 201].includes(result.status)), JSON.stringify(results));
+    const ids = results.map((result) => result.body.counts.map((row: { id: string }) => row.id));
+    for (const actual of ids) assert.deepEqual(actual, ids[0]);
+    assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, requestId } }), 2);
+    assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId } }), 1);
+    assert.equal((await submit(f, { ...command, totalQuantity: 7 }, true)).status, 409);
+    assert.equal((await submit(f, { requestId, physicalQuantity: 6.5, mode: 'weight' })).status, 409);
+    findEnhancedUser(f.userId)!.role = 'WAREHOUSE_PICKER';
+    const blindReplay = await submit(f, command, true);
+    assert.equal(blindReplay.status, 200);
+    assert.deepEqual(blindReplay.body, { success: true, duplicate: true, lots: 2 });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock atomically, and cannot deduct twice', async () => {

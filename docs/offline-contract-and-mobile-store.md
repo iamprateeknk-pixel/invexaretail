@@ -21,7 +21,9 @@ Version **1**. A device queues *commands*, not state. Each command is:
 - `REJECTED` - malformed, wrong version, or wrong tenant/actor;
 - `READY` - safe to apply through the normal domain service (which posts stock only via `InventoryPostingService`).
 
-**Status: contract + decision logic + tests only - deliberately not wired.** In practice the app already syncs safely without it: each queued count/action carries a client `requestId` that the existing endpoints treat idempotently, and a 409 moves the item to the Conflict Center for a user decision (`sync_resolution.dart`, `p4_workflows_test.dart`). What this contract adds is a per-entity *version* check (stale-write detection) and one uniform envelope. Adopting it needs (a) a server route with a persisted applied-command store dispatching to the count/pick/receive/putaway services and (b) the screens enqueuing into `sync_commands`. Both change user-facing behaviour and should be verified on a device, so they were not switched on blind.
+**Current replay path.** The app sends the original `requestId` to the existing count endpoints. PostgreSQL commits the receipt, the count rows, and any configured Studio event together. The receipt binds the ID to the company, submitting user, and normalized count input. A matching retry returns the committed result using the user's current role. Reusing the same ID with changed input returns a 409 and the app shows the item in its Conflict Center. Older count rows with a request ID can still be replayed after comparing their stored location, item, mode, lot and quantity where available.
+
+The typed command envelope, per-entity version checks, and common replay for pick, receive and putaway remain open. Verify the complete offline journey on physical devices before release.
 
 ## Mobile store - `mobile/lib/services/native_database.dart`
 

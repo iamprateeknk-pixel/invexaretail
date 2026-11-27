@@ -26738,7 +26738,7 @@
     "/stock-counts": {
       "post": {
         "operationId": "postStockCounts",
-        "summary": "Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A repeat requestId returns the original (200, duplicate true). Whole units unless the item is weight/decimal.",
+        "summary": "Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A matching requestId replays the committed count (200, duplicate true). Whole units unless the item is weight/decimal.",
         "tags": [
           "Stock counts"
         ],
@@ -26859,7 +26859,7 @@
             }
           },
           "409": {
-            "description": "This lot is already submitted and waiting for review.",
+            "description": "The lot already has a count awaiting review or the request ID belongs to a different submission.",
             "content": {
               "application/json": {
                 "schema": {
@@ -26879,7 +26879,7 @@
     "/stock-counts/weight": {
       "post": {
         "operationId": "postStockCountsWeight",
-        "summary": "Submit one decimal total for a weight-counted item; the server spreads it over the item's lots in FEFO/FIFO order and creates a count per lot, all or nothing. Store users get only the number of lots, never the split.",
+        "summary": "Submit one decimal total for a weight-counted item. The server allocates it over the lots in FEFO/FIFO order and saves the counts together. Store users and Warehouse pickers get the number of lots. A matching requestId replays the committed counts.",
         "tags": [
           "Stock counts"
         ],
@@ -27024,7 +27024,7 @@
             }
           },
           "409": {
-            "description": "Already submitted, or already being saved.",
+            "description": "The item already has a count awaiting review or the request ID belongs to a different submission.",
             "content": {
               "application/json": {
                 "schema": {
