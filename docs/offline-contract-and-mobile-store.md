@@ -27,7 +27,9 @@ Assigned lot and pooled counts now carry an opaque stock revision from `GET /mob
 
 Deploy the revision-aware API before the native pilot. The staged rollback target must also support count revisions while native clients can still have revision-bearing counts in their queues.
 
-The typed command envelope and common versioned replay for pick, receive and putaway remain open. Verify the complete offline journey on physical devices before release.
+The shared typed command envelope remains open. Each active replay uses its existing workflow endpoint. Verify the complete offline journey on physical devices before release.
+
+Picker task detail includes a revision covering the assignment, requested lines, saved slips and relevant source stock. The app queues one pending slip per transfer and retains the original revision and request ID. PostgreSQL checks the current revision and saves the slip and transfer status in one transaction. Simultaneous saves against the same task are resolved before a second slip can commit. A committed slip can be recovered by its original request ID. A stale slip stays in Sync Center for review, and the operator must refresh and scan again. The supervisor's later transfer-out confirmation remains a separate stock-posting step.
 
 Transfer receiving checks the company's transfer and destination inside the receipt transaction. Concurrent API requests with the same receipt ID use one transaction result, and the receiving account can recover that receipt after a restart. The existing global receipt ID constraint and receipt payload format are unchanged.
 

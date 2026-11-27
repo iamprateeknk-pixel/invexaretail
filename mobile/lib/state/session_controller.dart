@@ -647,6 +647,11 @@ class SessionController extends ChangeNotifier {
   }) async {
     error = null;
     notice = null;
+    if (type == 'PICK' && queuedActions.any((action) => action.path == path && action.status == 'pending')) {
+      error = 'Sync the saved pick for this transfer before saving another.';
+      notifyListeners();
+      return false;
+    }
     busy = true;
     notifyListeners();
     // One idempotency key per user action: the body's own requestId when it has one (pick, receive),
@@ -659,6 +664,10 @@ class SessionController extends ChangeNotifier {
       return true;
     } on ApiException catch (err) {
       if (err.isOffline) {
+        if (type == 'PICK' && asString(body['pickRevision']).isEmpty) {
+          error = 'Connect and refresh this pick task before saving it offline.';
+          return false;
+        }
         return enqueueAction(type: type, method: method, path: path, body: body, mutationId: mutationId);
       }
       error = err.message;

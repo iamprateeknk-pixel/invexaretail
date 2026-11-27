@@ -4037,7 +4037,7 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "TRANSFER_RECEIVE_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "TRANSFER_RECEIVE_CHANGED" | "TRANSFER_PICK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
@@ -12051,6 +12051,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         transfer: components["schemas"]["TransferRecord"] & {
+                            /** @description Revision of the task, saved slips and source stock. Retain it for offline replay. */
+                            pickRevision: string;
                             lines?: components["schemas"]["PickerTransferLine"][];
                         };
                         pickSlips: components["schemas"]["PickSlip"][];
@@ -17596,6 +17598,8 @@ export interface operations {
                 "application/json": {
                     /** @description Retry key: the same id from the same picker returns the saved slip. */
                     requestId?: string;
+                    /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
+                    pickRevision?: string;
                     /** Format: date-time */
                     startedAt?: string;
                     /** @description true moves the transfer to READY_FOR_ADMIN. */
@@ -17668,6 +17672,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description Pick task or source stock changed. Refresh and scan the items again. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

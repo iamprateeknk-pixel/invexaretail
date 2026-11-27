@@ -67,6 +67,7 @@
               "CONCURRENT_UPDATE_CONFLICT",
               "COUNT_STOCK_CHANGED",
               "TRANSFER_RECEIVE_CHANGED",
+              "TRANSFER_PICK_CHANGED",
               "DUPLICATE_REQUEST",
               "NOT_FOUND",
               "VALIDATION_FAILED",
@@ -15782,7 +15783,13 @@
                         },
                         {
                           "type": "object",
+                          "required": ["pickRevision"],
                           "properties": {
+                            "pickRevision": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$",
+                              "description": "Revision of the task, saved slips and source stock. Retain it for offline replay."
+                            },
                             "lines": {
                               "type": "array",
                               "items": {
@@ -25184,6 +25191,14 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Pick task or source stock changed. Refresh and scan the items again.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
           }
         },
         "security": [
@@ -25212,6 +25227,11 @@
                     "type": "string",
                     "maxLength": 191,
                     "description": "Retry key: the same id from the same picker returns the saved slip."
+                  },
+                  "pickRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "Revision from the opened picker task. Native offline saves send it unchanged."
                   },
                   "startedAt": {
                     "type": "string",

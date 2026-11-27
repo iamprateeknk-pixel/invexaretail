@@ -128,6 +128,7 @@ const pickExceptionSchema = z.object({
 /** POST /picker/transfers/:transferId/pick-slips */
 export const pickSlipSchema = z
   .object({
+    pickRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     lines: z.array(pickSlipLineSchema).optional(),
     exceptions: z.array(pickExceptionSchema).optional(),
   })

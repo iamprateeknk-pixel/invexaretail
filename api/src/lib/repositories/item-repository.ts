@@ -148,9 +148,9 @@ export async function getCatalogueVersion(ctx: TenantContext): Promise<string | 
  * Rows go through the same mapper snapshot hydration uses, so the shape is identical to the in-memory records.
  * Callers that hold the catalogue should gate this behind getCatalogueVersion; it is a large read.
  */
-export async function listItemsForCompany(ctx: TenantContext): Promise<ItemRecord[]> {
+export async function listItemsForCompany(ctx: TenantContext, db: import('@prisma/client').Prisma.TransactionClient = prisma): Promise<ItemRecord[]> {
   if (databaseEnabled) {
-    const rows = await prisma.item.findMany({
+    const rows = await db.item.findMany({
       where: { companyId: ctx.companyId },
       include: { lots: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],

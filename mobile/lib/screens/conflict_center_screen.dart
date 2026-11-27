@@ -189,9 +189,11 @@ class _EntryCard extends StatelessWidget {
               count?.requiresRecount == true
                   ? 'Recount required. Open the count task again and enter a fresh quantity.'
                   : entry.action?.requiresRescan == true
-                      ? entry.action?.lastErrorCode == 'TRANSFER_RECEIVE_CHANGED'
-                          ? 'Refresh the transfer and review the remaining quantities before receiving again.'
-                          : 'Refresh your putaway tasks and scan the destination bin again.'
+                      ? switch (entry.action?.lastErrorCode) {
+                          'TRANSFER_RECEIVE_CHANGED' => 'Refresh the transfer and review the remaining quantities before receiving again.',
+                          'TRANSFER_PICK_CHANGED' => 'Refresh the pick task and scan its items again.',
+                          _ => 'Refresh your putaway tasks and scan the destination bin again.',
+                        }
                       : syncReason(entry.status),
               style: const TextStyle(fontSize: 13),
             ),

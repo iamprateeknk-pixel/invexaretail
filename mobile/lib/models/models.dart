@@ -737,7 +737,7 @@ class QueuedAction {
   int attempts;
   String? lastError;
   String? lastErrorCode;
-  bool get requiresRescan => lastErrorCode == 'PUTAWAY_TASK_CHANGED' || lastErrorCode == 'TRANSFER_RECEIVE_CHANGED';
+  bool get requiresRescan => const {'PUTAWAY_TASK_CHANGED', 'TRANSFER_RECEIVE_CHANGED', 'TRANSFER_PICK_CHANGED'}.contains(lastErrorCode);
   // See QueuedCount.status - same conflict/rejected/pending contract.
   String status;
 

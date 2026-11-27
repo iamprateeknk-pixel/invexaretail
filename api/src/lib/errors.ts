@@ -19,6 +19,7 @@ export const ERROR_CODES = [
   'CONCURRENT_UPDATE_CONFLICT',
   'COUNT_STOCK_CHANGED',
   'TRANSFER_RECEIVE_CHANGED',
+  'TRANSFER_PICK_CHANGED',
   'DUPLICATE_REQUEST',
   'NOT_FOUND',
   'VALIDATION_FAILED',
@@ -136,6 +137,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'CONCURRENT_UPDATE_CONFLICT':
     case 'COUNT_STOCK_CHANGED':
     case 'TRANSFER_RECEIVE_CHANGED':
+    case 'TRANSFER_PICK_CHANGED':
       return 409;
     case 'DUPLICATE_REQUEST':
       return 200;

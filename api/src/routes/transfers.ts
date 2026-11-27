@@ -39,7 +39,9 @@ import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
-import { savedPickSlips } from '../lib/transfer-pick-slips.js';
+import { savedPickSlips, savePickSlip } from '../lib/transfer-pick-slips.js';
+import { pickRevision, transferPickChanged } from '../lib/pick-revision.js';
+import type { ItemRecord, StockLedgerRecord } from '../lib/repository.js';
 import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger } from '../lib/repository.js';
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { isPooledPick, allocatePick, isPickableLot } from '../lib/kg-pick.js';
@@ -381,23 +383,22 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
       lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,
     };
   });
-  return res.json({ transfer: { ...transfer, lines }, pickSlips: slips.map((event) => event.metadata) });
+  const revision = pickRevision(transfer, itemsById, ledger, slips.map((event) => event.id));
+  return res.json({ transfer: { ...transfer, lines, pickRevision: revision }, pickSlips: slips.map((event) => event.metadata) });
 });
 
 // Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
-async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, itemId: string) {
-  const item = listItems().find((candidate) => candidate.id === itemId);
+function pooledPickState(transfer: TransferRecord, itemId: string, item: ItemRecord | undefined,
+  ledger: StockLedgerRecord[], priorSlips: Awaited<ReturnType<typeof savedPickSlips>>) {
   if (!item) throw new Error('Item was not found.');
   if (!isPooledPick(item)) throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
   const requestedTotal = transfer.lines.filter((line) => line.itemId === itemId).reduce((sum, line) => sum + line.quantity, 0);
   if (!(requestedTotal > 0)) throw new Error('This item is not part of the transfer.');
-  const priorSlips = await savedPickSlips(transfer.id);
   const pickedByLot = new Map<string, number>();
   for (const slip of priorSlips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     if (line.itemId === itemId) pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
   }
   const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
-  const ledger = await listStockForLocation(ctx, transfer.sourceLocationId);
   const lots = item.lots.map((lot) => ({
     lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
     available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
@@ -406,7 +407,8 @@ async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, ite
 }
 
 router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
-  const transfer = findTransferForCompany(firstParam(req.params.transferId), req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, firstParam(req.params.transferId));
   const context = accessContext(req.user!);
   if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
@@ -414,7 +416,11 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
   if (parseBody(req, res, allocationPreviewSchema) === null) return;
   try {
     const quantity = Number(req.body?.quantity);
-    const state = await pooledPickState(tenantContext(req), transfer, String(req.body?.itemId ?? ''));
+    const itemId = String(req.body?.itemId ?? '');
+    const [items, ledger, slips] = await Promise.all([
+      listItemsForCompany(ctx), listStockForLocation(ctx, transfer.sourceLocationId), savedPickSlips(transfer.id),
+    ]);
+    const state = pooledPickState(transfer, itemId, items.find((item) => item.id === itemId), ledger, slips);
     if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8) throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
     const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
     return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
@@ -425,25 +431,32 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
 
 router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
   if (!pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
   const prior = await savedPickSlips(transferId);
   // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
-  const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
   if (requestId) {
     const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
     if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
   }
-  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer cannot be picked while ${transfer.status}.`);
+  const stale = () => sendError(res, 409, 'TRANSFER_PICK_CHANGED', transferPickChanged().message);
+  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) {
+    return req.body?.pickRevision ? stale() : sendError(res, 400, 'INVALID_TRANSITION', `Transfer cannot be picked while ${transfer.status}.`);
+  }
   // Shape validation runs here — after the scope/status guards above —
   // replacing the lines-or-exceptions presence check below.
-  if (parseBody(req, res, pickSlipSchema) === null) return;
+  const body = parseBody(req, res, pickSlipSchema);
+  if (body === null) return;
   let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
-  const itemMap = new Map(listItems().map((item) => [item.id, item]));
-  const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
+  const [items, ledger] = await Promise.all([listItemsForCompany(ctx), listStockForLocation(ctx, transfer.sourceLocationId)]);
+  const itemMap = new Map(items.map((item) => [item.id, item]));
+  const revision = pickRevision(transfer, itemMap, ledger, prior.map((event) => event.id));
+  if (body.pickRevision && body.pickRevision !== revision) return stale();
   const priorPicked = new Map<string, number>();
   for (const slip of prior) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`; priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
@@ -454,7 +467,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     for (const line of lines) {
       const item = itemMap.get(line.itemId);
       if (item && isPooledPick(item) && !line.lotId) {
-        const state = await pooledPickState(tenantContext(req), transfer, line.itemId);
+        const state = pooledPickState(transfer, line.itemId, item, ledger, prior);
         const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
         const { allocations, shortfall } = allocatePick({
           requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
@@ -479,7 +492,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       const pooled = Boolean(item && isPooledPick(item));
       if (!item || !lot || (!requested && !pooled)) throw new Error('Picked item/lot is not part of this transfer.');
       const quantity = Number(line.quantity);
-      validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, lotNo: lot.lotNo });
+      validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, itemBarcode: item.barcode, lotNo: lot.lotNo });
       const lotKey = `${line.itemId}|${line.lotId}`;
       const alreadyLot = runningLot.get(lotKey) ?? 0;
       if (pooled) {
@@ -503,7 +516,17 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     }
     const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
     const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
-    await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata }));
+    const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
+    let updated: TransferRecord;
+    if (databaseEnabled) {
+      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, metadata);
+      if (result.duplicate) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: result.metadata, transfer: result.transfer });
+      updated = result.transfer;
+      if (findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
+    } else {
+      updated = updateTransferStatus(transfer.id, nextStatus);
+      recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata });
+    }
 
     // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
     // Wrong Item or Damaged Item exception opens an owned Exception Inbox
@@ -526,16 +549,10 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       });
     }
 
-    const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
-    const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated, {
-      id: req.user!.id,
-      role: context.role,
-      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
-    });
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to save pick slip.');
   }
 });

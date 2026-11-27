@@ -67,9 +67,10 @@ double _round3(double value) => (value * 1000).round() / 1000;
 /// picked but not yet saved, and any problems reported. Reopening the task
 /// rebuilds it from the server, so closing the app never loses saved work.
 class PickSession {
-  PickSession(this.transferId, List<PickLine> lines) : lines = List.unmodifiable(lines);
+  PickSession(this.transferId, List<PickLine> lines, {this.pickRevision = ''}) : lines = List.unmodifiable(lines);
 
   final String transferId;
+  final String pickRevision;
   final List<PickLine> lines;
   // Piece scans, per item -> lot -> count; weights, per item.
   final Map<String, Map<String, double>> _scanned = {};
@@ -109,7 +110,7 @@ class PickSession {
       );
     }
     final lines = byItem.values.where((line) => line.remaining > 0 && (line.pooled || line.lots.isNotEmpty)).toList();
-    return PickSession(asString(transfer['id']), lines);
+    return PickSession(asString(transfer['id']), lines, pickRevision: asString(transfer['pickRevision']));
   }
 
   PickLine? line(String itemId) {
@@ -227,6 +228,7 @@ class PickSession {
     _weights.forEach((itemId, kg) => lots.add({'itemId': itemId, 'quantity': kg, 'inputMethod': 'MANUAL'}));
     return {
       'requestId': requestId,
+      if (pickRevision.isNotEmpty) 'pickRevision': pickRevision,
       'finished': finished,
       'lines': lots,
       'exceptions': exceptions.map((row) => Map<String, dynamic>.from(row)).toList(),
