@@ -39,7 +39,7 @@
     "@opentelemetry/sdk-node": "^0.223.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "@simplewebauthn/server": "^13.2.2",
+    "@simplewebauthn/server": "^13.3.3",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
@@ -56,7 +56,7 @@
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.12.0",
     "multer": "^2.5.0",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.6.1",
     "pdfkit": "^0.20.2",
     "pg": "^8.16.3",
     "prisma": "^7.10.0",
@@ -71,6 +71,18 @@
     "tsx": "^4.23.13"
   },
   "overrides": {
-    "effect": "^3.22.5"
+    "effect": "^3.22.5",
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.2"
+    },
+    "ajv": {
+      "fast-uri": "^3.1.9"
+    },
+    "express-rate-limit": {
+      "ip-address": "^10.7.4"
+    },
+    "prisma": {
+      "mysql2": "^3.24.6"
+    }
   }
 }
