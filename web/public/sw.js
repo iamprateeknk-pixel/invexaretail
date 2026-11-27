@@ -1,79 +1,73 @@
-const CACHE_NAME = 'invexaretail-v3';
-const RUNTIME_CACHE = 'invexaretail-runtime-v3';
+const CACHE_NAME = 'invexaretail-v4';
+const RUNTIME_CACHE = 'invexaretail-runtime-v4';
 
-const urlsToCache = [
+const PUBLIC_FILES = [
   '/index.html',
   '/favicon-32.png',
   '/favicon-16.png',
-  '/apple-touch-icon.png',
+  '/apple-touch-icon.png'
 ];
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(urlsToCache))
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(PUBLIC_FILES))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => Promise.all(
-      cacheNames
-        .filter((cacheName) => cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE)
-        .map((cacheName) => caches.delete(cacheName))
-    ))
+    caches.keys().then(keys => Promise.all(
+      keys.filter(key =>
+        key.startsWith('invexaretail-') &&
+        key !== CACHE_NAME &&
+        key !== RUNTIME_CACHE
+      ).map(key => caches.delete(key))
+    )).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
+self.addEventListener('fetch', event => {
+  const request = event.request;
+
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
   if (url.origin !== self.location.origin) return;
-  if (/\/(control|studio|sync)\/v1\//.test(url.pathname)) return;
 
-  if (event.request.mode === 'navigate') {
+  // Never cache API or authenticated requests.
+  if (/^\/(api|control|studio|sync)(\/|$)/.test(url.pathname)) return;
+  if (/^\/(health|ready|meta)(\/|$)/.test(url.pathname)) return;
+  if (request.headers.has('Authorization')) return;
+
+  // Network-first navigation with public shell fallback.
+  if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match('/index.html'))
+      fetch(request, { cache: 'no-store' })
+        .catch(() => caches.match('/index.html')
+          .then(response => response || Response.error()))
     );
     return;
   }
 
-  if (event.request.url.includes('/api/')) {
+  // Cache only public static files.
+  if (
+    PUBLIC_FILES.includes(url.pathname) ||
+    url.pathname.startsWith('/assets/')
+  ) {
     event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          if (response.status === 200) {
-            const copy = response.clone();
-            caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match(event.request).then((response) => response || new Response(
-          JSON.stringify({ offline: true, message: 'Offline mode' }),
-          { status: 503, headers: { 'Content-Type': 'application/json' } }
-        )))
-    );
-    return;
-  }
+      caches.open(RUNTIME_CACHE).then(async cache => {
+        const cached = await cache.match(request);
+        if (cached) return cached;
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      if (response.status === 200) {
-        const copy = response.clone();
-        caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, copy));
-      }
-      return response;
-    }))
-  );
+        const response = await fetch(request);
+        if (response.ok) {
+          await cache.put(request, response.clone());
+        }
+        return response;
+      })
+    );
+  }
 });
-
-// No background sync: the web app does not queue writes offline (src/lib/offline-policy.js).
