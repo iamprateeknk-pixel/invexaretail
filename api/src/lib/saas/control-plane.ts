@@ -232,6 +232,8 @@ export type ConfigurationVersion = {
   editorIds?: string[];
   releaseReview?: { id: string; revision: string; requestedBy: string; requestedAt: string;
     reviewerId?: string; approvedBy?: string; approvedAt?: string };
+  releaseSchedule?: { id: string; revision: string; reviewId: string; activateAt: string; requestedAt: string;
+    requestedBy: string; status: 'scheduled' | 'blocked' | 'activated'; failure?: string; activatedAt?: string };
   parentVersion: number | null;
   page: PageDefinition;
   fields: FieldDefinition[];
@@ -1083,8 +1085,10 @@ export class ControlPlane {
     return this.studioSvc.rollback(scope, version);
   }
 
-  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions, approvingReview = false) {
-    const companyId = this.studioSvc.requireLockedCompany(scope);
+  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions, approvingReview = false,
+    activation?: { id: string; now: Date }) {
+    const companyId = activation && scope.actorType === 'system' && scope.companyId
+      ? scope.companyId : this.studioSvc.requireLockedCompany(scope);
     const copy = (versions: Map<string, ConfigurationVersion>) => {
       const value = versions.get(companyId);
       return new Map(value ? [[companyId, structuredClone(value)]] : []);
@@ -1101,7 +1105,8 @@ export class ControlPlane {
       assertFeature: this.assertFeature.bind(this), assertBillingWritable: this.assertBillingWritable.bind(this),
       isFeatureEnabled: this.isFeatureEnabled.bind(this), auditEvent: (input) => appendControlAudit(staged, input),
     });
-    const published = rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion, options);
+    const published = activation ? studio.activateScheduled(scope, activation)
+      : rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion, options);
     return { companyId, published, draft: staged.drafts.get(companyId), history: staged.versions.get(companyId)!,
       audit: staged.audit, outbox: staged.outbox };
   }

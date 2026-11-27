@@ -81,6 +81,43 @@ test('Studio requests approval and only enables publishing for the independent r
   assert.deepEqual(published, [['revision-v2', 'review-v2']]);
 });
 
+test('Studio schedules the approved revision and can cancel from the visible status', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { cleanup(); globalThis.fetch = originalFetch; });
+  const calls = [];
+  let releaseSchedule = null;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ preview: {
+      role: 'ADMIN', version: 2, locations: [], draftRevision: 'revision-v2', stockEnabled: false,
+      page: { columns: [], actions: [] }, releaseSchedule,
+      releaseReview: { required: true, request: { id: 'review-v2', approvedAt: '2026-01-01T10:00:00Z' }, canApprove: true },
+    } }),
+  });
+  render(<DraftStockPreview controlToken="checker" onPublish={() => {}}
+    onSchedule={async (revision, reviewId, activateAt) => {
+      calls.push([revision, reviewId, activateAt]);
+      releaseSchedule = { id: 'schedule-v2', activateAt, status: 'scheduled' };
+    }}
+    onCancelSchedule={async (id) => { calls.push(id); releaseSchedule = null; }} />);
+  const button = await screen.findByRole('button', { name: 'Schedule approved draft' });
+  assert.equal(button.disabled, true);
+  const date = '2030-10-10T12:00';
+  const input = screen.getByLabelText('Activation time (local)');
+  input.focus();
+  assert.equal(document.activeElement, input);
+  fireEvent.change(input, { target: { value: date } });
+  fireEvent.click(button);
+  const cancel = await screen.findByRole('button', { name: 'Cancel schedule' });
+  assert.match(screen.getByRole('status').textContent, /Release scheduled for/);
+  assert.equal(screen.queryByRole('button', { name: 'Publish approved draft' }), null);
+  cancel.focus();
+  assert.equal(document.activeElement, cancel);
+  fireEvent.click(cancel);
+  await screen.findByRole('button', { name: 'Publish approved draft' });
+  assert.deepEqual(calls, [['revision-v2', 'review-v2', new Date(date).toISOString()], 'schedule-v2']);
+});
+
 test('the shared stock table keeps the live item details action keyboard focusable', (t) => {
   t.after(cleanup);
   const opened = [];

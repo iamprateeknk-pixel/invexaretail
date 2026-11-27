@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { prisma, resolveDatabaseUrl } from '../db.js';
-import { findUserById, listUsersByCompany } from '../enterprise-repository.js';
+import { listUsersByCompany } from '../enterprise-repository.js';
 import { validateStudioRelease, type StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
@@ -63,12 +63,13 @@ export async function saveControlPlaneSnapshot(
 
 export function studioDraftRevision(draft: ConfigurationVersion | undefined): string | null {
   if (!draft) return null;
-  const { releaseReview: _review, ...content } = draft;
+  const { releaseReview: _review, releaseSchedule: _schedule, ...content } = draft;
   return createHash('sha256').update(stableStringify(JSON.parse(JSON.stringify(content)))).digest('hex');
 }
 
 export type StudioReleaseCommand = StudioRollbackOptions & {
   rollbackVersion?: number; draftRevision?: string; expectedActiveVersionId?: string; reviewId?: string;
+  scheduledActivation?: { id: string; now: Date };
 };
 
 export function studioReviewStatus(draft: ConfigurationVersion | undefined, actorId: string) {
@@ -129,15 +130,15 @@ export async function assignedStudioReview(plane: ControlPlane, companyId: strin
   const draft = plane.drafts.get(companyId);
   const review = draft?.releaseReview;
   if (!draft || !review || review.reviewerId !== userId || review.revision !== studioDraftRevision(draft)) return null;
-  const eligible = studioCompanyReviewers(plane, draft, review.requestedBy).find((candidate) => candidate.id === userId);
-  if (!eligible || findUserById(userId)?.companyId !== companyId) return null;
-  if (databaseEnabled()) {
-    const active = await prisma.user.findFirst({
+  const contributors = new Set([...(draft.editorIds?.length ? draft.editorIds : [draft.authorId]), review.requestedBy]);
+  const active = databaseEnabled()
+    ? await prisma.user.findFirst({
       where: { id: userId, companyId, role: 'ADMIN', status: 'ACTIVE' },
       select: { email: true },
-    });
-    if (!active || active.email.toLowerCase() !== eligible.email.toLowerCase()) return null;
-  }
+    })
+    : studioCompanyReviewers(plane, draft, review.requestedBy).find((candidate) => candidate.id === userId);
+  if (!active || contributors.has(userId) || [...contributors].some((id) =>
+    plane.platformUsers.get(id)?.email.toLowerCase() === active.email.toLowerCase())) return null;
   return { draft, review };
 }
 
@@ -159,12 +160,74 @@ export async function approveAssignedStudioReview(plane: ControlPlane, companyId
   return request;
 }
 
+export async function scheduleStudioRelease(plane: ControlPlane, scope: ScopeContext,
+  input: { draftRevision: string; reviewId: string; activateAt: Date }, now = new Date()) {
+  const pending = persistQueue.then(async () => {
+    const companyId = plane.requireLockedCompany(scope);
+    if (!databaseEnabled()) throw new ControlPlaneError('Scheduled publishing requires the database-backed worker.', 'STUDIO_SCHEDULE_UNAVAILABLE', 503);
+    if (!Number.isFinite(input.activateAt.getTime()) || input.activateAt <= now) {
+      throw new ControlPlaneError('Choose a future release time.', 'INVALID_RELEASE_TIME', 400);
+    }
+    const draft = plane.drafts.get(companyId);
+    const review = studioReviewStatus(draft, scope.actorId);
+    if (!draft || !review.request || review.request.id !== input.reviewId || review.request.revision !== input.draftRevision) {
+      throw new ControlPlaneError('Request approval for this draft revision before scheduling.', 'STUDIO_REVIEW_REQUIRED', 409);
+    }
+    if (!review.canApprove) throw new ControlPlaneError('Another operator must approve this draft.', 'STUDIO_REVIEW_NOT_INDEPENDENT', 403);
+    if (draft.releaseSchedule?.status === 'scheduled') {
+      throw new ControlPlaneError('Cancel the existing schedule before changing the release time.', 'STUDIO_SCHEDULE_EXISTS', 409);
+    }
+    if (review.request.reviewerId && !await assignedStudioReview(plane, companyId, review.request.reviewerId)) {
+      throw new ControlPlaneError('The assigned company administrator can no longer approve this draft.', 'STUDIO_REVIEWER_UNAVAILABLE', 403);
+    }
+    plane.assertBillingWritable(companyId);
+    validateStudioRelease(draft);
+    const releaseSchedule = { id: randomUUID(), revision: input.draftRevision, reviewId: input.reviewId,
+      activateAt: input.activateAt.toISOString(), requestedAt: now.toISOString(), requestedBy: scope.actorId, status: 'scheduled' as const };
+    const releaseReview = { ...review.request, approvedBy: review.request.approvedBy ?? scope.actorId,
+      approvedAt: review.request.approvedAt ?? now.toISOString() };
+    await persistReviewedDraft(plane, { ...draft, releaseReview, releaseSchedule });
+    return releaseSchedule;
+  });
+  persistQueue = pending.then(() => undefined, () => undefined);
+  return pending;
+}
+
+export async function finishStudioSchedule(plane: ControlPlane, companyId: string, scheduleId: string, failure?: string) {
+  const pending = persistQueue.then(async () => {
+    const draft = plane.drafts.get(companyId);
+    const schedule = draft?.releaseSchedule;
+    if (!draft || schedule?.id !== scheduleId) return false;
+    const updated = { ...draft };
+    if (failure) updated.releaseSchedule = { ...schedule, status: 'blocked', failure };
+    else delete updated.releaseSchedule;
+    await persistReviewedDraft(plane, updated);
+    return true;
+  });
+  persistQueue = pending.then(() => undefined, () => undefined);
+  return pending;
+}
+
 export async function commitStudioRelease(plane: ControlPlane, scope: ScopeContext, command: StudioReleaseCommand) {
   const release = persistQueue.then(async () => {
     if (databaseEnabled() && !lastPersistedSnapshot(plane)) {
       throw new ControlPlaneError('Studio could not verify the saved configuration. Try again when the company configuration has loaded.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
     }
     const company = scope.companyId ?? '';
+    const schedule = plane.drafts.get(company)?.releaseSchedule;
+    const activation = command.scheduledActivation;
+    if (activation && (scope.actorType !== 'system' || command.rollbackVersion !== undefined ||
+        schedule?.id !== activation.id || schedule.status !== 'scheduled' ||
+        command.draftRevision !== schedule.revision || command.reviewId !== schedule.reviewId ||
+        new Date(schedule.activateAt) > activation.now || schedule.requestedBy !== scope.actorId)) {
+      throw new ControlPlaneError('The scheduled release changed or is not due.', 'STUDIO_SCHEDULE_CHANGED', 409);
+    }
+    if (activation && (plane.platformUsers.get(scope.actorId)?.status !== 'active' || plane.companies.get(company)?.status !== 'active')) {
+      throw new ControlPlaneError('The scheduling operator or company is inactive.', 'STUDIO_SCHEDULE_UNAUTHORIZED', 403);
+    }
+    if (command.rollbackVersion === undefined && !activation && schedule) {
+      throw new ControlPlaneError('Cancel the scheduled release before publishing manually.', 'STUDIO_SCHEDULE_EXISTS', 409);
+    }
     if (command.expectedActiveVersionId !== undefined && command.expectedActiveVersionId !== plane.published.get(company)?.id) {
       throw new ControlPlaneError('The active version changed. Compare the versions again before restoring.', 'STUDIO_CONFIG_CONFLICT', 409);
     }
@@ -182,7 +245,7 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
         throw new ControlPlaneError('The assigned company administrator can no longer approve this draft.', 'STUDIO_REVIEWER_UNAVAILABLE', 403);
       }
     }
-    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command, approvingReview);
+    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command, approvingReview, activation);
     const { companyId, published, draft, history, audit, outbox } = stage;
     if (databaseEnabled()) {
       const snapshot = serializeControlPlane(plane);
@@ -193,7 +256,7 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
       snapshot.audit = [...snapshot.audit, ...audit].slice(-500);
       snapshot.outbox = [...snapshot.outbox, ...outbox].slice(-200);
       await persistControlPlaneRows(plane, snapshot, { companyId, actorId: scope.actorId, versionId: published.id,
-        reviewerId: published.releaseReview?.reviewerId });
+        reviewerId: published.releaseReview?.reviewerId, scheduled: Boolean(activation) });
     }
     if (draft) plane.drafts.set(companyId, draft);
     else plane.drafts.delete(companyId);

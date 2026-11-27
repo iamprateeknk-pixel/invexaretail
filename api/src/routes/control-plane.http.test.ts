@@ -184,6 +184,18 @@ test('HTTP: a requested Studio release requires an independent locked operator',
     const initiated = await post('/studio/v1/release-review', { draftRevision }, makerToken);
     assert.equal(initiated.status, 200);
     const command = { draftRevision, reviewId: initiated.body.review.id };
+    const schedulePath = '/studio/v1/release-schedule';
+    const schedule = { ...command, activateAt: new Date(Date.now() + 60_000).toISOString() };
+    assert.equal((await post(schedulePath, schedule)).status, 401);
+    const badDate = await post(schedulePath, { ...schedule, activateAt: '2030-10-10T12:00' }, checkerToken);
+    assert.equal(badDate.body.code, 'INVALID_RELEASE_SCHEDULE');
+    const noWorker = await post(schedulePath, schedule, checkerToken);
+    assert.equal(noWorker.status, 503);
+    assert.equal(noWorker.body.code, 'STUDIO_SCHEDULE_UNAVAILABLE');
+    const absentSchedule = await json(url, `${schedulePath}/missing`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${checkerToken}` },
+    });
+    assert.equal(absentSchedule.status, 404);
     const denied = await post('/studio/v1/publish', command, makerToken);
     assert.equal(denied.status, 403);
     assert.equal(denied.body.code, 'STUDIO_REVIEW_NOT_INDEPENDENT');

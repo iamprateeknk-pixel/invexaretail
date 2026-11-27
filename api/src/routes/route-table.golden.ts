@@ -258,6 +258,8 @@ export const STUDIO_ROUTES: string[] = [
   'POST /preview',
   'POST /publish',
   'POST /release-review',
+  'POST /release-schedule',
+  'DELETE /release-schedule/:scheduleId',
   'POST /rollback',
   'GET /versions',
   'GET /versions/:versionId/compare',

@@ -10,7 +10,8 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { createEnhancedUser } from '../enterprise-repository.js';
 import { ControlPlane } from './control-plane.js';
-import { approveAssignedStudioReview, commitStudioRelease, requestStudioReview, studioDraftRevision } from './persistence.js';
+import { approveAssignedStudioReview, commitStudioRelease, finishStudioSchedule, requestStudioReview, scheduleStudioRelease, studioDraftRevision } from './persistence.js';
+import { activateDueStudioReleases } from './studio-release-worker.js';
 import { readStudioRuntime, readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
@@ -106,6 +107,72 @@ integration('a delegated approval is durable and the approver must still be a co
   await prisma.user.update({ where: { id: reviewerId, companyId: company.id }, data: { role: 'ADMIN' } });
   const result = await commitStudioRelease(maker, scope, { draftRevision: revision, reviewId: review.id });
   assert.equal(result.releaseReview?.approvedBy, reviewerId);
+});
+
+integration('a worker activates only the approved scheduled revision once and leaves changed or cancelled drafts unpublished', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const plane = new ControlPlane();
+  await hydrateControlPlaneRows(plane);
+  const { company } = plane.createCompany(platformScope(plane), {
+    name: 'Scheduled Studio Release', planId: 'pro', adminName: 'Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const checkerId = randomUUID();
+  const email = `${checkerId}@test.invexa.local`;
+  plane.platformUsers.set(checkerId, { ...plane.platformUsers.get('platform-super-1')!, id: checkerId, email });
+  await persistControlPlaneRows(plane);
+  const maker = lockedScope(plane, company.id);
+  const login = plane.platformLogin(email, plane.seedPassword);
+  const checker = plane.requireControlSession(plane.selectCompany(login.user.id, company.id).token).scope;
+  const original = plane.published.get(company.id)!;
+  const now = new Date();
+  const due = new Date(now.getTime() + 60_000);
+  async function reviewDraft(label: string) {
+    plane.setStockColumnLayout(maker, [{ key: 'item_code', label }]);
+    const draftRevision = studioDraftRevision(plane.drafts.get(company.id))!;
+    const review = await requestStudioReview(plane, maker, draftRevision);
+    return { draftRevision, reviewId: review.id };
+  }
+  const command = await reviewDraft('Scheduled item label');
+  const input = { ...command, activateAt: due };
+  await assert.rejects(scheduleStudioRelease(plane, maker, input, now), { code: 'STUDIO_REVIEW_NOT_INDEPENDENT' });
+  const schedule = await scheduleStudioRelease(plane, checker, input, now);
+  await assert.rejects(commitStudioRelease(plane, checker, command), { code: 'STUDIO_SCHEDULE_EXISTS' });
+  assert.equal(await activateDueStudioReleases(now, new ControlPlane()), 0);
+  assert.equal((await readStudioVersions(plane, company.id)).active?.id, original.id);
+  await prisma.controlPlaneSession.update({ where: { id: checker.companySessionId! }, data: { status: 'closed' } });
+  const results = await Promise.all([activateDueStudioReleases(due, new ControlPlane()), activateDueStudioReleases(due, new ControlPlane())]);
+  assert.equal(results[0] + results[1], 1);
+  const { active } = await readStudioVersions(plane, company.id);
+  assert.equal(active?.version, original.version + 1);
+  assert.equal(active?.page.columns.find((column) => column.key === 'item_code')?.label, 'Scheduled item label');
+  assert.deepEqual(active?.releaseSchedule, { ...schedule, status: 'activated', activatedAt: due.toISOString() });
+  assert.equal(active?.releaseReview?.approvedBy, checkerId);
+
+  await refreshControlPlaneFromDb(plane);
+  const nextChecker = plane.requireControlSession(plane.selectCompany(login.user.id, company.id).token).scope;
+  const nextDue = new Date(due.getTime() + 60_000);
+  const changed = await reviewDraft('Approved before editing');
+  const stale = await scheduleStudioRelease(plane, nextChecker, { ...changed, activateAt: nextDue }, due);
+  plane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'Changed after scheduling' }]);
+  await persistControlPlaneRows(plane);
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  await refreshControlPlaneFromDb(plane);
+  assert.equal(plane.drafts.get(company.id)?.releaseSchedule?.status, 'blocked');
+  assert.equal(await finishStudioSchedule(plane, 'default-company', stale.id), false);
+  assert.equal(await finishStudioSchedule(plane, company.id, stale.id), true);
+  const cancelled = await reviewDraft('Cancelled before activation');
+  const pending = await scheduleStudioRelease(plane, nextChecker, { ...cancelled, activateAt: nextDue }, due);
+  assert.equal(await finishStudioSchedule(plane, company.id, pending.id), true);
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  const revoked = await reviewDraft('Operator disabled before activation');
+  await scheduleStudioRelease(plane, nextChecker, { ...revoked, activateAt: nextDue }, due);
+  await prisma.controlPlanePlatformUser.update({ where: { id: checkerId }, data: { status: 'disabled' } });
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  await refreshControlPlaneFromDb(plane);
+  assert.match(plane.drafts.get(company.id)?.releaseSchedule?.failure ?? '', /inactive/);
+  assert.equal((await readStudioVersions(plane, company.id)).active?.id, active?.id);
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' } });
+  assert.deepEqual(events.map((event) => event.requestId), [active?.id]);
 });
 
 integration('kill switch written on one instance is seen by a fresh instance', async () => {

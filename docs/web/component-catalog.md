@@ -110,3 +110,9 @@ Set `REQUIRE_STUDIO_RELEASE_REVIEW=true` on all API replicas when an independent
 The requester and recorded editors cannot approve. For a draft without editor records, the recorded draft creator cannot approve it. Matching email addresses are excluded when assigning company reviewers. Editing the draft invalidates the request, and publication rechecks the assigned administrator's current role. The published version and audit record retain the requester and approver.
 
 The approval mode covers publication of Studio drafts. Emergency restoration still uses the existing version comparison and reason. Keep an API build that enforces review available for rollback once the flag is on. Finish any jointly edited draft from before editor tracking before enabling the flag. Single-operator environments can keep the flag off until independent review is available.
+
+### Scheduled Studio activation
+
+Studio operators can request approval for scheduling even when immediate publishing does not require a review. The Publish tab accepts a local date and time and sends it as a UTC instant for the approved draft revision. Operators can refresh the release status or cancel a pending or blocked schedule. Editing the draft after scheduling invalidates its approval. The worker records the failed check and keeps the live version available.
+
+The database-backed worker checks for due releases every 30 seconds. It rechecks the company, the scheduling operator and any assigned company reviewer before activation. Successful activation writes the version, audit entry and configuration-change event in one transaction. The audit records the scheduling operator and the worker activation time. Start the schedule-aware API and worker together in staging and verify a scheduled release before enabling operator access in production. Keep a schedule-aware rollback build available while there are pending releases.

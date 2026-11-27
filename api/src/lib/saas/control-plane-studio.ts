@@ -90,6 +90,7 @@ export class ControlPlaneStudio {
     };
     delete draft.editorIds;
     delete draft.releaseReview;
+    delete draft.releaseSchedule;
     this.store.drafts.set(companyId, draft);
     return draft;
   }
@@ -430,7 +431,24 @@ export class ControlPlaneStudio {
   publish(scope: ScopeContext): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.host.assertBillingWritable(companyId);
-    const draft = this.ensureDraft(scope);
+    return this.publishDraft(scope, this.ensureDraft(scope));
+  }
+
+  activateScheduled(scope: ScopeContext, activation: { id: string; now: Date }): ConfigurationVersion {
+    const draft = scope.companyId ? this.store.drafts.get(scope.companyId) : undefined;
+    const schedule = draft?.releaseSchedule;
+    if (scope.actorType !== 'system' || !draft || !schedule || schedule.id !== activation.id
+      || schedule.requestedBy !== scope.actorId || schedule.status !== 'scheduled' || new Date(schedule.activateAt) > activation.now) {
+      throw new ControlPlaneError('The scheduled release changed or is not due.', 'STUDIO_SCHEDULE_CHANGED', 409);
+    }
+    this.host.assertBillingWritable(draft.companyId);
+    schedule.status = 'activated';
+    schedule.activatedAt = activation.now.toISOString();
+    return this.publishDraft(scope, draft);
+  }
+
+  private publishDraft(scope: ScopeContext, draft: ConfigurationVersion): ConfigurationVersion {
+    const { companyId } = draft;
     const currentVersion = this.store.published.get(companyId)?.version ?? 1;
     if (draft.parentVersion !== currentVersion || draft.version !== currentVersion + 1) {
       throw new ControlPlaneError('This draft was based on an older published version. Review and reapply its changes to the current version.', 'STUDIO_CONFIG_CONFLICT', 409);
@@ -447,7 +465,7 @@ export class ControlPlaneStudio {
     this.store.outbox.push({ id: randomUUID(), event: 'config.published', payload: { companyId, version: draft.version }, createdAt: nowIso() });
     this.host.auditEvent({
       actorUserId: scope.actorId,
-      actorType: 'platform',
+      actorType: scope.actorType,
       tenantId: scope.tenantId,
       companyId,
       sessionId: scope.companySessionId,
@@ -455,7 +473,8 @@ export class ControlPlaneStudio {
       entityType: 'configuration',
       entityId: String(draft.version),
       before: { parent: draft.parentVersion },
-      after: { version: draft.version, diff, ...(draft.releaseReview && { review: draft.releaseReview }) },
+      after: { version: draft.version, diff, ...(draft.releaseReview && { review: draft.releaseReview }),
+        ...(draft.releaseSchedule && { schedule: draft.releaseSchedule }) },
     });
     return draft;
   }
@@ -482,6 +501,7 @@ export class ControlPlaneStudio {
     };
     delete restored.editorIds;
     delete restored.releaseReview;
+    delete restored.releaseSchedule;
     this.store.published.set(companyId, restored);
     const draft = this.store.drafts.get(companyId);
     if (draft) {

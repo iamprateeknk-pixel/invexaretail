@@ -14,10 +14,10 @@ import { StudioVersionHistory } from '../StudioVersionHistory';
 
 export function StudioSection(props) {
   const { setError, company, draft, runtime, controlToken, refreshLocked } = props;
-  async function submitRelease(path, body, confirmation) {
+  async function submitRelease(path, body, confirmation, method = 'POST') {
     setError('');
     try {
-      await controlRequest(path, { token: controlToken, method: 'POST', body });
+      await controlRequest(path, { token: controlToken, method, body });
       toast.success(confirmation);
       await refreshLocked().catch((caught) => setError(caught.message));
     } catch (caught) {
@@ -90,7 +90,10 @@ export function StudioSection(props) {
       <TabsContent value="preview" className="grid gap-4">
         <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken}
           onPublish={(draftRevision, reviewId) => submitRelease('/studio/v1/publish', { draftRevision, reviewId }, 'Published')}
-          onRequestReview={(draftRevision, reviewerId) => submitRelease('/studio/v1/release-review', { draftRevision, reviewerId }, 'Approval requested')} />
+          onRequestReview={(draftRevision, reviewerId) => submitRelease('/studio/v1/release-review', { draftRevision, reviewerId }, 'Approval requested')}
+          onSchedule={(draftRevision, reviewId, activateAt) => submitRelease('/studio/v1/release-schedule', { draftRevision, reviewId, activateAt }, 'Release scheduled')}
+          onCancelSchedule={(id) => submitRelease(`/studio/v1/release-schedule/${encodeURIComponent(id)}`, undefined, 'Schedule cancelled', 'DELETE')}
+          onRefreshRelease={() => refreshLocked().catch((caught) => setError(caught.message))} />
         <Card>
           <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
           <CardContent className="text-sm text-muted-foreground">

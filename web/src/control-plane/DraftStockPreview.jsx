@@ -45,7 +45,7 @@ function PreviewSelect({ label, value, onChange, children, disabled }) {
   </div>;
 }
 
-export function DraftStockPreview({ controlToken, draft, onPublish, onRequestReview }) {
+export function DraftStockPreview({ controlToken, draft, onPublish, onRequestReview, onSchedule, onCancelSchedule, onRefreshRelease }) {
   const [role, setRole] = useState('ADMIN');
   const [device, setDevice] = useState('desktop');
   const [locationId, setLocationId] = useState('');
@@ -75,6 +75,9 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
 
   const columns = preview ? stockTableColumns(preview.page, { role: preview.role, canViewSystemStock: canViewSystemStockForRole(preview.role) }) : [];
   const review = preview?.releaseReview;
+  const schedule = preview?.releaseSchedule;
+  const activationId = useId();
+  const [activationTime, setActivationTime] = useState('');
   const [reviewerId, setReviewerId] = useState('');
   const needsRequest = review?.required && !review.request;
   const waitingForReviewer = Boolean(review?.request && !review.canApprove);
@@ -87,6 +90,15 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
       } else {
         await onPublish(preview.draftRevision, review?.request?.id);
       }
+    } finally {
+      setPublishing(false);
+    }
+  }
+  async function updateSchedule(action) {
+    setPublishing(true);
+    try {
+      await action();
+      setAttempt((value) => value + 1);
     } finally {
       setPublishing(false);
     }
@@ -121,7 +133,17 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
           )}
         </Card>
       )}
-      {onPublish && <div className="flex flex-wrap items-center gap-3">
+      {schedule && <div className="flex flex-wrap items-center gap-3">
+        <p role="status" className="text-sm text-muted-foreground">
+          {schedule.status === 'blocked' ? `Scheduled release blocked. ${schedule.failure}`
+            : <>Release scheduled for <time dateTime={schedule.activateAt}>{new Date(schedule.activateAt).toLocaleString()}</time>.</>}
+        </p>
+        <Button type="button" variant="outline" disabled={publishing}
+          onClick={() => updateSchedule(() => onRefreshRelease?.())}>Refresh release status</Button>
+        {onCancelSchedule && <Button type="button" variant="outline" disabled={publishing}
+          onClick={() => updateSchedule(() => onCancelSchedule(schedule.id))}>Cancel schedule</Button>}
+      </div>}
+      {onPublish && !schedule && <div className="flex flex-wrap items-center gap-3">
         {needsRequest && Boolean(review.reviewers?.length) && <PreviewSelect label="Reviewer" value={reviewerId} onChange={setReviewerId}>
           <option value="">Another Studio operator</option>
           {review.reviewers.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}
@@ -130,12 +152,27 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
           {publishing ? 'Saving…' : needsRequest ? 'Request approval' : review?.request?.approvedAt
             ? 'Publish approved draft' : review?.request ? 'Approve and publish' : 'Publish reviewed draft'}
         </Button>
+        {!review?.required && preview?.draftRevision && onSchedule && onRequestReview && <Button type="button" variant="outline"
+          disabled={publishing} onClick={() => updateSchedule(() => onRequestReview(preview.draftRevision))}>
+          Request approval to schedule
+        </Button>}
         {waitingForReviewer && <>
           <p role="status" className="text-sm text-muted-foreground">{review.request.reviewerId
             ? 'Waiting for the assigned company administrator to approve in the workspace.'
             : 'Waiting for another operator to review and publish this draft.'}</p>
           <Button type="button" variant="outline" onClick={() => setAttempt((value) => value + 1)}>Refresh approval</Button>
         </>}
+      </div>}
+      {!schedule && review?.request && review.canApprove && onSchedule && <div className="flex flex-wrap items-end gap-3">
+        <div className="grid gap-1.5">
+          <Label htmlFor={activationId}>Activation time (local)</Label>
+          <input id={activationId} type="datetime-local" value={activationTime} onChange={(event) => setActivationTime(event.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-ring" />
+        </div>
+        <Button type="button" variant="outline" disabled={publishing || !preview.draftRevision || !Number.isFinite(Date.parse(activationTime))}
+          onClick={() => updateSchedule(() => onSchedule(preview.draftRevision, review.request.id, new Date(activationTime).toISOString()))}>
+          {review.request.approvedAt ? 'Schedule approved draft' : 'Approve and schedule'}
+        </Button>
       </div>}
     </section>
   );

@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { commitStudioRelease, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, studioCompanyReviewers, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
+import { commitStudioRelease, finishStudioSchedule, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, scheduleStudioRelease, studioCompanyReviewers, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
 import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -714,7 +714,8 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
   try {
     const scope = requireScope(req);
     const companyId = scopedCompany(req);
-    if (controlPlane.drafts.get(companyId)?.releaseReview?.reviewerId) await refreshControlPlaneFromDb(controlPlane);
+    const currentDraft = controlPlane.drafts.get(companyId);
+    if (currentDraft?.releaseReview || currentDraft?.releaseSchedule) await refreshControlPlaneFromDb(controlPlane);
     const role = COLUMN_ROLES.find((candidate) => candidate === (req.body?.role ?? 'ADMIN'));
     if (!role) throw new ControlPlaneError('Choose an operational role for the preview', 'INVALID_ROLE', 400);
     const requested = req.body?.locationId;
@@ -736,6 +737,7 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
     res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
     res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
       draftRevision: studioDraftRevision(draft),
+      releaseSchedule: draft?.releaseSchedule ?? null,
       releaseReview: { ...releaseReview, reviewers: releaseReview.required && draft
         ? studioCompanyReviewers(controlPlane, draft, scope.actorId) : [] },
       variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
@@ -793,6 +795,46 @@ studioRouter.post('/release-review', async (req, res) => {
     res.json({ success: true, review });
   } catch (error) {
     if (error instanceof StudioConfigConflict) await refreshControlPlaneFromDb(controlPlane).catch(() => false);
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+});
+
+studioRouter.post('/release-schedule', async (req, res) => {
+  const { draftRevision, reviewId, activateAt } = req.body ?? {};
+  if (typeof draftRevision !== 'string' || !/^[a-f0-9]{64}$/.test(draftRevision)
+    || typeof reviewId !== 'string' || !reviewId || reviewId.length > 191
+    || typeof activateAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(activateAt)) {
+    return sendError(res, new ControlPlaneError('Choose an activation time for the reviewed draft.', 'INVALID_RELEASE_SCHEDULE', 400));
+  }
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    await refreshControlPlaneFromDb(controlPlane);
+    const schedule = await scheduleStudioRelease(controlPlane, requireScope(req), { draftRevision, reviewId, activateAt: new Date(activateAt) });
+    res.locals.studioPersisted = true;
+    res.status(201).json({ success: true, schedule });
+  } catch (error) {
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+});
+
+studioRouter.delete('/release-schedule/:scheduleId', async (req, res) => {
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    await refreshControlPlaneFromDb(controlPlane);
+    if (!await finishStudioSchedule(controlPlane, companyId, param(req, 'scheduleId'))) {
+      throw new ControlPlaneError('Release schedule not found', 'RELEASE_SCHEDULE_NOT_FOUND', 404);
+    }
+    res.locals.studioPersisted = true;
+    res.json({ success: true });
+  } catch (error) {
     sendError(res, error);
   } finally {
     releasingCompanies.delete(companyId);
