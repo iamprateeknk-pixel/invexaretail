@@ -124,6 +124,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/{itemId}/studio-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read visible published Studio fields and saved values for an item */
+        get: operations["getItemStudioFields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/studio-fields/{fieldKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save a value for an editable published Studio item field */
+        put: operations["putItemStudioField"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{itemId}/adjust": {
         parameters: {
             query?: never;
@@ -6041,6 +6075,138 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getItemStudioFields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fields for the current role and published version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        versionId: string | null;
+                        configVersion: number | null;
+                        fields: {
+                            key: string;
+                            label: string;
+                            /** @enum {string} */
+                            type: "text" | "number" | "date" | "boolean";
+                            required: boolean;
+                            editable: boolean;
+                            value: string | number | boolean | null;
+                        }[];
+                    };
+                };
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Company scope or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putItemStudioField: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+                fieldKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    versionId: string;
+                    value: string | number | boolean | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Field saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        key: string;
+                        value: string | number | boolean | null;
+                        versionId: string;
+                        configVersion: number;
+                    };
+                };
+            };
+            /** @description Missing version ID or value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field editing or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item or visible field not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published version changed. Reload the field definitions. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Value does not satisfy the published field definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -32,8 +32,8 @@ export function FieldsEditor({ controlToken, draft, onSaved }) {
   return (
     <StudioListEditor
       title="Extra fields"
-      description="Add your own fields to items, transfers, orders and more - for example Shelf no. or Supplier batch. Pick what it is for, give it a name and say what kind of value it holds."
-      notLive="Saved and published, but forms in the app do not show these fields yet. For stock table columns use the Stock columns tab; for item details filled by imports use Import columns."
+      description="Publish text, number, date and yes/no fields to Item Stock Detail for the roles you select."
+      notLive="List fields and fields for other screens can be configured here and have no operational form yet."
       entries={entries}
       idOf={(field) => `${field.entityType}:${field.fieldKey}`}
       newEntry={(current) => ({ entityType: 'item', fieldKey: slugKey('New field', current.map((field) => field.fieldKey)), label: 'New field', dataType: 'text', required: false, visibleRoles: ['ADMIN', 'BRANCH_MANAGER'], editableRoles: ['ADMIN'] })}

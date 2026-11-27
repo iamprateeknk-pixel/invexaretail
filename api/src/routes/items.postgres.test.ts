@@ -48,7 +48,7 @@ async function withServer(run: (call: Api) => Promise<void>): Promise<void> {
   }
 }
 
-async function makeFixture() {
+async function makeFixture(registerItem = true) {
   const companyId = `items-route-test-${randomUUID()}`;
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
   const userId = `items-route-user-${randomUUID()}`;
@@ -62,7 +62,7 @@ async function makeFixture() {
   registerLocationCompany(locationId, companyId);
   const itemId = `items-route-item-${randomUUID()}`;
   await prisma.item.create({ data: { id: itemId, code: itemId, name: 'Route Test Item', unit: 'ea', companyId } });
-  registerItemCompany(itemId, companyId);
+  if (registerItem) registerItemCompany(itemId, companyId);
   const lot = await prisma.lot.create({ data: { itemId, lotNo: `LOT-${randomUUID().slice(0, 8)}` } });
   const token = generateJWT(userId, companyId);
   return { companyId, userId, locationId, itemId, lotId: lot.id, token };
@@ -76,6 +76,58 @@ integration('GET /items/search paginates and is scoped to the caller\'s tenant',
     assert.equal(page.status, 200);
     assert.ok(page.body.items.some((item: { id: string }) => item.id === fixtureA.itemId));
     assert.ok(!page.body.items.some((item: { id: string }) => item.id === fixtureB.itemId), 'tenant B\'s item must not appear in tenant A\'s search results');
+  });
+});
+
+integration('published Studio item fields enforce role, type, required value and version in the catalogue', async () => {
+  const owner = await makeFixture(false);
+  const foreign = await makeFixture();
+  const managerId = randomUUID();
+  createEnhancedUser({ id: managerId, companyId: owner.companyId, email: `${managerId}@test.invexa.local`, name: 'Manager',
+    role: 'BRANCH_MANAGER', branchIds: [], locationIds: [owner.locationId], passwordHash: 'x', status: 'active' });
+  const manager = generateJWT(managerId, owner.companyId);
+  const versionId = randomUUID();
+  const field = { id: randomUUID(), companyId: owner.companyId, entityType: 'item', fieldKey: 'case_size', label: 'Case size',
+    dataType: 'number', required: true, defaultValue: null, visibleRoles: ['ADMIN', 'BRANCH_MANAGER'], editableRoles: ['ADMIN'], status: 'active' };
+  const privateField = { ...field, id: randomUUID(), fieldKey: 'internal', visibleRoles: ['ADMIN'] };
+  const malformedField = { ...field, id: randomUUID(), fieldKey: 'malformed', visibleRoles: 'ADMIN,BRANCH_MANAGER' };
+  const path = `/items/${owner.itemId}/studio-fields`;
+  await prisma.controlPlaneConfig.create({ data: { companyId: owner.companyId, versionId, version: 2,
+    kind: 'draft', status: 'draft', payload: { fields: [field, privateField] } } });
+  await withServer(async (call) => {
+    const draft = await call('GET', path, owner.token);
+    assert.equal(draft.status, 200);
+    assert.deepEqual(draft.body.fields, []);
+    await prisma.controlPlaneConfig.create({ data: { companyId: owner.companyId, versionId, version: 2,
+      kind: 'published', status: 'published', payload: { fields: [field, privateField, malformedField] } } });
+    const admin = await call('GET', path, owner.token);
+    assert.equal(admin.body.versionId, versionId);
+    assert.equal(admin.body.fields.length, 2);
+    assert.equal((await call('GET', path, foreign.token)).status, 404);
+    const visibleToManager = await call('GET', path, manager);
+    assert.deepEqual(visibleToManager.body.fields.map((entry: { key: string; editable: boolean }) => [entry.key, entry.editable]), [['case_size', false]]);
+
+    const write = (token: string, value: unknown, version: string = versionId) => call('PUT', `${path}/case_size`, token, { value, versionId: version });
+    assert.equal((await write(foreign.token, 12)).status, 404);
+    assert.equal((await write(manager, 12)).status, 403);
+    assert.equal((await write(owner.token, '12')).status, 422);
+    assert.equal((await write(owner.token, null)).status, 422);
+    assert.equal((await write(owner.token, 12, 'obsolete')).status, 409);
+    assert.equal((await write(owner.token, 12)).status, 200);
+    const after = await call('GET', path, manager);
+    assert.equal(after.body.fields[0].value, 12);
+    const audit = await prisma.auditLog.findFirst({ where: { action: 'STUDIO_ITEM_FIELD_UPDATED', entityId: owner.itemId } });
+    assert.equal(audit?.actorId, owner.userId);
+    assert.deepEqual(audit?.metadata, { companyId: owner.companyId, fieldKey: field.fieldKey, configVersion: 2, versionId });
+
+    const nextVersion = randomUUID();
+    await prisma.controlPlaneConfig.create({ data: { companyId: owner.companyId, versionId: nextVersion, version: 3,
+      kind: 'published', status: 'published', payload: { fields: [{ ...field, label: 'Pack size', visibleRoles: ['ADMIN'] }] } } });
+    assert.equal((await write(owner.token, 20)).status, 409);
+    assert.deepEqual((await call('GET', path, manager)).body.fields, []);
+    const republished = await call('GET', path, owner.token);
+    assert.equal(republished.body.versionId, nextVersion);
+    assert.deepEqual(republished.body.fields.map((entry: { label: string; value: unknown }) => [entry.label, entry.value]), [['Pack size', 12]]);
   });
 });
 

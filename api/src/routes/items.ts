@@ -18,6 +18,7 @@ import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { prisma } from '../lib/db.js';
 import { checkApprovalGate, type GateResult } from '../lib/approval-rules.js';
 import { readValueAtRisk } from '../lib/exceptions.js';
+import { getStudioItemFields, setStudioItemField } from '../lib/saas/studio-item-fields.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -63,6 +64,31 @@ router.get('/items/:itemId/stock-detail', async (req: Request, res: Response) =>
     return res.json(detail);
   } catch (error) {
     if (error instanceof ItemNotFoundError) return res.status(404).json({ message: error.message });
+    throw error;
+  }
+});
+
+router.get('/items/:itemId/studio-fields', async (req, res) => {
+  if (req.apiKey) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company user to view item fields.');
+  try {
+    return res.json(await getStudioItemFields(tenantContextFor(req), firstParam(req.params.itemId)));
+  } catch (error) {
+    if (error instanceof ItemNotFoundError) return sendError(res, 404, 'NOT_FOUND', error.message);
+    throw error;
+  }
+});
+
+router.put('/items/:itemId/studio-fields/:fieldKey', async (req, res) => {
+  if (req.apiKey) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company user to edit item fields.');
+  const { value, versionId } = req.body ?? {};
+  if (typeof versionId !== 'string' || !versionId || versionId.length > 191 || value === undefined) {
+    return sendError(res, 400, 'VALIDATION_FAILED', 'The published version and field value are required.');
+  }
+  try {
+    return res.json(await setStudioItemField(tenantContextFor(req), firstParam(req.params.itemId), firstParam(req.params.fieldKey), versionId, value));
+  } catch (error) {
+    if (error instanceof ItemNotFoundError) return sendError(res, 404, 'NOT_FOUND', error.message);
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     throw error;
   }
 });

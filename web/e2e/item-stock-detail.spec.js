@@ -18,6 +18,15 @@ test.beforeEach(async ({ page }) => {
     if (path === '/api/v1/items/item-1/bundle') {
       return route.fulfill({ json: { itemId: 'item-1', isBundle: false, components: [], buildable: 0, limitingItemId: null, locationId: null } });
     }
+    if (path === '/api/v1/items/item-1/studio-fields') {
+      return route.fulfill({ json: { versionId: 'published-3', configVersion: 3, fields: [
+        { key: 'case_size', label: 'Case size', type: 'number', value: 12, required: true, editable: true },
+        { key: 'rack', label: 'Rack', type: 'text', value: 'R04', required: false, editable: false },
+      ] } });
+    }
+    if (path === '/api/v1/items/item-1/studio-fields/case_size') {
+      return route.fulfill({ json: { key: 'case_size', value: route.request().postDataJSON().value, versionId: 'published-3', configVersion: 3 } });
+    }
     if (path === '/api/v1/items/item-1/adjust') {
       return route.fulfill({ json: { movement: { id: 'move-1' }, duplicate: false } });
     }
@@ -63,4 +72,16 @@ test('browser login keeps refresh credential HttpOnly and item search adjustment
   await adjustment;
   await expect(page.getByLabel('Quantity change')).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Post adjustment' })).toBeDisabled();
+
+  const caseSize = page.getByRole('spinbutton', { name: 'Case size' });
+  await expect(caseSize).toHaveValue('12');
+  await expect(page.getByText('R04', { exact: true })).toBeVisible();
+  await caseSize.fill('24');
+  const saveField = page.waitForRequest((request) => request.url().endsWith('/items/item-1/studio-fields/case_size') && request.method() === 'PUT');
+  await caseSize.press('Enter');
+  expect((await saveField).postDataJSON()).toEqual({ versionId: 'published-3', value: 24 });
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(caseSize).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });

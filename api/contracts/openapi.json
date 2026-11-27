@@ -6351,6 +6351,68 @@
         }
       }
     },
+    "/items/{itemId}/studio-fields": {
+      "get": {
+        "operationId": "getItemStudioFields",
+        "summary": "Read visible published Studio fields and saved values for an item",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "Fields for the current role and published version.",
+            "content": { "application/json": { "schema": {
+              "type": "object", "required": ["versionId", "configVersion", "fields"],
+              "properties": {
+                "versionId": { "type": ["string", "null"] },
+                "configVersion": { "type": ["integer", "null"] },
+                "fields": { "type": "array", "items": { "type": "object",
+                  "required": ["key", "label", "type", "required", "editable", "value"],
+                  "properties": {
+                    "key": { "type": "string" }, "label": { "type": "string" },
+                    "type": { "type": "string", "enum": ["text", "number", "date", "boolean"] },
+                    "required": { "type": "boolean" }, "editable": { "type": "boolean" },
+                    "value": { "type": ["string", "number", "boolean", "null"] }
+                  }
+                } }
+              }
+            } } }
+          },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Company scope or route access denied." },
+          "404": { "description": "Item not found in the caller's company." }
+        }
+      }
+    },
+    "/items/{itemId}/studio-fields/{fieldKey}": {
+      "put": {
+        "operationId": "putItemStudioField",
+        "summary": "Save a value for an editable published Studio item field",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "fieldKey", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["versionId", "value"], "properties": {
+            "versionId": { "type": "string" }, "value": { "type": ["string", "number", "boolean", "null"] }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Field saved.", "content": { "application/json": { "schema": {
+            "type": "object", "required": ["key", "value", "versionId", "configVersion"], "properties": {
+              "key": { "type": "string" }, "value": { "type": ["string", "number", "boolean", "null"] },
+              "versionId": { "type": "string" }, "configVersion": { "type": "integer" }
+            }
+          } } } },
+          "400": { "description": "Missing version ID or value." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Field editing or route access denied." },
+          "404": { "description": "Item or visible field not found." },
+          "409": { "description": "The published version changed. Reload the field definitions." },
+          "422": { "description": "Value does not satisfy the published field definition." }
+        }
+      }
+    },
     "/items/{itemId}/adjust": {
       "post": {
         "operationId": "adjustItemStock",
