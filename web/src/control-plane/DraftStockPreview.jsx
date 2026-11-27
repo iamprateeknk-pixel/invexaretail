@@ -45,7 +45,7 @@ function PreviewSelect({ label, value, onChange, children, disabled }) {
   </div>;
 }
 
-export function DraftStockPreview({ controlToken, draft, onPublish }) {
+export function DraftStockPreview({ controlToken, draft, onPublish, onRequestReview }) {
   const [role, setRole] = useState('ADMIN');
   const [device, setDevice] = useState('desktop');
   const [locationId, setLocationId] = useState('');
@@ -74,10 +74,18 @@ export function DraftStockPreview({ controlToken, draft, onPublish }) {
   }, [controlToken, draft, role, device, locationId, attempt]);
 
   const columns = preview ? stockTableColumns(preview.page, { role: preview.role, canViewSystemStock: canViewSystemStockForRole(preview.role) }) : [];
+  const review = preview?.releaseReview;
+  const needsRequest = review?.required && !review.request;
+  const waitingForReviewer = Boolean(review?.request && !review.canApprove);
   async function publish() {
     setPublishing(true);
     try {
-      await onPublish(preview.draftRevision);
+      if (needsRequest) {
+        await onRequestReview(preview.draftRevision);
+        setAttempt((value) => value + 1);
+      } else {
+        await onPublish(preview.draftRevision, review?.request?.id);
+      }
     } finally {
       setPublishing(false);
     }
@@ -112,9 +120,12 @@ export function DraftStockPreview({ controlToken, draft, onPublish }) {
           )}
         </Card>
       )}
-      {onPublish && <div><Button type="button" disabled={publishing || !preview?.draftRevision} onClick={publish}>
-        {publishing ? 'Publishing…' : 'Publish reviewed draft'}
-      </Button></div>}
+      {onPublish && <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" disabled={publishing || !preview?.draftRevision || waitingForReviewer || (needsRequest && !onRequestReview)} onClick={publish}>
+          {publishing ? 'Saving…' : needsRequest ? 'Request approval' : review?.request ? 'Approve and publish' : 'Publish reviewed draft'}
+        </Button>
+        {waitingForReviewer && <p role="status" className="text-sm text-muted-foreground">Waiting for another operator to review and publish this draft.</p>}
+      </div>}
     </section>
   );
 }

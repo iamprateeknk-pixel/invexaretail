@@ -48,6 +48,39 @@ test('the draft stock preview renders sample rows and recalculates the view for 
   await waitFor(() => assert.equal(screen.getByRole('button', { name: 'Publish reviewed draft' }).disabled, false));
 });
 
+test('Studio requests approval and only enables publishing for the independent reviewer', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { cleanup(); globalThis.fetch = originalFetch; });
+  const approvals = [];
+  const published = [];
+  let request = null;
+  globalThis.fetch = async (_url, options) => ({
+    ok: true,
+    json: async () => ({ preview: {
+      role: 'ADMIN', version: 2, locations: [], draftRevision: 'revision-v2', stockEnabled: false,
+      page: { columns: [], actions: [] },
+      releaseReview: { required: true, request, canApprove: options.headers.Authorization === 'Bearer checker' },
+    } }),
+  });
+  const actions = {
+    onRequestReview: async (revision) => { approvals.push(revision); request = { id: 'review-v2' }; },
+    onPublish: async (...args) => { published.push(args); },
+  };
+  const { rerender } = render(<DraftStockPreview controlToken="maker" {...actions} />);
+  const button = await screen.findByRole('button', { name: 'Request approval' });
+  button.focus();
+  assert.equal(document.activeElement, button);
+  fireEvent.click(button);
+  await screen.findByText('Waiting for another operator to review and publish this draft.');
+  assert.equal(screen.getByRole('button', { name: 'Approve and publish' }).disabled, true);
+  assert.deepEqual(approvals, ['revision-v2']);
+  rerender(<DraftStockPreview controlToken="checker" {...actions} />);
+  const approve = await screen.findByRole('button', { name: 'Approve and publish' });
+  await waitFor(() => assert.equal(approve.disabled, false));
+  fireEvent.click(approve);
+  assert.deepEqual(published, [['revision-v2', 'review-v2']]);
+});
+
 test('the shared stock table keeps the live item details action keyboard focusable', (t) => {
   t.after(cleanup);
   const opened = [];

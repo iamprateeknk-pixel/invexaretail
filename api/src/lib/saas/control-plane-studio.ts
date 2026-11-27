@@ -78,7 +78,7 @@ export class ControlPlaneStudio {
     const existing = this.store.drafts.get(companyId);
     if (existing) return existing;
     const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, scope.actorId, 1, 'published');
-    const draft = {
+    const draft: ConfigurationVersion = {
       ...JSON.parse(JSON.stringify(published)) as ConfigurationVersion,
       id: randomUUID(),
       version: published.version + 1,
@@ -88,7 +88,14 @@ export class ControlPlaneStudio {
       publishedAt: null,
       createdAt: nowIso(),
     };
+    delete draft.editorIds;
+    delete draft.releaseReview;
     this.store.drafts.set(companyId, draft);
+    return draft;
+  }
+
+  private recordDraftEdit(draft: ConfigurationVersion, scope: ScopeContext): ConfigurationVersion {
+    draft.editorIds = [...new Set([...(draft.editorIds ?? []), scope.actorId])].sort();
     return draft;
   }
 
@@ -154,7 +161,7 @@ export class ControlPlaneStudio {
     const afterIndex = draft.page.columns.findIndex((entry) => entry.key === 'available');
     if (afterIndex >= 0) draft.page.columns.splice(afterIndex + 1, 0, column);
     else draft.page.columns.push(column);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   // Generic Field Builder (blueprint §16 "Field builder"): works across any
@@ -205,7 +212,7 @@ export class ControlPlaneStudio {
     };
     if (existing >= 0) draft.fields[existing] = { ...field, id: draft.fields[existing].id };
     else draft.fields.push(field);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   tableColumnsOf(draft: ConfigurationVersion, table: TableKey): ColumnDefinition[] {
@@ -268,7 +275,7 @@ export class ControlPlaneStudio {
       ordered.push(column);
     }
     this.setTableColumnsOf(draft, table, [...ordered, ...current.filter((column) => !seen.has(column.key))]);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /**
@@ -297,7 +304,7 @@ export class ControlPlaneStudio {
       if (!target) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
       target.formula = formula;
       target.label = label;
-      return draft;
+      return this.recordDraftEdit(draft, scope);
     }
     if (requestedKey && !/^calc_[a-z0-9_]{1,30}$/.test(requestedKey)) {
       throw new ControlPlaneError('Only calculated columns can hold a formula', 'INVALID_COLUMN_KEY', 400);
@@ -308,7 +315,7 @@ export class ControlPlaneStudio {
       existing.label = label;
       existing.formula = formula;
       existing.type = type;
-      return draft;
+      return this.recordDraftEdit(draft, scope);
     }
     if (columns.filter((column) => column.source === 'formula').length >= 12) {
       throw new ControlPlaneError('A maximum of 12 calculated columns is allowed', 'TOO_MANY_FORMULAS', 400);
@@ -319,7 +326,7 @@ export class ControlPlaneStudio {
     columns.push({
       key, label, type, source: 'formula', formula, visible: true, exportEnabled: true, mobileEnabled: true,
     });
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /** Adds a table column that shows one of the company's item custom fields (by name). */
@@ -342,7 +349,7 @@ export class ControlPlaneStudio {
     let key = `field_${slug}`;
     for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
     columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /** Removes a calculated / item-field column, or restores the standard formula of a built-in one. */
@@ -358,7 +365,7 @@ export class ControlPlaneStudio {
       delete column.formula;
       if (column.key === 'available') column.label = 'Available';
     } else throw new ControlPlaneError('This column has no formula', 'NO_FORMULA', 400);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   setActionEnabled(scope: ScopeContext, actionKey: string, enabled: boolean): ConfigurationVersion {
@@ -366,7 +373,7 @@ export class ControlPlaneStudio {
     const action = draft.page.actions.find((entry) => entry.key === actionKey);
     if (!action) throw new ControlPlaneError('Unknown action', 'ACTION_NOT_FOUND', 404);
     action.enabled = enabled;
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   moveTab(scope: ScopeContext, tabKey: string, order: number): ConfigurationVersion {
@@ -375,7 +382,7 @@ export class ControlPlaneStudio {
     if (!tab) throw new ControlPlaneError('Unknown tab', 'TAB_NOT_FOUND', 404);
     tab.order = order;
     draft.page.tabs.sort((left, right) => left.order - right.order);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   preview(scope: ScopeContext, input: { role: string; device: 'desktop' | 'tablet' | 'mobile' }): {
@@ -448,7 +455,7 @@ export class ControlPlaneStudio {
       entityType: 'configuration',
       entityId: String(draft.version),
       before: { parent: draft.parentVersion },
-      after: { version: draft.version, diff },
+      after: { version: draft.version, diff, ...(draft.releaseReview && { review: draft.releaseReview }) },
     });
     return draft;
   }
@@ -473,6 +480,8 @@ export class ControlPlaneStudio {
       createdAt: nowIso(),
       status: 'published' as const,
     };
+    delete restored.editorIds;
+    delete restored.releaseReview;
     this.store.published.set(companyId, restored);
     const draft = this.store.drafts.get(companyId);
     if (draft) {
@@ -541,6 +550,7 @@ export class ControlPlaneStudio {
     this.store.entitlements.set(companyId, entitlements);
     const draft = this.ensureDraft(scope);
     draft.modules[moduleKey] = enabled;
+    this.recordDraftEdit(draft, scope);
   }
 
   upsertWorkflow(scope: ScopeContext, workflow: WorkflowDefinition): ConfigurationVersion {
@@ -549,7 +559,7 @@ export class ControlPlaneStudio {
     const index = draft.workflows.findIndex((entry) => entry.key === workflow.key);
     if (index >= 0) draft.workflows[index] = workflow;
     else draft.workflows.push(workflow);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }) {
@@ -591,7 +601,7 @@ export class ControlPlaneStudio {
     const index = draft.rules.findIndex((entry) => entry.key === rule.key);
     if (index >= 0) draft.rules[index] = rule;
     else draft.rules.push(rule);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertReport(scope: ScopeContext, report: ReportDefinition): ConfigurationVersion {
@@ -599,7 +609,7 @@ export class ControlPlaneStudio {
     const index = draft.reports.findIndex((entry) => entry.key === report.key);
     if (index >= 0) draft.reports[index] = report;
     else draft.reports.push(report);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertAutomation(scope: ScopeContext, automation: AutomationDefinition): ConfigurationVersion {
@@ -608,7 +618,7 @@ export class ControlPlaneStudio {
     const index = draft.automations.findIndex((entry) => entry.key === automation.key);
     if (index >= 0) draft.automations[index] = automation;
     else draft.automations.push(automation);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertMobilePolicy(scope: ScopeContext, policy: MobilePolicy): ConfigurationVersion {
@@ -617,7 +627,7 @@ export class ControlPlaneStudio {
     const normalized: MobilePolicy = { ...policy, encryptedLocalStore: true };
     if (index >= 0) draft.mobilePolicies[index] = normalized;
     else draft.mobilePolicies.push(normalized);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /**
@@ -639,7 +649,7 @@ export class ControlPlaneStudio {
       (draft as unknown as Record<string, Array<{ key: string }>>)[kind] = (draft[kind] as Array<{ key: string }>).filter((entry) => entry.key !== key);
     }
     if (draft[kind].length === before) throw new ControlPlaneError('That entry was not found in the draft', 'DRAFT_ENTRY_NOT_FOUND', 404);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
 }

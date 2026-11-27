@@ -14,11 +14,11 @@ import { StudioVersionHistory } from '../StudioVersionHistory';
 
 export function StudioSection(props) {
   const { setError, company, draft, runtime, controlToken, refreshLocked } = props;
-  async function publish(draftRevision) {
+  async function submitRelease(path, body, confirmation) {
     setError('');
     try {
-      await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST', body: { draftRevision } });
-      toast.success('Published');
+      await controlRequest(path, { token: controlToken, method: 'POST', body });
+      toast.success(confirmation);
       await refreshLocked().catch((caught) => setError(caught.message));
     } catch (caught) {
       if (caught?.code === 'STUDIO_CONFIG_CONFLICT') await refreshLocked().catch(() => undefined);
@@ -88,7 +88,9 @@ export function StudioSection(props) {
         <MobilePolicyEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
       </TabsContent>
       <TabsContent value="preview" className="grid gap-4">
-        <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken} onPublish={publish} />
+        <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken}
+          onPublish={(draftRevision, reviewId) => submitRelease('/studio/v1/publish', { draftRevision, reviewId }, 'Published')}
+          onRequestReview={(draftRevision) => submitRelease('/studio/v1/release-review', { draftRevision }, 'Approval requested')} />
         <Card>
           <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
           <CardContent className="text-sm text-muted-foreground">

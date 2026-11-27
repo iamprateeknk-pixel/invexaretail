@@ -102,3 +102,9 @@ interactive visual browsing a real component catalog tool would.
   real, separate work, not something to assert without having measured it.
   Flagged for the accessibility-baseline gate the guide names before page
   rebuild begins.
+
+### Studio release approval
+
+Set `REQUIRE_STUDIO_RELEASE_REVIEW=true` on all API replicas after a second Studio operator is available. The draft preview offers **Request approval** for the exact previewed revision. A separate operator opens the same company's Studio preview and selects **Approve and publish**. The requester and recorded editors cannot approve it. For a draft without editor records, the recorded draft creator cannot approve it. Editing the draft invalidates the pending approval request. The published version and audit record retain the requester and approver. Previously published versions remain readable.
+
+The approval mode covers publication of Studio drafts. Emergency restoration still uses the existing version comparison and reason. Keep an API build that enforces review available for rollback once the flag is on. Finish any jointly edited draft from before editor tracking before enabling the flag. Single-operator environments can keep the flag off until independent review is available.

@@ -229,6 +229,8 @@ export type ConfigurationVersion = {
   version: number;
   status: ConfigStatus;
   authorId: string;
+  editorIds?: string[];
+  releaseReview?: { id: string; revision: string; requestedBy: string; requestedAt: string; approvedBy?: string; approvedAt?: string };
   parentVersion: number | null;
   page: PageDefinition;
   fields: FieldDefinition[];
@@ -1080,7 +1082,7 @@ export class ControlPlane {
     return this.studioSvc.rollback(scope, version);
   }
 
-  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions) {
+  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions, approvingReview = false) {
     const companyId = this.studioSvc.requireLockedCompany(scope);
     const copy = (versions: Map<string, ConfigurationVersion>) => {
       const value = versions.get(companyId);
@@ -1088,6 +1090,11 @@ export class ControlPlane {
     };
     const staged: ControlPlaneStore = { ...this.store, drafts: copy(this.drafts), published: copy(this.published),
       versions: new Map([[companyId, structuredClone(this.versions.get(companyId) ?? [])]]), audit: [], outbox: [] };
+    const review = staged.drafts.get(companyId)?.releaseReview;
+    if (approvingReview && review) {
+      review.approvedBy = scope.actorId;
+      review.approvedAt = new Date().toISOString();
+    }
     const studio = new ControlPlaneStudio(staged, {
       requireCompany: this.requireCompany.bind(this), blankConfig: this.blankConfig.bind(this),
       assertFeature: this.assertFeature.bind(this), assertBillingWritable: this.assertBillingWritable.bind(this),

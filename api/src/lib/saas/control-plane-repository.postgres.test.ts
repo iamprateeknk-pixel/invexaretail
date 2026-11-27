@@ -9,7 +9,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { ControlPlane } from './control-plane.js';
-import { commitStudioRelease, studioDraftRevision } from './persistence.js';
+import { commitStudioRelease, requestStudioReview, studioDraftRevision } from './persistence.js';
 import { readStudioRuntime, readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
@@ -22,6 +22,49 @@ import {
 } from './control-plane-repository.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
+
+integration('the same operator cannot approve a draft, and review survives a replica restart', async (t) => {
+  const previous = process.env.REQUIRE_STUDIO_RELEASE_REVIEW;
+  process.env.REQUIRE_STUDIO_RELEASE_REVIEW = 'true';
+  t.after(() => {
+    if (previous === undefined) delete process.env.REQUIRE_STUDIO_RELEASE_REVIEW;
+    else process.env.REQUIRE_STUDIO_RELEASE_REVIEW = previous;
+  });
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const makerPlane = new ControlPlane();
+  await hydrateControlPlaneRows(makerPlane);
+  const { company } = makerPlane.createCompany(platformScope(makerPlane), {
+    name: 'Independent Studio Review', planId: 'pro', adminName: 'Review owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const reviewerId = randomUUID();
+  const email = `${reviewerId}@test.invexa.local`;
+  makerPlane.platformUsers.set(reviewerId, { ...makerPlane.platformUsers.get('platform-super-1')!, id: reviewerId, email });
+  await persistControlPlaneRows(makerPlane);
+  const maker = lockedScope(makerPlane, company.id);
+  makerPlane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'First proposed label' }]);
+  let revision = studioDraftRevision(makerPlane.drafts.get(company.id))!;
+  await assert.rejects(commitStudioRelease(makerPlane, maker, { draftRevision: revision }), { code: 'STUDIO_REVIEW_REQUIRED' });
+  const stale = await requestStudioReview(makerPlane, maker, revision);
+  makerPlane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'Final proposed label' }]);
+  await assert.rejects(commitStudioRelease(makerPlane, maker, { draftRevision: revision, reviewId: stale.id }), { code: 'STUDIO_CONFIG_CONFLICT' });
+  revision = studioDraftRevision(makerPlane.drafts.get(company.id))!;
+  const review = await requestStudioReview(makerPlane, maker, revision);
+  assert.notEqual(review.id, stale.id);
+  const command = { draftRevision: revision, reviewId: review.id };
+  await assert.rejects(commitStudioRelease(makerPlane, maker, command), { code: 'STUDIO_REVIEW_NOT_INDEPENDENT' });
+  assert.deepEqual(await requestStudioReview(makerPlane, maker, revision), review);
+
+  const checkerPlane = new ControlPlane();
+  await hydrateControlPlaneRows(checkerPlane);
+  const login = checkerPlane.platformLogin(email, checkerPlane.seedPassword);
+  const checker = checkerPlane.requireControlSession(checkerPlane.selectCompany(login.user.id, company.id).token).scope;
+  const published = await commitStudioRelease(checkerPlane, checker, command);
+  assert.equal(published.releaseReview?.requestedBy, maker.actorId);
+  assert.equal(published.releaseReview?.approvedBy, checker.actorId);
+  assert.equal((await readStudioVersions(makerPlane, company.id)).active?.releaseReview?.id, review.id);
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' } });
+  assert.deepEqual(events.map((event) => event.actorId), [checker.actorId]);
+});
 
 function platformScope(plane: ControlPlane) {
   return plane.createScope({ actorId: 'platform-super-1', sessionType: 'platform' });

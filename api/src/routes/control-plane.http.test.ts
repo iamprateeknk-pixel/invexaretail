@@ -153,6 +153,42 @@ test('HTTP: Studio restores the selected saved version while retaining active an
   });
 });
 
+test('HTTP: a requested Studio release requires an independent locked operator', async () => {
+  await withServer(async (url) => {
+    const checker = { ...controlPlane.platformUsers.get('platform-super-1')!, id: 'platform-checker', email: 'checker@invexa.local' };
+    controlPlane.platformUsers.set(checker.id, checker);
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const lock = async (email: string, companyId: string) => {
+      const login = await post('/control/v1/auth/login', { email, password: controlPlane.seedPassword });
+      assert.equal(login.status, 200);
+      const locked = await post('/control/v1/sessions/select-company', { companyId }, login.body.token);
+      assert.equal(locked.status, 200);
+      return locked.body.token;
+    };
+    const checkerToken = await lock(checker.email, 'default-company');
+    const opened = await json(url, '/studio/v1/draft', { headers: { Authorization: `Bearer ${checkerToken}` } });
+    assert.equal(opened.status, 200);
+    const makerToken = await lock('superadmin@invexa.local', 'default-company');
+    const edited = await post('/studio/v1/draft/stock/columns', { name: 'Review check', key: 'review_check', type: 'number' }, makerToken);
+    assert.equal(edited.status, 200);
+    const preview = await post('/studio/v1/preview', {}, makerToken);
+    assert.equal(preview.status, 200);
+    const draftRevision = preview.body.preview.draftRevision;
+    assert.equal((await post('/studio/v1/release-review', { draftRevision })).status, 401);
+    const initiated = await post('/studio/v1/release-review', { draftRevision }, makerToken);
+    assert.equal(initiated.status, 200);
+    const command = { draftRevision, reviewId: initiated.body.review.id };
+    const denied = await post('/studio/v1/publish', command, makerToken);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, 'STUDIO_REVIEW_NOT_INDEPENDENT');
+    const approved = await post('/studio/v1/publish', command, checkerToken);
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.published.releaseReview.approvedBy, checker.id);
+  });
+});
+
 test('HTTP: platform login, company lock, studio publish and sync mutation', async () => {
   await withServer(async (url) => {
     const login = await json(url, '/control/v1/auth/login', {

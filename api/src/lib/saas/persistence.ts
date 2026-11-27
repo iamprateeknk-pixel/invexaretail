@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolveDatabaseUrl } from '../db.js';
-import type { StudioRollbackOptions } from './control-plane-studio.js';
+import { validateStudioRelease, type StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
   controlPlaneDbEnabled,
@@ -61,10 +61,53 @@ export async function saveControlPlaneSnapshot(
 }
 
 export function studioDraftRevision(draft: ConfigurationVersion | undefined): string | null {
-  return draft ? createHash('sha256').update(stableStringify(JSON.parse(JSON.stringify(draft)))).digest('hex') : null;
+  if (!draft) return null;
+  const { releaseReview: _review, ...content } = draft;
+  return createHash('sha256').update(stableStringify(JSON.parse(JSON.stringify(content)))).digest('hex');
 }
 
-export type StudioReleaseCommand = StudioRollbackOptions & { rollbackVersion?: number; draftRevision?: string; expectedActiveVersionId?: string };
+export type StudioReleaseCommand = StudioRollbackOptions & {
+  rollbackVersion?: number; draftRevision?: string; expectedActiveVersionId?: string; reviewId?: string;
+};
+
+export function studioReviewStatus(draft: ConfigurationVersion | undefined, actorId: string) {
+  const request = draft?.releaseReview;
+  const current = request && request.revision === studioDraftRevision(draft) ? request : null;
+  const editors = draft?.editorIds?.length ? draft.editorIds : [draft?.authorId];
+  const canApprove = Boolean(draft && current && actorId !== current.requestedBy &&
+    !editors.includes(actorId));
+  return { required: process.env.REQUIRE_STUDIO_RELEASE_REVIEW === 'true' || Boolean(request), request: current, canApprove };
+}
+
+export async function requestStudioReview(plane: ControlPlane, scope: ScopeContext, revision: string) {
+  const request = persistQueue.then(async () => {
+    if (scope.sessionType !== 'control' || !scope.companyId || !scope.companySessionId) {
+      throw new ControlPlaneError('Hard-locked company control session required', 'SESSION_REQUIRED', 401);
+    }
+    const companyId = scope.companyId;
+    plane.assertBillingWritable(companyId);
+    const draft = plane.drafts.get(companyId);
+    if (!draft || studioDraftRevision(draft) !== revision) {
+      throw new ControlPlaneError('The draft changed. Review the latest draft before requesting approval.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
+    validateStudioRelease(draft);
+    if (draft.releaseReview?.revision === revision) return draft.releaseReview;
+    if (databaseEnabled() && !lastPersistedSnapshot(plane)) {
+      throw new ControlPlaneError('Studio could not verify the saved configuration.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
+    }
+    const releaseReview = { id: randomUUID(), revision, requestedBy: scope.actorId, requestedAt: new Date().toISOString() };
+    const reviewed = { ...draft, releaseReview };
+    if (databaseEnabled()) {
+      const snapshot = serializeControlPlane(plane);
+      snapshot.drafts = snapshot.drafts.map((entry) => entry.companyId === companyId ? reviewed : entry);
+      await persistControlPlaneRows(plane, snapshot);
+    }
+    plane.drafts.set(companyId, reviewed);
+    return releaseReview;
+  });
+  persistQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
 
 export async function commitStudioRelease(plane: ControlPlane, scope: ScopeContext, command: StudioReleaseCommand) {
   const release = persistQueue.then(async () => {
@@ -78,7 +121,15 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
     if (command.draftRevision !== undefined && command.draftRevision !== studioDraftRevision(plane.drafts.get(company))) {
       throw new ControlPlaneError('The draft changed after preview. Review the latest draft before publishing.', 'STUDIO_CONFIG_CONFLICT', 409);
     }
-    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command);
+    const review = studioReviewStatus(plane.drafts.get(company), scope.actorId);
+    const approvingReview = command.rollbackVersion === undefined && (review.required || command.reviewId !== undefined);
+    if (approvingReview) {
+      if (!review.request || command.reviewId !== review.request.id || command.draftRevision !== review.request.revision) {
+        throw new ControlPlaneError('Request approval for this draft revision before publishing.', 'STUDIO_REVIEW_REQUIRED', 409);
+      }
+      if (!review.canApprove) throw new ControlPlaneError('Another operator must approve this draft.', 'STUDIO_REVIEW_NOT_INDEPENDENT', 403);
+    }
+    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command, approvingReview);
     const { companyId, published, draft, history, audit, outbox } = stage;
     if (databaseEnabled()) {
       const snapshot = serializeControlPlane(plane);

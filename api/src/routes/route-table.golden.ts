@@ -255,6 +255,7 @@ export const STUDIO_ROUTES: string[] = [
   'POST /draft/tabs/:tabKey',
   'POST /preview',
   'POST /publish',
+  'POST /release-review',
   'POST /rollback',
   'GET /versions',
   'GET /versions/:versionId/compare',

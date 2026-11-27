@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { commitStudioRelease, flushControlPlanePersist, scheduleControlPlanePersist, studioDraftRevision, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
+import { commitStudioRelease, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
 import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -733,6 +733,7 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
     res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
     res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
       draftRevision: studioDraftRevision(controlPlane.drafts.get(companyId)),
+      releaseReview: studioReviewStatus(controlPlane.drafts.get(companyId), scope.actorId),
       variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
     } });
   } catch (error) {
@@ -760,11 +761,34 @@ async function releaseStudioVersion(req: Request, res: Response, command: Studio
 }
 
 studioRouter.post('/publish', async (req: Request, res: Response) => {
-  const draftRevision = req.body?.draftRevision;
+  const { draftRevision, reviewId } = req.body ?? {};
   if (draftRevision !== undefined && (typeof draftRevision !== 'string' || !/^[a-f0-9]{64}$/.test(draftRevision))) {
     return sendError(res, new ControlPlaneError('Invalid draft revision', 'INVALID_DRAFT_REVISION', 400));
   }
-  await releaseStudioVersion(req, res, { draftRevision });
+  if (reviewId !== undefined && (typeof reviewId !== 'string' || !reviewId || reviewId.length > 191)) {
+    return sendError(res, new ControlPlaneError('Invalid release review', 'INVALID_RELEASE_REVIEW', 400));
+  }
+  await releaseStudioVersion(req, res, { draftRevision, reviewId });
+});
+
+studioRouter.post('/release-review', async (req, res) => {
+  const revision = req.body?.draftRevision;
+  if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)) {
+    return sendError(res, new ControlPlaneError('Preview the draft before requesting approval.', 'INVALID_DRAFT_REVISION', 400));
+  }
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    const review = await requestStudioReview(controlPlane, requireScope(req), revision);
+    res.locals.studioPersisted = true;
+    res.json({ success: true, review });
+  } catch (error) {
+    if (error instanceof StudioConfigConflict) await refreshControlPlaneFromDb(controlPlane).catch(() => false);
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
 });
 
 studioRouter.post('/rollback', async (req: Request, res: Response) => {
