@@ -62,7 +62,10 @@ export async function savePickSlip(ctx: TenantContext, transferId: string, expec
       return result;
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError)) throw error;
-      const serializationFailure = error.code === 'P2034' || (error.code === 'P2010' && error.meta?.code === '40001');
+      // Prisma's PostgreSQL adapter puts the SQLSTATE in the underlying driver error for raw queries.
+      const adapter = error.meta?.driverAdapterError as { cause?: { originalCode?: string } } | undefined;
+      const serializationFailure = error.code === 'P2034' || (error.code === 'P2010'
+        && (error.meta?.code === '40001' || adapter?.cause?.originalCode === '40001'));
       if (!serializationFailure) throw error;
       if (attempt >= 2) throw new DomainError('CONFLICT', 'The pick could not be saved during another update. Try again.');
     }
