@@ -5,6 +5,7 @@ import { formatDateTime } from '../../lib/workspace';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorState, LoadingState } from '@/components/ui/feedback-states';
 
 function Bars({ pulse, field, label }) {
   const bars = pulseBars(pulse, field);
@@ -26,23 +27,32 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
   const [health, setHealth] = useState(null);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [retry, setRetry] = useState(0);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   // Live events bump liveRevision, so the numbers follow the work without a refresh button.
   useEffect(() => {
-    const headers = { Authorization: `Bearer ${token}` };
+    const controller = new AbortController();
+    const options = { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal };
+    apiRequest('/api/v1/command-center', options).then((center) => {
+      if (controller.signal.aborted) return;
+      if (!center?.commandCenter) throw new Error('The command center returned no data.');
+      setData(center.commandCenter);
+      setError('');
+    }).catch((err) => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : 'The command center is unavailable.'); });
     Promise.all([
-      apiRequest('/api/v1/command-center', { headers }),
-      apiRequest('/api/v1/reports/transfer-cycle', { headers }).catch(() => null),
-      apiRequest('/api/v1/reports/count-accuracy?groupBy=branch', { headers }).catch(() => null),
-      // Admin-only; everyone else simply does not get the panel.
-      apiRequest('/api/v1/ops/metrics', { headers }).catch(() => null),
-    ]).then(([center, cycle, accuracy, metrics]) => {
-      if (!mounted.current) return;
-      setData(center.commandCenter); setReports({ cycle: cycle?.report, accuracy: accuracy?.rows ?? [] }); setHealth(metrics); setError('');
-    }).catch((err) => { if (mounted.current) setError(err instanceof Error ? err.message : 'The command center is unavailable.'); });
-  }, [token, liveRevision]);
+      apiRequest('/api/v1/reports/transfer-cycle', options).catch(() => null),
+      apiRequest('/api/v1/reports/count-accuracy?groupBy=branch', options).catch(() => null),
+    ]).then(([cycle, accuracy]) => {
+      if (!controller.signal.aborted) setReports({ cycle: cycle?.report, accuracy: accuracy?.rows ?? [] });
+    });
+    // Admin-only; everyone else simply does not get the panel.
+    apiRequest('/api/v1/ops/metrics', options).catch(() => null).then((metrics) => {
+      if (!controller.signal.aborted) setHealth(metrics);
+    });
+    return () => controller.abort();
+  }, [token, liveRevision, retry]);
 
   async function exportAudit() {
     setExporting(true);
@@ -58,13 +68,14 @@ export default function CommandCenter({ token, liveRevision, locationsById }) {
     } finally { if (mounted.current) setExporting(false); }
   }
 
-  if (error && !data) return <div role="alert" className="rounded-lg border border-destructive p-4 text-sm text-destructive">{error}</div>;
-  if (!data) return <p role="status" className="py-10 text-center text-sm text-muted-foreground">Loading the command center…</p>;
+  const reload = () => { setError(''); setRetry((count) => count + 1); };
+  if (error && !data) return <ErrorState title="Could not load the command center" description={error} onRetry={reload} />;
+  if (!data) return <LoadingState label="Loading the command center…" />;
 
   const nameOf = (id) => locationsById?.get(id)?.name ?? id;
   return (
     <div className="space-y-6">
-      {error && <div role="alert" className="rounded-lg border border-destructive p-3 text-sm text-destructive">{error}</div>}
+      {error && <ErrorState title="Could not refresh the command center" description={error} onRetry={reload} />}
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">

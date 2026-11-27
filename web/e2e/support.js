@@ -17,6 +17,12 @@ export async function mockApi(page, role = 'ADMIN') {
       return route.fulfill({ json: { token, user: { id: `u-${role}`, name: `Test ${role}`, email: 'user@example.com', role, companyId: 'company-1', locationIds: ['loc-1'] } } });
     }
     if (path === '/api/v1/locations') return route.fulfill({ json: { locations: [LOCATION] } });
+    if (path === '/api/v1/command-center') return route.fulfill({ json: { commandCenter: {
+      sync: { liveClients: 0, staleBranches: 0, totalBranches: 1 }, attention: [], branchHealth: [], pulse: [],
+      blocked: { stuckTransfers: 0, countsAwaitingReview: 0, reconciliation: 0 },
+      stuckTransfers: { rows: [] }, heatmap: [], team: [], recent: [],
+    } } });
+    if (path === '/api/v1/ops/metrics') return route.fulfill({ status: 403, json: { error: 'Metrics unavailable' } });
     if (path === '/api/v1/items') return route.fulfill({ json: { items: [ITEM] } });
     if (path === '/api/v1/purchase-orders') return route.fulfill({ json: { purchaseOrders: [], nextCursor: null } });
     if (path === '/api/v1/suppliers') return route.fulfill({ json: { suppliers: [] } });
@@ -28,9 +34,13 @@ export async function mockApi(page, role = 'ADMIN') {
   });
 }
 
-export async function signIn(page, role = 'ADMIN') {
+export async function signIn(page, role = 'ADMIN', path = '/') {
   await mockApi(page, role);
-  await page.goto('/');
+  await page.goto(path);
+  await submitSignIn(page);
+}
+
+export async function submitSignIn(page) {
   await page.getByLabel('Email').fill('user@example.com');
   await page.getByLabel('Password').fill('password');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();

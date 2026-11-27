@@ -32,6 +32,11 @@ export function useSectionRoute() {
   }, []);
 
   const navigate = useCallback((nextSection, { replace = false } = {}) => {
+    if (nextSection === null) {
+      setSection('dashboard');
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      return;
+    }
     const next = sectionFromHash(`#/${nextSection}`);
     setSection(next);
     const nextHash = sectionHash(next);

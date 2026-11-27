@@ -48,29 +48,50 @@ export function useWorkspaceHydration({
 }) {
   // Version of the catalogue we currently hold (see lib/catalogue-version.js); null = unknown.
   const itemsVersion = useRef(null);
+  const [configurationRevision, setConfigurationRevision] = useState(0);
+  const [landingProfile, setLandingProfile] = useState(null);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const controller = new AbortController();
+    const headers = { Authorization: `Bearer ${authToken}` };
+    const profileController = new AbortController();
+    const profileTimeout = window.setTimeout(() => profileController.abort(), 8000);
+    const finishProfile = (profile) => {
+      if (controller.signal.aborted) return;
+      if (profile) setWorkspaceProfile({
+        ...DEFAULT_WORKSPACE_PROFILE,
+        ...profile,
+        pack: { ...DEFAULT_WORKSPACE_PROFILE.pack, ...profile.pack },
+      });
+      setLandingProfile({ token: authToken, available: Boolean(profile) });
+    };
+    apiRequest('/api/v1/workspace/profile', { headers, signal: profileController.signal })
+      .then(finishProfile, () => finishProfile(null))
+      .finally(() => window.clearTimeout(profileTimeout));
+    apiRequest('/api/v1/runtime/config', { headers, signal: controller.signal })
+      .then((response) => { if (!controller.signal.aborted) setRuntimeConfig(response?.runtime ?? null); })
+      .catch(() => { if (!controller.signal.aborted) setRuntimeConfig(null); });
+    return () => {
+      controller.abort();
+      profileController.abort();
+      window.clearTimeout(profileTimeout);
+    };
+  }, [authToken, configurationRevision, setRuntimeConfig, setWorkspaceProfile]);
 
   async function hydrateWorkspace(token, currentRole) {
     const headers = { Authorization: `Bearer ${token}` };
     // Read before the catalogue itself so a change landing in between is caught by the next check.
     itemsVersion.current = await fetchCatalogueVersion(headers);
     // Independent resources load together so login does not pay an extra network round-trip.
-    const [locationsResponse, itemsResponse, countsResponse, transfersResponse, dashboardResponse, workspaceResponse, runtimeResponse] = await Promise.all([
+    const [locationsResponse, itemsResponse, countsResponse, transfersResponse, dashboardResponse] = await Promise.all([
       apiRequest('/api/v1/locations', { headers }),
       apiRequest('/api/v1/items', { headers }),
       apiRequest('/api/v1/counts', { headers }),
       apiRequest('/api/v1/transfers/list', { headers }),
       apiRequest('/api/v1/dashboard', { headers }),
-      apiRequest('/api/v1/workspace/profile', { headers }).catch(() => DEFAULT_WORKSPACE_PROFILE),
-      apiRequest('/api/v1/runtime/config', { headers }).catch(() => null),
     ]);
     const visibleLocations = locationsResponse.locations ?? [];
-    const nextProfile = {
-      ...DEFAULT_WORKSPACE_PROFILE,
-      ...(workspaceResponse ?? {}),
-      pack: { ...DEFAULT_WORKSPACE_PROFILE.pack, ...(workspaceResponse?.pack ?? {}) },
-    };
-    setWorkspaceProfile(nextProfile);
-    setRuntimeConfig(runtimeResponse?.runtime ?? null);
     const countManager = isCountManager(currentRole);
     const [auditResponse, pickerResponse, assignmentsResponse, storeUsersResponse] = await Promise.all([
       ['ADMIN', 'AUDITOR'].includes(currentRole) ? apiRequest('/api/v1/audit', { headers }) : Promise.resolve({ events: [] }),
@@ -121,6 +142,7 @@ export function useWorkspaceHydration({
     setApiError('');
     setWorkspaceProfile(DEFAULT_WORKSPACE_PROFILE);
     setRuntimeConfig(null);
+    setLandingProfile(null);
   };
 
   useEffect(() => {
@@ -171,6 +193,7 @@ export function useWorkspaceHydration({
     const { authToken: token, locationId: currentLocation, role: currentRole } = latest.current;
     if (!token) return;
     if (slices.has('full')) {
+      setConfigurationRevision((current) => current + 1);
       await loadAppDataRef.current?.(token, currentRole);
       return;
     }
@@ -291,5 +314,6 @@ export function useWorkspaceHydration({
     }
   }
 
-  return { markNotificationRead, liveStatus, campaignRevision, liveRevision };
+  return { markNotificationRead, liveStatus, campaignRevision, liveRevision,
+    landingProfile: landingProfile?.token === authToken ? landingProfile : null };
 }

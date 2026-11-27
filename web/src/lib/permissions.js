@@ -41,7 +41,16 @@ export function canAccessSection(sectionId, { role, hiddenModules = new Set() } 
   return navigationItemIsVisible(item, { role, hiddenModules });
 }
 
-/** The first section a role should land on. Every role's home is the shared operations dashboard today - see docs/web/role-journeys.md for why a role-specific landing page is deliberately not built this week. */
-export function getRoleHome(_role) {
-  return 'dashboard';
+const HOME_QUEUES = {
+  ADMIN: ['command-center', 'approvals', 'import-wizard'],
+  ADMIN_USER: ['command-center', 'approvals', 'import-wizard'],
+  BRANCH_MANAGER: ['counts', 'approvals', 'transfers'],
+  STORE_USER: ['counts', 'transfers', 'item-search'],
+  WAREHOUSE_PICKER: ['picking', 'putaway', 'transfers'],
+  AUDITOR: ['reports', 'command-center'],
+};
+
+export function getRoleHome(role, { hiddenModules } = {}) {
+  if (!Object.hasOwn(HOME_QUEUES, role)) return 'dashboard';
+  return HOME_QUEUES[role].find((section) => canAccessSection(section, { role, hiddenModules })) ?? 'dashboard';
 }

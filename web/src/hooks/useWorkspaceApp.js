@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { defaultSectionForRole } from '../lib/workspace';
-import { canAccessSection } from '../lib/permissions';
+import { getRoleHome } from '../lib/permissions';
 import { useWorkspaceAuth } from './useWorkspaceAuth';
 import { useWorkspaceCounts } from './useWorkspaceCounts';
 import { useWorkspaceTransfers } from './useWorkspaceTransfers';
@@ -26,6 +25,7 @@ import { useWorkspaceIntegrations } from './useWorkspaceIntegrations';
 import { useWorkspaceCore } from './useWorkspaceCore';
 import { useWorkspaceHydration } from './useWorkspaceHydration';
 import { useWorkspaceDerived } from './useWorkspaceDerived';
+import { sectionHash } from './useSectionRoute';
 
 export function useWorkspaceApp() {
   const core = useWorkspaceCore();
@@ -38,27 +38,20 @@ export function useWorkspaceApp() {
     showToast,
   } = core;
 
+  const automaticHome = useRef(null);
+  const landingIdentity = useRef(null);
   const auth = useWorkspaceAuth({
     loadAppData,
-    onLogout: () => resetWorkspaceRef.current(),
+    onLogout: () => {
+      if (automaticHome.current === window.location.hash) core.setActiveSection(null);
+      automaticHome.current = null;
+      landingIdentity.current = null;
+      resetWorkspaceRef.current();
+    },
     setLoading,
     addNotification,
   });
   const { session, authToken, role } = auth;
-
-  // Plan U1: a person who opens the app with no deep link lands on their own task queue.
-  // An explicit link (#/inventory, a bookmark, a shared investigation URL) is never overridden.
-  const landingApplied = useRef(false);
-  useEffect(() => {
-    if (!session || !role || landingApplied.current) return;
-    landingApplied.current = true;
-    const hash = typeof window === 'undefined' ? '' : window.location.hash.replace(/^#\/?/, '');
-    if (hash) return;
-    const hidden = new Set(core.workspaceProfile.pack?.hide ?? []);
-    const landing = defaultSectionForRole(role, { canAccess: (section) => canAccessSection(section, { role, hiddenModules: hidden }) });
-    if (landing !== 'dashboard') core.navigateTo(landing);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, role]);
 
   const countDomain = useWorkspaceCounts({
     authToken,
@@ -296,7 +289,7 @@ export function useWorkspaceApp() {
     showToast,
   });
 
-  const { markNotificationRead, liveStatus, campaignRevision, liveRevision } = useWorkspaceHydration({
+  const { markNotificationRead, liveStatus, campaignRevision, liveRevision, landingProfile } = useWorkspaceHydration({
     activeSection: core.activeSection,
     authToken,
     items: core.items,
@@ -363,6 +356,21 @@ export function useWorkspaceApp() {
     workspaceProfile: core.workspaceProfile,
   });
 
+  const identity = session ? JSON.stringify([session.user?.companyId, session.user?.id, role]) : null;
+  const { hiddenModules } = derived;
+  const { setActiveSection } = core;
+  const hasDeepLink = Boolean(window.location.hash.replace(/^#\/?/, ''));
+  useEffect(() => {
+    if (!identity || !role || !landingProfile || landingIdentity.current === identity) return;
+    landingIdentity.current = identity;
+    const hash = window.location.hash;
+    if (hash.replace(/^#\/?/, '')) return;
+    const home = landingProfile.available ? getRoleHome(role, { hiddenModules }) : 'dashboard';
+    if (home === 'dashboard') return;
+    automaticHome.current = sectionHash(home);
+    setActiveSection(home, { replace: true });
+  }, [identity, role, landingProfile, hiddenModules, setActiveSection]);
+
   return {
     ...auth,
     ...countDomain,
@@ -399,6 +407,7 @@ export function useWorkspaceApp() {
     inventoryPageSize: core.inventoryPageSize,
     isMobile: core.isMobile,
     items: core.items,
+    landingPending: Boolean(identity && !hasDeepLink && !landingProfile),
     loading: core.loading,
     locationId: core.locationId,
     locations: core.locations,

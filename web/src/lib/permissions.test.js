@@ -50,3 +50,15 @@ test('getRoleHome returns a section every role can access', () => {
     assert.equal(canAccessSection(home, { role }), true, `${role}'s home section must itself be accessible to that role`);
   }
 });
+
+test('the home for each role opens its task queue and skips hidden destinations', () => {
+  assert.equal(getRoleHome('ADMIN'), 'command-center');
+  assert.equal(getRoleHome('ADMIN_USER'), 'command-center');
+  assert.equal(getRoleHome('BRANCH_MANAGER'), 'counts');
+  assert.equal(getRoleHome('STORE_USER'), 'counts');
+  assert.equal(getRoleHome('WAREHOUSE_PICKER'), 'picking');
+  assert.equal(getRoleHome('AUDITOR'), 'reports');
+  assert.equal(getRoleHome('STORE_USER', { hiddenModules: new Set(['counts']) }), 'transfers');
+  assert.equal(getRoleHome('WAREHOUSE_PICKER', { hiddenModules: ['picking', 'putaway'] }), 'transfers');
+  assert.equal(getRoleHome('ADMIN', { hiddenModules: ['command-center', 'approvals'] }), 'import-wizard');
+});

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import 'global-jsdom/register';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { Workspace } from './Workspace.jsx';
 import { WorkspaceProvider } from './WorkspaceContext.jsx';
@@ -30,7 +30,7 @@ function renderWorkspace(overrides) {
 test('a Store User is denied "putaway" - role-restricted in NAVIGATION but never covered by the old SECTION_ROLES route guard', () => {
   renderWorkspace({ activeSection: 'putaway', role: 'STORE_USER' });
   assert.ok(screen.getByText('Access restricted'));
-  assert.ok(screen.getByRole('button', { name: 'Return to dashboard' }));
+  assert.ok(screen.getByRole('button', { name: 'Return to my workspace' }));
 });
 
 // The "role IS allowed" side is intentionally not exercised by rendering a
@@ -47,9 +47,12 @@ test('a section hidden by the industry pack/entitlements is denied at the route 
   assert.ok(screen.getByText('Access restricted'));
 });
 
-test('the "Return to dashboard" action is keyboard-focusable', () => {
-  renderWorkspace({ activeSection: 'saas', role: 'STORE_USER' });
-  const button = screen.getByRole('button', { name: 'Return to dashboard' });
+test('returning to the role workspace is keyboard-focusable and skips hidden queues', () => {
+  const routes = [];
+  renderWorkspace({ activeSection: 'saas', role: 'STORE_USER', hiddenModules: new Set(['counts']), navigateTo: (route) => routes.push(route) });
+  const button = screen.getByRole('button', { name: 'Return to my workspace' });
   button.focus();
   assert.equal(document.activeElement, button);
+  fireEvent.click(button);
+  assert.deepEqual(routes, ['transfers']);
 });
