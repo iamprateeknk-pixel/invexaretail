@@ -11,6 +11,8 @@ analyzer:
   exclude:
     - build/**
     - android/**
+    - ios/**
+    - windows/**
   errors:
     missing_required_param: error
     missing_return: error

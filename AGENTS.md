@@ -10,6 +10,10 @@ read those first if a rule below seems arbitrary.
   only backend Render deploys (see `render.yaml`); it owns the database.
 - `web/` - the deployed frontend (Vite).
 - `admin-panel/`, `mobile/` - separate deployables, own package.json each.
+  `mobile/` is one Flutter codebase shipped as three apps: Android
+  (`android-apk.yml`), iOS (`ios.yml`) and Windows (`windows.yml`). Platform
+  differences (no camera scanner or embedded web view on Windows) are decided
+  only in `mobile/lib/config/platform_caps.dart`.
 - `database/` was the pre-`api/` MySQL/Sequelize schema/migrations half of
   the legacy prototype - already removed (an earlier commit, "Migrate
   Invexa Retail to PostgreSQL and complete Week 1 controls"). `backend/`
@@ -938,3 +942,20 @@ tracks how much of it):
   "Code scanning" feature enabled at all, so the SARIF upload step always
   fails regardless of workflow permissions - a repo-owner-only setting;
   marked that job `continue-on-error: true` until it's enabled.
+- Post-merge follow-up 6 (`mobile/ios/`, `mobile/windows/`,
+  `mobile/lib/state/session_controller.dart`, `.github/workflows/{ios,windows}.yml`,
+  no dedicated ADR - see `mobile/README.md`): adds iOS and Windows builds of
+  the existing Flutter app (no second codebase). Windows has no camera
+  scanner or web view plugin, so scanning becomes a focused keyboard-wedge
+  field and the full workspace opens in the browser; wide windows get a
+  navigation rail. Also fixed four real data/flow bugs in the controller,
+  each with a test proven to fail on the old code
+  (`test/sync_concurrency_test.dart`): a count queued while a sync was in
+  flight was silently dropped (the flush overwrote the queue with its own
+  snapshot), overlapping flushes could replay the same item twice, a slow
+  stock response for the previous location could overwrite the newly
+  selected location's stock, and a save the server accepted was reported as
+  failed when the refresh after it failed - inviting a second tap that posts
+  again under a new idempotency key. Not verifiable in this sandbox (no
+  macOS, Windows or Android SDK): the iOS/Windows/Android builds themselves
+  - they are proven by those three CI workflows.

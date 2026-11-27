@@ -56,3 +56,31 @@ Android release workflow (`.github/workflows/android-apk.yml`) does not
 regenerate it. The workflow runs `flutter pub get --enforce-lockfile`,
 `flutter analyze` and `flutter test`, then builds the signed release
 AAB/APK with the version from `pubspec.yaml`.
+
+## iOS app
+
+`ios/` is committed (bundle id `com.invexaretail.invexaretailMobile`, iOS 15+).
+`.github/workflows/ios.yml` runs on macOS: pull requests build unsigned to prove
+the app compiles; `main`/manual runs build a signed App Store / TestFlight IPA
+once the Apple signing secrets are set (see `SETUP.md`, "iOS"). Camera
+scanning and the embedded workspace work as on Android.
+
+## Windows app
+
+`windows/` is committed. `.github/workflows/windows.yml` builds a portable zip
+and a per-user `InvexaRetail-Setup-<version>.exe` (Inno Setup script in
+`windows/installer/`, no admin rights needed). Two platform differences, both
+decided in one place (`lib/config/platform_caps.dart`):
+
+- **Scanning:** no camera scanner exists on Windows, so every "Scan" opens a
+  focused field instead. A USB/Bluetooth barcode scanner types the code plus
+  Enter into it, so scanning works hands-free like on a phone.
+- **Full workspace:** opens in the default browser (no embedded web view on
+  Windows). The one-time sign-in code is not passed, so it never lands in
+  browser history; the workspace asks for sign-in itself.
+
+Wide windows (Windows, iPad, tablets in landscape) use a side navigation rail
+instead of the bottom bar.
+
+Run locally on a Windows PC with Visual Studio 2022 ("Desktop development with
+C++"): `flutter run -d windows`.

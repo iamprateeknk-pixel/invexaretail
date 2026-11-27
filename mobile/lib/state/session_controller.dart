@@ -176,8 +176,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on TwoFactorRequiredException catch (challenge) {
       twoFactorChallenge = challenge.challengeToken;
@@ -194,6 +193,18 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Signed in is signed in: if the first data load fails (one endpoint down, a slow
+  /// network), the person still lands on the home screen with the reason shown and can
+  /// pull to refresh, instead of being told sign-in failed while their session is saved.
+  Future<void> _loadAfterSignIn() async {
+    try {
+      await refreshAll();
+    } on ApiException catch (err) {
+      error = err.message;
+    }
+    startLive();
+  }
+
   Future<bool> completeTwoFactor(String code) async {
     final challenge = twoFactorChallenge;
     if (challenge == null) return false;
@@ -208,8 +219,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -263,8 +273,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on TwoFactorRequiredException catch (challenge) {
       twoFactorChallenge = challenge.challengeToken;
@@ -391,9 +400,14 @@ class SessionController extends ChangeNotifier {
           api.myAssignments().then((value) => assignments = value),
         if ((slices.contains('assignments') || slices.contains('stock')) && isCountWorker)
           _loadCountTasks(),
-        if (slices.contains('stock') && locationId != null) api.stock(locationId).then((value) => stock = value),
+        if (slices.contains('stock') && locationId != null)
+          api.stock(locationId).then((value) {
+            if (selectedLocationId == locationId) stock = value;
+          }),
         if (slices.contains('putaway') && locationId != null)
-          api.putawayTasks(locationId).then((value) => putawayTasks = value),
+          api.putawayTasks(locationId).then((value) {
+            if (selectedLocationId == locationId) putawayTasks = value;
+          }),
         if (slices.contains('transfers')) api.transfers().then((value) => transfers = value),
         if (slices.contains('dashboard')) api.dashboard().then((value) => dashboard = value),
       ];
@@ -405,38 +419,51 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> selectLocation(String locationId) async {
+    if (selectedLocationId == locationId) return;
     selectedLocationId = locationId;
+    // The old location's rows must never be shown under the new one, even for a moment.
+    stock = [];
+    putawayTasks = [];
     notifyListeners();
-    await refreshStock();
+    try {
+      await Future.wait<void>([refreshStock(notify: false), refreshPutaway(notify: false)]);
+    } on ApiException catch (err) {
+      error = err.message;
+    }
+    notifyListeners();
   }
 
+  /// Loads everything the home screens need. Independent reads run in parallel;
+  /// only stock and putaway wait for the location list (they need a location).
   Future<void> refreshAll() async {
     error = null;
     api.servedFromCacheAt = null;
-    final locationFuture = api.locations();
-    final itemFuture = api.items();
-    final dashFuture = api.dashboard();
-    final countFuture = api.counts();
-    final transferFuture = api.transfers();
-    locations = await locationFuture;
-    items = await itemFuture;
-    dashboard = await dashFuture;
-    counts = await countFuture;
-    transfers = await transferFuture;
-    if (isCountWorker) {
-      try {
-        assignments = await api.myAssignments();
-      } on ApiException {
-        assignments = [];
-      }
-      await _loadCountTasks();
-    } else {
+    final countWorker = isCountWorker;
+    await Future.wait<void>([
+      api.locations().then((value) async {
+        locations = value;
+        final selected = selectedLocationId;
+        // A location the user can no longer access (re-assigned, deactivated) is not kept selected.
+        if (selected == null || !value.any((location) => location.id == selected)) {
+          selectedLocationId = value.isEmpty ? null : value.first.id;
+        }
+        await Future.wait<void>([refreshStock(notify: false), refreshPutaway(notify: false)]);
+      }),
+      api.items().then((value) => items = value),
+      api.dashboard().then((value) => dashboard = value),
+      api.counts().then((value) => counts = value),
+      api.transfers().then((value) => transfers = value),
+      if (countWorker)
+        api.myAssignments().then((value) => assignments = value).catchError(
+              (Object _) => assignments = <CountAssignment>[],
+              test: (err) => err is ApiException,
+            ),
+      if (countWorker) _loadCountTasks(),
+    ]);
+    if (!countWorker) {
       assignments = [];
       countTasks = [];
     }
-    selectedLocationId ??= locations.isEmpty ? null : locations.first.id;
-    await refreshStock();
-    await refreshPutaway();
     await flushQueue();
     notifyListeners();
   }
@@ -459,28 +486,35 @@ class SessionController extends ChangeNotifier {
     return null;
   }
 
-  Future<void> refreshStock() async {
+  /// Stock for the selected location. A response that arrives after the user
+  /// has switched location is dropped, so one location's rows never show under another.
+  Future<void> refreshStock({bool notify = true}) async {
     final locationId = selectedLocationId;
     if (locationId == null) {
       stock = [];
       return;
     }
-    stock = await api.stock(locationId);
-    notifyListeners();
+    final rows = await api.stock(locationId);
+    if (selectedLocationId != locationId) return;
+    stock = rows;
+    if (notify) notifyListeners();
   }
 
-  Future<void> refreshPutaway() async {
+  Future<void> refreshPutaway({bool notify = true}) async {
     final locationId = selectedLocationId;
     if (locationId == null) {
       putawayTasks = [];
       return;
     }
+    List<Map<String, dynamic>> tasks;
     try {
-      putawayTasks = await api.putawayTasks(locationId);
+      tasks = await api.putawayTasks(locationId);
     } on ApiException {
-      putawayTasks = [];
+      tasks = [];
     }
-    notifyListeners();
+    if (selectedLocationId != locationId) return;
+    putawayTasks = tasks;
+    if (notify) notifyListeners();
   }
 
   Future<bool> enqueueAction({
@@ -529,19 +563,27 @@ class SessionController extends ChangeNotifier {
     final mutationId = body['requestId']?.toString().isNotEmpty == true ? body['requestId'].toString() : newRequestId();
     try {
       await api.sendRaw(method, path, body: body, mutationId: mutationId);
-      notice = '$type saved.';
-      await refreshAll();
-      return true;
     } on ApiException catch (err) {
+      busy = false;
       if (err.isOffline) {
         return enqueueAction(type: type, method: method, path: path, body: body, mutationId: mutationId);
       }
       error = err.message;
+      notifyListeners();
       return false;
+    }
+    // The server has the change. A failed re-read afterwards must not report the save as failed:
+    // the person would tap again and, with a fresh idempotency key, post it a second time.
+    notice = '$type saved.';
+    try {
+      await refreshAll();
+    } on ApiException {
+      notice = '$type saved. Pull down to refresh the latest data.';
     } finally {
       busy = false;
       notifyListeners();
     }
+    return true;
   }
 
   /// [weight] counts send one decimal total for the item (server splits it
@@ -694,12 +736,60 @@ class SessionController extends ChangeNotifier {
     await flushQueue();
   }
 
-  Future<void> flushQueue({DateTime? now, Random? random}) async {
+  Future<void>? _flushing;
+  bool _flushRequested = false;
+
+  /// Replays queued work. Only one flush runs at a time: a call that arrives
+  /// while one is running (app resume + pull-to-refresh, a manual retry) is
+  /// folded into one more pass after it, so nothing is sent twice in parallel
+  /// and a retried item is never skipped.
+  Future<void> flushQueue({DateTime? now, Random? random}) {
+    final running = _flushing;
+    if (running != null) {
+      _flushRequested = true;
+      return running;
+    }
+    final future = _flushLoop(now: now, random: random);
+    _flushing = future;
+    return future.whenComplete(() {
+      if (identical(_flushing, future)) _flushing = null;
+    });
+  }
+
+  Future<void> _flushLoop({DateTime? now, Random? random}) async {
+    do {
+      _flushRequested = false;
+      await _flushQueueOnce(now: now, random: random);
+    } while (_flushRequested && isSignedIn);
+  }
+
+  /// Rebuilds a queue after a flush pass without losing concurrent edits: an item
+  /// queued while the pass was awaiting the network is kept, and an item the
+  /// user discarded meanwhile is not brought back.
+  static List<T> mergeQueueAfterFlush<T>({
+    required List<T> snapshot,
+    required List<T> remaining,
+    required List<T> current,
+    required String Function(T item) idOf,
+  }) {
+    final snapshotIds = snapshot.map(idOf).toSet();
+    final currentIds = current.map(idOf).toSet();
+    return [
+      ...remaining.where((item) => currentIds.contains(idOf(item))),
+      ...current.where((item) => !snapshotIds.contains(idOf(item))),
+    ];
+  }
+
+  Future<void> _flushQueueOnce({DateTime? now, Random? random}) async {
     if (!isSignedIn) return;
     if (queuedCounts.isEmpty && queuedActions.isEmpty) return;
     final clock = now ?? DateTime.now();
     final me = _userId;
+    final meCompany = companyId;
     var sent = 0;
+    // Signed out or switched user mid-flush: never write this pass's lists into someone else's queue.
+    bool sameIdentity() => isSignedIn && _userId == me && companyId == meCompany;
+    final countSnapshot = List<QueuedCount>.of(queuedCounts);
 
     // Never replay under a different identity (plan P0-SYNC-001): the lists are loaded per
     // user, and this guard keeps that true even if something stale is ever in memory.
@@ -707,7 +797,7 @@ class SessionController extends ChangeNotifier {
 
     final remainingCounts = <QueuedCount>[];
     var stopCounts = false;
-    for (final item in queuedCounts) {
+    for (final item in countSnapshot) {
       // A conflict/rejected item waits for the user's explicit retry (retryQueuedCount) - never
       // resubmitted silently. A backed-off item waits for its time. Anything after a transient
       // failure waits too, so the order the person worked in is preserved.
@@ -753,12 +843,19 @@ class SessionController extends ChangeNotifier {
         remainingCounts.add(item);
       }
     }
-    queuedCounts = remainingCounts;
+    if (!sameIdentity()) return;
+    queuedCounts = mergeQueueAfterFlush(
+      snapshot: countSnapshot,
+      remaining: remainingCounts,
+      current: queuedCounts,
+      idOf: (item) => item.localId,
+    );
     await _saveCounts();
 
+    final actionSnapshot = List<QueuedAction>.of(queuedActions);
     final remainingActions = <QueuedAction>[];
     var stopActions = false;
-    for (final item in queuedActions) {
+    for (final item in actionSnapshot) {
       if (item.status != 'pending' || !mine(item.userId)) {
         remainingActions.add(item);
         continue;
@@ -784,12 +881,25 @@ class SessionController extends ChangeNotifier {
         remainingActions.add(item);
       }
     }
-    queuedActions = remainingActions;
+    if (!sameIdentity()) return;
+    queuedActions = mergeQueueAfterFlush(
+      snapshot: actionSnapshot,
+      remaining: remainingActions,
+      current: queuedActions,
+      idOf: (item) => item.localId,
+    );
     await _saveActions();
     if (sent > 0) {
       notice = sent == 1 ? 'Synced 1 queued action.' : 'Synced $sent queued actions.';
-      counts = await api.counts();
-      dashboard = await api.dashboard();
+      // Best-effort: the work is already saved server-side, so a failed re-read must not
+      // surface as a sync failure (or abort the refresh that called this flush).
+      try {
+        final results = await Future.wait([api.counts(), api.dashboard()]);
+        counts = results[0] as List<CountRecord>;
+        dashboard = results[1] as DashboardSummary;
+      } on ApiException {
+        // The next refresh or live event catches up.
+      }
     }
     notifyListeners();
   }

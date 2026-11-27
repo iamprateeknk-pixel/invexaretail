@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import 'package:url_launcher/url_launcher.dart';
+
+import '../config/env.dart';
+import '../config/platform_caps.dart';
 import '../config/role_home.dart';
 import '../config/theme.dart';
 import '../services/live_events.dart';
@@ -79,13 +83,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
           IconButton(
             tooltip: 'Full workspace',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => WorkspaceScreen(fetchHandoffCode: controller.api.webHandoffCode),
-                ),
-              );
-            },
+            onPressed: () => _openWorkspace(controller),
             icon: const Icon(Icons.open_in_browser_outlined),
           ),
           IconButton(
@@ -95,7 +93,8 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: Column(
+      body: LayoutBuilder(builder: (context, constraints) {
+        final content = Column(
         children: [
           if (controller.snapshotFetchedAt != null)
             Semantics(
@@ -113,7 +112,28 @@ class _HomeShellState extends State<HomeShell> {
             ),
           Expanded(child: IndexedStack(index: safeIndex, children: pages)),
         ],
-      ),
+      );
+        if (constraints.maxWidth < wideLayoutBreakpoint) return content;
+        // Wide window (Windows, iPad, tablet landscape): destinations move to a side rail so
+        // every screen keeps its full height and the main action is one click away.
+        return Row(children: [
+          NavigationRail(
+            selectedIndex: safeIndex,
+            onDestinationSelected: (value) => setState(() => _index = value),
+            labelType: NavigationRailLabelType.all,
+            destinations: [
+              for (final dest in home.destinations)
+                NavigationRailDestination(
+                  icon: Icon(dest.icon),
+                  selectedIcon: Icon(dest.icon, color: invexaEmerald),
+                  label: Text(dest.label),
+                ),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(child: content),
+        ]);
+      }),
       floatingActionButton: FloatingActionButton.extended(
         key: const ValueKey('quick-scan'),
         tooltip: 'Scan an item, barcode or lot',
@@ -121,7 +141,9 @@ class _HomeShellState extends State<HomeShell> {
         icon: const Icon(Icons.qr_code_scanner),
         label: const Text('Scan'),
       ),
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint
+          ? null
+          : NavigationBar(
         selectedIndex: safeIndex,
         onDestinationSelected: (value) => setState(() => _index = value),
         destinations: [
@@ -134,6 +156,25 @@ class _HomeShellState extends State<HomeShell> {
         ],
       ),
     );
+  }
+
+  /// The full web workspace: embedded (and signed in via a one-time code) where a web view
+  /// exists; otherwise the default browser, without the code, so it never lands in browser history.
+  Future<void> _openWorkspace(SessionController controller) async {
+    if (PlatformCaps.hasEmbeddedWebView) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => WorkspaceScreen(fetchHandoffCode: controller.api.webHandoffCode),
+        ),
+      );
+      return;
+    }
+    final opened = await launchUrl(Uri.parse(workspaceOrigin), mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open the browser. Visit invexaretail.com to use the full workspace.')),
+      );
+    }
   }
 
   Future<void> _quickScan(SessionController controller, MobileRoleHome home) async {
