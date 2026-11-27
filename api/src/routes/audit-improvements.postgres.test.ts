@@ -470,7 +470,7 @@ integration('reorder suggestions can be accepted (writes the rule) or dismissed 
     assert.equal(accepted.body.rule.minQty, suggested.suggestedMin);
     assert.equal(accepted.body.rule.targetQty, suggested.suggestedTarget);
     const stored = await prisma.reorderRule.findUniqueOrThrow({ where: { itemId_locationId: { itemId: item.id, locationId: a.loc.id } } });
-    assert.equal(stored.minQty, suggested.suggestedMin);
+    assert.equal(Number(stored.minQty), suggested.suggestedMin);
 
     const after = await call('GET', `/reorder-rules/suggestions?locationId=${a.loc.id}&windowDays=30&leadTimeDays=5`, a.token);
     assert.equal(after.body.suggestions.some((s: { itemId: string }) => s.itemId === item.id), false, 'the rule now matches the suggestion, so it is no longer NEW/INCREASE/DECREASE');

@@ -136,7 +136,9 @@ export const pickSlipSchema = z
     path: ['lines'],
   });
 
-const transferReceiptLineSchema = z.object({
+// lineId pins a QC inspection to its transfer line; it was stripped before (see poReceiptLineSchema).
+const transferReceiptLineSchema = z.looseObject({
+  lineId: z.string().optional(),
   itemId: z.string().min(1),
   lotId: z.string().min(1),
   // The handler maps receivedQty with plain Number(): a missing value is
@@ -425,10 +427,17 @@ export const purchaseOrderCreateSchema = z.object({
   expectedAt: validDate('expectedAt must be a valid date.'),
 });
 
-const poReceiptLineSchema = z.object({
+// parseBody writes the parsed `lines` back over req.body.lines, so every field the handler reads
+// must be declared here or it is stripped: without lineId/lotNo/expiryDate every receipt failed
+// with "Purchase order line  was not found." and lot/expiry were silently dropped. Loose, so a
+// field added to the handler later is never lost the same way.
+const poReceiptLineSchema = z.looseObject({
+  lineId: z.string().optional(),
   receivedQty: z.coerce.number().optional(),
   damagedQty: z.coerce.number().optional(),
   excessQty: z.coerce.number().optional(),
+  lotNo: z.string().nullish(),
+  expiryDate: z.string().nullish(),
 });
 
 /**
