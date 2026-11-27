@@ -10,11 +10,11 @@ PostgreSQL 17 is the only active database for the Invexa Retail API. Prisma migr
 4. Run `npm run db:seed` when demo data is required.
 5. Run `npm run db:verify` and the PostgreSQL integration test before shipping.
 
-## Render
+## Production
 
-`render.yaml` declares the managed PostgreSQL database and injects its connection string into both the API and worker. The API pre-deploy command applies migrations and verifies the migration table before a new release starts.
+Production runs PostgreSQL behind the root `docker-compose.yml` on the team's cloud host; `DATABASE_URL` is injected into both the API and worker. Each release applies migrations with `prisma migrate deploy` before the new containers start (`docs/PRODUCTION_RUNBOOK.md`, section 3).
 
-Required operator-provided secret: `SEED_PASSWORD`. Render generates `JWT_SECRET`. Never commit database URLs or copied production credentials.
+Required operator-provided secrets: `SEED_PASSWORD` and `JWT_SECRET`. Never commit database URLs or copied production credentials.
 
 ## Migrating existing production data
 

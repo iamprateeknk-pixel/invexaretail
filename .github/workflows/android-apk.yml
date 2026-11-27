@@ -34,6 +34,14 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
+      - name: Read app version from pubspec.yaml
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*//p' mobile/pubspec.yaml | tr -d '[:space:]')
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'; then
+            echo "mobile/pubspec.yaml version '$version' must look like 1.2.3+45" >&2; exit 1
+          fi
+          echo "BUILD_NAME=${version%%+*}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=${version##*+}" >> "$GITHUB_ENV"
       - name: Set up Java
         uses: actions/setup-java@v6
         with:
@@ -76,13 +84,13 @@ jobs:
           INVEXA_KEY_ALIAS: ${{ secrets.INVEXA_KEY_ALIAS }}
           INVEXA_KEY_PASSWORD: ${{ secrets.INVEXA_KEY_PASSWORD }}
         run: |
-          flutter build appbundle --release --build-name=1.3.0 --build-number=4
-          flutter build apk --release --build-name=1.3.0 --build-number=4
+          flutter build appbundle --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
+          flutter build apk --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
       - name: Upload release artifacts
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: InvexaRetail-Android-1.3.0
+          name: InvexaRetail-Android-${{ env.BUILD_NAME }}
           path: |
             mobile/build/app/outputs/bundle/release/app-release.aab
             mobile/build/app/outputs/flutter-apk/app-release.apk

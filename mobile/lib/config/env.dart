@@ -1,4 +1,5 @@
-const productionApiBase = 'https://invexaretail-api-production.up.railway.app';
+// The API is served from the same host as the web app (https://invexaretail.com/api/v1).
+const productionApiBase = 'https://invexaretail.com';
 const workspaceOrigin = 'https://invexaretail.com/';
 
 /// Which build this is (plan Area H WP4). Set with `--dart-define=INVEXA_ENV=...`.
@@ -49,7 +50,7 @@ String? apiBaseProblem(String base, InvexaEnvironment environment) {
 }
 
 /// Empty or whitespace dart-defines fall back to production, matching web
-/// `VITE_API_BASE || 'https://invexaretail-api-production.up.railway.app'`.
+/// `VITE_API_BASE || 'https://invexaretail.com'`.
 /// A non-development build throws on an unsafe endpoint instead of running with it.
 String resolveApiBase({String fromDefine = '', InvexaEnvironment environment = InvexaEnvironment.production}) {
   final defined = stripTrailingSlash(fromDefine);

@@ -51,7 +51,7 @@ Do not commit real secrets — see the repo's deployment docs.
 
 ## Deployment
 
-Production web is served from Cloudflare; `npm run deploy` deploys with
-Wrangler (`wrangler.toml`). The canonical production topology (Cloudflare
-web + Railway API/worker + managed PostgreSQL) is documented in
-`docs/PRODUCTION_RUNBOOK.md` and `docs/deployment-railway-cloudflare.md`.
+Production web is the `web` service in the root `docker-compose.yml`: the
+Vite build served by Nginx (`nginx.conf`, which also forwards `/api/` and
+`/control/` to the API) at `https://invexaretail.com`. The full topology and
+release steps are in `docs/PRODUCTION_RUNBOOK.md`.
