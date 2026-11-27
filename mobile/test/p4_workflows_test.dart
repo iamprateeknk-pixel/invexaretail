@@ -193,6 +193,46 @@ void main() {
     expect((await controller.store.loadQueuedActions('default-company', 'u1')).map((row) => row.mutationId), ['first-action', 'second-action']);
   });
 
+  test('restored counts and warehouse actions share one ordered retry queue', () async {
+    final store = DriftStore.inMemory();
+    addTearDown(store.close);
+    await store.saveQueuedCounts([
+      QueuedCount(localId: 'count', itemId: 'i1', locationId: 'loc-1', physicalQuantity: 1,
+        userId: 'u1', createdAt: '2026-09-19T10:00:01Z'),
+    ], 'default-company', 'u1');
+    await store.saveQueuedActions([
+      for (final (id, second) in [('receive', '00'), ('putaway', '02')])
+        QueuedAction(localId: id, type: id.toUpperCase(), method: 'POST', path: '/api/v1/$id', body: {},
+          companyId: 'default-company', userId: 'u1', createdAt: '2026-09-19T10:00:${second}Z'),
+    ], 'default-company', 'u1');
+    final sent = <String>[];
+    var temporarilyUnavailable = true;
+    final controller = _controller((request) async {
+      if (request.method != 'POST') return _json({});
+      sent.add(request.url.pathSegments.last);
+      if (sent.last == 'receive' && temporarilyUnavailable) {
+        return http.Response('{"error":"Busy"}', 503, headers: {'content-type': 'application/json', 'retry-after': '60'});
+      }
+      return _json({'count': {'id': 'c1'}});
+    }, store: store);
+    controller.queuedCounts = await store.loadQueuedCounts('default-company', 'u1');
+    controller.queuedActions = await store.loadQueuedActions('default-company', 'u1');
+    final firstAttempt = DateTime.utc(2026, 9, 19, 12);
+    await controller.flushQueue(now: firstAttempt);
+    expect(sent, ['receive']);
+    expect(await store.loadQueuedCounts('default-company', 'u1'), hasLength(1));
+    final actions = await store.loadQueuedActions('default-company', 'u1');
+    expect(actions.first.attempts, 1);
+    expect(actions.last.attempts, 0);
+    temporarilyUnavailable = false;
+    await controller.flushQueue(now: firstAttempt.add(const Duration(seconds: 30)));
+    expect(sent, ['receive']);
+    await controller.flushQueue(now: DateTime.parse(actions.first.nextAttemptAt!).add(const Duration(seconds: 1)));
+    expect(sent, ['receive', 'receive', 'stock-counts', 'putaway']);
+    expect(await store.loadQueuedCounts('default-company', 'u1'), isEmpty);
+    expect(await store.loadQueuedActions('default-company', 'u1'), isEmpty);
+  });
+
   test('overlapping sync calls send once and preserve work added during replay', () async {
     final started = Completer<void>();
     final reply = Completer<http.Response>();

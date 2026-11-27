@@ -574,7 +574,20 @@ class CountTask {
   }
 }
 
-class QueuedCount {
+sealed class QueuedOperation {
+  String get userId;
+  String get createdAt;
+  String? get nextAttemptAt;
+  set nextAttemptAt(String? value);
+  String get status;
+  set status(String value);
+  int get attempts;
+  set attempts(int value);
+  set lastError(String? value);
+  set lastErrorCode(String? value);
+}
+
+class QueuedCount extends QueuedOperation {
   QueuedCount({
     required this.localId,
     required this.itemId,
@@ -597,9 +610,11 @@ class QueuedCount {
   final String localId;
   // Plan P0-SYNC-001: who queued this and on which device. A queued item is only ever shown
   // to, and replayed by, that same user; never by whoever signs in next on the phone.
+  @override
   final String userId;
   final String deviceId;
   // Earliest time the next automatic attempt may run (backoff after a transient failure).
+  @override
   String? nextAttemptAt;
   final String itemId;
   final String locationId;
@@ -612,14 +627,19 @@ class QueuedCount {
   // after a timeout or a reconnect can never record the count twice.
   final String requestId;
   final String? stockRevision;
+  @override
   final String createdAt;
+  @override
   int attempts;
+  @override
   String? lastError;
+  @override
   String? lastErrorCode;
   bool get requiresRecount => lastErrorCode == 'COUNT_STOCK_CHANGED';
   // 'pending' auto-retries on the next flush; 'conflict'/'rejected' stop
   // auto-retrying and wait for the user to retry or discard (see
   // classifySyncFailure in sync_resolution.dart).
+  @override
   String status;
 
   factory QueuedCount.fromJson(Map<String, dynamic> json) {
@@ -702,7 +722,7 @@ String encodeQueuedCounts(List<QueuedCount> items) {
   return jsonEncode(items.map((item) => item.toJson()).toList());
 }
 
-class QueuedAction {
+class QueuedAction extends QueuedOperation {
   QueuedAction({
     required this.localId,
     required this.type,
@@ -725,20 +745,27 @@ class QueuedAction {
   // Plan P0-SYNC-001/003: identity binding and a stable idempotency key, created once when the
   // person acts and sent as X-Mutation-Id on every attempt (including after a restart).
   final String companyId;
+  @override
   final String userId;
   final String deviceId;
   final String mutationId;
+  @override
   String? nextAttemptAt;
   final String type;
   final String method;
   final String path;
   final Map<String, dynamic> body;
+  @override
   final String createdAt;
+  @override
   int attempts;
+  @override
   String? lastError;
+  @override
   String? lastErrorCode;
   bool get requiresRescan => const {'PUTAWAY_TASK_CHANGED', 'TRANSFER_RECEIVE_CHANGED', 'TRANSFER_PICK_CHANGED'}.contains(lastErrorCode);
   // See QueuedCount.status - same conflict/rejected/pending contract.
+  @override
   String status;
 
   factory QueuedAction.fromJson(Map<String, dynamic> json) {

@@ -869,45 +869,47 @@ class SessionController extends ChangeNotifier {
   Future<void> _replayQueue({required DateTime clock, required bool Function() active, Random? random}) async {
     final company = companyId;
     final me = _userId;
-    final countsToReplay = [...queuedCounts];
-    final actionsToReplay = [...queuedActions];
+    final queue = <QueuedOperation>[...queuedCounts, ...queuedActions]
+        .indexed
+        .map((entry) => (
+              index: entry.$1,
+              item: entry.$2,
+              capturedAt: DateTime.tryParse(entry.$2.createdAt)?.microsecondsSinceEpoch ?? 0,
+            ))
+        .toList()
+      ..sort((a, b) {
+        final order = a.capturedAt.compareTo(b.capturedAt);
+        return order == 0 ? a.index.compareTo(b.index) : order;
+      });
     var sent = 0;
 
-    // Never replay under a different identity (plan P0-SYNC-001): the lists are loaded per
-    // user, and this guard keeps that true even if something stale is ever in memory.
-    bool mine(String itemUser) => itemUser.isEmpty || itemUser == me;
+    bool stillQueued(QueuedOperation item) => switch (item) {
+      QueuedCount() => queuedCounts.contains(item),
+      QueuedAction() => queuedActions.contains(item),
+    };
 
-    for (final item in countsToReplay) {
+    Future<void> persist(QueuedOperation item) =>
+        item is QueuedCount ? _saveCounts() : _saveActions();
+
+    for (final entry in queue) {
       if (!active()) return;
-      // A conflict/rejected item waits for the user's explicit retry (retryQueuedCount) - never
-      // resubmitted silently. A backed-off item waits for its time. Anything after a transient
-      // failure waits too, so the order the person worked in is preserved.
-      if (!queuedCounts.contains(item) || item.status != 'pending' || !mine(item.userId)) continue;
-      // A pending item that is backing off holds back everything queued after it.
+      final item = entry.item;
+      if (!stillQueued(item) || item.status != 'pending') continue;
+      if (item.userId.isNotEmpty && item.userId != me) continue;
+      if (item is QueuedAction && item.companyId != company) continue;
+      // A transient failure holds later pending work across both workflows.
+      // Conflicts remain in Sync Center for the operator to resolve.
       if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
       try {
-        if (item.mode == 'weight') {
-          await api.submitWeightCount(
-            itemId: item.itemId,
-            locationId: item.locationId,
-            totalQuantity: item.physicalQuantity,
-            requestId: item.requestId,
-            stockRevision: item.stockRevision,
-          );
-        } else {
-          await api.submitCount(
-            itemId: item.itemId,
-            locationId: item.locationId,
-            physicalQuantity: item.physicalQuantity,
-            lotNo: item.lotNo,
-            mode: item.mode,
-            requestId: item.requestId,
-            stockRevision: item.stockRevision,
-          );
+        switch (item) {
+          case QueuedCount():
+            await _sendQueuedCount(item);
+          case QueuedAction():
+            await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
         }
       } on ApiException catch (err) {
         if (!active()) return;
-        if (!queuedCounts.contains(item)) continue;
+        if (!stillQueued(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
         item.lastErrorCode = err.code;
@@ -917,41 +919,18 @@ class SessionController extends ChangeNotifier {
         } else {
           item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        await _saveCounts();
+        await persist(item);
         if (outcome == SyncOutcome.retry) break;
         continue;
       }
       if (!active()) return;
-      queuedCounts = queuedCounts.where((queued) => !identical(queued, item)).toList();
-      await _saveCounts();
-      sent += 1;
-    }
-
-    for (final item in actionsToReplay) {
-      if (!active()) return;
-      if (!queuedActions.contains(item) || item.status != 'pending' || !mine(item.userId) || item.companyId != company) continue;
-      if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
-      try {
-        await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
-      } on ApiException catch (err) {
-        if (!active()) return;
-        if (!queuedActions.contains(item)) continue;
-        item.attempts += 1;
-        item.lastError = err.message;
-        item.lastErrorCode = err.code;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, code: err.code, attempts: item.attempts);
-        if (outcome == SyncOutcome.retry) {
-          item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
-        } else {
-          item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
-        }
-        await _saveActions();
-        if (outcome == SyncOutcome.retry) break;
-        continue;
+      switch (item) {
+        case QueuedCount():
+          queuedCounts = queuedCounts.where((queued) => !identical(queued, item)).toList();
+        case QueuedAction():
+          queuedActions = queuedActions.where((queued) => !identical(queued, item)).toList();
       }
-      if (!active()) return;
-      queuedActions = queuedActions.where((queued) => !identical(queued, item)).toList();
-      await _saveActions();
+      await persist(item);
       sent += 1;
     }
     if (!active()) return;
@@ -970,4 +949,26 @@ class SessionController extends ChangeNotifier {
     }
     if (active()) notifyListeners();
   }
+  Future<void> _sendQueuedCount(QueuedCount item) async {
+    if (item.mode == 'weight') {
+      await api.submitWeightCount(
+        itemId: item.itemId,
+        locationId: item.locationId,
+        totalQuantity: item.physicalQuantity,
+        requestId: item.requestId,
+        stockRevision: item.stockRevision,
+      );
+      return;
+    }
+    await api.submitCount(
+      itemId: item.itemId,
+      locationId: item.locationId,
+      physicalQuantity: item.physicalQuantity,
+      lotNo: item.lotNo,
+      mode: item.mode,
+      requestId: item.requestId,
+      stockRevision: item.stockRevision,
+    );
+  }
+
 }
