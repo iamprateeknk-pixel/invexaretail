@@ -25183,7 +25183,7 @@
     "/picker/transfers/{transferId}/pick-slips": {
       "post": {
         "operationId": "postPickerTransfersTransferIdPickSlips",
-        "summary": "Save what the picker picked (and any exceptions). Retry-safe by requestId.",
+        "summary": "Save what the picker picked (and any exceptions). A matching retry can recover the saved slip by requestId.",
         "tags": [
           "picker"
         ],
@@ -25266,7 +25266,7 @@
             }
           },
           "409": {
-            "description": "Pick task or source stock changed. Refresh and scan the items again.",
+            "description": "The request ID was used for a different pick submission, or the pick task or source stock changed.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
@@ -25299,7 +25299,7 @@
                   "requestId": {
                     "type": "string",
                     "maxLength": 191,
-                    "description": "Retry key: the same id from the same picker returns the saved slip."
+                    "description": "Retry key: send the same id and the original pick submission to recover its saved slip."
                   },
                   "pickRevision": {
                     "type": "string",

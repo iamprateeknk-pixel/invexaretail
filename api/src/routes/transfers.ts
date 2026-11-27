@@ -39,7 +39,7 @@ import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
-import { savedPickSlips, savePickSlip } from '../lib/transfer-pick-slips.js';
+import { matchesPickSlipRequest, pickSlipRequestFingerprint, pickSlipRequestReused, savedPickSlips, savePickSlip } from '../lib/transfer-pick-slips.js';
 import { pickRevision, transferPickChanged } from '../lib/pick-revision.js';
 import type { ItemRecord, StockLedgerRecord } from '../lib/repository.js';
 import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger } from '../lib/repository.js';
@@ -384,7 +384,8 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
     };
   });
   const revision = pickRevision(transfer, itemsById, ledger, slips.map((event) => event.id));
-  return res.json({ transfer: { ...transfer, lines, pickRevision: revision }, pickSlips: slips.map((event) => event.metadata) });
+  return res.json({ transfer: { ...transfer, lines, pickRevision: revision },
+    pickSlips: slips.map((event) => event.metadata && { ...event.metadata, requestFingerprint: undefined }) });
 });
 
 // Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
@@ -439,9 +440,17 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
   const prior = await savedPickSlips(transferId);
   // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
   const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  const requestFingerprint = requestId ? pickSlipRequestFingerprint(req.body) : undefined;
   if (requestId) {
     const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
-    if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
+    if (saved) {
+      if (!matchesPickSlipRequest(saved.metadata?.requestFingerprint, requestFingerprint)) {
+        const conflict = pickSlipRequestReused();
+        return sendError(res, 409, conflict.code, conflict.message);
+      }
+      return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true,
+        pickSlip: { ...saved.metadata, requestFingerprint: undefined }, transfer });
+    }
   }
   const stale = () => sendError(res, 409, 'TRANSFER_PICK_CHANGED', transferPickChanged().message);
   if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) {
@@ -516,16 +525,18 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     }
     const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
     const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
+    const storedMetadata = requestFingerprint ? { ...metadata, requestFingerprint } : metadata;
     const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
     let updated: TransferRecord;
     if (databaseEnabled) {
-      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, metadata);
-      if (result.duplicate) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: result.metadata, transfer: result.transfer });
+      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, storedMetadata);
+      if (result.duplicate) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true,
+        pickSlip: { ...result.metadata, requestFingerprint: undefined }, transfer: result.transfer });
       updated = result.transfer;
       if (findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
     } else {
       updated = updateTransferStatus(transfer.id, nextStatus);
-      recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata });
+      recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata: storedMetadata });
     }
 
     // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
@@ -552,6 +563,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'DUPLICATE_REQUEST') return sendError(res, 409, error.code, error.message);
     if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to save pick slip.');
   }

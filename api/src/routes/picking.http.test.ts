@@ -91,7 +91,11 @@ test('a KG pick is allocated by the server FEFO, previewed first, and never spli
     assert.equal(slip.body.transfer.status, 'PARTIAL');
 
     // A retry of the same slip returns it instead of picking twice.
-    const retry = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ itemId: item.id, quantity: 4, inputMethod: 'MANUAL' }] });
+    const retry = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ inputMethod: 'MANUAL', quantity: 4, itemId: item.id }] });
+    const changed = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ itemId: item.id, quantity: 3, inputMethod: 'MANUAL' }] });
+    assert.equal(changed.status, 409);
+    assert.equal(changed.body.code, 'DUPLICATE_REQUEST');
+    assert.equal('requestFingerprint' in retry.body.pickSlip, false);
     assert.equal(retry.status, 200);
     assert.equal(retry.body.duplicate, true);
     assert.equal(retry.body.pickSlip.id, slip.body.pickSlip.id);

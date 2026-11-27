@@ -1,7 +1,7 @@
 import { databaseEnabled } from './persistence.js';
 import { loadTransferPickSlips } from './persistence.js';
 import { listAuditEvents, rememberPersistedAudit } from './audit.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db.js';
 import { transitionTransferStatus } from './domain-policies.js';
@@ -12,6 +12,7 @@ import { listItemsForCompany } from './repositories/item-repository.js';
 import { listStockForLocation } from './repositories/stock-repository.js';
 import type { TenantContext } from './tenant-context.js';
 import { transferRowToRecord } from './transfer-record-mapper.js';
+import { pickSlipSchema } from './validation-schemas.js';
 
 // The pick slips saved against a transfer: from the audit journal in memory mode, from the database otherwise.
 export async function savedPickSlips(transferId: string) {
@@ -19,7 +20,26 @@ export async function savedPickSlips(transferId: string) {
   return listAuditEvents().filter((event) => event.entityType === 'Transfer' && event.entityId === transferId && event.action === 'PICK_SLIP_SAVED');
 }
 
-type PickSlip = { id: string; requestId?: string; pickerId: string } & Record<string, unknown>;
+type PickSlip = { id: string; requestId?: string; pickerId: string; requestFingerprint?: string } & Record<string, unknown>;
+
+/** Bind the operator's original input before server lot allocation and timestamps. */
+export function pickSlipRequestFingerprint(input: Record<string, unknown>): string | undefined {
+  const parsed = pickSlipSchema.safeParse(input);
+  if (!parsed.success) return undefined;
+  const { pickRevision, lines = [], exceptions = [] } = parsed.data;
+  const startedAt = typeof input.startedAt === 'string' ? input.startedAt : null;
+  return createHash('sha256')
+    .update(JSON.stringify([pickRevision ?? null, lines, exceptions, Boolean(input.finished), startedAt]))
+    .digest('hex');
+}
+
+export function matchesPickSlipRequest(savedFingerprint: unknown, submittedFingerprint: string | undefined): boolean {
+  // Slips created before fingerprinting remain recoverable by their original request ID.
+  return typeof savedFingerprint !== 'string' || savedFingerprint === submittedFingerprint;
+}
+
+export const pickSlipRequestReused = () =>
+  new DomainError('DUPLICATE_REQUEST', 'This request ID already belongs to a different pick submission.');
 
 /** Keep the status update and durable replay receipt in the same transaction. */
 export async function savePickSlip(ctx: TenantContext, transferId: string, expectedRevision: string,
@@ -42,7 +62,11 @@ export async function savePickSlip(ctx: TenantContext, transferId: string, expec
           const data = slip.metadata as PickSlip | null;
           return data?.requestId === metadata.requestId && slip.actorId === ctx.userId;
         });
-        if (duplicate) return { transfer, metadata: duplicate.metadata, duplicate: true };
+        if (duplicate) {
+          const saved = duplicate.metadata as PickSlip;
+          if (!matchesPickSlipRequest(saved.requestFingerprint, metadata.requestFingerprint)) throw pickSlipRequestReused();
+          return { transfer, metadata: saved, duplicate: true };
+        }
         const [items, ledger] = await Promise.all([
           listItemsForCompany(ctx, tx), listStockForLocation(ctx, transfer.sourceLocationId, tx),
         ]);

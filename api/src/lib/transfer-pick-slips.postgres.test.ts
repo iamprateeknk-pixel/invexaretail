@@ -31,7 +31,7 @@ test('pick slips and progress commit together, concurrent saves conflict, and re
     await listStockForLocation(tenant, source.id), []);
   const attempts = Array.from({ length: 6 }, (_, index) => {
     const id = `slip-${index}`;
-    return { id, requestId: id, pickerId: tenant.userId };
+    return { id, requestId: id, pickerId: tenant.userId, requestFingerprint: `fingerprint-${index}` };
   });
   await assert.rejects(savePickSlip({ ...tenant, companyId: 'foreign-company' }, row.id, revision, 'PARTIAL', attempts[0]), { code: 'TRANSFER_PICK_CHANGED' });
   assert.equal((await savedPickSlips(row.id)).length, 0);
@@ -48,6 +48,9 @@ test('pick slips and progress commit together, concurrent saves conflict, and re
   const retry = await savePickSlip(tenant, row.id, revision, 'PARTIAL', original);
   assert.equal(retry.duplicate, true);
   assert.deepEqual(retry.metadata, original);
+  await assert.rejects(savePickSlip(tenant, row.id, revision, 'PARTIAL', {
+    ...original, requestFingerprint: 'changed-command',
+  }), { code: 'DUPLICATE_REQUEST' });
   assert.equal((await savedPickSlips(row.id)).length, 1);
 
   // Force the raw FOR UPDATE query to acquire its snapshot while another

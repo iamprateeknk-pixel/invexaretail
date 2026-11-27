@@ -3354,7 +3354,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save what the picker picked (and any exceptions). Retry-safe by requestId. */
+        /** Save what the picker picked (and any exceptions). A matching retry can recover the saved slip by requestId. */
         post: operations["postPickerTransfersTransferIdPickSlips"];
         delete?: never;
         options?: never;
@@ -17769,7 +17769,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Retry key: the same id from the same picker returns the saved slip. */
+                    /** @description Retry key: send the same id and the original pick submission to recover its saved slip. */
                     requestId?: string;
                     /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
                     pickRevision?: string;
@@ -17847,7 +17847,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Pick task or source stock changed. Refresh and scan the items again. */
+            /** @description The request ID was used for a different pick submission, or the pick task or source stock changed. */
             409: {
                 headers: {
                     [name: string]: unknown;
