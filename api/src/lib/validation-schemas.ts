@@ -109,7 +109,7 @@ export const allocationPreviewSchema = z.object({
   itemId: z.string({ error: 'Item was not found.' }).min(1, 'Item was not found.'),
 });
 
-const pickSlipLineSchema = z.object({
+export const pickSlipLineSchema = z.object({
   itemId: z.string().min(1),
   lotId: z.string().optional(),
   quantity: z.coerce.number({ error: 'Picked quantity must be greater than zero.' }).positive('Picked quantity must be greater than zero.'),
@@ -117,7 +117,7 @@ const pickSlipLineSchema = z.object({
   scanCode: z.string().optional(),
 });
 
-const pickExceptionSchema = z.object({
+export const pickExceptionSchema = z.object({
   reason: z.enum(PICK_EXCEPTION_REASONS, { error: 'Exception reason must be No Stock, Wrong Item or Damaged Item.' }),
   quantity: z.coerce.number({ error: 'Exception quantity must be greater than zero.' }).positive('Exception quantity must be greater than zero.'),
   itemId: z.string().optional(),
@@ -140,7 +140,7 @@ export const pickSlipSchema = z
     path: ['lines'],
   });
 
-const transferReceiptLineSchema = z.object({
+export const transferReceiptLineSchema = z.object({
   lineId: z.string().optional(),
   itemId: z.string().min(1),
   lotId: z.string().min(1),

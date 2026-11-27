@@ -2132,6 +2132,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sync/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay a permitted count, pick, receipt or putaway through its operational workflow. */
+        post: operations["postOperationalOfflineCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runtime/config": {
         parameters: {
             query?: never;
@@ -4063,6 +4080,59 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        LotCountReplay: {
+            success?: boolean;
+            duplicate?: boolean;
+            count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
+        };
+        LotCountSubmission: {
+            success?: boolean;
+            count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
+        };
+        PooledCountReplay: {
+            success?: boolean;
+            duplicate?: boolean;
+            lots?: number;
+            counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
+        };
+        PooledCountSubmission: {
+            success?: boolean;
+            /** @description Store users only. */
+            lots?: number;
+            counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
+            allocation?: {
+                lotId?: string;
+                lotNo?: string;
+                bookQty?: number;
+                physicalQuantity?: number;
+            }[];
+            totalVariance?: number;
+        };
+        PickSlipReplay: {
+            message?: string;
+            /** @constant */
+            duplicate: true;
+            pickSlip: components["schemas"]["PickSlip"];
+            transfer?: components["schemas"]["TransferRecord"];
+        };
+        PickSlipSubmission: {
+            message?: string;
+            pickSlip: components["schemas"]["PickSlip"];
+            transfer: components["schemas"]["TransferRecord"];
+        };
+        TransferReceiptResponse: {
+            success: boolean;
+            duplicate?: boolean;
+            transfer: components["schemas"]["TransferRecord"];
+            receipt: components["schemas"]["ReceiptSummary"];
+        };
+        PutawayConfirmationResponse: {
+            task?: components["schemas"]["PutawayTask"];
+            bin?: {
+                id?: string;
+                code?: string;
+            };
+        };
         OfflineActionPermit: {
             token: string;
             /** Format: date-time */
@@ -13374,6 +13444,145 @@ export interface operations {
             };
         };
     };
+    postOperationalOfflineCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "COUNT_SUBMIT";
+                    entityId: string;
+                    /** @description The lot revision from mobile work when the operator began the count. Requires requestId. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        locationId: string;
+                        physicalQuantity: number;
+                        /** @description Defaults to the item's first lot. */
+                        lotNo?: string;
+                        /** @enum {string} */
+                        mode: "scan" | "manual";
+                    } | {
+                        locationId: string;
+                        totalQuantity: number;
+                        /** @enum {string} */
+                        mode: "weight";
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "PICK_CONFIRM";
+                    entityId: string;
+                    /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        lines?: {
+                            itemId: string;
+                            lotId?: string;
+                            quantity: number;
+                            inputMethod?: string;
+                        }[];
+                        exceptions?: {
+                            itemId?: string;
+                            lotId?: string;
+                            reason?: string;
+                            quantity?: number;
+                            note?: string;
+                        }[];
+                        /** @description true moves the transfer to READY_FOR_ADMIN. */
+                        finished?: boolean;
+                        /** Format: date-time */
+                        startedAt?: string;
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "RECEIVE_CONFIRM";
+                    entityId: string;
+                    /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        lines: {
+                            lineId?: string;
+                            itemId: string;
+                            lotId: string;
+                            receivedQty: number;
+                            damagedQty?: number;
+                            shortageQty?: number;
+                            excessQty?: number;
+                        }[];
+                        notes?: string;
+                        qcInspections?: {
+                            itemId?: string;
+                            lineId?: string;
+                            results?: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "PUTAWAY_CONFIRM";
+                    entityId: string;
+                    /**
+                     * Format: date-time
+                     * @description The task's updatedAt value from the last task list, preserved while offline.
+                     */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        scannedBinCode: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The canonical workflow receipt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotCountReplay"] | components["schemas"]["PooledCountReplay"] | components["schemas"]["PickSlipReplay"] | components["schemas"]["TransferReceiptResponse"] | components["schemas"]["PutawayConfirmationResponse"];
+                };
+            };
+            /** @description The canonical workflow receipt. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotCountSubmission"] | components["schemas"]["PooledCountSubmission"] | components["schemas"]["PickSlipSubmission"];
+                };
+            };
+            /** @description The canonical workflow error or command validation failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"] | components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
     getRuntimeConfig: {
         parameters: {
             query?: never;
@@ -13392,6 +13601,8 @@ export interface operations {
                     "application/json": {
                         success?: boolean;
                         runtime?: {
+                            /** @constant */
+                            offlineCommandVersion?: 2;
                             /** @description Account-bound permit for offline counts. Null if the published role policy does not permit them. */
                             offlineCountPermit?: {
                                 token: string;
@@ -17813,13 +18024,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
-                        /** @constant */
-                        duplicate: true;
-                        pickSlip: components["schemas"]["PickSlip"];
-                        transfer?: components["schemas"]["TransferRecord"];
-                    };
+                    "application/json": components["schemas"]["PickSlipReplay"];
                 };
             };
             /** @description Pick slip saved. */
@@ -17828,11 +18033,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
-                        pickSlip: components["schemas"]["PickSlip"];
-                        transfer: components["schemas"]["TransferRecord"];
-                    };
+                    "application/json": components["schemas"]["PickSlipSubmission"];
                 };
             };
             /** @description Nothing picked, a line over the requested quantity, or the transfer is not in a pickable status. */
@@ -18085,13 +18286,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        task?: components["schemas"]["PutawayTask"];
-                        bin?: {
-                            id?: string;
-                            code?: string;
-                        };
-                    };
+                    "application/json": components["schemas"]["PutawayConfirmationResponse"];
                 };
             };
             /** @description A bin must be selected, the scan does not match, the bin is not at this location, or an override is required (code WRONG_BIN). */
@@ -18814,11 +19009,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        duplicate?: boolean;
-                        count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
-                    };
+                    "application/json": components["schemas"]["LotCountReplay"];
                 };
             };
             /** @description Recorded. */
@@ -18827,10 +19018,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
-                    };
+                    "application/json": components["schemas"]["LotCountSubmission"];
                 };
             };
             /** @description Invalid payload, unknown or inactive item or lot, fractional quantity for a whole-unit item, or no stock to count. */
@@ -18899,12 +19087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        duplicate?: boolean;
-                        lots?: number;
-                        counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
-                    };
+                    "application/json": components["schemas"]["PooledCountReplay"];
                 };
             };
             /** @description Recorded. */
@@ -18913,19 +19096,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        /** @description Store users only. */
-                        lots?: number;
-                        counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
-                        allocation?: {
-                            lotId?: string;
-                            lotNo?: string;
-                            bookQty?: number;
-                            physicalQuantity?: number;
-                        }[];
-                        totalVariance?: number;
-                    };
+                    "application/json": components["schemas"]["PooledCountSubmission"];
                 };
             };
             /** @description Invalid quantity, or the item is not counted by weight. */
@@ -19476,12 +19647,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success: boolean;
-                        duplicate?: boolean;
-                        transfer: components["schemas"]["TransferRecord"];
-                        receipt: components["schemas"]["ReceiptSummary"];
-                    };
+                    "application/json": components["schemas"]["TransferReceiptResponse"];
                 };
             };
             /** @description Missing requestId, wrong status, a multi-lot transfer without per-line receipts, a QC gate (code QC_REQUIRED), or a quantity problem. */

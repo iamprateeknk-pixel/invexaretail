@@ -207,8 +207,10 @@ router.get('/runtime/config', async (req: Request, res: Response) => {
   const offlineCountPermit = caller ? issueMobilePermit(caller, runtime.mobilePolicy, 'counts') : undefined;
   const offlineWarehousePermits = caller ? Object.fromEntries(WAREHOUSE_OFFLINE_SCOPES.map((scope) =>
     [scope, issueMobilePermit(caller, runtime.mobilePolicy, scope) ?? null])) : {};
+  const { OPERATIONAL_OFFLINE_COMMAND_VERSION } = await import('../lib/offline-command-contract.js');
   return res.set('Cache-Control', 'no-store').json({ success: true,
-    runtime: { ...runtime, offlineCountPermit: offlineCountPermit ?? null, offlineWarehousePermits } });
+    runtime: { ...runtime, offlineCountPermit: offlineCountPermit ?? null, offlineWarehousePermits,
+      offlineCommandVersion: OPERATIONAL_OFFLINE_COMMAND_VERSION } });
 });
 
 router.get('/company', (req: Request, res: Response) => {

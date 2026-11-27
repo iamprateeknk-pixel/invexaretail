@@ -18,6 +18,7 @@ import enterpriseAuthRouter from './routes/enterprise-auth.js';
 import enterpriseManagementRouter from './routes/enterprise-management.js';
 import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
+import offlineCommandsRouter from './routes/offline-commands.js';
 import locationOrderRouter from './routes/location-order.js';
 import transfersRouter from './routes/transfers.js';
 import branchesRouter from './routes/branches.js';
@@ -251,6 +252,7 @@ app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+app.use('/api/v1', offlineCommandsRouter);
 app.use('/api/v1', extractToken, (req: Request, res: Response, next: NextFunction) => {
   if (!req.companyId) return next();
   const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};

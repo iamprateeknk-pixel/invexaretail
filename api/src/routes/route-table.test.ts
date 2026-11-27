@@ -39,6 +39,7 @@ import assert from 'node:assert/strict';
 import type { Router } from 'express';
 import coreRouter from './core.js';
 import operationsExtensionRouter from './operations-extension.js';
+import offlineCommandsRouter from './offline-commands.js';
 import { controlRouter, studioRouter, syncRouter } from './control-plane.js';
 import {
   CORE_ROUTES,
@@ -93,6 +94,10 @@ test('control router registers exactly the golden routes, in order', () => {
 
 test('studio router registers exactly the golden routes, in order', () => {
   assert.deepEqual(routeTable(studioRouter), STUDIO_ROUTES);
+});
+
+test('operational offline replay exposes only the command entry point', () => {
+  assert.deepEqual(routeTable(offlineCommandsRouter), ['POST /sync/commands']);
 });
 
 test('sync router registers exactly the golden routes, in order', () => {

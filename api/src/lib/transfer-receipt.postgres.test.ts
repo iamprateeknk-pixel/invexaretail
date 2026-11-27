@@ -14,11 +14,12 @@ import type { TenantContext } from './tenant-context.js';
 import { createEnhancedUser } from './enterprise-repository.js';
 import { generateJWT, issueOfflinePermit, verifyJWT } from './otp-auth.js';
 import { controlPlane } from './saas/control-plane.js';
-import { registerLocationCompany } from './saas/tenant-scope.js';
+import { enforceOperationalCompanyScope, registerLocationCompany } from './saas/tenant-scope.js';
 import transfersRouter from '../routes/transfers.js';
 import transferLogisticsRouter from '../routes/transfer-logistics.js';
 import { extractToken } from '../routes/enterprise-auth.js';
 import { mutationIdempotency } from './mutation-idempotency.js';
+import offlineCommandsRouter from '../routes/offline-commands.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -162,7 +163,8 @@ integration('a carton scan gives the current receive revision and a stale offlin
   await prisma.transferCarton.create({ data: { transferId: f.transfer.id, cartonNumber: '1', qrCode, quantity: 6, status: 'SEALED' } });
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', transfersRouter, transferLogisticsRouter);
+  app.use('/api/v1', offlineCommandsRouter);
+  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, mutationIdempotency(), transfersRouter, transferLogisticsRouter);
   const server = app.listen(0);
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
@@ -199,7 +201,17 @@ integration('a carton scan gives the current receive revision and a stale offlin
     assert.equal(denied.status, 403);
     assert.equal(denied.body.code, 'OFFLINE_WAREHOUSE_POLICY_REJECTED');
     assert.equal((await journal(f.item.id, f.dst.id)).length, 0);
-    const saved = await call(receive, { ...savedCommand, offlinePermit: token });
+    const replayCommand = { contractVersion: 2, commandId: savedCommand.requestId, type: 'RECEIVE_CONFIRM',
+      entityId: f.transfer.id, revision: initial, permit: token, payload: { lines } };
+    const sync = (command: object, actor = f) => fetch(`http://127.0.0.1:${address.port}/api/v1/sync/commands`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${generateJWT(actor.userId, actor.tenant.companyId)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(command),
+    });
+    assert.equal((await sync(replayCommand, foreign)).status, 404);
+    assert.equal((await sync({ ...replayCommand, contractVersion: 1 })).status, 400);
+    const savedResponse = await sync(replayCommand);
+    const saved = { status: savedResponse.status, body: await savedResponse.json() };
     assert.equal(saved.status, 200, JSON.stringify(saved.body));
     const current = (await call(scanPath)).body.transfer.receiveRevision;
     assert.notEqual(current, initial);
@@ -218,6 +230,9 @@ integration('a carton scan gives the current receive revision and a stale offlin
     assert.equal(replay.status, 200, JSON.stringify(replay.body));
     assert.equal(replay.body.duplicate, true);
     assert.equal(replay.body.receipt.receiptId, saved.body.receipt.receiptId);
+    const replayThroughSync = await sync(replayCommand);
+    assert.equal(replayThroughSync.status, 200);
+    assert.equal((await replayThroughSync.json()).receipt.receiptId, saved.body.receipt.receiptId);
     const modified = await call(receive, { ...savedCommand, lines: [{ ...lines[0], receivedQty: 3 }] });
     assert.equal(modified.status, 409);
     assert.equal(modified.body.code, 'DUPLICATE_REQUEST');

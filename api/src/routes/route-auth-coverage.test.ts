@@ -24,6 +24,7 @@ import itemMasterRouter from './item-master.js';
 import importControlCenterRouter from './import-control-center.js';
 import transferLogisticsRouter from './transfer-logistics.js';
 import commandCenterRouter from './command-center.js';
+import offlineCommandsRouter from './offline-commands.js';
 
 // Security review (blueprint §35 and Appendix C "API authorization tests pass"):
 // every route these routers register must refuse a caller with no credentials.
@@ -62,6 +63,7 @@ const fill = (path: string) => path.replace(/:[A-Za-z]+\??/g, 'probe').replace(/
 test('no route on the operational routers answers a request that carries no credentials', async () => {
   seedEnhancedUsersForMemoryMode(seedUsers, hashPassword('x'));
   const routers: Array<[string, Router]> = [
+    ['offline-commands', offlineCommandsRouter],
     ['core', coreRouter], ['transfers', transfersRouter], ['branches', branchesRouter], ['location-order', locationOrderRouter], ['items', itemsRouter], ['bundles', bundlesRouter], ['transfer-evidence', transferEvidenceRouter], ['transfer-labels', transferLabelsRouter], ['imports', importsRouter], ['reports', reportsRouter], ['entities', entitiesRouter], ['catalog-procurement', catalogProcurementRouter], ['operations-extension', operationsExtensionRouter],
     ['campaigns', campaignsRouter], ['item-master', itemMasterRouter], ['import-control-center', importControlCenterRouter],
     ['transfer-logistics', transferLogisticsRouter], ['command-center', commandCenterRouter],

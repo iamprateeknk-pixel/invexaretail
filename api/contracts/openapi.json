@@ -45,6 +45,201 @@
       }
     },
     "schemas": {
+      "LotCountReplay": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "count": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StockCount"
+              },
+              {
+                "$ref": "#/components/schemas/BlindCount"
+              }
+            ]
+          }
+        }
+      },
+      "LotCountSubmission": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "count": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StockCount"
+              },
+              {
+                "$ref": "#/components/schemas/BlindCount"
+              }
+            ]
+          }
+        }
+      },
+      "PooledCountReplay": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "lots": {
+            "type": "integer"
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockCount"
+                },
+                {
+                  "$ref": "#/components/schemas/BlindCount"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "PooledCountSubmission": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "lots": {
+            "type": "integer",
+            "description": "Store users only."
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockCount"
+                },
+                {
+                  "$ref": "#/components/schemas/BlindCount"
+                }
+              ]
+            }
+          },
+          "allocation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "lotId": {
+                  "type": "string"
+                },
+                "lotNo": {
+                  "type": "string"
+                },
+                "bookQty": {
+                  "type": "number"
+                },
+                "physicalQuantity": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "totalVariance": {
+            "type": "number"
+          }
+        }
+      },
+      "PickSlipReplay": {
+        "type": "object",
+        "required": [
+          "duplicate",
+          "pickSlip"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "duplicate": {
+            "type": "boolean",
+            "const": true
+          },
+          "pickSlip": {
+            "$ref": "#/components/schemas/PickSlip"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          }
+        }
+      },
+      "PickSlipSubmission": {
+        "type": "object",
+        "required": [
+          "pickSlip",
+          "transfer"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "pickSlip": {
+            "$ref": "#/components/schemas/PickSlip"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          }
+        }
+      },
+      "TransferReceiptResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "transfer",
+          "receipt"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ReceiptSummary"
+          }
+        }
+      },
+      "PutawayConfirmationResponse": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/PutawayTask"
+          },
+          "bin": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
       "OfflineActionPermit": {
         "type": ["object", "null"],
         "required": ["token", "expiresAt"],
@@ -18022,6 +18217,450 @@
         ]
       }
     },
+    "/sync/commands": {
+      "post": {
+        "operationId": "postOperationalOfflineCommand",
+        "summary": "Replay a permitted count, pick, receipt or putaway through its operational workflow.",
+        "tags": [
+          "Sync"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "COUNT_SUBMIT"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "The lot revision from mobile work when the operator began the count. Requires requestId."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "mode",
+                              "locationId",
+                              "physicalQuantity"
+                            ],
+                            "properties": {
+                              "locationId": {
+                                "type": "string"
+                              },
+                              "physicalQuantity": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "lotNo": {
+                                "type": "string",
+                                "description": "Defaults to the item's first lot."
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "scan",
+                                  "manual"
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "mode",
+                              "locationId",
+                              "totalQuantity"
+                            ],
+                            "properties": {
+                              "locationId": {
+                                "type": "string"
+                              },
+                              "totalQuantity": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "weight"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "PICK_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Revision from the opened picker task. Native offline saves send it unchanged."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "itemId",
+                                "quantity"
+                              ],
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "number"
+                                },
+                                "inputMethod": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "exceptions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "number"
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "finished": {
+                            "type": "boolean",
+                            "description": "true moves the transfer to READY_FOR_ADMIN."
+                          },
+                          "startedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "RECEIVE_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "The revision of the transfer opened for receiving. Preserve it on queued retries."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "required": [
+                          "lines"
+                        ],
+                        "properties": {
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "itemId",
+                                "lotId",
+                                "receivedQty"
+                              ],
+                              "properties": {
+                                "lineId": {
+                                  "type": "string"
+                                },
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "receivedQty": {
+                                  "type": "number"
+                                },
+                                "damagedQty": {
+                                  "type": "number"
+                                },
+                                "shortageQty": {
+                                  "type": "number"
+                                },
+                                "excessQty": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 4000
+                          },
+                          "qcInspections": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lineId": {
+                                  "type": "string"
+                                },
+                                "results": {
+                                  "type": "object",
+                                  "additionalProperties": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "PUTAWAY_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The task's updatedAt value from the last task list, preserved while offline."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "required": [
+                          "scannedBinCode"
+                        ],
+                        "properties": {
+                          "scannedBinCode": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The canonical workflow receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LotCountReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PooledCountReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PickSlipReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TransferReceiptResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PutawayConfirmationResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The canonical workflow receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LotCountSubmission"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PooledCountSubmission"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PickSlipSubmission"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "The canonical workflow error or command validation failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LegacyErrorMessage"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/runtime/config": {
       "get": {
         "operationId": "getRuntimeConfig",
@@ -18043,6 +18682,7 @@
                     "runtime": {
                       "type": "object",
                       "properties": {
+                        "offlineCommandVersion": { "type": "integer", "const": 2 },
                         "offlineCountPermit": {
                           "type": ["object", "null"],
                           "description": "Account-bound permit for offline counts. Null if the published role policy does not permit them.",
@@ -25213,28 +25853,7 @@
             "description": "This requestId was already saved; the original slip is returned.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "duplicate",
-                    "pickSlip"
-                  ],
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "duplicate": {
-                      "type": "boolean",
-                      "const": true
-                    },
-                    "pickSlip": {
-                      "$ref": "#/components/schemas/PickSlip"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PickSlipReplay"}
               }
             }
           },
@@ -25242,24 +25861,7 @@
             "description": "Pick slip saved.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "pickSlip",
-                    "transfer"
-                  ],
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "pickSlip": {
-                      "$ref": "#/components/schemas/PickSlip"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PickSlipSubmission"}
               }
             }
           },
@@ -25779,25 +26381,7 @@
             "description": "Confirmed.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "task": {
-                      "$ref": "#/components/schemas/PutawayTask"
-                    },
-                    "bin": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string"
-                        },
-                        "code": {
-                          "type": "string"
-                        }
-                      }
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PutawayConfirmationResponse"}
               }
             }
           },
@@ -26964,27 +27548,7 @@
             "description": "Duplicate of an earlier submission with the same requestId.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "count": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/StockCount"
-                        },
-                        {
-                          "$ref": "#/components/schemas/BlindCount"
-                        }
-                      ]
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/LotCountReplay"}
               }
             }
           },
@@ -26992,24 +27556,7 @@
             "description": "Recorded.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "count": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/StockCount"
-                        },
-                        {
-                          "$ref": "#/components/schemas/BlindCount"
-                        }
-                      ]
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/LotCountSubmission"}
               }
             }
           },
@@ -27112,33 +27659,7 @@
             "description": "Duplicate of an earlier submission.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "lots": {
-                      "type": "integer"
-                    },
-                    "counts": {
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "$ref": "#/components/schemas/StockCount"
-                          },
-                          {
-                            "$ref": "#/components/schemas/BlindCount"
-                          }
-                        ]
-                      }
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PooledCountReplay"}
               }
             }
           },
@@ -27146,54 +27667,7 @@
             "description": "Recorded.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "lots": {
-                      "type": "integer",
-                      "description": "Store users only."
-                    },
-                    "counts": {
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "$ref": "#/components/schemas/StockCount"
-                          },
-                          {
-                            "$ref": "#/components/schemas/BlindCount"
-                          }
-                        ]
-                      }
-                    },
-                    "allocation": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "lotId": {
-                            "type": "string"
-                          },
-                          "lotNo": {
-                            "type": "string"
-                          },
-                          "bookQty": {
-                            "type": "number"
-                          },
-                          "physicalQuantity": {
-                            "type": "number"
-                          }
-                        }
-                      }
-                    },
-                    "totalVariance": {
-                      "type": "number"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PooledCountSubmission"}
               }
             }
           },
@@ -28030,28 +28504,7 @@
             "description": "OK.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success",
-                    "transfer",
-                    "receipt"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    },
-                    "receipt": {
-                      "$ref": "#/components/schemas/ReceiptSummary"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/TransferReceiptResponse"}
               }
             }
           },

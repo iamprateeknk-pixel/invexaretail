@@ -256,6 +256,8 @@ export const STUDIO_ROUTES: string[] = [
   'POST /preview',
   'POST /publish',
   'POST /rollback',
+  'GET /versions',
+  'GET /versions/:versionId/compare',
   'GET /runtime',
   'GET /modules',
   'POST /modules/:moduleKey',
