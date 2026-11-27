@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import 'global-jsdom/register';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DraftStockPreview } from './DraftStockPreview.jsx';
 import { StockItemsTable } from '../components/inventory/StockItemsTable.jsx';
 
@@ -9,6 +9,7 @@ test('the draft stock preview renders sample rows and recalculates the view for 
   const originalFetch = globalThis.fetch;
   t.after(() => { cleanup(); globalThis.fetch = originalFetch; });
   const requests = [];
+  const published = [];
   const locations = [{ id: 'loc-1', name: 'Main Store', type: 'store' }, { id: 'wh-1', name: 'Warehouse', type: 'warehouse' }];
   globalThis.fetch = async (url, options) => {
     assert.equal(url, '/studio/v1/preview');
@@ -24,9 +25,10 @@ test('the draft stock preview renders sample rows and recalculates the view for 
       actions: [{ key: 'scan', label: 'Scan item', enabled: true }],
     };
     const location = locations.find((entry) => entry.id === input.locationId) ?? locations[0];
-    return { ok: true, json: async () => ({ preview: { ...input, location, locations, page, version: 2 } }) };
+    return { ok: true, json: async () => ({ preview: { ...input, location, locations, page, version: 2, draftRevision: 'reviewed-revision' } }) };
   };
-  render(<DraftStockPreview controlToken="locked" />);
+  render(<DraftStockPreview controlToken="locked" onPublish={async (revision) => { published.push(revision); }} />);
+  assert.equal(screen.getByRole('button', { name: 'Publish reviewed draft' }).disabled, true);
   await screen.findByRole('table', { name: 'Draft stock table' });
   assert.ok(screen.getByRole('columnheader', { name: 'Book doubled' }));
   assert.equal(screen.getByRole('button', { name: 'Scan item' }).disabled, true);
@@ -41,6 +43,9 @@ test('the draft stock preview renders sample rows and recalculates the view for 
   await screen.findByRole('table', { name: 'Draft stock table' });
   assert.deepEqual(requests.at(-1), { role: 'STORE_USER', device: 'mobile', locationId: 'wh-1' });
   assert.ok(screen.getByText('Warehouse · Phone'));
+  fireEvent.click(screen.getByRole('button', { name: 'Publish reviewed draft' }));
+  assert.deepEqual(published, ['reviewed-revision']);
+  await waitFor(() => assert.equal(screen.getByRole('button', { name: 'Publish reviewed draft' }).disabled, false));
 });
 
 test('the shared stock table keeps the live item details action keyboard focusable', (t) => {

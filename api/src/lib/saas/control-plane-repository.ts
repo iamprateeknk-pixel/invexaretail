@@ -475,11 +475,8 @@ async function hasAnyRows(): Promise<boolean> {
   return Boolean(company ?? session ?? key ?? killSwitch);
 }
 
-type TxOp = Promise<unknown>;
-
-async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows): Promise<{ written: number; deleted: number }> {
-  const prisma = await getPrisma();
-  const ops: TxOp[] = [];
+function buildDiffOperations(prisma: Prisma.TransactionClient, diff: SnapshotDiff, nextRows: ControlPlaneRows) {
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
   let written = 0;
   let deleted = 0;
 
@@ -683,8 +680,40 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
     written += 1;
   }
 
-  if (ops.length > 0) await prisma.$transaction(ops as unknown as Prisma.PrismaPromise<unknown>[]);
-  return { written, deleted };
+  return { ops, written, deleted };
+}
+
+export class StudioConfigConflict extends Error {
+  readonly code = 'STUDIO_CONFIG_CONFLICT';
+  constructor() { super('Studio configuration changed in another session. Refresh the company configuration before trying again.'); }
+}
+
+async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows) {
+  const prisma = await getPrisma();
+  const changedKeys = new Set([...diff.configs.upserts, ...diff.configs.deletes]);
+  if (previous?.configs.some((row) => row.kind === 'history' && changedKeys.has(`${row.versionId}|history`))) {
+    throw new StudioConfigConflict();
+  }
+  const companyIds = previous && changedKeys.size ? [...new Set([...previous.configs, ...nextRows.configs]
+    .filter((row) => changedKeys.has(`${row.versionId}|${row.kind}`)).map((row) => row.companyId))].sort() : [];
+  if (!companyIds.length || !previous) {
+    const { ops, written, deleted } = buildDiffOperations(prisma, diff, nextRows);
+    if (ops.length) await prisma.$transaction(ops);
+    return { written, deleted };
+  }
+  return prisma.$transaction(async (tx) => {
+    for (const companyId of companyIds) {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+      const current = await tx.controlPlaneConfig.findMany({ where: { companyId },
+        select: { companyId: true, versionId: true, version: true, kind: true, status: true, payload: true } });
+      const expected = previous.configs.filter((row) => row.companyId === companyId);
+      const comparable = (rows: readonly unknown[]) => rows.map(stableStringify).sort();
+      if (stableStringify(comparable(current)) !== stableStringify(comparable(expected))) throw new StudioConfigConflict();
+    }
+    const { ops, written, deleted } = buildDiffOperations(tx, diff, nextRows);
+    for (const op of ops) await op;
+    return { written, deleted };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 25_000 });
 }
 
 // Last-persisted snapshot per plane instance (WeakMap: fresh instances in
@@ -720,7 +749,7 @@ export async function persistControlPlaneRows(
     return result;
   }
   const diff = diffSnapshots(prev, snapshot);
-  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot));
+  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot), rowsFromSnapshot(prev));
   setLastPersisted(plane, snapshot);
   return result;
 }

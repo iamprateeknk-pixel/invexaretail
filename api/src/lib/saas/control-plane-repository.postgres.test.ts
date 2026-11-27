@@ -9,6 +9,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { ControlPlane } from './control-plane.js';
+import { commitStudioRelease, studioDraftRevision } from './persistence.js';
 import {
   controlPlaneDbEnabled,
   hydrateControlPlaneRows,
@@ -136,4 +137,66 @@ integration('a company survives a row round-trip and a remote status change conv
   await persistControlPlaneRows(plane);
   await refreshControlPlaneFromDb(reader);
   assert.equal(reader.companies.get(company.id)?.status, 'suspended');
+});
+
+integration('two replicas cannot both publish different changes from the same Studio version', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const first = new ControlPlane();
+  const { company } = first.createCompany(platformScope(first), {
+    name: 'Concurrent Studio Publishing', planId: 'pro', adminName: 'Studio Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  await persistControlPlaneRows(first);
+  const second = new ControlPlane();
+  await hydrateControlPlaneRows(second);
+  const a = lockedScope(first, company.id);
+  const b = lockedScope(second, company.id);
+  first.setStockColumnLayout(a, [{ key: 'item_code', label: 'First item label' }]);
+  second.setStockColumnLayout(b, [{ key: 'item_code', label: 'Second item label' }]);
+  const left = first.publish(a);
+  const right = second.publish(b);
+  const results = await Promise.allSettled([persistControlPlaneRows(first), persistControlPlaneRows(second)]);
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+  const rejected = results.find((result) => result.status === 'rejected');
+  assert.equal(rejected?.reason.code, 'STUDIO_CONFIG_CONFLICT');
+  const winner = results[0].status === 'fulfilled' ? left : right;
+  const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
+  assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [winner.id]);
+  assert.equal(rows.filter((row) => row.kind === 'history' && row.version === winner.version).length, 1);
+});
+
+integration('a rejected Studio release leaves its draft intact and rollback creates immutable history', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const first = new ControlPlane();
+  const { company } = first.createCompany(platformScope(first), {
+    name: 'Studio Release History', planId: 'pro', adminName: 'Studio Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  await persistControlPlaneRows(first);
+  const second = new ControlPlane();
+  await hydrateControlPlaneRows(second);
+  const a = lockedScope(first, company.id);
+  const b = lockedScope(second, company.id);
+  const original = first.published.get(company.id)!;
+  first.setStockColumnLayout(a, [{ key: 'item_code', label: 'Released label' }]);
+  second.setStockColumnLayout(b, [{ key: 'item_code', label: 'Unreleased label' }]);
+  const unreleased = structuredClone(second.drafts.get(company.id));
+  const winner = await commitStudioRelease(first, a, { draftRevision: studioDraftRevision(first.drafts.get(company.id))! });
+  await assert.rejects(commitStudioRelease(second, b, { draftRevision: studioDraftRevision(unreleased)! }), { code: 'STUDIO_CONFIG_CONFLICT' });
+  assert.deepEqual(second.drafts.get(company.id), unreleased);
+  assert.equal(second.published.get(company.id)?.id, original.id);
+  assert.ok(!second.audit.some((entry) => entry.companyId === company.id && entry.action === 'CONFIG_PUBLISHED'));
+  await refreshControlPlaneFromDb(second);
+  assert.equal(second.published.get(company.id)?.id, winner.id);
+  assert.deepEqual(second.drafts.get(company.id), unreleased);
+  await assert.rejects(commitStudioRelease(second, b, { draftRevision: studioDraftRevision(unreleased)! }), { code: 'STUDIO_CONFIG_CONFLICT' });
+
+  const restored = await commitStudioRelease(first, a, { rollbackVersion: original.version });
+  assert.equal(restored.version, winner.version + 1);
+  assert.deepEqual(restored.page, original.page);
+  const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
+  assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [restored.id]);
+  assert.deepEqual(new Set(rows.filter((row) => row.kind === 'history').map((row) => row.versionId)), new Set([original.id, winner.id, restored.id]));
+  first.versions.get(company.id)!.find((entry) => entry.id === winner.id)!.page.title = 'Changed after release';
+  await assert.rejects(persistControlPlaneRows(first), { code: 'STUDIO_CONFIG_CONFLICT' });
+  const unchanged = await prisma.controlPlaneConfig.findUniqueOrThrow({ where: { versionId_kind: { versionId: winner.id, kind: 'history' } } });
+  assert.deepEqual(unchanged.payload, winner);
 });

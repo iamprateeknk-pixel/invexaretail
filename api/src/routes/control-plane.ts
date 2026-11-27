@@ -1,6 +1,7 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { flushControlPlanePersist, saveControlPlaneSnapshot, scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
+import { commitStudioRelease, flushControlPlanePersist, scheduleControlPlanePersist, studioDraftRevision, syncOperationalCompanies } from '../lib/saas/persistence.js';
+import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
@@ -15,6 +16,10 @@ import { getIndustryPack } from '../lib/industry-packs.js';
 import { findCompanyProfile } from '../lib/repository.js';
 
 function sendError(res: Response, error: unknown): void {
+  if (error instanceof StudioConfigConflict) {
+    res.status(409).json({ error: error.message, code: error.code });
+    return;
+  }
   if (error instanceof ControlPlaneError) {
     res.status(error.status).json({ error: error.message, code: error.code });
     return;
@@ -493,6 +498,13 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 });
 
 studioRouter.use(requireLockedCompany);
+const releasingCompanies = new Set<string>();
+studioRouter.use((req, res, next) => {
+  if (releasingCompanies.has(scopedCompany(req))) {
+    return sendError(res, new ControlPlaneError('This company is publishing a configuration. Try again shortly.', 'STUDIO_CONFIG_CONFLICT', 409));
+  }
+  next();
+});
 
 // Which table a column edit applies to: `stock` (default) or `lots`.
 export function tableOf(value: unknown): TableKey {
@@ -719,6 +731,7 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
     const pack = getIndustryPack(company?.industryKey ?? company?.industry);
     res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
     res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
+      draftRevision: studioDraftRevision(controlPlane.drafts.get(companyId)),
       variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
     } });
   } catch (error) {
@@ -726,28 +739,32 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
   }
 });
 
-studioRouter.post('/publish', async (req: Request, res: Response) => {
+async function releaseStudioVersion(req: Request, res: Response, command: { rollbackVersion?: number; draftRevision?: string }) {
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
   try {
     await flushControlPlanePersist();
-    const published = controlPlane.publish(requireScope(req));
-    await saveControlPlaneSnapshot();
+    const published = await commitStudioRelease(controlPlane, requireScope(req), command);
     res.locals.studioPersisted = true;
-    res.json({ success: true, published, runtime: controlPlane.runtimeConfig(scopedCompany(req)) });
+    res.json({ success: true, published, runtime: controlPlane.runtimeConfig(companyId) });
   } catch (error) {
+    if (error instanceof StudioConfigConflict) await refreshControlPlaneFromDb(controlPlane).catch(() => false);
     sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
   }
+}
+
+studioRouter.post('/publish', async (req: Request, res: Response) => {
+  const draftRevision = req.body?.draftRevision;
+  if (draftRevision !== undefined && (typeof draftRevision !== 'string' || !/^[a-f0-9]{64}$/.test(draftRevision))) {
+    return sendError(res, new ControlPlaneError('Invalid draft revision', 'INVALID_DRAFT_REVISION', 400));
+  }
+  await releaseStudioVersion(req, res, { draftRevision });
 });
 
 studioRouter.post('/rollback', async (req: Request, res: Response) => {
-  try {
-    await flushControlPlanePersist();
-    const published = controlPlane.rollback(requireScope(req), Number(req.body?.version));
-    await saveControlPlaneSnapshot();
-    res.locals.studioPersisted = true;
-    res.json({ success: true, published });
-  } catch (error) {
-    sendError(res, error);
-  }
+  await releaseStudioVersion(req, res, { rollbackVersion: Number(req.body?.version) });
 });
 
 studioRouter.get('/runtime', (req: Request, res: Response) => {

@@ -416,6 +416,10 @@ export class ControlPlaneStudio {
     const companyId = this.requireLockedCompany(scope);
     this.host.assertBillingWritable(companyId);
     const draft = this.ensureDraft(scope);
+    const currentVersion = this.store.published.get(companyId)?.version ?? 1;
+    if (draft.parentVersion !== currentVersion || draft.version !== currentVersion + 1) {
+      throw new ControlPlaneError('This draft was based on an older published version. Review and reapply its changes to the current version.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
     for (const workflow of draft.workflows) validateLiveApproval(workflow);
     for (const rule of draft.rules) validateRuleForPublish(rule);
     for (const automation of draft.automations ?? []) validateAutomationForPublish(automation);

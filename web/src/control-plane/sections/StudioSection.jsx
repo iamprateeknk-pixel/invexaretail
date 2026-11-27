@@ -13,6 +13,19 @@ import { DraftStockPreview } from '../DraftStockPreview';
 
 export function StudioSection(props) {
   const { setError, company, draft, runtime, controlToken, refreshLocked } = props;
+  async function publish(draftRevision) {
+    setError('');
+    try {
+      await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST', body: { draftRevision } });
+      toast.success('Published');
+      await refreshLocked().catch((caught) => setError(caught.message));
+    } catch (caught) {
+      if (caught?.code === 'STUDIO_CONFIG_CONFLICT') await refreshLocked().catch(() => undefined);
+      const message = caught instanceof Error ? caught.message : 'Publish failed';
+      setError(message);
+      toast.error(message);
+    }
+  }
   return (
     <Tabs defaultValue="columns">
       <TabsList className="h-auto flex-wrap justify-start">
@@ -74,21 +87,7 @@ export function StudioSection(props) {
         <MobilePolicyEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
       </TabsContent>
       <TabsContent value="preview" className="grid gap-4">
-        <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken} />
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={async () => {
-            try {
-              await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST' });
-              await refreshLocked().catch((caught) => setError(caught.message));
-              setError('');
-              toast.success('Published');
-            } catch (caught) {
-              const message = caught instanceof Error ? caught.message : 'Publish failed';
-              setError(message);
-              toast.error(message);
-            }
-          }}>Publish</Button>
-        </div>
+        <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken} onPublish={publish} />
         <Card>
           <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
           <CardContent className="text-sm text-muted-foreground">

@@ -353,6 +353,13 @@ export function clonePage(page: PageDefinition): PageDefinition {
   return JSON.parse(JSON.stringify(page)) as PageDefinition;
 }
 
+function appendControlAudit(store: Pick<ControlPlaneStore, 'audit' | 'outbox'>, input: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEvent {
+  const event: AuditEvent = { ...input, id: randomUUID(), timestamp: nowIso() };
+  store.audit.push(event);
+  store.outbox.push({ id: event.id, event: `audit.${input.action.toLowerCase()}`, payload: event, createdAt: event.timestamp });
+  return event;
+}
+
 export class ControlPlane {
   tenantId = DEFAULT_TENANT_ID;
   plans = new Map<string, PlanTemplate>();
@@ -643,10 +650,7 @@ export class ControlPlane {
   }
 
   auditEvent(input: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEvent {
-    const event: AuditEvent = { ...input, id: randomUUID(), timestamp: nowIso() };
-    this.audit.push(event);
-    this.outbox.push({ id: event.id, event: `audit.${input.action.toLowerCase()}`, payload: event, createdAt: event.timestamp });
-    return event;
+    return appendControlAudit(this.store, input);
   }
 
   createScope(input: Partial<ScopeContext> & Pick<ScopeContext, 'actorId' | 'sessionType'>): ScopeContext {
@@ -1074,6 +1078,24 @@ export class ControlPlane {
 
   rollback(scope: ScopeContext, version: number): ConfigurationVersion {
     return this.studioSvc.rollback(scope, version);
+  }
+
+  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number) {
+    const companyId = this.studioSvc.requireLockedCompany(scope);
+    const copy = (versions: Map<string, ConfigurationVersion>) => {
+      const value = versions.get(companyId);
+      return new Map(value ? [[companyId, structuredClone(value)]] : []);
+    };
+    const staged: ControlPlaneStore = { ...this.store, drafts: copy(this.drafts), published: copy(this.published),
+      versions: new Map([[companyId, structuredClone(this.versions.get(companyId) ?? [])]]), audit: [], outbox: [] };
+    const studio = new ControlPlaneStudio(staged, {
+      requireCompany: this.requireCompany.bind(this), blankConfig: this.blankConfig.bind(this),
+      assertFeature: this.assertFeature.bind(this), assertBillingWritable: this.assertBillingWritable.bind(this),
+      isFeatureEnabled: this.isFeatureEnabled.bind(this), auditEvent: (input) => appendControlAudit(staged, input),
+    });
+    const published = rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion);
+    return { companyId, published, draft: staged.drafts.get(companyId), history: staged.versions.get(companyId)!,
+      audit: staged.audit, outbox: staged.outbox };
   }
 
   runtimeConfig(companyId: string, role = 'ADMIN'): {

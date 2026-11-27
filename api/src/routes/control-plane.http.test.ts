@@ -91,6 +91,20 @@ test('HTTP: draft stock preview resolves the requested role, device and company 
     const unknown = await preview({ ...input, locationId: 'missing-branch' });
     assert.deepEqual(foreign, unknown);
     assert.equal(foreign.status, 404);
+
+    controlPlane.setActionEnabled(scope, 'scan', false);
+    const stale = await post('/studio/v1/publish', { draftRevision: result.draftRevision }, token);
+    assert.equal(stale.status, 409);
+    assert.equal(controlPlane.runtimeConfig('default-company').version, draft.version - 1);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_PUBLISHED').length, 0);
+    const refreshed = await preview(input);
+    const revision = refreshed.body.preview.draftRevision;
+    assert.notEqual(revision, result.draftRevision);
+    const release = await post('/studio/v1/publish', { draftRevision: revision }, token);
+    assert.equal(release.status, 200);
+    assert.equal(release.body.published.version, draft.version);
+    assert.equal((await post('/studio/v1/publish', { draftRevision: revision }, token)).status, 409);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_PUBLISHED').length, 1);
   });
 });
 

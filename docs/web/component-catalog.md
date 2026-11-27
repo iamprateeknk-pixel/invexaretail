@@ -14,6 +14,8 @@ at the same files.
 
 Item stock and Studio's Publish tab share the stock table, formula rendering and stock action controls. Studio displays example rows for the selected role, device and location. The preview request resolves the draft under the locked company's session, returns that company's locations, and leaves the published configuration in place. Mobile-width preview removes columns disabled for mobile. The stock table suppresses restricted columns and formulas using restricted values. Preview actions are disabled. The live item table opens details by mouse or keyboard.
 
+**Publish reviewed draft** submits the revision returned with the preview. A stale revision leaves the published configuration in place. PostgreSQL serializes configuration writes per company and checks the saved draft and version history before persisting a release. Publication and rollback each write the new active version and audit in the same transaction. Rollback adds a new version and preserves the previous versions. Studio refreshes its view after a conflicting publish. An operator with a draft based on an older release must reapply its changes to the current version.
+
 ### Feedback states (`web/src/components/ui/feedback-states.jsx`)
 
 | Component | Variants | Used by | Accessibility evidence |

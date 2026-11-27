@@ -1,10 +1,13 @@
-import { controlPlane } from './control-plane.js';
+import { createHash } from 'node:crypto';
+import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
   controlPlaneDbEnabled,
   controlPlaneRowsExist,
   hydrateControlPlaneRows,
   importBlobSnapshotToRows,
+  lastPersistedSnapshot,
   persistControlPlaneRows,
+  stableStringify,
 } from './control-plane-repository.js';
 import {
   CONTROL_PLANE_STATE_ID,
@@ -47,12 +50,48 @@ export async function loadControlPlaneSnapshot(): Promise<ControlPlaneSnapshot |
  * argument defaults to the live plane, which is what every caller passes.
  */
 export async function saveControlPlaneSnapshot(
-  snapshot: ControlPlaneSnapshot = serializeControlPlane(controlPlane),
+  snapshot?: ControlPlaneSnapshot,
 ): Promise<void> {
   if (!databaseEnabled()) return;
-  const write = persistQueue.then(async () => { await persistControlPlaneRows(controlPlane, snapshot); });
+  const write = persistQueue.then(async () => { await persistControlPlaneRows(controlPlane, snapshot ?? serializeControlPlane(controlPlane)); });
   persistQueue = write.catch(() => undefined);
   await write;
+}
+
+export function studioDraftRevision(draft: ConfigurationVersion | undefined): string | null {
+  return draft ? createHash('sha256').update(stableStringify(JSON.parse(JSON.stringify(draft)))).digest('hex') : null;
+}
+
+export async function commitStudioRelease(plane: ControlPlane, scope: ScopeContext, command: { rollbackVersion?: number; draftRevision?: string }) {
+  const release = persistQueue.then(async () => {
+    if (databaseEnabled() && !lastPersistedSnapshot(plane)) {
+      throw new ControlPlaneError('Studio could not verify the saved configuration. Try again when the company configuration has loaded.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
+    }
+    if (command.draftRevision !== undefined && command.draftRevision !== studioDraftRevision(plane.drafts.get(scope.companyId ?? ''))) {
+      throw new ControlPlaneError('The draft changed after preview. Review the latest draft before publishing.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
+    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion);
+    const { companyId, published, draft, history, audit, outbox } = stage;
+    if (databaseEnabled()) {
+      const snapshot = serializeControlPlane(plane);
+      snapshot.drafts = snapshot.drafts.filter((entry) => entry.companyId !== companyId);
+      if (draft) snapshot.drafts.push(draft);
+      snapshot.published = [...snapshot.published.filter((entry) => entry.companyId !== companyId), published];
+      snapshot.versions = [...snapshot.versions.filter(([id]) => id !== companyId), [companyId, history]];
+      snapshot.audit = [...snapshot.audit, ...audit].slice(-500);
+      snapshot.outbox = [...snapshot.outbox, ...outbox].slice(-200);
+      await persistControlPlaneRows(plane, snapshot);
+    }
+    if (draft) plane.drafts.set(companyId, draft);
+    else plane.drafts.delete(companyId);
+    plane.published.set(companyId, published);
+    plane.versions.set(companyId, history);
+    plane.audit.push(...audit);
+    plane.outbox.push(...outbox);
+    return published;
+  });
+  persistQueue = release.then(() => undefined, () => undefined);
+  return release;
 }
 
 export async function hydrateControlPlaneFromStore(): Promise<'skipped' | 'seeded' | 'restored'> {

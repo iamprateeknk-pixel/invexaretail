@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { StockItemsTable } from '@/components/inventory/StockItemsTable';
 import { StockOverviewActions } from '@/components/inventory/StockOverviewActions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/feedback-states';
 import { Label } from '@/components/ui/label';
 import { canViewSystemStockForRole } from '@/lib/stock-metadata';
@@ -44,12 +45,13 @@ function PreviewSelect({ label, value, onChange, children, disabled }) {
   </div>;
 }
 
-export function DraftStockPreview({ controlToken, draft }) {
+export function DraftStockPreview({ controlToken, draft, onPublish }) {
   const [role, setRole] = useState('ADMIN');
   const [device, setDevice] = useState('desktop');
   const [locationId, setLocationId] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState(null);
+  const [publishing, setPublishing] = useState(false);
   const current = result?.role === role && result.controlToken === controlToken && result.device === device && result.locationId === locationId
     && result.draft === draft && result.attempt === attempt;
   const preview = current ? result.preview : null;
@@ -72,6 +74,14 @@ export function DraftStockPreview({ controlToken, draft }) {
   }, [controlToken, draft, role, device, locationId, attempt]);
 
   const columns = preview ? stockTableColumns(preview.page, { role: preview.role, canViewSystemStock: canViewSystemStockForRole(preview.role) }) : [];
+  async function publish() {
+    setPublishing(true);
+    try {
+      await onPublish(preview.draftRevision);
+    } finally {
+      setPublishing(false);
+    }
+  }
   return (
     <section aria-label="Draft stock preview" className="grid min-w-0 gap-4">
       <div className="grid gap-3 sm:grid-cols-3">
@@ -102,6 +112,9 @@ export function DraftStockPreview({ controlToken, draft }) {
           )}
         </Card>
       )}
+      {onPublish && <div><Button type="button" disabled={publishing || !preview?.draftRevision} onClick={publish}>
+        {publishing ? 'Publishing…' : 'Publish reviewed draft'}
+      </Button></div>}
     </section>
   );
 }
