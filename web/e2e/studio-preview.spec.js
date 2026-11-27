@@ -9,8 +9,11 @@ const draftPage = { columns: [
   { key: 'calc_book', label: 'Double book stock', source: 'formula', visible: true, formula: 'book * 2' },
 ], actions: [{ key: 'export', enabled: true }, { key: 'scan', enabled: true }] };
 
-test('Studio shows the draft stock screen without publishing and fits a phone viewport', async ({ page }) => {
+test('Studio previews a draft and confirms a selected historical restore at phone width', async ({ page }) => {
   const requests = [];
+  const restores = [];
+  const current = { id: 'v3', version: 3, author: 'Operator', canRestore: false };
+  const previous = { id: 'v2', version: 2, author: 'Operator', canRestore: true };
   await page.addInitScript((activeCompany) => {
     sessionStorage.setItem('invexa_control_session', JSON.stringify({
       company: activeCompany, user: { name: 'Operator' }, platformToken: 'platform', controlToken: 'locked',
@@ -25,6 +28,12 @@ test('Studio shows the draft stock screen without publishing and fits a phone vi
       return route.fulfill({ json: { preview: { ...selection, page: draftPage, locations, location, stockEnabled: true, version: 4 } } });
     }
     if (path === '/studio/v1/publish') throw new Error('Preview unexpectedly published the draft');
+    if (path === '/studio/v1/versions') return route.fulfill({ json: { active: current, versions: [current, previous] } });
+    if (path === '/studio/v1/versions/v2/compare') return route.fulfill({ json: { active: current, target: previous, changes: ['Stock layout'] } });
+    if (path === '/studio/v1/rollback') {
+      restores.push(route.request().postDataJSON());
+      return route.fulfill({ json: { published: { version: 4 } } });
+    }
     if (path === '/studio/v1/draft') return route.fulfill({ json: { draft: { ...company, page: draftPage, version: 4 } } });
     if (path === '/studio/v1/runtime') return route.fulfill({ json: { runtime: { page: livePage, version: 3 } } });
     if (path === '/control/v1/users') return route.fulfill({ json: { users: [] } });
@@ -47,4 +56,13 @@ test('Studio shows the draft stock screen without publishing and fits a phone vi
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('table', { name: 'Draft stock table' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.getByRole('button', { name: 'Compare version 2' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Restore version 2' });
+  await expect(dialog.getByText('Stock layout')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Restore version 2' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await dialog.getByLabel('Reason for restoring').fill('Return to the documented stock layout');
+  await dialog.getByRole('button', { name: 'Restore version 2' }).click();
+  await expect(page.getByText('Version 2 restored as version 4.')).toBeVisible();
+  expect(restores).toEqual([{ version: 2, targetVersionId: 'v2', expectedActiveVersionId: 'v3', reason: 'Return to the documented stock layout' }]);
 });

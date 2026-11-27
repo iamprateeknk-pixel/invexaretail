@@ -108,6 +108,51 @@ test('HTTP: draft stock preview resolves the requested role, device and company 
   });
 });
 
+test('HTTP: Studio restores the selected saved version while retaining active and historical versions', async () => {
+  await withServer(async (url) => {
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const locked = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const token = locked.body.token;
+    const headers = { Authorization: `Bearer ${token}` };
+    const scope = controlPlane.requireControlSession(token).scope;
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Second release item' }]);
+    const second = controlPlane.publish(scope);
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Third release item' }]);
+    const third = controlPlane.publish(scope);
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Unsaved draft item' }]);
+    const foreign = controlPlane.published.get('company-jaipur')!;
+    const history = () => json(url, '/studio/v1/versions', { headers });
+    assert.equal((await json(url, '/studio/v1/versions')).status, 401);
+    const listed = await history();
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.active.id, third.id);
+    const choices = listed.body.versions as Array<{ id: string; version: number }>;
+    assert.deepEqual(choices.map((entry) => entry.version), [3, 2, 1]);
+    assert.ok(choices.every((entry) => entry.id !== foreign.id));
+    assert.equal((await post('/studio/v1/rollback', { version: 3, targetVersionId: third.id, expectedActiveVersionId: third.id, reason: 'Duplicate' }, token)).status, 400);
+    const result = await json(url, `/studio/v1/versions/${second.id}/compare`, { headers });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.changes, ['Stock layout']);
+    const cross = await json(url, `/studio/v1/versions/${foreign.id}/compare`, { headers });
+    const missing = await json(url, '/studio/v1/versions/missing/compare', { headers });
+    assert.deepEqual(cross, missing);
+    assert.equal(cross.status, 404);
+    const reviewed = { version: second.version, targetVersionId: second.id, expectedActiveVersionId: third.id, reason: 'Restore the validated item label' };
+    assert.equal((await post('/studio/v1/rollback', { ...reviewed, expectedActiveVersionId: second.id }, token)).status, 409);
+    assert.equal((await post('/studio/v1/rollback', { ...reviewed, version: foreign.version, targetVersionId: foreign.id }, token)).status, 404);
+    const restored = await post('/studio/v1/rollback', reviewed, token);
+    assert.equal(restored.status, 200);
+    assert.equal(restored.body.published.version, 4);
+    assert.deepEqual(restored.body.published.page, second.page);
+    assert.equal(controlPlane.drafts.get('default-company')?.page.columns.find((entry) => entry.key === 'item_code')?.label, 'Unsaved draft item');
+    assert.deepEqual((await history()).body.versions.map((entry: { version: number }) => entry.version), [4, 3, 2, 1]);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_ROLLBACK').at(-1)?.reason, reviewed.reason);
+  });
+});
+
 test('HTTP: platform login, company lock, studio publish and sync mutation', async () => {
   await withServer(async (url) => {
     const login = await json(url, '/control/v1/auth/login', {

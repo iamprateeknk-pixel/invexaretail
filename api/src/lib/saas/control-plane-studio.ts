@@ -42,6 +42,14 @@ function validateAutomationForPublish(automation: AutomationDefinition): void {
   }
 }
 
+export function validateStudioRelease(version: ConfigurationVersion): void {
+  for (const workflow of version.workflows ?? []) validateLiveApproval(workflow);
+  for (const rule of version.rules ?? []) validateRuleForPublish(rule);
+  for (const automation of version.automations ?? []) validateAutomationForPublish(automation);
+}
+
+export type StudioRollbackOptions = { targetVersionId?: string; reason?: string };
+
 function ruleOutcomeAction(outcome: Record<string, unknown>): string {
   if (typeof outcome.action === 'string') return outcome.action;
   const [first] = Object.values(outcome);
@@ -420,9 +428,7 @@ export class ControlPlaneStudio {
     if (draft.parentVersion !== currentVersion || draft.version !== currentVersion + 1) {
       throw new ControlPlaneError('This draft was based on an older published version. Review and reapply its changes to the current version.', 'STUDIO_CONFIG_CONFLICT', 409);
     }
-    for (const workflow of draft.workflows) validateLiveApproval(workflow);
-    for (const rule of draft.rules) validateRuleForPublish(rule);
-    for (const automation of draft.automations ?? []) validateAutomationForPublish(automation);
+    validateStudioRelease(draft);
     const diff = this.diff(companyId);
     draft.status = 'published';
     draft.publishedAt = nowIso();
@@ -447,11 +453,16 @@ export class ControlPlaneStudio {
     return draft;
   }
 
-  rollback(scope: ScopeContext, version: number): ConfigurationVersion {
+  rollback(scope: ScopeContext, version: number, options: StudioRollbackOptions = {}): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
+    if (options.targetVersionId && options.targetVersionId === this.store.published.get(companyId)?.id) {
+      throw new ControlPlaneError('This version is already active.', 'INVALID_ROLLBACK', 400);
+    }
     const history = this.store.versions.get(companyId) ?? [];
-    const target = history.find((entry) => entry.version === version && entry.status === 'published');
+    const target = history.find((entry) => entry.version === version && entry.status === 'published'
+      && (!options.targetVersionId || options.targetVersionId === entry.id));
     if (!target) throw new ControlPlaneError('Version not found', 'VERSION_NOT_FOUND', 404);
+    validateStudioRelease(target);
     const restored = {
       ...JSON.parse(JSON.stringify(target)) as ConfigurationVersion,
       id: randomUUID(),
@@ -478,8 +489,9 @@ export class ControlPlaneStudio {
       action: 'CONFIG_ROLLBACK',
       entityType: 'configuration',
       entityId: String(restored.version),
-      before: { restoredFrom: version },
-      after: { version: restored.version },
+      before: { restoredFrom: version, restoredFromId: target.id },
+      after: { version: restored.version, versionId: restored.id },
+      reason: options.reason,
     });
     return restored;
   }

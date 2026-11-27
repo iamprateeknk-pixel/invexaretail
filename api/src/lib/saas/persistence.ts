@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
   controlPlaneDbEnabled,
@@ -62,15 +63,21 @@ export function studioDraftRevision(draft: ConfigurationVersion | undefined): st
   return draft ? createHash('sha256').update(stableStringify(JSON.parse(JSON.stringify(draft)))).digest('hex') : null;
 }
 
-export async function commitStudioRelease(plane: ControlPlane, scope: ScopeContext, command: { rollbackVersion?: number; draftRevision?: string }) {
+export type StudioReleaseCommand = StudioRollbackOptions & { rollbackVersion?: number; draftRevision?: string; expectedActiveVersionId?: string };
+
+export async function commitStudioRelease(plane: ControlPlane, scope: ScopeContext, command: StudioReleaseCommand) {
   const release = persistQueue.then(async () => {
     if (databaseEnabled() && !lastPersistedSnapshot(plane)) {
       throw new ControlPlaneError('Studio could not verify the saved configuration. Try again when the company configuration has loaded.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
     }
-    if (command.draftRevision !== undefined && command.draftRevision !== studioDraftRevision(plane.drafts.get(scope.companyId ?? ''))) {
+    const company = scope.companyId ?? '';
+    if (command.expectedActiveVersionId !== undefined && command.expectedActiveVersionId !== plane.published.get(company)?.id) {
+      throw new ControlPlaneError('The active version changed. Compare the versions again before restoring.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
+    if (command.draftRevision !== undefined && command.draftRevision !== studioDraftRevision(plane.drafts.get(company))) {
       throw new ControlPlaneError('The draft changed after preview. Review the latest draft before publishing.', 'STUDIO_CONFIG_CONFLICT', 409);
     }
-    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion);
+    const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command);
     const { companyId, published, draft, history, audit, outbox } = stage;
     if (databaseEnabled()) {
       const snapshot = serializeControlPlane(plane);

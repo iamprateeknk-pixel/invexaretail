@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { commitStudioRelease, flushControlPlanePersist, scheduleControlPlanePersist, studioDraftRevision, syncOperationalCompanies } from '../lib/saas/persistence.js';
+import { commitStudioRelease, flushControlPlanePersist, scheduleControlPlanePersist, studioDraftRevision, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
 import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -14,6 +14,7 @@ import { listStudioAutomationRuns, retryStudioAutomationRun } from '../lib/saas/
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
 import { getIndustryPack } from '../lib/industry-packs.js';
 import { findCompanyProfile } from '../lib/repository.js';
+import { compareStudioVersions, describeStudioVersion, readStudioVersions } from '../lib/saas/studio-versions.js';
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof StudioConfigConflict) {
@@ -739,11 +740,14 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
   }
 });
 
-async function releaseStudioVersion(req: Request, res: Response, command: { rollbackVersion?: number; draftRevision?: string }) {
+async function releaseStudioVersion(req: Request, res: Response, command: StudioReleaseCommand) {
   const companyId = scopedCompany(req);
   releasingCompanies.add(companyId);
   try {
     await flushControlPlanePersist();
+    if (command.expectedActiveVersionId && command.expectedActiveVersionId !== controlPlane.published.get(companyId)?.id) {
+      await refreshControlPlaneFromDb(controlPlane);
+    }
     const published = await commitStudioRelease(controlPlane, requireScope(req), command);
     res.locals.studioPersisted = true;
     res.json({ success: true, published, runtime: controlPlane.runtimeConfig(companyId) });
@@ -764,7 +768,37 @@ studioRouter.post('/publish', async (req: Request, res: Response) => {
 });
 
 studioRouter.post('/rollback', async (req: Request, res: Response) => {
-  await releaseStudioVersion(req, res, { rollbackVersion: Number(req.body?.version) });
+  const { version: submittedVersion, targetVersionId, expectedActiveVersionId, reason } = req.body ?? {};
+  const version = typeof submittedVersion === 'string' && /^\d+$/.test(submittedVersion) ? Number(submittedVersion) : submittedVersion;
+  const reviewed = targetVersionId !== undefined || expectedActiveVersionId !== undefined || reason !== undefined;
+  if (!Number.isSafeInteger(version) || version < 1 || (reviewed && (
+    typeof targetVersionId !== 'string' || !targetVersionId || targetVersionId.length > 191
+    || typeof expectedActiveVersionId !== 'string' || !expectedActiveVersionId || expectedActiveVersionId.length > 191
+    || typeof reason !== 'string' || !reason.trim() || reason.length > 500
+  ))) return sendError(res, new ControlPlaneError('Select a saved version, compare it with the active version and enter a reason.', 'INVALID_ROLLBACK', 400));
+  await releaseStudioVersion(req, res, { rollbackVersion: version, targetVersionId, expectedActiveVersionId, reason: reason?.trim() });
+});
+
+studioRouter.get('/versions', async (req, res) => {
+  try {
+    const { active, versions } = await readStudioVersions(controlPlane, scopedCompany(req));
+    res.json({ success: true, active: active ? describeStudioVersion(controlPlane, active, active.id) : null,
+      versions: versions.map((version) => describeStudioVersion(controlPlane, version, active?.id)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.get('/versions/:versionId/compare', async (req, res) => {
+  try {
+    const { active, versions } = await readStudioVersions(controlPlane, scopedCompany(req));
+    const target = versions.find((version) => version.id === param(req, 'versionId'));
+    if (!active || !target) throw new ControlPlaneError('Version not found', 'VERSION_NOT_FOUND', 404);
+    res.json({ success: true, active: describeStudioVersion(controlPlane, active, active.id),
+      target: describeStudioVersion(controlPlane, target, active.id), changes: compareStudioVersions(active, target) });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 studioRouter.get('/runtime', (req: Request, res: Response) => {

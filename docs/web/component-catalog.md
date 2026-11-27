@@ -16,6 +16,8 @@ Item stock and Studio's Publish tab share the stock table, formula rendering and
 
 **Publish reviewed draft** submits the revision returned with the preview. A stale revision leaves the published configuration in place. PostgreSQL serializes configuration writes per company and checks the saved draft and version history before persisting a release. Publication and rollback each write the new active version and audit in the same transaction. Rollback adds a new version and preserves the previous versions. Studio refreshes its view after a conflicting publish. An operator with a draft based on an older release must reapply its changes to the current version.
 
+**Version history** lists the locked company's published versions with their author, date and active status. An operator can compare an earlier compatible version with the active one, review which configuration areas will change, and enter an audit reason before restoring. Studio asks for a fresh comparison if the active version changes before confirmation. A restore creates a new active version and keeps the draft and prior versions available.
+
 ### Feedback states (`web/src/components/ui/feedback-states.jsx`)
 
 | Component | Variants | Used by | Accessibility evidence |

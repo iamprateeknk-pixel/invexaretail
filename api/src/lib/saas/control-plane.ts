@@ -9,7 +9,7 @@ import { signControlToken, verifyControlToken } from './control-plane-tokens.js'
 import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
 import { ControlPlaneBilling } from './control-plane-billing.js';
 import { ControlPlaneIntegrations } from './control-plane-integrations.js';
-import { ControlPlaneStudio } from './control-plane-studio.js';
+import { ControlPlaneStudio, type StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneSync } from './control-plane-sync.js';
 import {
   controlPlaneDbEnabled,
@@ -1080,7 +1080,7 @@ export class ControlPlane {
     return this.studioSvc.rollback(scope, version);
   }
 
-  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number) {
+  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions) {
     const companyId = this.studioSvc.requireLockedCompany(scope);
     const copy = (versions: Map<string, ConfigurationVersion>) => {
       const value = versions.get(companyId);
@@ -1093,7 +1093,7 @@ export class ControlPlane {
       assertFeature: this.assertFeature.bind(this), assertBillingWritable: this.assertBillingWritable.bind(this),
       isFeatureEnabled: this.isFeatureEnabled.bind(this), auditEvent: (input) => appendControlAudit(staged, input),
     });
-    const published = rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion);
+    const published = rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion, options);
     return { companyId, published, draft: staged.drafts.get(companyId), history: staged.versions.get(companyId)!,
       audit: staged.audit, outbox: staged.outbox };
   }

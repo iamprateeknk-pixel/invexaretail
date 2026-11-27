@@ -10,6 +10,7 @@ import { StockColumnsLayoutEditor } from '../StockColumnsLayoutEditor';
 import { Advanced } from '../studio-mode';
 import { AutomationsEditor, FieldsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, StockExtraColumnCard } from '../StudioEditors';
 import { DraftStockPreview } from '../DraftStockPreview';
+import { StudioVersionHistory } from '../StudioVersionHistory';
 
 export function StudioSection(props) {
   const { setError, company, draft, runtime, controlToken, refreshLocked } = props;
@@ -95,15 +96,8 @@ export function StudioSection(props) {
             <p className="mt-2">Items & stock in the grocery workspace uses this published page: custom columns and enabled header actions.</p>
           </CardContent>
         </Card>
-        <Advanced label="Advanced: undo">
-          <div>
-            <Button variant="outline" onClick={async () => {
-            await controlRequest('/studio/v1/rollback', { token: controlToken, method: 'POST', body: { version: 1 } });
-            await refreshLocked();
-            toast.message('Rolled back to version 1');
-          }}>Go back to version 1</Button>
-          </div>
-        </Advanced>
+        <StudioVersionHistory key={company?.id} controlToken={controlToken} activeVersion={runtime?.version}
+          onRestored={() => refreshLocked().catch((caught) => setError(caught.message))} />
       </TabsContent>
     </Tabs>
   );

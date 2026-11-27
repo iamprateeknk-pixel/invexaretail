@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { ControlPlane } from './control-plane.js';
 import { commitStudioRelease, studioDraftRevision } from './persistence.js';
+import { readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
   hydrateControlPlaneRows,
@@ -195,6 +196,14 @@ integration('a rejected Studio release leaves its draft intact and rollback crea
   const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
   assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [restored.id]);
   assert.deepEqual(new Set(rows.filter((row) => row.kind === 'history').map((row) => row.versionId)), new Set([original.id, winner.id, restored.id]));
+
+  const restoredSecond = await commitStudioRelease(first, a, { rollbackVersion: winner.version, targetVersionId: winner.id,
+    expectedActiveVersionId: restored.id, reason: 'Return to the second release' });
+  const history = await readStudioVersions(second, company.id);
+  assert.equal(history.active?.id, restoredSecond.id);
+  assert.deepEqual(history.active?.page, winner.page);
+  assert.deepEqual(history.versions.map((entry) => entry.version), [4, 3, 2, 1]);
+  assert.deepEqual(await readStudioVersions(second, randomUUID()), { active: undefined, versions: [] });
   first.versions.get(company.id)!.find((entry) => entry.id === winner.id)!.page.title = 'Changed after release';
   await assert.rejects(persistControlPlaneRows(first), { code: 'STUDIO_CONFIG_CONFLICT' });
   const unchanged = await prisma.controlPlaneConfig.findUniqueOrThrow({ where: { versionId_kind: { versionId: winner.id, kind: 'history' } } });
