@@ -39,8 +39,8 @@ integration('listStockForLocation returns the full buckets for the caller\'s com
 
 integration('findStockEntry resolves the tenant-qualified key and nothing else', async () => {
   const hit = await findStockEntry(stockParityCtx(fixture.companyA), fixture.itemA1, fixture.lotA1, fixture.locationA);
-  assert.equal(hit?.onHand, 10);
-  assert.equal(hit?.reserved, 4);
+  assert.equal(Number(hit?.onHand), 10);
+  assert.equal(Number(hit?.reserved), 4);
   // The same tuple under company B does not exist, even though it exists under A.
   assert.equal(await findStockEntry(stockParityCtx(fixture.companyB), fixture.itemA1, fixture.lotA1, fixture.locationA), null);
   assert.equal(await findStockEntry(stockParityCtx(fixture.companyA), fixture.itemA1, fixture.lotA1, fixture.locationB), null);
@@ -76,7 +76,7 @@ integration('a row written after boot is visible to the repository without rehyd
     data: { companyId: fixture.companyA, itemId: fixture.itemA2, lotId: lot.id, locationId: fixture.locationA, onHand: 7, reserved: 1 },
   });
   const entry = await findStockEntry(stockParityCtx(fixture.companyA), fixture.itemA2, lot.id, fixture.locationA);
-  assert.equal(entry?.onHand, 7);
+  assert.equal(Number(entry?.onHand), 7);
   const all = await listStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA);
   assert.equal(all.length, 3, 'the post-boot row joins the two seeded rows');
 });
@@ -85,8 +85,8 @@ integration('listBinStockForLocation serves the populated location and answers [
   const rows = await listBinStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].binId, fixture.binA);
-  assert.equal(rows[0].onHand, 10);
-  assert.equal(rows[0].reserved, 4);
+  assert.equal(Number(rows[0].onHand), 10);
+  assert.equal(Number(rows[0].reserved), 4);
   assert.equal(rows[0].item.id, fixture.itemA1);
   // The §2.5b case: stock exists at locationA2 but BinStock was never
   // populated — the repository says so, instead of inventing staging rows.

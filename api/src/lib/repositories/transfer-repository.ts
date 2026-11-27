@@ -60,16 +60,16 @@ async function companyLocationIds(companyId: string): Promise<string[]> {
 }
 
 /** The tenant scope for transfers: the row's company, or a destination at one of the company's locations. */
-async function companyTransferScope(ctx: TenantContext) {
-  const locationIds = await companyLocationIds(ctx.companyId);
-  return [{ companyId: ctx.companyId }, { destinationLocationId: { in: locationIds } }];
+async function companyTransferScope(companyId: string) {
+  const locationIds = await companyLocationIds(companyId);
+  return [{ companyId }, { destinationLocationId: { in: locationIds } }];
 }
 
 /** Every transfer of the company (as source or destination), oldest first — Postgres in database mode. */
 export async function listTransfersForCompany(ctx: TenantContext): Promise<TransferRecord[]> {
   if (databaseEnabled) {
     const rows = await prisma.transfer.findMany({
-      where: { OR: await companyTransferScope(ctx) },
+      where: { OR: await companyTransferScope(ctx.companyId) },
       include: { lines: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
@@ -84,7 +84,7 @@ export async function listTransfersForCompany(ctx: TenantContext): Promise<Trans
 export async function findTransferForCompany(ctx: TenantContext, transferId: string): Promise<TransferRecord | null> {
   if (databaseEnabled) {
     const row = await prisma.transfer.findFirst({
-      where: { id: transferId, OR: await companyTransferScope(ctx) },
+      where: { id: transferId, OR: await companyTransferScope(ctx.companyId) },
       include: { lines: true },
     });
     return row ? transferRowToRecord(row) : null;
@@ -97,7 +97,7 @@ export async function listTransferCartonsForTransfers(ctx: TenantContext, transf
   if (!transferIds.length) return [];
   if (databaseEnabled) {
     const owned = await prisma.transfer.findMany({
-      where: { id: { in: transferIds }, OR: await companyTransferScope(ctx) },
+      where: { id: { in: transferIds }, OR: await companyTransferScope(ctx.companyId) },
       select: { id: true },
     });
     const ownedIds = owned.map((row) => row.id);

@@ -49,12 +49,12 @@ integration('transfer receipt posts a TRANSFER_IN journal row that matches the l
 
   const ledger = await prisma.stockLedger.findMany({ where: { itemId: f.item.id, locationId: f.dst.id } });
   assert.equal(ledger.length, 1);
-  assert.equal(ledger[0].onHand, 7);
-  assert.equal(ledger[0].quarantine, 1, 'damaged quantity is quarantined, never sellable');
+  assert.equal(Number(ledger[0].onHand), 7);
+  assert.equal(Number(ledger[0].quarantine), 1, 'damaged quantity is quarantined, never sellable');
   const rows = await journal(f.item.id, f.dst.id);
   assert.equal(rows.length, 1, 'one journal row despite the retry');
   assert.equal(rows[0].movementType, 'TRANSFER_IN');
-  assert.equal(rows[0].qtyDelta, 7);
+  assert.equal(Number(rows[0].qtyDelta), 7);
   assert.equal(rows[0].companyId, f.tenant.companyId);
   assert.equal(rows.reduce((sum, r) => sum + Number(r.qtyDelta), 0), Number(ledger[0].onHand), 'journal sum equals projection');
 });
@@ -66,7 +66,7 @@ integration('a second partial receipt adds a second journal row and the journal 
   await persistTransferReceipt({ ...base, requestId: randomUUID(), lines: line(4, 0) });
   await persistTransferReceipt({ ...base, requestId: randomUUID(), lines: line(6, 0) });
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.dst.id } });
-  assert.equal(ledger.onHand, 10);
+  assert.equal(Number(ledger.onHand), 10);
   const rows = await journal(f.item.id, f.dst.id);
   assert.equal(rows.length, 2);
   assert.equal(rows.reduce((sum, r) => sum + Number(r.qtyDelta), 0), 10);
@@ -91,10 +91,10 @@ integration('in-transit stock is tracked on the source lot from pick-confirm unt
   const alloc = [{ itemId: f.item.id, lotId: f.lot.id, locationId: srcId, quantity: 10 }];
   await persistConfirmedPickAllocations(f.transfer.id, alloc, f.tenant);
   const afterConfirm = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } });
-  assert.equal(afterConfirm.onHand, 0);
-  assert.equal(afterConfirm.inTransit, 10, 'the 10 units are in flight, not vanished');
+  assert.equal(Number(afterConfirm.onHand), 0);
+  assert.equal(Number(afterConfirm.inTransit), 10, 'the 10 units are in flight, not vanished');
   await assert.rejects(persistConfirmedPickAllocations(f.transfer.id, alloc, f.tenant), /already confirmed/);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 10, 'a rejected replay does not double it');
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit), 10, 'a rejected replay does not double it');
 
   await prisma.transfer.update({ where: { id: f.transfer.id }, data: { status: 'DISPATCHED' as never } });
   const receive = (requestId: string, receivedQty: number, shortageQty: number) => persistTransferReceipt({
@@ -102,9 +102,9 @@ integration('in-transit stock is tracked on the source lot from pick-confirm unt
     lines: [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty, damagedQty: 0, shortageQty, excessQty: 0 }],
   });
   await receive(randomUUID(), 6, 0);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 4, 'partial receipt releases only what arrived');
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit), 4, 'partial receipt releases only what arrived');
   await receive(randomUUID(), 3, 1);
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 0, 'received + short settles the rest');
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit), 0, 'received + short settles the rest');
 });
 
 integration('a transfer confirmed before in-transit tracking existed does not disturb another transfer\'s in-transit', async () => {
@@ -115,5 +115,5 @@ integration('a transfer confirmed before in-transit tracking existed does not di
     requestId: randomUUID(), transferId: f.transfer.id, destinationLocationId: f.dst.id, receivedById: f.userId, notes: '', tenant: f.tenant,
     lines: [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty: 5, damagedQty: 0, shortageQty: 0, excessQty: 0 }],
   });
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit, 8);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: srcId } })).inTransit), 8);
 });

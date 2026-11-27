@@ -959,3 +959,29 @@ tracks how much of it):
   again under a new idempotency key. Not verifiable in this sandbox (no
   macOS, Windows or Android SDK): the iOS/Windows/Android builds themselves
   - they are proven by those three CI workflows.
+- Post-merge follow-up 7 (`api/scripts/architecture-lint.mjs`,
+  `api/prisma/migrations/20270128090000_drop_tenant_column_defaults`,
+  `api/contracts/`, `api/prisma/seed.ts`, `api/package.json`, Postgres
+  test assertions, no dedicated ADR): `main`'s CI had been red since at
+  least 2026-10-24, and because `lint:arch` failed early every later API
+  step - contract checks, migrations, seed, all real-Postgres suites - had
+  stopped running at all. Fixed in order: three lint findings
+  (`transfer-repository.ts` was scoped but hid `companyId` inside a helper -
+  the helper now takes it explicitly; the test-only
+  `stock-parity-harness.ts` is allowlisted and a new check fails the lint
+  if production code ever imports it; `ControlPlaneUsage.value`/
+  `ControlPlaneLedger.value` are exempted by `Model.field` with a reason,
+  not by line number); a duplicated `/items/version` path in
+  `openapi.json`; a real tenant-isolation gap - `20270126090000_drop_company_defaults`
+  shipped no DDL on the mistaken belief that Prisma defaults live only in
+  the client, so 35 `companyId` columns and `MarketplaceConnector.tenantId`
+  still had `DEFAULT 'default-company'` in Postgres (a raw INSERT without a
+  tenant silently landed in the phantom tenant) - now dropped by a real
+  migration; the seed's stale `StockLedger` unique key; the contract-coverage
+  test only reading top-level router routes (it now walks nested routers like
+  `route-auth-coverage.test.ts`); and Postgres tests comparing Prisma
+  `Decimal` objects to numbers (wrapped in `Number()`). Security: `multer`,
+  `zod`, `body-parser` upgraded to patched versions; `effect` (pinned exactly
+  by `@prisma/config`) forced to a patched 3.x via `overrides`, with the
+  Prisma CLI re-verified (validate, generate, migrate, migration matrix).
+

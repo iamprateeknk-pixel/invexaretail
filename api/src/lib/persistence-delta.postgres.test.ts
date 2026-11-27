@@ -59,7 +59,7 @@ integration('delta refresh merges updates, nested changes and inserts; a hard de
     assert.equal(snapshotItem?.lots.find((row) => row.id === lot.id)?.expiryDate, '2028-06-15T00:00:00.000Z', 'a lot-only change reloads its parent item');
     const snapshotTransfer = snapshotTransfers.find((row) => row.id === transfer.id);
     assert.equal(snapshotTransfer?.status, 'IN_TRANSIT');
-    assert.equal(snapshotTransfer?.lines[0].receivedQty, 3, 'a transfer-line-only change reloads its parent transfer');
+    assert.equal(Number(snapshotTransfer?.lines[0].receivedQty), 3, 'a transfer-line-only change reloads its parent transfer');
     assert.ok(snapshotItems.some((row) => row.id === newItem.id), 'an inserted row arrives through the delta path');
 
     // A hard delete is invisible to updatedAt watermarks: the row-count check must fall back.

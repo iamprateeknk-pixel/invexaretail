@@ -61,7 +61,7 @@ integration('a replayed delivery is one order, one reservation, and the event lo
   });
   assert.equal(await prisma.order.count({ where: { externalReference: ref, companyId: a.companyId } }), 1);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: a.item.id } });
-  assert.equal(ledger.reserved, 2, 'reserved exactly once');
+  assert.equal(Number(ledger.reserved), 2, 'reserved exactly once');
   const events = await prisma.channelWebhookEvent.findMany({ where: { connectorId: a.connector.id } });
   assert.equal(events.length, 1);
   assert.equal(events[0].state, 'PROCESSED');
@@ -105,6 +105,6 @@ integration('company B\'s connector cannot resolve company A\'s SKU or reserve A
     const res = await post(b.connector.id, order(`FK-${randomUUID().slice(0, 8)}`, a.item.code), b.secret);
     assert.equal(res.status, 409);
   });
-  assert.equal((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: a.item.id } })).reserved, 0);
+  assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: a.item.id } })).reserved), 0);
   assert.equal(await prisma.order.count({ where: { companyId: b.companyId } }), 0);
 });

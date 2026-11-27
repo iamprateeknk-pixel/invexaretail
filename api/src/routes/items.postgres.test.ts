@@ -92,7 +92,7 @@ integration('POST /items/:itemId/adjust posts once for two identical requests wi
     assert.equal(second.body.movement.id, first.body.movement.id);
 
     const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } });
-    assert.equal(ledger?.onHand, 10, 'a retried adjustment must not double-post');
+    assert.equal(Number(ledger?.onHand), 10, 'a retried adjustment must not double-post');
   });
 });
 
@@ -121,13 +121,13 @@ integration('a reversal posts an equal-and-opposite movement and retrying the re
 
     const reversed = await call('POST', `/items/${fixture.itemId}/movements/${posted.body.movement.id}/reverse`, fixture.token, { reason: 'undo' });
     assert.equal(reversed.status, 201);
-    assert.equal(reversed.body.movement.qtyDelta, -20);
+    assert.equal(Number(reversed.body.movement.qtyDelta), -20);
 
     const again = await call('POST', `/items/${fixture.itemId}/movements/${posted.body.movement.id}/reverse`, fixture.token, { reason: 'undo again' });
     assert.equal(again.status, 409, 'reversing an already-reversed movement must fail, not silently double-reverse');
 
     const ledger = await prisma.stockLedger.findFirst({ where: { itemId: fixture.itemId, lotId: fixture.lotId, locationId: fixture.locationId } });
-    assert.equal(ledger?.onHand, 0);
+    assert.equal(Number(ledger?.onHand), 0);
   });
 });
 
@@ -159,7 +159,7 @@ integration('GET /items/:itemId/stock-detail returns branch balances, lots and m
     const detail = await call('GET', `/items/${fixture.itemId}/stock-detail`, fixture.token);
     assert.equal(detail.status, 200);
     assert.equal(detail.body.branches.length, 1);
-    assert.equal(detail.body.branches[0].onHand, 15);
+    assert.equal(Number(detail.body.branches[0].onHand), 15);
     assert.equal(detail.body.lots.length, 1);
     assert.equal(detail.body.movements.length, 1);
     assert.equal(detail.body.reconciliation.length, 1);

@@ -59,7 +59,7 @@ integration('the same marketplace order replayed twice (sequentially) creates on
   // being exactly one Order/OrderLine, asserted above, and confirmed here
   // by onHand still reflecting only the fixture's original stock (no second
   // debit occurred, whatever the specific reservation accounting model is).
-  assert.equal(ledger?.onHand, 10);
+  assert.equal(Number(ledger?.onHand), 10);
 });
 
 integration('two deliveries of the same marketplace order arriving concurrently still create exactly one order', async () => {
