@@ -19175,14 +19175,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Blocked pending approval. */
+            /** @description Blocked pending approval, or pick progress changed before confirmation and must be reviewed again. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
+                    "application/json": components["schemas"]["ErrorEnvelope"] & {
                         approvalRequestId?: string;
                         requiredApproverRole?: string;
                     };

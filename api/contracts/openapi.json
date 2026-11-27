@@ -27829,22 +27829,20 @@
             }
           },
           "409": {
-            "description": "Blocked pending approval.",
+            "description": "Blocked pending approval, or pick progress changed before confirmation and must be reviewed again.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "approvalRequestId": {
-                      "type": "string"
-                    },
-                    "requiredApproverRole": {
-                      "type": "string"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/ErrorEnvelope" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "approvalRequestId": { "type": "string" },
+                        "requiredApproverRole": { "type": "string" }
+                      }
                     }
-                  }
+                  ]
                 }
               }
             }

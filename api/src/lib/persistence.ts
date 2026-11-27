@@ -20,6 +20,7 @@ import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFrom
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
+import { transferPickChanged } from './pick-revision.js';
 import { reserveCountSubmission, type CountSubmissionGuard } from './count-submission-receipts.js';
 import { verifyCountStockRevision } from './count-stock-revision.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
@@ -1262,12 +1263,25 @@ export async function persistConfirmedPickAllocations(
   transferId: string,
   allocations: Array<{ itemId: string; lotId: string; locationId: string; quantity: number }>,
   tenant: import('./tenant-context.js').TenantContext,
+  reviewed?: { status: string; sourceLocationId: string; destinationLocationId: string; slipIds: string[] },
 ): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${transferId} AND "companyId" = ${tenant.companyId} FOR UPDATE`;
     const transfer = await tx.transfer.findFirst({ where: { id: transferId, companyId: tenant.companyId } });
     if (!transfer) throw new Error('Transfer was not found.');
+    if (reviewed) {
+      const slips = await tx.auditLog.findMany({
+        where: { entityType: 'Transfer', entityId: transferId, action: 'PICK_SLIP_SAVED' }, select: { id: true },
+      });
+      const expected = new Set(reviewed.slipIds);
+      if (transfer.status !== reviewed.status || transfer.sourceLocationId !== reviewed.sourceLocationId
+        || transfer.destinationLocationId !== reviewed.destinationLocationId
+        || slips.length !== expected.size || slips.some((slip) => !expected.has(slip.id))) {
+        throw transferPickChanged();
+      }
+    }
     if (['CONFIRMED', 'DISPATCHED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED'].includes(String(transfer.status))) {
       throw new Error('Transfer is already confirmed and stock cannot be deducted twice.');
     }

@@ -33,6 +33,7 @@ export async function savePickSlip(ctx: TenantContext, transferId: string, expec
   for (let attempt = 0; ; attempt++) {
     try {
       const result = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${transferId} AND "companyId" = ${ctx.companyId} FOR UPDATE`;
         const row = await tx.transfer.findFirst({ where: { id: transferId, companyId: ctx.companyId }, include: { lines: true } });
         if (!row) throw transferPickChanged();
         const transfer = transferRowToRecord(row);
@@ -60,7 +61,9 @@ export async function savePickSlip(ctx: TenantContext, transferId: string, expec
       if (!result.duplicate) rememberPersistedAudit(event);
       return result;
     } catch (error) {
-      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error;
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError)) throw error;
+      const serializationFailure = error.code === 'P2034' || (error.code === 'P2010' && error.meta?.code === '40001');
+      if (!serializationFailure) throw error;
       if (attempt >= 2) throw new DomainError('CONFLICT', 'The pick could not be saved during another update. Try again.');
     }
   }

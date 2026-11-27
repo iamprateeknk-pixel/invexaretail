@@ -560,11 +560,13 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
 router.post('/transfers/:transferId/confirm', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins can confirm transfer-out.');
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer must be ready for admin review, not ${transfer.status}.`);
   const allocations = new Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }>();
-  for (const slip of await savedPickSlips(transferId)) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
+  const slips = await savedPickSlips(transferId);
+  for (const slip of slips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`;
     const existing = allocations.get(key) ?? { itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: 0 };
     existing.quantity += Number(line.quantity ?? 0); allocations.set(key, existing);
@@ -587,13 +589,17 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
   try {
-    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
+    await persistConfirmedPickAllocations(transfer.id, acceptedPicks, ctx, {
+      status: transfer.status, sourceLocationId: transfer.sourceLocationId,
+      destinationLocationId: transfer.destinationLocationId, slipIds: slips.map((slip) => slip.id),
+    });
     // Phase 5 step 14: in database mode the canonical posting inside
     // persistConfirmedPickAllocations is the stock write — the snapshot
     // mirror that used to follow it is retired. Memory mode (where the
     // persist call no-ops) still writes the snapshot directly.
     if (!databaseEnabled) for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
-    const updated = updateTransferStatus(transfer.id, 'CONFIRMED');
+    const updated: TransferRecord = { ...transfer, status: 'CONFIRMED' };
+    if (!databaseEnabled || findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
     // Stock has just physically left the source (decremented above); the
     // request-time reservation for this transfer's full original quantity
     // is no longer needed, picked-in-full or not.
@@ -604,6 +610,9 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
     void emitTransferUpdated(updated);
     return res.json({ message: 'Transfer confirmed and lot-level stock deducted.', transfer: updated });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'TRANSFER_PICK_CHANGED') {
+      return sendError(res, 409, error.code, 'Pick progress changed. Refresh the transfer and review the current slips before confirming.');
+    }
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to confirm transfer.');
   }
 });

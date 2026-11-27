@@ -380,6 +380,29 @@ integration('transfer pick-confirm posts TRANSFER_OUT, blocks insufficient stock
   assert.equal(Number((await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } })).onHand), 6);
 });
 
+integration('transfer confirmation refuses stock posting if the reviewed pick slips have changed', async () => {
+  const f = await fixture(10);
+  const row = await prisma.transfer.create({ data: {
+    companyId: f.companyId, requestedById: f.userId, sourceLocationId: f.loc.id,
+    destinationLocationId: f.dst.id, status: 'PARTIAL',
+  } });
+  const tenant = { companyId: f.companyId, tenantId: 'tenant-invexa', userId: f.userId, role: 'ADMIN' as const };
+  const allocations = [{ itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id, quantity: 2 }];
+  const reviewed = { status: row.status, sourceLocationId: f.loc.id, destinationLocationId: f.dst.id, slipIds: [`${row.id}-reviewed-slip`] };
+  for (const id of ['reviewed-slip', 'later-slip']) {
+    await prisma.auditLog.create({ data: {
+      id: `${row.id}-${id}`, actorId: f.userId, actorRole: tenant.role,
+      action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: row.id,
+    } });
+  }
+  await assert.rejects(persistConfirmedPickAllocations(row.id, allocations, tenant, reviewed), { code: 'TRANSFER_PICK_CHANGED' });
+  assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 0);
+  assert.equal((await prisma.transfer.findUniqueOrThrow({ where: { id: row.id } })).status, 'PARTIAL');
+  await persistConfirmedPickAllocations(row.id, allocations, tenant, { ...reviewed, slipIds: [...reviewed.slipIds, `${row.id}-later-slip`] });
+  assert.equal((await prisma.stockMovement.count({ where: { itemId: f.item.id } })), 1);
+  assert.equal((await prisma.transfer.findUniqueOrThrow({ where: { id: row.id } })).status, 'CONFIRMED');
+});
+
 integration('the review stores the root-cause reason code with the variance (audit C-3)', async () => {
   const f = await fixture(10);
   const count = { ...(await pendingCount(f, 8, 10)), reasonCode: 'DAMAGE' };
