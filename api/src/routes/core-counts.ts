@@ -21,6 +21,7 @@ import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.j
 import { getCountRecommendation } from '../lib/count-tolerance.js';
 import { CountSubmissionAlreadyRecorded, countSubmissionFingerprint, findCountSubmission, type CountSubmissionGuard, type CountSubmissionIntent } from '../lib/count-submission-receipts.js';
 import { countStockChanged } from '../lib/count-stock-revision.js';
+import { enforceOfflineCountPolicy } from '../lib/saas/offline-count-policy.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { parseBody } from '../lib/validate.js';
 import {
@@ -217,7 +218,7 @@ async function commitLotCount(args: LotCountArgs) {
 router.post('/stock-counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const ctx = tenantContext(req);
-  const input = req.body as BlindCountInput;
+  const input = req.body as BlindCountInput & { offlineCountPermit?: string };
 
   if (!canAccessLocation(context, input.locationId)) {
     return sendError(res, 403, 'FORBIDDEN', 'This user cannot submit a count for the selected location.');
@@ -231,11 +232,13 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
   try {
     const validated = validateBlindCountSubmission(context.role, input);
     const requestId = parseRequestId(input.requestId);
+    if (input.offlineCountPermit && !input.stockRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline count requires a stock revision.');
     if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
     if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
     if (requestId) intent = { requestId, kind: 'LOT', itemId: validated.itemId, locationId: validated.locationId,
       lotNo: validated.lotNo, mode: validated.mode ?? 'manual', quantity: validated.physicalQuantity, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
+    if (input.offlineCountPermit) await enforceOfflineCountPolicy(ctx, input.offlineCountPermit);
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
@@ -295,7 +298,7 @@ const weightInFlight = new Set<string>();
 router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const ctx = tenantContext(req);
-  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string; stockRevision?: string };
+  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string; stockRevision?: string; offlineCountPermit?: string };
   // The presence check stays ahead of the location check, exactly as
   // before — a missing itemId/locationId is a 400 even for a location
   // this user cannot access.
@@ -311,10 +314,12 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   try {
     const total = Number(input.totalQuantity);
     const requestId = parseRequestId(input.requestId);
+    if (input.offlineCountPermit && !input.stockRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline count requires a stock revision.');
     if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
     if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
     if (requestId) intent = { requestId, kind: 'POOLED', itemId: input.itemId, locationId, mode: 'weight', quantity: total, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
+    if (input.offlineCountPermit) await enforceOfflineCountPolicy(ctx, input.offlineCountPermit);
 
     const item = listItems().find((candidate) => candidate.id === input.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');

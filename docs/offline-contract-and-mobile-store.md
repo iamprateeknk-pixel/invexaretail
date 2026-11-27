@@ -25,6 +25,8 @@ Version **1**. A device queues *commands*, not state. Each command is:
 
 Assigned lot and pooled counts now carry an opaque stock revision from `GET /mobile/work`. The app keeps the revision from the first quantity entry through local storage and replay. PostgreSQL checks the relevant stock inside the count transaction. If it changed, the count and receipt are rolled back and Sync Center keeps the old quantity with a recount prompt. A completed request can still replay after later stock changes. Counts created without a revision retain the existing behavior.
 
+`GET /runtime/config` now returns `offlineCountPermit` for roles whose published offline scope includes counts. The permit is issued and expires on server time, and is valid only for the same company, user, and role. Both count endpoints accept it with the original request ID and stock revision. The server checks the current published policy for a new submission. A matching committed receipt can still be recovered after permission is revoked or the permit expires. The permit cannot authenticate a request by itself. Existing clients can continue using the original count contract. Flutter still needs to store this permit with the count and present it on replay.
+
 Deploy the revision-aware API before the native pilot. The staged rollback target must also support count revisions while native clients can still have revision-bearing counts in their queues.
 
 The shared typed command envelope remains open. Each active replay uses its existing workflow endpoint. Verify the complete offline journey on physical devices before release.

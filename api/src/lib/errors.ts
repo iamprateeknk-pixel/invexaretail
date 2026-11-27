@@ -18,6 +18,8 @@ export const ERROR_CODES = [
   'INVALID_TRANSITION',
   'CONCURRENT_UPDATE_CONFLICT',
   'COUNT_STOCK_CHANGED',
+  'OFFLINE_COUNT_POLICY_REJECTED',
+  'OFFLINE_COUNT_POLICY_UNAVAILABLE',
   'TRANSFER_RECEIVE_CHANGED',
   'TRANSFER_PICK_CHANGED',
   'DUPLICATE_REQUEST',
@@ -152,6 +154,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     // envelope with 400") — the two paths are deliberately different.
     case 'FORBIDDEN':
     case 'SELF_REVIEW':
+    case 'OFFLINE_COUNT_POLICY_REJECTED':
       return 403;
     case 'CONFLICT':
     case 'STUDIO_RULE_BLOCKED':
@@ -167,6 +170,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'UPSTREAM_ERROR':
       return 502;
     case 'APPROVAL_UNAVAILABLE':
+    case 'OFFLINE_COUNT_POLICY_UNAVAILABLE':
       return 503;
     default:
       return 400;

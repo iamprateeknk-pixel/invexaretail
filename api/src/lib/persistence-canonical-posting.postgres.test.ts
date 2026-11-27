@@ -13,11 +13,12 @@ import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 import { createCountRecord, items, type CountRecord } from './repository.js';
 import { createEnhancedUser, findUserById as findEnhancedUser } from './enterprise-repository.js';
 import { mutationIdempotency } from './mutation-idempotency.js';
-import { generateJWT } from './otp-auth.js';
+import { generateJWT, issueOfflineCountPermit, verifyJWT } from './otp-auth.js';
 import { enforceOperationalCompanyScope, registerItemCompany, registerLocationCompany } from './saas/tenant-scope.js';
 import { extractToken } from '../routes/enterprise-auth.js';
 import coreRouter from '../routes/core.js';
 import { countSubmissionFingerprint } from './count-submission-receipts.js';
+import { controlPlane } from './saas/control-plane.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -297,6 +298,16 @@ integration('count retries use committed PostgreSQL receipts and bind the reques
 
 integration('assigned count revisions detect stock changes and preserve completed offline receipts', async () => {
   const f = await fixture(10);
+  const previousPersistenceFlag = process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  controlPlane.companies.set(f.companyId, { ...controlPlane.requireCompany('default-company'), id: f.companyId });
+  const config = controlPlane.runtimeConfig(f.companyId, 'BRANCH_MANAGER');
+  const versionId = randomUUID();
+  const policy = { role: 'BRANCH_MANAGER', offlineMaxHours: 2, syncScope: ['counts'], navigation: [], encryptedLocalStore: true };
+  const configuration = { page: config.page, mobilePolicies: [policy] };
+  await prisma.controlPlaneConfig.create({ data: {
+    companyId: f.companyId, kind: 'published', status: 'published', version: 2, versionId, payload: configuration,
+  } });
   registerLocationCompany(f.loc.id, f.companyId);
   registerItemCompany(f.item.id, f.companyId);
   const item = { id: f.item.id, code: f.item.code, name: f.item.name, status: 'ACTIVE' as const,
@@ -340,14 +351,44 @@ integration('assigned count revisions detect stock changes and preserve complete
     const pooled = { requestId, totalQuantity: 8, stockRevision: beforeNewLot.stockRevision };
     assert.equal((await call('stock-counts/weight', pooled)).status, 409);
     assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, requestId } }), 0);
-    const command = { ...pooled, requestId: randomUUID(), stockRevision: (await task()).stockRevision };
+    const runtime = await call('runtime/config');
+    assert.equal(runtime.status, 200);
+    const offlineCountPermit = runtime.body.runtime.offlineCountPermit?.token;
+    assert.equal(typeof offlineCountPermit, 'string');
+    assert.equal(verifyJWT(offlineCountPermit), null);
+    const command = { ...pooled, requestId: randomUUID(), stockRevision: (await task()).stockRevision, offlineCountPermit };
+    for (const token of [
+      generateJWT(f.userId, f.companyId),
+      issueOfflineCountPermit(f.userId, 'default-company', 'BRANCH_MANAGER', 300).token,
+      issueOfflineCountPermit('other-user', f.companyId, 'BRANCH_MANAGER', 300).token,
+      issueOfflineCountPermit(f.userId, f.companyId, 'ADMIN', 300).token,
+      issueOfflineCountPermit(f.userId, f.companyId, 'BRANCH_MANAGER', -1).token,
+    ]) {
+      const invalid = await call('stock-counts/weight', { ...command, offlineCountPermit: token });
+      assert.equal(invalid.status, 403);
+      assert.equal(invalid.body.code, 'OFFLINE_COUNT_POLICY_REJECTED');
+    }
+    const invalidLot = await call('stock-counts', { ...staleLot, offlineCountPermit: generateJWT(f.userId, f.companyId) });
+    assert.equal(invalidLot.status, 403);
+    assert.equal(invalidLot.body.code, 'OFFLINE_COUNT_POLICY_REJECTED');
+    const missingRevision = await call('stock-counts/weight', { ...command, stockRevision: undefined });
+    assert.equal(missingRevision.status, 400);
     const accepted = await call('stock-counts/weight', command);
     assert.equal(accepted.status, 201, JSON.stringify(accepted.body));
     await prisma.stockLedger.update({ where: ledgerKey, data: { onHand: 8, version: { increment: 1 } } });
+    await prisma.controlPlaneConfig.update({ where: { versionId_kind: { versionId, kind: 'published' } },
+      data: { payload: { ...configuration, mobilePolicies: [{ ...policy, syncScope: ['stock'] }] } } });
+    const revoked = await call('stock-counts/weight', { ...command, requestId: randomUUID() });
+    assert.equal(revoked.status, 403);
+    assert.equal(revoked.body.code, 'OFFLINE_COUNT_POLICY_REJECTED');
+    assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId } }), 1);
     const replay = await call('stock-counts/weight', command);
     assert.equal(replay.status, 200);
     assert.deepEqual(replay.body.counts.map((row: { id: string }) => row.id), accepted.body.counts.map((row: { id: string }) => row.id));
   } finally {
+    if (previousPersistenceFlag === undefined) delete process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
+    else process.env.CONTROL_PLANE_PERSIST_IN_TESTS = previousPersistenceFlag;
+    controlPlane.companies.delete(f.companyId);
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

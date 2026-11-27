@@ -13387,6 +13387,13 @@ export interface operations {
                     "application/json": {
                         success?: boolean;
                         runtime?: {
+                            /** @description Account-bound permit for offline counts. Null if the published role policy does not permit them. */
+                            offlineCountPermit?: {
+                                token: string;
+                                /** Format: date-time */
+                                expiresAt: string;
+                            } | null;
+                        } & {
                             [key: string]: unknown;
                         };
                     };
@@ -18761,6 +18768,8 @@ export interface operations {
                     mode?: "scan" | "manual" | "weight";
                     /** @description The lot revision from mobile work when the operator began the count. Requires requestId. */
                     stockRevision?: string;
+                    /** @description Permit from runtime config for a saved offline count. Requires requestId and stockRevision. */
+                    offlineCountPermit?: string;
                     requestId?: string;
                 };
             };
@@ -18800,17 +18809,26 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description No access to the location, or the item is not assigned to this user. */
+            /** @description No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED). */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description The lot has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -18835,6 +18853,8 @@ export interface operations {
                     totalQuantity: number;
                     /** @description The pooled revision from mobile work when the operator began the count. Requires requestId. */
                     stockRevision?: string;
+                    /** @description Permit from runtime config for a saved offline count. Requires requestId and stockRevision. */
+                    offlineCountPermit?: string;
                     requestId?: string;
                 };
             };
@@ -18884,17 +18904,26 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description No access to the location, or the item is not assigned to this user. */
+            /** @description No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED). */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description The item has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

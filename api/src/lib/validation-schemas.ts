@@ -176,6 +176,7 @@ const countRequestIdSchema = z
   .max(191, 'requestId must be text of at most 191 characters.')
   .optional();
 const countStockRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/, 'Stock revision is invalid.').optional();
+const offlineCountPermitSchema = z.string().min(1).max(2_048).optional();
 
 /** POST /stock-counts (validateBlindCountSubmission's shape half; blind-role rules stay in the handler). */
 export const countSubmitSchema = z.object({
@@ -184,6 +185,7 @@ export const countSubmitSchema = z.object({
   physicalQuantity: z.number({ error: 'Physical quantity must be a non-negative number.' }).min(0, 'Physical quantity must be a non-negative number.'),
   requestId: countRequestIdSchema,
   stockRevision: countStockRevisionSchema,
+  offlineCountPermit: offlineCountPermitSchema,
 });
 
 /** POST /stock-counts/weight */
@@ -193,6 +195,7 @@ export const weightCountSchema = z.object({
   totalQuantity: requiredNumber('Counted quantity must be a non-negative number.', 0),
   requestId: countRequestIdSchema,
   stockRevision: countStockRevisionSchema,
+  offlineCountPermit: offlineCountPermitSchema,
 });
 
 /**

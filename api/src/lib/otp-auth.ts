@@ -202,6 +202,27 @@ export function verifyTwoFactorChallenge(token: string): { userId: string; compa
   return verifyJWT(token, 'twofactor');
 }
 
+export function issueOfflineCountPermit(userId: string, companyId: string, role: string, lifetimeSeconds: number) {
+  const issuedAt = Math.floor(Date.now() / 1_000);
+  const expiresAt = new Date((issuedAt + lifetimeSeconds) * 1_000).toISOString();
+  const token = jwt.sign({ userId, companyId, role, tokenType: 'offline-count', iat: issuedAt }, getJwtSecret(), {
+    algorithm: 'HS256', expiresIn: lifetimeSeconds,
+  });
+  return { token, expiresAt };
+}
+
+export function verifyOfflineCountPermit(token: string, caller: { userId: string; companyId: string; role: string }) {
+  try {
+    const permit = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
+    if (typeof permit === 'string' || permit.tokenType !== 'offline-count' ||
+        permit.userId !== caller.userId || permit.companyId !== caller.companyId || permit.role !== caller.role ||
+        typeof permit.iat !== 'number' || !Number.isInteger(permit.iat) || !Number.isInteger(permit.exp)) return null;
+    return permit.iat;
+  } catch {
+    return null;
+  }
+}
+
 // Validation utilities
 export function validateEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

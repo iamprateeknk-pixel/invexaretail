@@ -18030,6 +18030,17 @@
                     },
                     "runtime": {
                       "type": "object",
+                      "properties": {
+                        "offlineCountPermit": {
+                          "type": ["object", "null"],
+                          "description": "Account-bound permit for offline counts. Null if the published role policy does not permit them.",
+                          "required": ["token", "expiresAt"],
+                          "properties": {
+                            "token": { "type": "string" },
+                            "expiresAt": { "type": "string", "format": "date-time" }
+                          }
+                        }
+                      },
                       "additionalProperties": true
                     }
                   }
@@ -26882,6 +26893,12 @@
                     "pattern": "^[a-f0-9]{64}$",
                     "description": "The lot revision from mobile work when the operator began the count. Requires requestId."
                   },
+                  "offlineCountPermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Permit from runtime config for a saved offline count. Requires requestId and stockRevision."
+                  },
                   "requestId": {
                     "type": "string"
                   }
@@ -26955,11 +26972,11 @@
             }
           },
           "403": {
-            "description": "No access to the location, or the item is not assigned to this user.",
+            "description": "No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -26971,6 +26988,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -27015,6 +27040,12 @@
                     "type": "string",
                     "pattern": "^[a-f0-9]{64}$",
                     "description": "The pooled revision from mobile work when the operator began the count. Requires requestId."
+                  },
+                  "offlineCountPermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Permit from runtime config for a saved offline count. Requires requestId and stockRevision."
                   },
                   "requestId": {
                     "type": "string"
@@ -27125,11 +27156,11 @@
             }
           },
           "403": {
-            "description": "No access to the location, or the item is not assigned to this user.",
+            "description": "No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -27141,6 +27172,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
