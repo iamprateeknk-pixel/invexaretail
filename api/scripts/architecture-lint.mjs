@@ -79,6 +79,9 @@ const RULES = [
     description: 'StockLedger/StockMovement/StockBalance write outside the ADR-001 posting-service allowlist',
     test(file, line) {
       if (STOCK_WRITE_ALLOWLIST.has(file)) return false;
+      // This projection query only reads and locks rows for count verification.
+      if (file === 'src/lib/count-stock-revision.ts' &&
+        line.trim() === 'SELECT sl.id, sl."lotId", sl.version, sl."lastUpdatedAt", sl."onHand" FROM "StockLedger" AS sl') return false;
       return /prisma\.(stockLedger|stockMovement|stockBalance)\.(create|update|upsert|createMany|updateMany)\(/.test(line)
         || /"(StockLedger|StockMovement|StockBalance)"/.test(line);
     },

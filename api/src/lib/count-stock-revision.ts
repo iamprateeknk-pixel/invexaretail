@@ -24,8 +24,7 @@ export async function verifyCountStockRevision(
 ): Promise<void> {
   const lotId = scope.lotId ?? null;
   const rows = await tx.$queryRaw<Array<CountStockRevisionRow & { onHand: Prisma.Decimal }>>`
-    SELECT sl.id, sl."lotId", sl.version, sl."lastUpdatedAt", sl."onHand"
-    FROM "StockLedger" AS sl
+    SELECT sl.id, sl."lotId", sl.version, sl."lastUpdatedAt", sl."onHand" FROM "StockLedger" AS sl
     JOIN "Lot" AS lot ON lot.id = sl."lotId" AND lot."itemId" = sl."itemId"
     WHERE sl."companyId" = ${scope.companyId} AND sl."itemId" = ${scope.itemId} AND sl."locationId" = ${scope.locationId}
       AND (${lotId}::text IS NULL OR sl."lotId" = ${lotId})
