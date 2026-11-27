@@ -29,6 +29,8 @@ Deploy the revision-aware API before the native pilot. The staged rollback targe
 
 The typed command envelope and common versioned replay for pick, receive and putaway remain open. Verify the complete offline journey on physical devices before release.
 
+Transfer receiving checks the company's transfer and destination inside the receipt transaction. Concurrent API requests with the same receipt ID use one transaction result, and the receiving account can recover that receipt after a restart. The existing global receipt ID constraint and receipt payload format are unchanged.
+
 ## Mobile store - `mobile/lib/services/native_database.dart`
 
 Real SQLite (`sqlite3` package), replacing the earlier JSON file that only imitated SQLite.

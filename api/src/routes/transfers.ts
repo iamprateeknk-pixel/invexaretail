@@ -40,7 +40,7 @@ import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
 import { savedPickSlips } from '../lib/transfer-pick-slips.js';
-import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger, listTransfers } from '../lib/repository.js';
+import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger } from '../lib/repository.js';
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { isPooledPick, allocatePick, isPickableLot } from '../lib/kg-pick.js';
 import { validatePickInput, PICK_EXCEPTION_REASONS } from '../lib/warehouse-workflow.js';
@@ -625,7 +625,8 @@ router.get('/transfers/:transferId/export.xls', async (req: Request, res: Respon
 router.post('/transfers/:transferId/receive', async (req: Request, res: Response) => {
   if (!canReceiveTransfer(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only operational admins and destination store users can receive transfers.');
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer not found.');
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
     return sendError(res, 403, 'FORBIDDEN', 'Receiving is limited to the assigned destination.');
@@ -637,7 +638,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   // A retry (client timeout, offline outbox) of a receipt that already went
   // through answers with the recorded result - before the status gate, because
   // that receipt may itself have completed the transfer.
-  const prior = await findReceiptByRequestId(requestId).catch(() => null);
+  const prior = await findReceiptByRequestId(ctx, requestId);
   if (prior) {
     if (prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
     return res.json({
@@ -652,8 +653,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   // requestId/status guards above (the requestId check itself stays
   // where it was, ahead of the retry lookup).
   if (parseBody(req, res, transferReceiveSchema) === null) return;
-  // The same request twice at once must not both post: the second waits for the client's next retry.
-  if (!beginReceiptRequest(requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt is already being processed. Retry in a moment.');
+  if (!beginReceiptRequest(ctx, requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt request ID is unavailable.');
   try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
@@ -727,20 +727,30 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
-      tenant: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role },
+      tenant: ctx,
     });
 
     let status: TransferRecord['status'];
     let summary: { receivedQty: number; damagedQty: number; shortageQty: number; excessQty: number; complete?: boolean; hasDiscrepancy?: boolean };
     if (persisted) {
+      if (persisted.duplicate) {
+        const { receiptId, receivedAt, receivedQty, damagedQty, shortageQty, excessQty, status, notes } = persisted;
+        return res.json({
+          success: true, duplicate: true, transfer: await findTransferFromDb(ctx, transferId),
+          receipt: { requestId, transferId, receiptId, receivedAt, receivedBy: ctx.userId,
+            receivedQty, damagedQty, shortageQty, excessQty, status, notes },
+        });
+      }
       status = persisted.status;
       summary = persisted;
       // Mirror committed database state only after the transaction succeeds.
-      updateTransferStatus(transfer.id, status);
-      updateTransferReceiptProgress(transfer.id, persisted.lines.map((line) => ({
-        itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
-        receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
-      })));
+      if (findTransferForCompany(transfer.id, ctx.companyId)) {
+        updateTransferStatus(transfer.id, status);
+        updateTransferReceiptProgress(transfer.id, persisted.lines.map((line) => ({
+          itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty,
+          receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty, excessQty: line.excessQty,
+        })));
+      }
       // Phase 5 step 14: this branch runs only when the receipt was
       // persisted (database mode) — the canonical posting inside
       // persistTransferReceipt already moved the stock, so the snapshot
@@ -839,22 +849,24 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       }
     }
 
-    const nextTransfer = listTransfers().find((record) => record.id === transferId);
+    const nextTransfer = await findTransferFromDb(ctx, transferId);
     if (nextTransfer) void emitTransferUpdated(nextTransfer);
-    rememberReceipt({
+    const receivedAt = persisted?.receivedAt ?? new Date().toISOString();
+    rememberReceipt(ctx, {
       requestId, transferId, receiptId: persisted?.receiptId, status: status as 'RECEIVED' | 'PARTIAL_RECEIVED', receivedBy: req.user!.id,
-      receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+      receivedAt, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
     });
     return res.json({
       success: true, duplicate: persisted?.duplicate ?? false,
       transfer: nextTransfer,
-      receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user!.id, ...summary, status, notes },
+      receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt, receivedBy: req.user!.id, ...summary, status, notes },
     });
   } catch (error) {
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to process receipt.');
   }
   } finally {
-    endReceiptRequest(requestId);
+    endReceiptRequest(ctx, requestId);
   }
 });
 

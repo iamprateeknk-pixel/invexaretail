@@ -6,10 +6,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import express from 'express';
 import { prisma } from './db.js';
-import { persistTransferReceipt } from './transfer-receipt.js';
+import { findReceiptByRequestId, persistTransferReceipt } from './transfer-receipt.js';
 import { persistConfirmedPickAllocations } from './persistence.js';
 import type { TenantContext } from './tenant-context.js';
+import { createEnhancedUser } from './enterprise-repository.js';
+import { generateJWT } from './otp-auth.js';
+import { registerLocationCompany } from './saas/tenant-scope.js';
+import transfersRouter from '../routes/transfers.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -70,6 +75,60 @@ integration('a second partial receipt adds a second journal row and the journal 
   const rows = await journal(f.item.id, f.dst.id);
   assert.equal(rows.length, 2);
   assert.equal(rows.reduce((sum, r) => sum + Number(r.qtyDelta), 0), 10);
+});
+
+integration('concurrent receiving returns one receipt and foreign tenants cannot replay it', async () => {
+  const own = await makeTransfer(5);
+  const foreign = await makeTransfer(5);
+  const requestId = randomUUID();
+  const input = {
+    requestId, transferId: own.transfer.id, destinationLocationId: own.dst.id, receivedById: own.userId, notes: '', tenant: own.tenant,
+    lines: [{ lineId: own.transfer.lines[0].id, itemId: own.item.id, lotId: own.lot.id, receivedQty: 5, damagedQty: 0, shortageQty: 0 }],
+  };
+  await assert.rejects(persistTransferReceipt({ ...input, tenant: foreign.tenant, receivedById: foreign.userId }), /not found/i);
+  const results = await Promise.all(Array.from({ length: 5 }, () => persistTransferReceipt(input)));
+  assert.equal(results.filter((result) => result && !result.duplicate).length, 1);
+  assert.ok(results.every((result) => result && result.receiptId === results[0]?.receiptId));
+  assert.equal((await findReceiptByRequestId(own.tenant, requestId))?.receiptId, results[0]?.receiptId);
+  assert.equal(await findReceiptByRequestId(foreign.tenant, requestId), null);
+  assert.equal(await findReceiptByRequestId({ ...own.tenant, userId: foreign.userId }, requestId), null);
+  assert.equal((await journal(own.item.id, own.dst.id)).length, 1);
+  assert.equal((await journal(own.item.id, foreign.dst.id)).length, 0);
+});
+
+integration('the receiving route replays a committed receipt without a transfer in the in-memory snapshot', async () => {
+  const f = await makeTransfer(5);
+  registerLocationCompany(f.dst.id, f.tenant.companyId);
+  createEnhancedUser({ id: f.userId, companyId: f.tenant.companyId, email: `${f.userId}@test.invexa.local`, name: 'Receiver',
+    passwordHash: 'x', role: 'ADMIN', branchIds: [], locationIds: [f.dst.id], status: 'active' });
+  const requestId = randomUUID();
+  const lines = [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty: 5, damagedQty: 0, shortageQty: 0 }];
+  const prior = await persistTransferReceipt({ requestId, transferId: f.transfer.id, destinationLocationId: f.dst.id,
+    receivedById: f.userId, notes: 'Five checked', tenant: f.tenant, lines });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', transfersRouter);
+  const server = app.listen(0);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  try {
+    const result = await fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${f.transfer.id}/receive`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${generateJWT(f.userId, f.tenant.companyId)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId, lines, notes: 'Five checked' }),
+    });
+    const body = await result.json();
+    assert.equal(result.status, 200, JSON.stringify(body));
+    assert.equal(body.duplicate, true);
+    assert.equal(body.transfer.status, 'RECEIVED');
+    assert.equal(body.receipt.receiptId, prior?.receiptId);
+    assert.equal(body.receipt.receivedAt, prior?.receivedAt);
+    assert.equal(body.receipt.notes, 'Five checked');
+    assert.equal((await journal(f.item.id, f.dst.id)).length, 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 integration('a receipt that fails validation leaves no journal row, ledger row or receipt behind', async () => {

@@ -49,12 +49,12 @@ export function validateReceiptLines(
   let excessQty = 0;
 
   for (const input of inputs) {
-    const key = input.lineId || `${input.itemId}|${input.lotId}`;
-    if (seen.has(key)) throw new Error('Each item lot can appear only once in a receipt.');
-    seen.add(key);
     const line = transferLines.find((candidate) =>
       input.lineId ? candidate.id === input.lineId : candidate.itemId === input.itemId && candidate.lotId === input.lotId);
     if (!line) throw new Error(`Transfer line not found for lot ${input.lotId}.`);
+    const key = line.id ?? JSON.stringify([line.itemId, line.lotId]);
+    if (seen.has(key)) throw new Error('Each item lot can appear only once in a receipt.');
+    seen.add(key);
     const inputExcess = Number(input.excessQty ?? 0);
     const quantities = [input.receivedQty, input.damagedQty, input.shortageQty, inputExcess];
     if (quantities.some((value) => !Number.isFinite(value) || value < 0)) {
