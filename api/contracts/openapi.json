@@ -45,6 +45,14 @@
       }
     },
     "schemas": {
+      "OfflineActionPermit": {
+        "type": ["object", "null"],
+        "required": ["token", "expiresAt"],
+        "properties": {
+          "token": { "type": "string" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
       "ErrorEnvelope": {
         "type": "object",
         "description": "The stable error shape (ADR-006 / lib/errors.ts's DomainError) that new and extracted code returns. Not yet the shape of every endpoint in the full API - see AGENTS.md's Error catalog row.",
@@ -66,6 +74,10 @@
               "INVALID_TRANSITION",
               "CONCURRENT_UPDATE_CONFLICT",
               "COUNT_STOCK_CHANGED",
+              "OFFLINE_COUNT_POLICY_REJECTED",
+              "OFFLINE_COUNT_POLICY_UNAVAILABLE",
+              "OFFLINE_WAREHOUSE_POLICY_REJECTED",
+              "OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE",
               "TRANSFER_RECEIVE_CHANGED",
               "TRANSFER_PICK_CHANGED",
               "DUPLICATE_REQUEST",
@@ -18039,6 +18051,15 @@
                             "token": { "type": "string" },
                             "expiresAt": { "type": "string", "format": "date-time" }
                           }
+                        },
+                        "offlineWarehousePermits": {
+                          "type": "object",
+                          "description": "Account-bound permits by workflow. Null means the published role policy does not permit that workflow.",
+                          "properties": {
+                            "picks": { "$ref": "#/components/schemas/OfflineActionPermit" },
+                            "receiving": { "$ref": "#/components/schemas/OfflineActionPermit" },
+                            "putaway": { "$ref": "#/components/schemas/OfflineActionPermit" }
+                          }
                         }
                       },
                       "additionalProperties": true
@@ -25256,17 +25277,25 @@
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location.",
+            "description": "Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "409": {
             "description": "The request ID was used for a different pick submission, or the pick task or source stock changed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
@@ -25300,6 +25329,12 @@
                     "type": "string",
                     "maxLength": 191,
                     "description": "Retry key: send the same id and the original pick submission to recover its saved slip."
+                  },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline pick permit from runtime configuration. Preserve the original permit and revision on retry."
                   },
                   "pickRevision": {
                     "type": "string",
@@ -25720,6 +25755,12 @@
                   "requireScan": {
                     "type": "boolean"
                   },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline putaway permit from runtime configuration. Preserve the original permit and revision on retry."
+                  },
                   "taskRevision": {
                     "type": "string",
                     "format": "date-time",
@@ -25771,11 +25812,14 @@
             }
           },
           "403": {
-            "description": "Location access denied.",
+            "description": "Location access denied. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "anyOf": [
+                    { "$ref": "#/components/schemas/ErrorEnvelope" },
+                    { "$ref": "#/components/schemas/LegacyErrorMessage" }
+                  ]
                 }
               }
             }
@@ -25797,6 +25841,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/LegacyErrorMessage"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -28017,11 +28069,11 @@
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "Role cannot receive, or not the destination.",
+            "description": "Role cannot receive, or not the destination. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -28043,6 +28095,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -28077,6 +28137,12 @@
                     "minLength": 1,
                     "maxLength": 191,
                     "description": "Retry key; send the original receipt details to recover the recorded result with duplicate=true."
+                  },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline receiving permit from runtime configuration. Preserve the original permit and revision on retry."
                   },
                   "receiveRevision": {
                     "type": "string",

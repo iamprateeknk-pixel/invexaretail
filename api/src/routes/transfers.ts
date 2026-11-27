@@ -40,6 +40,7 @@ import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
 import { matchesPickSlipRequest, pickSlipRequestFingerprint, pickSlipRequestReused, savedPickSlips, savePickSlip } from '../lib/transfer-pick-slips.js';
+import { enforceMobilePermit } from '../lib/saas/mobile-offline-permits.js';
 import { pickRevision, transferPickChanged } from '../lib/pick-revision.js';
 import type { ItemRecord, StockLedgerRecord } from '../lib/repository.js';
 import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger } from '../lib/repository.js';
@@ -460,6 +461,9 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
   // replacing the lines-or-exceptions presence check below.
   const body = parseBody(req, res, pickSlipSchema);
   if (body === null) return;
+  if (body.offlinePermit && (!requestId || !body.pickRevision)) {
+    return sendError(res, 400, 'VALIDATION_FAILED', 'An offline pick requires a request ID and task revision.');
+  }
   let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
   const [items, ledger] = await Promise.all([listItemsForCompany(ctx), listStockForLocation(ctx, transfer.sourceLocationId)]);
@@ -529,12 +533,13 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
     let updated: TransferRecord;
     if (databaseEnabled) {
-      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, storedMetadata);
+      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, storedMetadata, body.offlinePermit);
       if (result.duplicate) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true,
         pickSlip: { ...result.metadata, requestFingerprint: undefined }, transfer: result.transfer });
       updated = result.transfer;
       if (findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
     } else {
+      if (body.offlinePermit) await enforceMobilePermit(ctx, body.offlinePermit, 'picks');
       updated = updateTransferStatus(transfer.id, nextStatus);
       recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata: storedMetadata });
     }
@@ -726,6 +731,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     }
     return replay(prior);
   }
+  if (input.offlinePermit && !input.receiveRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline receipt requires a transfer revision.');
   if (input.receiveRevision) {
     if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Receive revisions require a connected database.');
     if (!isReceivableStatus(transfer.status) || transfer.receiveRevision !== input.receiveRevision) {
@@ -782,7 +788,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
-      tenant: ctx, expectedRevision: input.receiveRevision, requestFingerprint,
+      tenant: ctx, expectedRevision: input.receiveRevision, requestFingerprint, offlinePermit: input.offlinePermit,
     });
 
     let status: TransferRecord['status'];

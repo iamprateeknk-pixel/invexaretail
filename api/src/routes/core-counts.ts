@@ -21,7 +21,7 @@ import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.j
 import { getCountRecommendation } from '../lib/count-tolerance.js';
 import { CountSubmissionAlreadyRecorded, countSubmissionFingerprint, findCountSubmission, type CountSubmissionGuard, type CountSubmissionIntent } from '../lib/count-submission-receipts.js';
 import { countStockChanged } from '../lib/count-stock-revision.js';
-import { enforceOfflineCountPolicy } from '../lib/saas/offline-count-policy.js';
+import { enforceMobilePermit } from '../lib/saas/mobile-offline-permits.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { parseBody } from '../lib/validate.js';
 import {
@@ -238,7 +238,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     if (requestId) intent = { requestId, kind: 'LOT', itemId: validated.itemId, locationId: validated.locationId,
       lotNo: validated.lotNo, mode: validated.mode ?? 'manual', quantity: validated.physicalQuantity, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
-    if (input.offlineCountPermit) await enforceOfflineCountPolicy(ctx, input.offlineCountPermit);
+    if (input.offlineCountPermit) await enforceMobilePermit(ctx, input.offlineCountPermit, 'counts');
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
@@ -319,7 +319,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
     if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
     if (requestId) intent = { requestId, kind: 'POOLED', itemId: input.itemId, locationId, mode: 'weight', quantity: total, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
-    if (input.offlineCountPermit) await enforceOfflineCountPolicy(ctx, input.offlineCountPermit);
+    if (input.offlineCountPermit) await enforceMobilePermit(ctx, input.offlineCountPermit, 'counts');
 
     const item = listItems().find((candidate) => candidate.id === input.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');

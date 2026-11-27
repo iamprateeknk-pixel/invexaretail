@@ -13,6 +13,7 @@ import { listStockForLocation } from './repositories/stock-repository.js';
 import type { TenantContext } from './tenant-context.js';
 import { transferRowToRecord } from './transfer-record-mapper.js';
 import { pickSlipSchema } from './validation-schemas.js';
+import { enforceMobilePermit } from './saas/mobile-offline-permits.js';
 
 // The pick slips saved against a transfer: from the audit journal in memory mode, from the database otherwise.
 export async function savedPickSlips(transferId: string) {
@@ -43,7 +44,7 @@ export const pickSlipRequestReused = () =>
 
 /** Keep the status update and durable replay receipt in the same transaction. */
 export async function savePickSlip(ctx: TenantContext, transferId: string, expectedRevision: string,
-  status: TransferRecord['status'], metadata: PickSlip) {
+  status: TransferRecord['status'], metadata: PickSlip, offlinePermit?: string) {
   const event = {
     id: randomUUID(), actorId: ctx.userId, actorRole: ctx.role, action: 'PICK_SLIP_SAVED',
     entityType: 'Transfer', entityId: transferId, metadata, createdAt: new Date().toISOString(),
@@ -67,6 +68,7 @@ export async function savePickSlip(ctx: TenantContext, transferId: string, expec
           if (!matchesPickSlipRequest(saved.requestFingerprint, metadata.requestFingerprint)) throw pickSlipRequestReused();
           return { transfer, metadata: saved, duplicate: true };
         }
+        if (offlinePermit) await enforceMobilePermit(ctx, offlinePermit, 'picks', tx);
         const [items, ledger] = await Promise.all([
           listItemsForCompany(ctx, tx), listStockForLocation(ctx, transfer.sourceLocationId, tx),
         ]);

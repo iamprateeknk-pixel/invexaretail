@@ -114,10 +114,17 @@ integration('putaway moves staging stock once, rejects stale tasks, and rolls ba
     assert.equal(stale.status, 409, JSON.stringify(stale.body));
     assert.equal(stale.body.code, 'PUTAWAY_TASK_CHANGED');
     const request = { ...scan, taskRevision: revisedAt.toISOString() };
+    const denied = await call('POST', path, a.token, { ...request, offlinePermit: 'invalid-permit' });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, 'OFFLINE_WAREHOUSE_POLICY_REJECTED');
+    assert.equal((await prisma.putawayTask.findUniqueOrThrow({ where: { id: task.id } })).status, 'PENDING');
     const mutationId = randomUUID();
     const results = await Promise.all(Array.from({ length: 5 }, () => call('POST', path, a.token, request, mutationId)));
     assert.ok(results.every((result) => result.status === 200), JSON.stringify(results));
     assert.equal(results.filter((result) => !result.body.duplicate).length, 1);
+    const replay = await call('POST', path, a.token, { ...request, offlinePermit: 'expired-permit' }, randomUUID());
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.duplicate, true);
     const move = await prisma.binMovement.findMany({ where: { companyId: a.companyId, reference: `putaway:${task.id}` } });
     assert.equal(move.length, 1);
     assert.equal(Number(move[0].quantity), 5);

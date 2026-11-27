@@ -97,6 +97,14 @@ export function mutationIdempotency(now: () => number = Date.now) {
       /^\/api\/v1\/stock-counts(?:\/weight)?\/?$/i.test(req.originalUrl.split('?')[0])) {
       return next();
     }
+    // A native retry may add its captured offline permit after an interrupted
+    // online send. The warehouse receipts match the business input and enforce
+    // current access, so a changed transport permit must reach those receipts.
+    if (databaseEnabled && req.method === 'POST' && req.body?.requestId === mutationId &&
+      typeof req.body?.offlinePermit === 'string' &&
+      /^\/api\/v1\/(?:picker\/transfers\/[^/]+\/pick-slips|transfers\/[^/]+\/receive)\/?$/i.test(req.originalUrl.split('?')[0])) {
+      return next();
+    }
     // Versioned putaway uses the committed bin movement as its receipt, after
     // rechecking the operator's access and the scanned destination.
     if (databaseEnabled && req.method === 'POST' && typeof req.body?.taskRevision === 'string' &&

@@ -20,6 +20,8 @@ export const ERROR_CODES = [
   'COUNT_STOCK_CHANGED',
   'OFFLINE_COUNT_POLICY_REJECTED',
   'OFFLINE_COUNT_POLICY_UNAVAILABLE',
+  'OFFLINE_WAREHOUSE_POLICY_REJECTED',
+  'OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE',
   'TRANSFER_RECEIVE_CHANGED',
   'TRANSFER_PICK_CHANGED',
   'DUPLICATE_REQUEST',
@@ -155,6 +157,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'FORBIDDEN':
     case 'SELF_REVIEW':
     case 'OFFLINE_COUNT_POLICY_REJECTED':
+    case 'OFFLINE_WAREHOUSE_POLICY_REJECTED':
       return 403;
     case 'CONFLICT':
     case 'STUDIO_RULE_BLOCKED':
@@ -171,6 +174,7 @@ export function statusForErrorCode(code: ErrorCode): number {
       return 502;
     case 'APPROVAL_UNAVAILABLE':
     case 'OFFLINE_COUNT_POLICY_UNAVAILABLE':
+    case 'OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE':
       return 503;
     default:
       return 400;

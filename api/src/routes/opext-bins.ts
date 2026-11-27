@@ -5,6 +5,8 @@
 import { decimalsToNumbers } from '../lib/decimal-json.js';
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
+import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
+import { enforceMobilePermit } from '../lib/saas/mobile-offline-permits.js';
 import { rememberPersistedAudit } from '../lib/audit.js';
 import { sellableQuantity } from '../lib/sellable-stock.js';
 import { databaseEnabled } from '../lib/persistence.js';
@@ -222,6 +224,11 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
     return res.status(409).json({ message: 'This putaway task is already resolved.' });
   }
   const taskChanged = () => res.status(409).json({ code: 'PUTAWAY_TASK_CHANGED', message: 'This putaway task changed. Refresh your tasks and scan the destination bin again.' });
+  const offlinePermit: unknown = body.offlinePermit;
+  if (offlinePermit !== undefined && (typeof offlinePermit !== 'string' || !offlinePermit.length ||
+      offlinePermit.length > 2_048 || typeof body.taskRevision !== 'string')) {
+    return sendError(res, 400, 'VALIDATION_FAILED', 'An offline putaway requires a valid permit and task revision.');
+  }
   if (body.taskRevision !== undefined && body.taskRevision !== task.updatedAt.toISOString()) return taskChanged();
   const bins = await prisma.bin.findMany({ where: { locationId: task.locationId, status: 'ACTIVE' } });
   let scannedBinCode = submittedCode;
@@ -252,6 +259,8 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
         data: { status: 'CONFIRMED', confirmedBinId: bin.id, confirmedAt: new Date(), assignedToId: actor.id },
       });
       if (!updated) return null;
+      if (typeof offlinePermit === 'string') await enforceMobilePermit({ companyId, tenantId: DEFAULT_TENANT_ID,
+        userId: actor.id, role: actor.role }, offlinePermit, 'putaway', tx);
       const [active] = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM "Bin"
         WHERE id = ${bin.id} AND "locationId" = ${task.locationId} AND status = 'ACTIVE' AND code = ${bin.code}
@@ -278,6 +287,7 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
       return res.status(409).json({ code: 'PUTAWAY_STAGING_SHORTAGE', message: 'Staging has insufficient stock. Reconcile the intake before confirming putaway.' });
     }
     if (error instanceof InactivePutawayBin) return taskChanged();
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     throw error;
   }
 });

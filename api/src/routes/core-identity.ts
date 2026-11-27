@@ -201,10 +201,14 @@ router.get('/runtime/config', async (req: Request, res: Response) => {
   const companyId = req.companyId || DEFAULT_COMPANY_ID;
   const role = req.user?.role ?? 'ADMIN';
   const { readStudioRuntime } = await import('../lib/saas/studio-versions.js');
-  const { issueCountPermit } = await import('../lib/saas/offline-count-policy.js');
+  const { issueMobilePermit, WAREHOUSE_OFFLINE_SCOPES } = await import('../lib/saas/mobile-offline-permits.js');
   const runtime = await readStudioRuntime(controlPlane, companyId, role);
-  const offlineCountPermit = req.user ? issueCountPermit({ userId: req.user.id, companyId, role: req.user.role }, runtime.mobilePolicy) : undefined;
-  return res.set('Cache-Control', 'no-store').json({ success: true, runtime: { ...runtime, offlineCountPermit: offlineCountPermit ?? null } });
+  const caller = req.user ? { userId: req.user.id, companyId, role: req.user.role } : null;
+  const offlineCountPermit = caller ? issueMobilePermit(caller, runtime.mobilePolicy, 'counts') : undefined;
+  const offlineWarehousePermits = caller ? Object.fromEntries(WAREHOUSE_OFFLINE_SCOPES.map((scope) =>
+    [scope, issueMobilePermit(caller, runtime.mobilePolicy, scope) ?? null])) : {};
+  return res.set('Cache-Control', 'no-store').json({ success: true,
+    runtime: { ...runtime, offlineCountPermit: offlineCountPermit ?? null, offlineWarehousePermits } });
 });
 
 router.get('/company', (req: Request, res: Response) => {

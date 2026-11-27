@@ -34,6 +34,8 @@ test('pick slips and progress commit together, concurrent saves conflict, and re
     return { id, requestId: id, pickerId: tenant.userId, requestFingerprint: `fingerprint-${index}` };
   });
   await assert.rejects(savePickSlip({ ...tenant, companyId: 'foreign-company' }, row.id, revision, 'PARTIAL', attempts[0]), { code: 'TRANSFER_PICK_CHANGED' });
+  await assert.rejects(savePickSlip(tenant, row.id, revision, 'PARTIAL', attempts[0], 'invalid-permit'),
+    { code: 'OFFLINE_WAREHOUSE_POLICY_REJECTED' });
   assert.equal((await savedPickSlips(row.id)).length, 0);
 
   const results = await Promise.allSettled(attempts.map((slip) => savePickSlip(tenant, row.id, revision, 'PARTIAL', slip)));
@@ -45,7 +47,7 @@ test('pick slips and progress commit together, concurrent saves conflict, and re
   assert.equal((await savedPickSlips(row.id)).length, 1);
   assert.equal((await prisma.transfer.findUniqueOrThrow({ where: { id: row.id } })).status, 'PARTIAL');
   const original = attempts.find((slip) => slip.id === (winner?.value.metadata as { id: string }).id)!;
-  const retry = await savePickSlip(tenant, row.id, revision, 'PARTIAL', original);
+  const retry = await savePickSlip(tenant, row.id, revision, 'PARTIAL', original, 'expired-permit');
   assert.equal(retry.duplicate, true);
   assert.deepEqual(retry.metadata, original);
   await assert.rejects(savePickSlip(tenant, row.id, revision, 'PARTIAL', {

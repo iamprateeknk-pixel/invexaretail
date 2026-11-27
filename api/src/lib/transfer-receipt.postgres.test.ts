@@ -12,10 +12,13 @@ import { findReceiptByRequestId, persistTransferReceipt } from './transfer-recei
 import { persistConfirmedPickAllocations } from './persistence.js';
 import type { TenantContext } from './tenant-context.js';
 import { createEnhancedUser } from './enterprise-repository.js';
-import { generateJWT } from './otp-auth.js';
+import { generateJWT, issueOfflinePermit, verifyJWT } from './otp-auth.js';
+import { controlPlane } from './saas/control-plane.js';
 import { registerLocationCompany } from './saas/tenant-scope.js';
 import transfersRouter from '../routes/transfers.js';
 import transferLogisticsRouter from '../routes/transfer-logistics.js';
+import { extractToken } from '../routes/enterprise-auth.js';
+import { mutationIdempotency } from './mutation-idempotency.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -111,17 +114,18 @@ integration('the receiving route replays a committed receipt without a transfer 
     receivedById: f.userId, notes: 'Five checked', tenant: f.tenant, lines });
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', transfersRouter);
+  app.use('/api/v1', extractToken, mutationIdempotency(), transfersRouter);
   const server = app.listen(0);
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  const submit = (body: object) => fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${f.transfer.id}/receive`, {
+  const submit = (body: object, mutationId?: string) => fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${f.transfer.id}/receive`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${generateJWT(f.userId, f.tenant.companyId)}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${generateJWT(f.userId, f.tenant.companyId)}`, 'Content-Type': 'application/json',
+      ...(mutationId ? { 'X-Mutation-Id': mutationId } : {}) },
     body: JSON.stringify(body),
   });
   try {
-    const result = await submit({ requestId, lines, notes: 'Five checked' });
+    const result = await submit({ requestId, lines, notes: 'Five checked' }, requestId);
     const body = await result.json();
     assert.equal(result.status, 200, JSON.stringify(body));
     assert.equal(body.duplicate, true);
@@ -129,6 +133,9 @@ integration('the receiving route replays a committed receipt without a transfer 
     assert.equal(body.receipt.receiptId, prior?.receiptId);
     assert.equal(body.receipt.receivedAt, prior?.receivedAt);
     assert.equal(body.receipt.notes, 'Five checked');
+    const offlineRetry = await submit({ requestId, lines, notes: 'Five checked', offlinePermit: 'expired-permit' }, requestId);
+    assert.equal(offlineRetry.status, 200);
+    assert.equal((await offlineRetry.json()).receipt.receiptId, prior?.receiptId);
     const altered = await submit({ requestId, lines, notes: 'Different notes' });
     assert.equal(altered.status, 409);
     assert.equal((await altered.json()).code, 'DUPLICATE_REQUEST');
@@ -164,7 +171,17 @@ integration('a carton scan gives the current receive revision and a stale offlin
     headers: { Authorization: `Bearer ${generateJWT(actor.userId, actor.tenant.companyId)}`, ...(body && { 'Content-Type': 'application/json' }) },
     body: body && JSON.stringify(body),
   }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  const previousFlag = process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
   try {
+    process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+    controlPlane.companies.set(f.tenant.companyId, { ...controlPlane.requireCompany('default-company'), id: f.tenant.companyId });
+    const defaults = controlPlane.runtimeConfig(f.tenant.companyId, f.tenant.role);
+    const policy = { role: f.tenant.role, offlineMaxHours: 2, syncScope: ['receiving'], navigation: [], encryptedLocalStore: true };
+    const versionId = randomUUID();
+    const configuration = { page: defaults.page, mobilePolicies: [policy] };
+    await prisma.controlPlaneConfig.create({ data: {
+      companyId: f.tenant.companyId, kind: 'published', status: 'published', version: 2, versionId, payload: configuration,
+    } });
     const scanPath = `by-package/${qrCode.toLowerCase()}`;
     const scan = await call(scanPath);
     assert.equal(scan.status, 200, JSON.stringify(scan.body));
@@ -175,7 +192,14 @@ integration('a carton scan gives the current receive revision and a stale offlin
     const lines = [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty: 2 }];
     const receive = `${f.transfer.id}/receive`;
     const savedCommand = { requestId: randomUUID(), receiveRevision: initial, lines };
-    const saved = await call(receive, savedCommand);
+    const wrongScope = issueOfflinePermit(f.userId, f.tenant.companyId, f.tenant.role, 300, 'picks').token;
+    const { token } = issueOfflinePermit(f.userId, f.tenant.companyId, f.tenant.role, 300, 'receiving');
+    assert.equal(verifyJWT(token), null);
+    const denied = await call(receive, { ...savedCommand, offlinePermit: wrongScope });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, 'OFFLINE_WAREHOUSE_POLICY_REJECTED');
+    assert.equal((await journal(f.item.id, f.dst.id)).length, 0);
+    const saved = await call(receive, { ...savedCommand, offlinePermit: token });
     assert.equal(saved.status, 200, JSON.stringify(saved.body));
     const current = (await call(scanPath)).body.transfer.receiveRevision;
     assert.notEqual(current, initial);
@@ -185,7 +209,12 @@ integration('a carton scan gives the current receive revision and a stale offlin
     assert.equal(stale.body.code, 'TRANSFER_RECEIVE_CHANGED');
     assert.equal(await prisma.transferReceipt.count({ where: { transferId: f.transfer.id } }), 1);
     assert.equal(Number((await journal(f.item.id, f.dst.id))[0].qtyDelta), 2);
-    const replay = await call(receive, savedCommand);
+    await prisma.controlPlaneConfig.update({ where: { versionId_kind: { versionId, kind: 'published' } },
+      data: { payload: { ...configuration, mobilePolicies: [{ ...policy, syncScope: ['stock'] }] } } });
+    const revoked = await call(receive, { ...savedCommand, requestId: randomUUID(), receiveRevision: current, offlinePermit: token });
+    assert.equal(revoked.status, 403);
+    assert.equal(revoked.body.code, 'OFFLINE_WAREHOUSE_POLICY_REJECTED');
+    const replay = await call(receive, { ...savedCommand, offlinePermit: token });
     assert.equal(replay.status, 200, JSON.stringify(replay.body));
     assert.equal(replay.body.duplicate, true);
     assert.equal(replay.body.receipt.receiptId, saved.body.receipt.receiptId);
@@ -206,6 +235,9 @@ integration('a carton scan gives the current receive revision and a stale offlin
     assert.equal(rejected?.reason.code, 'TRANSFER_RECEIVE_CHANGED');
     assert.equal((await journal(f.item.id, f.dst.id)).reduce((total, row) => total + Number(row.qtyDelta), 0), 4);
   } finally {
+    if (previousFlag === undefined) delete process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
+    else process.env.CONTROL_PLANE_PERSIST_IN_TESTS = previousFlag;
+    controlPlane.companies.delete(f.tenant.companyId);
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

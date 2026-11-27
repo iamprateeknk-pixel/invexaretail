@@ -1,11 +1,13 @@
 import { prisma } from '../db.js';
+import type { Prisma } from '@prisma/client';
 import type { ConfigurationVersion, ControlPlane } from './control-plane.js';
 import { controlPlaneDbEnabled, stableStringify } from './control-plane-repository.js';
 import { validateStudioRelease } from './control-plane-studio.js';
 
-export async function readStudioRuntime(plane: ControlPlane, companyId: string, role: string) {
+export async function readStudioRuntime(plane: ControlPlane, companyId: string, role: string,
+  db: Pick<Prisma.TransactionClient, 'controlPlaneConfig'> = prisma) {
   if (!controlPlaneDbEnabled()) return plane.runtimeConfig(companyId, role);
-  const current = await prisma.controlPlaneConfig.findFirst({
+  const current = await db.controlPlaneConfig.findFirst({
     where: { companyId, kind: 'published', status: 'published' },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
     select: { payload: true },

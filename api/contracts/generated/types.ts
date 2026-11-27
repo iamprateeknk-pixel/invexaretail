@@ -4063,6 +4063,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        OfflineActionPermit: {
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+        } | null;
         /** @description The stable error shape (ADR-006 / lib/errors.ts's DomainError) that new and extracted code returns. Not yet the shape of every endpoint in the full API - see AGENTS.md's Error catalog row. */
         ErrorEnvelope: {
             /** @description Human-readable message. May change wording without notice - do not branch on it. */
@@ -4071,7 +4076,7 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "TRANSFER_RECEIVE_CHANGED" | "TRANSFER_PICK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "OFFLINE_COUNT_POLICY_REJECTED" | "OFFLINE_COUNT_POLICY_UNAVAILABLE" | "OFFLINE_WAREHOUSE_POLICY_REJECTED" | "OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE" | "TRANSFER_RECEIVE_CHANGED" | "TRANSFER_PICK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
@@ -13393,6 +13398,12 @@ export interface operations {
                                 /** Format: date-time */
                                 expiresAt: string;
                             } | null;
+                            /** @description Account-bound permits by workflow. Null means the published role policy does not permit that workflow. */
+                            offlineWarehousePermits?: {
+                                picks?: components["schemas"]["OfflineActionPermit"];
+                                receiving?: components["schemas"]["OfflineActionPermit"];
+                                putaway?: components["schemas"]["OfflineActionPermit"];
+                            };
                         } & {
                             [key: string]: unknown;
                         };
@@ -17771,6 +17782,8 @@ export interface operations {
                 "application/json": {
                     /** @description Retry key: send the same id and the original pick submission to recover its saved slip. */
                     requestId?: string;
+                    /** @description Signed offline pick permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
                     /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
                     pickRevision?: string;
                     /** Format: date-time */
@@ -17838,17 +17851,26 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. */
+            /** @description Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description The request ID was used for a different pick submission, or the pick task or source stock changed. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -18045,6 +18067,8 @@ export interface operations {
                     binId?: string;
                     binCode?: string;
                     requireScan?: boolean;
+                    /** @description Signed offline putaway permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
                     /**
                      * Format: date-time
                      * @description The task's updatedAt value from the last task list, preserved while offline.
@@ -18079,13 +18103,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Location access denied. */
+            /** @description Location access denied. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"] | components["schemas"]["LegacyErrorMessage"];
                 };
             };
             /** @description Putaway task not found (also for another company's task). */
@@ -18104,6 +18128,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -19407,6 +19440,8 @@ export interface operations {
                 "application/json": {
                     /** @description Retry key; send the original receipt details to recover the recorded result with duplicate=true. */
                     requestId: string;
+                    /** @description Signed offline receiving permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
                     /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
                     receiveRevision?: string;
                     notes?: string;
@@ -19465,13 +19500,13 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Role cannot receive, or not the destination. */
+            /** @description Role cannot receive, or not the destination. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Transfer not found (also for another company's). */
@@ -19485,6 +19520,15 @@ export interface operations {
             };
             /** @description The receive revision changed, the request ID is unavailable, or the same ID was submitted with changed receipt details. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

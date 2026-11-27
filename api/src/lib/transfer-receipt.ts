@@ -7,6 +7,7 @@ import { DomainError } from './errors.js';
 import { receiveRevision, transferReceiveChanged } from './receive-revision.js';
 import { isReceivableStatus } from './transfer-lifecycle.js';
 import { validateReceiptLines, type ReceiptLineInput, type TransferReceiptLine } from './receipt-validation.js';
+import { enforceMobilePermit } from './saas/mobile-offline-permits.js';
 
 type DbTransferLine = {
   id: string; itemId: string; lotId: string; requestedQty: number;
@@ -119,6 +120,7 @@ export async function persistTransferReceipt(input: {
   tenant: TenantContext;
   expectedRevision?: string;
   requestFingerprint?: string;
+  offlinePermit?: string;
 }): Promise<PersistedReceiptResult | null> {
   if (!databaseEnabled) return null;
   if (input.receivedById !== input.tenant.userId) throw new DomainError('FORBIDDEN', 'The receiver must match the signed-in account.');
@@ -148,6 +150,7 @@ export async function persistTransferReceipt(input: {
       return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, receivedAt: duplicate[0].createdAt.toISOString(), notes: duplicate[0].notes ?? '', receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty), shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
     }
 
+    if (input.offlinePermit) await enforceMobilePermit(input.tenant, input.offlinePermit, 'receiving', tx);
     if (!isReceivableStatus(transfers[0].status)) {
       if (input.expectedRevision) throw transferReceiveChanged();
       throw new Error(`Transfer cannot be received while ${transfers[0].status}.`);
