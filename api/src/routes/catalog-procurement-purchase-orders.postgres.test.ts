@@ -158,13 +158,13 @@ integration('POST /purchase-orders/:id/receive posts a journal row atomically wi
   });
   const ledger = await prisma.stockLedger.findMany({ where: { itemId: item.id, locationId: a.locationId } });
   assert.equal(ledger.length, 1);
-  assert.equal(ledger[0].onHand, 8, 'sellable quantity only');
-  assert.equal(ledger[0].quarantine, 2, 'damaged quantity is quarantined, not sellable');
+  assert.equal(Number(ledger[0].onHand), 8, 'sellable quantity only');
+  assert.equal(Number(ledger[0].quarantine), 2, 'damaged quantity is quarantined, not sellable');
   assert.equal(ledger[0].companyId, a.companyId);
   const movements = await prisma.stockMovement.findMany({ where: { itemId: item.id, locationId: a.locationId } });
   assert.equal(movements.length, 1, 'exactly one journal row despite the retried request');
-  assert.equal(movements[0].qtyDelta, 8);
-  assert.equal(movements[0].afterBalance, 8);
+  assert.equal(Number(movements[0].qtyDelta), 8);
+  assert.equal(Number(movements[0].afterBalance), 8);
   assert.equal(movements[0].companyId, a.companyId);
   assert.equal(movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0), Number(ledger[0].onHand), 'journal sum equals the projection');
 });
@@ -187,5 +187,5 @@ integration('a failing receipt leaves neither a journal row nor a ledger change 
   });
   assert.equal(await prisma.stockMovement.count({ where: { itemId: item.id } }), 0);
   assert.equal(await prisma.stockLedger.count({ where: { itemId: item.id } }), 0);
-  assert.equal((await prisma.purchaseOrderLine.findUniqueOrThrow({ where: { id: po.lines[0].id } })).receivedQty, 0);
+  assert.equal(Number((await prisma.purchaseOrderLine.findUniqueOrThrow({ where: { id: po.lines[0].id } })).receivedQty), 0);
 });

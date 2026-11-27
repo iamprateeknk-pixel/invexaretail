@@ -29,11 +29,11 @@ integration('RESTOCK moves quarantine back on-hand with one canonical journal ro
   const f = await setup();
   await applyExceptionDisposition(f.exceptionCase, 'RESTOCK', f.userId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
-  assert.equal(ledger.onHand, 8);
-  assert.equal(ledger.quarantine, 1);
+  assert.equal(Number(ledger.onHand), 8);
+  assert.equal(Number(ledger.quarantine), 1);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: f.item.id } });
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].qtyDelta, 3);
+  assert.equal(Number(rows[0].qtyDelta), 3);
   assert.equal(rows[0].companyId, f.companyId);
 });
 
@@ -41,10 +41,10 @@ integration('WRITE_OFF is a bucket move: damaged rises, on-hand is untouched, jo
   const f = await setup();
   await applyExceptionDisposition(f.exceptionCase, 'WRITE_OFF', f.userId);
   const ledger = await prisma.stockLedger.findFirstOrThrow({ where: { itemId: f.item.id, locationId: f.loc.id } });
-  assert.equal(ledger.onHand, 5);
-  assert.equal(ledger.quarantine, 1);
-  assert.equal(ledger.damaged, 3);
+  assert.equal(Number(ledger.onHand), 5);
+  assert.equal(Number(ledger.quarantine), 1);
+  assert.equal(Number(ledger.damaged), 3);
   const rows = await prisma.stockMovement.findMany({ where: { itemId: f.item.id } });
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].qtyDelta, 0);
+  assert.equal(Number(rows[0].qtyDelta), 0);
 });

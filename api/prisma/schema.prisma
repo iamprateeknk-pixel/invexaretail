@@ -2202,7 +2202,7 @@ model ControlPlaneCompany {
   entitlements   Json
   limitOverrides Json
   billing        Json
-  updatedAt      DateTime @updatedAt
+  updatedAt      DateTime @default(now()) @updatedAt
 }
 
 model ControlPlanePlatformUser {
@@ -2211,7 +2211,7 @@ model ControlPlanePlatformUser {
   name         String
   passwordHash String
   status       String
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
 }
 
 model ControlPlaneCompanyUser {
@@ -2224,7 +2224,7 @@ model ControlPlaneCompanyUser {
   passwordHash   String
   isPrimaryAdmin Boolean
   createdAt      String
-  updatedAt      DateTime @updatedAt
+  updatedAt      DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2237,7 +2237,7 @@ model ControlPlaneSession {
   status         String
   issuedAt       String
   expiresAt      String
-  updatedAt      DateTime @updatedAt
+  updatedAt      DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2251,7 +2251,7 @@ model ControlPlaneApiKey {
   scopes    Json
   status    String
   createdAt String
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2259,14 +2259,14 @@ model ControlPlaneApiKey {
 model ControlPlaneKillSwitch {
   featureKey String   @id
   enabled    Boolean
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
 }
 
 model ControlPlaneUsage {
   companyId String
   meter     String
   value     Float
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@id([companyId, meter])
 }
@@ -2280,7 +2280,7 @@ model ControlPlaneWebhook {
   status        String
   signingSecret String
   createdAt     String
-  updatedAt     DateTime @updatedAt
+  updatedAt     DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2290,7 +2290,7 @@ model ControlPlaneConnector {
   companyId String
   type      String
   status    String
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2301,7 +2301,7 @@ model ControlPlaneDevice {
   userId     String
   status     String
   appVersion String
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2315,7 +2315,7 @@ model ControlPlaneInvoice {
   issuedAt                String
   paidAt                  String?
   stripeCheckoutSessionId String?
-  updatedAt               DateTime @updatedAt
+  updatedAt               DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2327,7 +2327,7 @@ model ControlPlaneConfig {
   kind      String
   status    String
   payload   Json
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@id([versionId, kind])
   @@index([companyId, kind])
@@ -2366,7 +2366,7 @@ model ControlPlaneMutation {
   result      Json?
   createdAt   String
   serverAckAt String?
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
 
   @@index([companyId])
 }
@@ -2374,19 +2374,19 @@ model ControlPlaneMutation {
 model ControlPlaneFieldValue {
   key       String   @id
   value     Json
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model ControlPlaneLedger {
   key       String   @id
   value     Float
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model ControlPlaneImportProfile {
   key       String   @id
   profile   Json
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model ControlPlaneOutbox {
@@ -2401,7 +2401,7 @@ model ControlPlaneOutbox {
 model ControlPlaneMeta {
   key       String   @id
   value     Json
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 // Blueprint P8: bin-granularity stock. Location ATP remains on StockLedger

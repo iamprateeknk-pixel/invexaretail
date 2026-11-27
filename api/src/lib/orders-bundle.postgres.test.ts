@@ -52,16 +52,16 @@ integration('an order for 4 kits reserves 8 rice and 12 dal; fulfilling it takes
   const quantities = Object.fromEntries(order.lines.map((line) => [line.itemId, Number(line.requestedQty)]));
   assert.deepEqual(quantities, { [f.riceId]: 8, [f.dalId]: 12 }, 'the kit line is replaced by component lines');
   assert.equal(order.lines.some((line: { itemId: string }) => line.itemId === f.kitId), false, 'no line may reference the kit itself');
-  assert.equal((await ledger(f.riceId, f.locationId)).reserved, 8);
-  assert.equal((await ledger(f.dalId, f.locationId)).reserved, 12);
+  assert.equal(Number((await ledger(f.riceId, f.locationId)).reserved), 8);
+  assert.equal(Number((await ledger(f.dalId, f.locationId)).reserved), 12);
 
   await fulfillOrder(f.companyId, order.id, f.userId);
   const rice = await ledger(f.riceId, f.locationId);
   const dal = await ledger(f.dalId, f.locationId);
-  assert.equal(rice.onHand, 12);
-  assert.equal(dal.onHand, 8);
-  assert.equal(rice.reserved, 0);
-  assert.equal(dal.reserved, 0);
+  assert.equal(Number(rice.onHand), 12);
+  assert.equal(Number(dal.onHand), 8);
+  assert.equal(Number(rice.reserved), 0);
+  assert.equal(Number(dal.reserved), 0);
   assert.equal(await prisma.stockLedger.count({ where: { itemId: f.kitId } }), 0, 'the kit never holds stock of its own');
   const movements = await prisma.stockMovement.findMany({ where: { itemId: { in: [f.riceId, f.dalId] }, locationId: f.locationId } });
   assert.ok(movements.length >= 2, 'each component movement is journalled');
@@ -77,8 +77,8 @@ integration('a kit that the scarcest component cannot cover is refused, and noth
     }),
     (error: unknown) => error instanceof OrderShortageError,
   );
-  assert.equal((await ledger(f.riceId, f.locationId)).reserved, 0);
-  assert.equal((await ledger(f.dalId, f.locationId)).reserved, 0);
+  assert.equal(Number((await ledger(f.riceId, f.locationId)).reserved), 0);
+  assert.equal(Number((await ledger(f.dalId, f.locationId)).reserved), 0);
 });
 
 integration('a kit and one of its components on the same order are merged into one component line', async () => {
@@ -89,7 +89,7 @@ integration('a kit and one of its components on the same order are merged into o
   });
   const rice = order.lines.filter((line: { itemId: string }) => line.itemId === f.riceId);
   assert.equal(rice.length, 1);
-  assert.equal(rice[0].requestedQty, 7);
+  assert.equal(Number(rice[0].requestedQty), 7);
 });
 
 integration('another company cannot expand this company\'s bundle (a foreign kit id is just an unknown item)', async () => {
@@ -111,5 +111,5 @@ integration('items that are not bundles still order exactly as before', async ()
     fulfillmentLocationId: f.locationId, lines: [{ itemId: f.riceId, quantity: 3 }],
   });
   assert.equal(order.lines.length, 1);
-  assert.equal(order.lines[0].requestedQty, 3);
+  assert.equal(Number(order.lines[0].requestedQty), 3);
 });

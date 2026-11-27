@@ -83,7 +83,7 @@ integration('plan §2.5a FIXED at step 2: the stock read behind GET /stock is te
   const own = await listStockForLocation(stockParityCtx(fixture.companyB), fixture.locationB);
   assert.equal(own.length, 1);
   assert.equal(own[0].itemId, fixture.itemB1);
-  assert.equal(own[0].reserved, 1);
+  assert.equal(Number(own[0].reserved), 1);
 });
 
 integration('plan §2.5c RESOLVED at step 15: hydration no longer loads stock into the snapshot at all', async () => {
@@ -95,11 +95,11 @@ integration('plan §2.5c RESOLVED at step 15: hydration no longer loads stock in
   // and the only way to read stock is the tenant-scoped repository.
   assert.equal(findStockLedgerEntry(fixture.itemA1, fixture.lotA1, fixture.locationA), undefined);
   const entry = await findStockEntry(stockParityCtx(fixture.companyA), fixture.itemA1, fixture.lotA1, fixture.locationA);
-  assert.equal(entry?.onHand, 10);
-  assert.equal(entry?.quarantine, 1);
-  assert.equal(entry?.reserved, 4);
-  assert.equal(entry?.inTransit, 2);
-  assert.equal(entry?.damaged, 1);
+  assert.equal(Number(entry?.onHand), 10);
+  assert.equal(Number(entry?.quarantine), 1);
+  assert.equal(Number(entry?.reserved), 4);
+  assert.equal(Number(entry?.inTransit), 2);
+  assert.equal(Number(entry?.damaged), 1);
 });
 
 integration('stock inputs for /dashboard, /expiry-dashboard, /intelligence and picker detail, post-step-15: snapshot empty, repository serves the pinned rows', async () => {
@@ -141,7 +141,7 @@ integration('plan §2.5b FIXED at step 3: a stocked location with zero BinStock 
   const populated = await listBinStockForLocation(stockParityCtx(fixture.companyA), fixture.locationA);
   assert.equal(populated.length, 1);
   assert.equal(populated[0].binId, fixture.binA);
-  assert.equal(populated[0].onHand, 10);
+  assert.equal(Number(populated[0].onHand), 10);
 });
 
 integration('step 5: the memory intelligence builder, fed by the stock repository, now agrees with the DB branch on availability', async () => {
