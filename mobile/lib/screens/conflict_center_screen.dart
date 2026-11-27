@@ -159,6 +159,7 @@ class _EntryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = entry.count;
+    final waitsForPermitSupport = (count?.lastErrorCode ?? entry.action?.lastErrorCode) == 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE';
     final title = count != null
         ? '${lookupItemName(controller.items, count.itemId)} · ${count.mode == 'weight' ? 'weight ' : 'qty '}${formatQty(count.physicalQuantity)}'
         : queuedActionLabel(entry.action!.type);
@@ -194,7 +195,9 @@ class _EntryCard extends StatelessWidget {
                           'PICK' => 'Refresh the pick task and scan its items again.',
                           _ => 'Refresh your putaway tasks and scan the destination bin again.',
                         }
-                      : syncReason(entry.status),
+                      : waitsForPermitSupport
+                          ? entry.lastError ?? syncReason(entry.status)
+                          : syncReason(entry.status),
               style: const TextStyle(fontSize: 13),
             ),
             if (entry.lastError != null && attention) ...[

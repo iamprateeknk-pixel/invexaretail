@@ -34,18 +34,19 @@ void main() {
     final store = DriftStore.inMemory();
     addTearDown(store.close);
     const commands = [
-      (type: 'PICK', path: '/api/v1/picker/transfers/p1/pick-slips', scope: 'picks', revision: 'pickRevision'),
-      (type: 'TRANSFER_RECEIVE', path: '/api/v1/transfers/r1/receive', scope: 'receiving', revision: 'receiveRevision'),
-      (type: 'PUTAWAY', path: '/api/v1/putaway-tasks/b1/confirm', scope: 'putaway', revision: 'taskRevision'),
+      (type: 'PICK', path: '/api/v1/picker/transfers/p1/pick-slips', scope: 'picks', revision: 'pickRevision', wireType: 'PICK_CONFIRM', entityId: 'p1'),
+      (type: 'TRANSFER_RECEIVE', path: '/api/v1/transfers/r1/receive', scope: 'receiving', revision: 'receiveRevision', wireType: 'RECEIVE_CONFIRM', entityId: 'r1'),
+      (type: 'PUTAWAY', path: '/api/v1/putaway-tasks/b1/confirm', scope: 'putaway', revision: 'taskRevision', wireType: 'PUTAWAY_CONFIRM', entityId: 'b1'),
     ];
     final attempts = <String, List<({Map<String, dynamic> body, String? mutationId})>>{};
+    final replays = <Map<String, dynamic>>[];
     var offline = true;
     var policyAvailable = true;
     var tokenVersion = 'original';
     Future<http.Response> handle(http.Request request) async {
       if (request.url.path.endsWith('/runtime/config')) {
         if (!policyAvailable) throw const SocketException('offline policy');
-        return _json({'runtime': {'offlineWarehousePermits': {
+        return _json({'runtime': {'offlineCommandVersion': 2, 'offlineWarehousePermits': {
           for (final command in commands) command.scope: {
             'token': '$tokenVersion-${command.scope}',
             'expiresAt': DateTime.now().toUtc().add(const Duration(hours: 1)).toIso8601String(),
@@ -53,6 +54,14 @@ void main() {
         }}});
       }
       if (request.method != 'POST') return _json({});
+      if (request.url.path == '/api/v1/sync/commands') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        replays.add(body);
+        if (body['type'] == 'RECEIVE_CONFIRM') {
+          return _json({'code': 'OFFLINE_WAREHOUSE_POLICY_REJECTED', 'error': 'Offline permission changed.'}, 403);
+        }
+        return _json({'success': true});
+      }
       attempts.putIfAbsent(request.url.path, () => []).add((
         body: jsonDecode(request.body) as Map<String, dynamic>,
         mutationId: request.headers['x-mutation-id'],
@@ -69,9 +78,17 @@ void main() {
     policyAvailable = false;
     final capturing = session();
     await capturing.refreshAll();
+    final hash = 'a' * 64;
     for (final command in commands) {
       expect(await capturing.runOrQueue(type: command.type, method: 'POST', path: command.path,
-        body: {command.revision: 'revision-${command.scope}', 'requestId': 'req-${command.scope}'}), isTrue);
+        body: {
+          command.revision: command.type == 'PUTAWAY' ? '2026-11-04T12:00:00.000Z' : hash,
+          if (command.type == 'PUTAWAY') 'scannedBinCode': 'BIN-A',
+          if (command.type == 'PUTAWAY') 'requireScan': true,
+          if (command.type == 'PICK') 'lines': [{'itemId': 'item-1', 'quantity': 2}],
+          if (command.type == 'TRANSFER_RECEIVE') 'lines': [{'itemId': 'item-1', 'lotId': 'lot-1', 'receivedQty': 2}],
+          'requestId': 'req-${command.scope}',
+        }), isTrue);
     }
     offline = false;
     policyAvailable = true;
@@ -79,17 +96,68 @@ void main() {
     final restarted = session();
     await restarted.loadQueuesForTest();
     await restarted.refreshAll();
+    expect(replays, hasLength(3));
     for (final command in commands) {
-      final [online, queued] = attempts[command.path]!;
+      final online = attempts[command.path]!.single;
+      final queued = replays.singleWhere((row) => row['type'] == command.wireType);
       expect(online.body.containsKey('offlinePermit'), isFalse);
-      expect(queued.body, {...online.body, 'offlinePermit': 'original-${command.scope}'});
       expect(online.mutationId, 'req-${command.scope}');
-      expect(queued.mutationId, online.mutationId);
+      expect(queued['contractVersion'], 2);
+      expect(queued['entityId'], command.entityId);
+      expect(queued['permit'], 'original-${command.scope}');
+      expect(queued['commandId'], online.mutationId);
+      expect(queued['revision'], online.body[command.revision]);
+      expect(queued['payload'], Map<String, dynamic>.of(online.body)
+        ..remove(command.revision)
+        ..remove('requestId')
+        ..remove('requireScan'));
     }
     final saved = (await store.loadQueuedActions('default-company', 'u1')).single;
     expect(saved.requiresRescan, isTrue);
     await restarted.retryQueuedAction(saved.localId);
-    expect(attempts[saved.path], hasLength(2));
+    expect(replays, hasLength(3));
+  });
+
+  test('a permit-bearing count waits on an older API and resumes through the shared endpoint', () async {
+    final sent = <http.Request>[];
+    var apiVersion = 1;
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/runtime/config')) {
+        return _json({'runtime': {
+          if (apiVersion != 0) 'offlineCountPermit': {
+            'token': 'original-count-permit',
+            'expiresAt': DateTime.now().toUtc().add(const Duration(hours: 1)).toIso8601String(),
+          },
+          if (apiVersion == 2) 'offlineCommandVersion': 2,
+        }});
+      }
+      if (request.method == 'POST') {
+        sent.add(request);
+        if (sent.length == 1) throw const SocketException('disconnected');
+        return _json({'success': true});
+      }
+      return _json({});
+    })..api.cacheScope = 'default-company|u1|STORE_USER';
+    await controller.refreshAll();
+    final revision = 'b' * 64;
+    expect(await controller.submitCount(itemId: 'item-1', locationId: 'loc-1', physicalQuantity: 7, lotNo: 'LOT-1',
+      stockRevision: revision), isTrue);
+    apiVersion = 0;
+    await controller.refreshAll();
+    expect(sent, hasLength(1));
+    expect(controller.queuedCounts.single.status, 'pending');
+    expect(controller.queuedCounts.single.lastErrorCode, 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE');
+    apiVersion = 2;
+    await controller.refreshAll();
+    expect(sent, hasLength(2));
+    expect(sent.last.url.path, '/api/v1/sync/commands');
+    final initial = jsonDecode(sent.first.body) as Map<String, dynamic>;
+    expect(jsonDecode(sent.last.body), {
+      'contractVersion': 2, 'type': 'COUNT_SUBMIT', 'entityId': 'item-1',
+      'commandId': initial['requestId'], 'revision': revision, 'permit': 'original-count-permit',
+      'payload': {'locationId': 'loc-1', 'mode': 'manual', 'physicalQuantity': 7, 'lotNo': 'LOT-1'},
+    });
+    expect(controller.queuedCounts, isEmpty);
   });
 
   test('warehouse work with no current offline permission stays visible without replay', () async {

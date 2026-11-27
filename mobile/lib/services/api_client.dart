@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../config/env.dart';
 import '../models/models.dart';
 import 'mobile_offline_policy.dart';
+import 'operational_offline_command.dart';
 
 /// The server accepted the first factor but wants an authenticator or backup
 /// code before it will issue a session. Not an error to show the user.
@@ -418,6 +419,9 @@ class InvexaApi {
   Future<Map<String, dynamic>> sendRaw(String method, String path, {Object? body, String? mutationId}) {
     return _send(method, path, body: body, mutationId: mutationId);
   }
+
+  Future<Map<String, dynamic>> replayOfflineCommand(OperationalOfflineCommand command) =>
+      _send('POST', '/api/v1/sync/commands', body: command.toJson(), mutationId: command.commandId);
 
   Future<Map<String, dynamic>> mobileHome() async {
     return _send('GET', '/api/v1/mobile/home');

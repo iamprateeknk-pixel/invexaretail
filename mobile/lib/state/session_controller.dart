@@ -9,6 +9,7 @@ import '../services/api_client.dart';
 import '../services/live_events.dart';
 import '../services/local_store.dart';
 import '../services/mobile_offline_policy.dart';
+import '../services/operational_offline_command.dart';
 import '../services/sync_resolution.dart';
 
 /// A key that is unique per user action and stays the same across retries.
@@ -43,6 +44,8 @@ class SessionController extends ChangeNotifier {
       _countPermitsRequired = false;
       _offlineCountPermit = null;
       _offlineWarehousePermits = null;
+      _verifiedPermitTransport = false;
+      _offlineCommandVersion = null;
     }
   }
 
@@ -83,6 +86,8 @@ class SessionController extends ChangeNotifier {
   bool _countPermitsRequired = false;
   OfflinePermit? _offlineCountPermit;
   Map<String, OfflinePermit?>? _offlineWarehousePermits;
+  bool _verifiedPermitTransport = false;
+  int? _offlineCommandVersion;
   String _countPermitScope(String identity) => 'offline-count|$identity';
   String _warehousePermitScope(String identity) => 'offline-warehouse|$identity';
   Timer? _snapshotExpiry;
@@ -354,6 +359,8 @@ class SessionController extends ChangeNotifier {
     _countPermitsRequired = false;
     _offlineCountPermit = null;
     _offlineWarehousePermits = null;
+    _verifiedPermitTransport = false;
+    _offlineCommandVersion = null;
     api.cacheScope = null;
     api.offlinePolicy = null;
     try {
@@ -600,6 +607,9 @@ class SessionController extends ChangeNotifier {
       final rawWarehouse = runtime['offlineWarehousePermits'];
       final warehousePermitsRequired = runtime.containsKey('offlineWarehousePermits');
       _offlineWarehousePermits = warehousePermitsRequired ? _decodeWarehousePermits(rawWarehouse) : null;
+      final version = runtime['offlineCommandVersion'];
+      _offlineCommandVersion = version is int ? version : null;
+      _verifiedPermitTransport = true;
       await Future.wait([
         store.saveMobilePolicy(_countPermitScope(identity), _countPermitsRequired ? jsonEncode(rawPermit) : null),
         store.saveMobilePolicy(_warehousePermitScope(identity), warehousePermitsRequired ? jsonEncode(rawWarehouse) : null),
@@ -987,6 +997,14 @@ class SessionController extends ChangeNotifier {
     Future<void> persist(QueuedOperation item) =>
         item is QueuedCount ? _saveCounts() : _saveActions();
 
+    bool permitTransportUnavailable(QueuedOperation item) => switch (item) {
+      QueuedCount() => item.offlineCountPermit != null && (!_verifiedPermitTransport || !_countPermitsRequired),
+      QueuedAction() => item.body['offlinePermit'] is String && (!_verifiedPermitTransport || _offlineWarehousePermits == null),
+    };
+    if (queue.any((entry) => entry.item.status == 'pending' && permitTransportUnavailable(entry.item))) {
+      await _refreshMobilePolicy();
+    }
+
     for (final entry in queue) {
       if (!active()) return;
       final item = entry.item;
@@ -996,12 +1014,26 @@ class SessionController extends ChangeNotifier {
       // A transient failure holds later pending work across both workflows.
       // Conflicts remain in Sync Center for the operator to resolve.
       if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
+      if (permitTransportUnavailable(item)) {
+        if (item.lastErrorCode != 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE') {
+          item.lastErrorCode = 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE';
+          item.lastError = 'Saved work is waiting for a server that can verify offline permission.';
+          await persist(item);
+        }
+        break;
+      }
       try {
-        switch (item) {
-          case QueuedCount():
-            await _sendQueuedCount(item);
-          case QueuedAction():
-            await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
+        final command = _offlineCommandVersion == OperationalOfflineCommand.version
+            ? OperationalOfflineCommand.fromQueue(item) : null;
+        if (command != null) {
+          await api.replayOfflineCommand(command);
+        } else {
+          switch (item) {
+            case QueuedCount():
+              await _sendQueuedCount(item);
+            case QueuedAction():
+              await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
+          }
         }
       } on ApiException catch (err) {
         if (!active()) return;

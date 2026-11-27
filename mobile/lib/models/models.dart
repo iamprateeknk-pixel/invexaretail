@@ -584,6 +584,7 @@ sealed class QueuedOperation {
   int get attempts;
   set attempts(int value);
   set lastError(String? value);
+  String? get lastErrorCode;
   set lastErrorCode(String? value);
 }
 
