@@ -9,6 +9,7 @@ import 'package:http/testing.dart';
 import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/screens/conflict_center_screen.dart';
 import 'package:invexaretail_mobile/screens/count_screen.dart';
+import 'package:invexaretail_mobile/screens/putaway_screen.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/drift_store.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
@@ -29,6 +30,31 @@ SessionController _controller(Future<http.Response> Function(http.Request reques
 http.Response _json(Object body, [int status = 200]) => http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
 
 void main() {
+  testWidgets('offline putaway retains the scanned bin and task revision until reconciliation', (tester) async {
+    final sent = <Map<String, dynamic>>[];
+    var offline = true;
+    final controller = _controller((request) async {
+      sent.add(jsonDecode(request.body) as Map<String, dynamic>);
+      if (offline) throw const SocketException('offline');
+      return _json({'code': 'PUTAWAY_TASK_CHANGED', 'message': 'Refresh your tasks.'}, 409);
+    });
+    const revision = '2026-11-27T06:45:00.000Z';
+    controller.putawayTasks = [{'id': 'p1', 'itemId': 'i1', 'quantity': 5, 'updatedAt': revision}];
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: PutawayScreen(controller: controller))));
+    await tester.enterText(find.byType(TextField), 'BIN-A');
+    await tester.tap(find.widgetWithText(TextButton, 'Confirm'));
+    await tester.pumpAndSettle();
+    await controller.loadQueuesForTest();
+    expect(controller.queuedActions.single.body, {'scannedBinCode': 'BIN-A', 'requireScan': true, 'taskRevision': revision});
+    offline = false;
+    await controller.flushQueue();
+    await controller.loadQueuesForTest();
+    final action = controller.queuedActions.single;
+    expect(action.requiresRescan, isTrue);
+    await controller.retryQueuedAction(action.localId);
+    expect(sent, hasLength(2));
+    expect(sent.last, sent.first);
+  });
   test('quantities print without stray decimals', () {
     expect(formatQty(12), '12');
     expect(formatQty(12.0), '12');

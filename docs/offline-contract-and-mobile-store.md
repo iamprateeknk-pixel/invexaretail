@@ -31,6 +31,10 @@ The typed command envelope and common versioned replay for pick, receive and put
 
 Transfer receiving checks the company's transfer and destination inside the receipt transaction. Concurrent API requests with the same receipt ID use one transaction result, and the receiving account can recover that receipt after a restart. The existing global receipt ID constraint and receipt payload format are unchanged.
 
+Native putaway preserves the task's last update time with the scanned bin. PostgreSQL saves the confirmation, staging debit, destination credit, movement record and audit together. A retry by the same operator for the same destination returns the confirmation proven by that movement. If the task changed, the app keeps the saved scan and asks the operator to refresh and rescan. Older confirmations without a movement record keep their existing resolved response.
+
+During the native pilot, keep putaway revision checks available on the rollback API while devices have queued confirmations.
+
 ## Mobile store - `mobile/lib/services/native_database.dart`
 
 Real SQLite (`sqlite3` package), replacing the earlier JSON file that only imitated SQLite.

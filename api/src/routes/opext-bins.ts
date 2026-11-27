@@ -5,12 +5,12 @@
 import { decimalsToNumbers } from '../lib/decimal-json.js';
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
-import { recordAudit } from '../lib/audit.js';
+import { rememberPersistedAudit } from '../lib/audit.js';
 import { sellableQuantity } from '../lib/sellable-stock.js';
-import { databaseEnabled, persistAudit } from '../lib/persistence.js';
+import { databaseEnabled } from '../lib/persistence.js';
 import { listItems, listStockLedgerForLocation } from '../lib/repository.js';
 import { assertPutawayScan, assertGuidedWalkScan } from '../lib/scan-enforcement.js';
-import { persistBinStockDelta, moveBinStockPersisted, STAGING_BIN_ID, memoryBinStock, listMemoryBins, createMemoryBin } from '../lib/bin-stock.js';
+import { BinStockShortageError, moveBinStockInTransaction, moveBinStockPersisted, STAGING_BIN_ID, memoryBinStock, listMemoryBins, createMemoryBin } from '../lib/bin-stock.js';
 import { assertValidBinMove, BinMoveValidationError } from '../lib/bin-move.js';
 import { planPickFaceReplenishment } from '../lib/pick-face-replenishment.js';
 import { sequenceKeyForBin, lastKnownBin } from '../lib/pick-wave.js';
@@ -186,17 +186,45 @@ router.get('/putaway-tasks', async (req, res) => {
 });
 
 router.post('/putaway-tasks/:id/confirm', async (req, res) => {
-  const task = await prisma.putawayTask.findFirst({
-    where: { id: req.params.id, location: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } },
-    include: { suggestedBin: { select: { id: true, code: true } } },
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const actor = req.user!;
+  const body = req.body ?? {};
+  const findTask = () => prisma.putawayTask.findFirst({
+    where: { id: req.params.id, location: { companyId } },
+    include: { suggestedBin: { select: { id: true, code: true } }, confirmedBin: { select: { id: true, code: true } } },
   });
+  const task = await findTask();
   if (!task) return res.status(404).json({ message: 'Putaway task not found.' });
   if (!canAccessLocation(req, task.locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  if (task.status !== 'PENDING') return res.status(409).json({ message: 'This putaway task is already resolved.' });
+  if (!['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'WAREHOUSE_PICKER'].includes(actor.role)) {
+    return res.status(403).json({ message: 'This role cannot confirm putaway.' });
+  }
+  const requireScan = actor.role === 'WAREHOUSE_PICKER' || Boolean(body.requireScan);
+  const submittedCode = typeof body.scannedBinCode === 'string' ? body.scannedBinCode.trim().toUpperCase() : '';
+  const requestedBinId = typeof body.binId === 'string' && body.binId ? body.binId : task.suggestedBinId;
+  const reference = `putaway:${task.id}`;
+  const replay = async (saved: Awaited<ReturnType<typeof findTask>>) => {
+    if (saved?.status !== 'CONFIRMED' || saved.assignedToId !== actor.id || !saved.confirmedBin) return false;
+    const sameDestination = submittedCode
+      ? submittedCode === saved.confirmedBin.code.toUpperCase()
+      : !requireScan && requestedBinId === saved.confirmedBin.id;
+    if (!sameDestination) return false;
+    const movement = await prisma.binMovement.findFirst({ where: {
+      companyId, locationId: saved.locationId, reference, actorId: actor.id, toBinId: saved.confirmedBin.id,
+    }, select: { id: true } });
+    if (!movement) return false;
+    const { confirmedBin, suggestedBin: _suggestion, ...receipt } = saved;
+    res.json({ task: receipt, bin: confirmedBin, duplicate: true });
+    return true;
+  };
+  if (task.status !== 'PENDING') {
+    if (await replay(task)) return;
+    return res.status(409).json({ message: 'This putaway task is already resolved.' });
+  }
+  const taskChanged = () => res.status(409).json({ code: 'PUTAWAY_TASK_CHANGED', message: 'This putaway task changed. Refresh your tasks and scan the destination bin again.' });
+  if (body.taskRevision !== undefined && body.taskRevision !== task.updatedAt.toISOString()) return taskChanged();
   const bins = await prisma.bin.findMany({ where: { locationId: task.locationId, status: 'ACTIVE' } });
-  const requireScan = req.user!.role === 'WAREHOUSE_PICKER' || Boolean(req.body.requireScan);
-  let scannedBinCode = typeof req.body.scannedBinCode === 'string' ? req.body.scannedBinCode : '';
-  const requestedBinId = typeof req.body.binId === 'string' && req.body.binId ? req.body.binId : task.suggestedBinId;
+  let scannedBinCode = submittedCode;
   const requestedBin = requestedBinId ? bins.find((bin) => bin.id === requestedBinId) : undefined;
   if (!scannedBinCode && requestedBin && !requireScan) scannedBinCode = requestedBin.code;
   const allowOverride = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(req.user!.role) && Boolean(req.body.allowOverride);
@@ -209,33 +237,52 @@ router.post('/putaway-tasks/:id/confirm', async (req, res) => {
   if (scanned.ok === false) return res.status(400).json({ message: scanned.message, code: scanned.code });
   const confirmedCode = (scannedBinCode || req.body.binCode || '').toString().trim().toUpperCase();
   const binFromScan = bins.find((bin) => bin.code.toUpperCase() === confirmedCode);
-  const binId = binFromScan?.id ?? (typeof req.body.binId === 'string' && req.body.binId ? req.body.binId : task.suggestedBinId);
+  const binId = binFromScan?.id ?? requestedBinId;
   if (!binId) return res.status(400).json({ message: 'A bin must be selected to confirm putaway.' });
-  const bin = bins.find((row) => row.id === binId) ?? await prisma.bin.findFirst({ where: { id: binId, locationId: task.locationId } });
-  if (!bin) return res.status(400).json({ message: 'Bin does not belong to this location.' });
+  const bin = bins.find((row) => row.id === binId);
+  if (!bin) return res.status(400).json({ message: 'Select an active bin at this location.' });
   if (!allowOverride && task.suggestedBin?.code && bin.code.toUpperCase() !== task.suggestedBin.code.toUpperCase()) {
     return res.status(400).json({ message: `Expected bin ${task.suggestedBin.code}; scanned ${bin.code}. Override is required to confirm a different bin.`, code: 'WRONG_BIN' });
   }
-  const updated = await prisma.putawayTask.update({
-    where: { id: task.id },
-    data: { status: 'CONFIRMED', confirmedBinId: bin.id, confirmedAt: new Date(), assignedToId: req.user!.id },
-  });
   try {
-    await persistBinStockDelta({
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: STAGING_BIN_ID, qtyDelta: -Number(task.quantity),
+    const metadata = { binId: bin.id, binCode: bin.code, scanned: Boolean(submittedCode), companyId };
+    const result = await prisma.$transaction(async (tx) => {
+      const [updated] = await tx.putawayTask.updateManyAndReturn({
+        where: { id: task.id, status: 'PENDING', updatedAt: task.updatedAt, location: { companyId } },
+        data: { status: 'CONFIRMED', confirmedBinId: bin.id, confirmedAt: new Date(), assignedToId: actor.id },
+      });
+      if (!updated) return null;
+      const [active] = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "Bin"
+        WHERE id = ${bin.id} AND "locationId" = ${task.locationId} AND status = 'ACTIVE' AND code = ${bin.code}
+        FOR SHARE
+      `;
+      if (!active) throw new InactivePutawayBin();
+      await moveBinStockInTransaction(tx, {
+        companyId, itemId: updated.itemId, lotId: updated.lotId, locationId: updated.locationId,
+        binId: STAGING_BIN_ID, toBinId: bin.id, quantity: Number(updated.quantity), reference, actorId: actor.id,
+      });
+      const audit = await tx.auditLog.create({ data: {
+        actorId: actor.id, actorRole: actor.role, action: 'PUTAWAY_CONFIRMED', entityType: 'PutawayTask', entityId: task.id, metadata,
+      } });
+      return { updated, audit };
     });
-    await persistBinStockDelta({
-      companyId: req.companyId ?? DEFAULT_COMPANY_ID, itemId: task.itemId, lotId: task.lotId, locationId: task.locationId, binId: bin.id, qtyDelta: Number(task.quantity),
-    });
+    if (!result) {
+      if (await replay(await findTask())) return;
+      return taskChanged();
+    }
+    rememberPersistedAudit({ ...result.audit, createdAt: result.audit.createdAt.toISOString(), metadata });
+    return res.json({ task: result.updated, bin: { id: bin.id, code: bin.code } });
   } catch (error) {
-    console.error('bin stock putaway persist failed (non-blocking):', error instanceof Error ? error.message : error);
+    if (error instanceof BinStockShortageError) {
+      return res.status(409).json({ code: 'PUTAWAY_STAGING_SHORTAGE', message: 'Staging has insufficient stock. Reconcile the intake before confirming putaway.' });
+    }
+    if (error instanceof InactivePutawayBin) return taskChanged();
+    throw error;
   }
-  await persistAudit(recordAudit({
-    actorId: req.user!.id, actorRole: req.user!.role, action: 'PUTAWAY_CONFIRMED',
-    entityType: 'PutawayTask', entityId: task.id, metadata: { binId: bin.id, binCode: bin.code, scanned: true },
-  }));
-  return res.json({ task: updated, bin: { id: bin.id, code: bin.code } });
 });
+
+class InactivePutawayBin extends Error {}
 
 export default router;
 

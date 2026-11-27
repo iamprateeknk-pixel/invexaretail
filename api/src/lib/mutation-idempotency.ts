@@ -97,6 +97,12 @@ export function mutationIdempotency(now: () => number = Date.now) {
       /^\/api\/v1\/stock-counts(?:\/weight)?\/?$/i.test(req.originalUrl.split('?')[0])) {
       return next();
     }
+    // Versioned putaway uses the committed bin movement as its receipt, after
+    // rechecking the operator's access and the scanned destination.
+    if (databaseEnabled && req.method === 'POST' && typeof req.body?.taskRevision === 'string' &&
+      /^\/api\/v1\/putaway-tasks\/[^/]+\/confirm\/?$/i.test(req.originalUrl.split('?')[0])) {
+      return next();
+    }
     const userId = req.userId;
     const companyId = req.companyId;
     if (!userId || !companyId) return next(); // unauthenticated: the auth layer rejects it, nothing to remember

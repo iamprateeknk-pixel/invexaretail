@@ -709,6 +709,7 @@ class QueuedAction {
     required this.createdAt,
     this.attempts = 0,
     this.lastError,
+    this.lastErrorCode,
     this.status = 'pending',
     this.companyId = '',
     this.userId = '',
@@ -732,6 +733,8 @@ class QueuedAction {
   final String createdAt;
   int attempts;
   String? lastError;
+  String? lastErrorCode;
+  bool get requiresRescan => lastErrorCode == 'PUTAWAY_TASK_CHANGED';
   // See QueuedCount.status - same conflict/rejected/pending contract.
   String status;
 
@@ -745,6 +748,7 @@ class QueuedAction {
       createdAt: asString(json['createdAt']),
       attempts: asInt(json['attempts']),
       lastError: json['lastError'] == null ? null : asString(json['lastError']),
+      lastErrorCode: json['lastErrorCode'] == null ? null : asString(json['lastErrorCode']),
       status: asString(json['status'], 'pending'),
       companyId: asString(json['companyId']),
       userId: asString(json['userId']),
@@ -769,6 +773,7 @@ class QueuedAction {
         'attempts': attempts,
         'status': status,
         'lastError': lastError,
+        if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
       };
 }
 

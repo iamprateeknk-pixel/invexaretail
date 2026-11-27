@@ -28,7 +28,7 @@ class ConflictCenterScreen extends StatelessWidget {
           ...counts.where((row) => row.status == 'pending').map((row) => _Entry.count(row)),
           ...actions.where((row) => row.status == 'pending').map((row) => _Entry.action(row)),
         ];
-        final retryable = needsAttention.where((entry) => entry.count?.requiresRecount != true).toList();
+        final retryable = needsAttention.where((entry) => entry.canRetry).toList();
         return Scaffold(
           appBar: AppBar(
             title: const Text('Sync center'),
@@ -111,6 +111,7 @@ class _Entry {
   String? get lastError => count != null ? count!.lastError : action!.lastError;
   int get attempts => count != null ? count!.attempts : action!.attempts;
   String get createdAt => count != null ? count!.createdAt : action!.createdAt;
+  bool get canRetry => count?.requiresRecount != true && action?.requiresRescan != true;
 }
 
 /// What the status means in plain words, and what the user can do about it.
@@ -184,9 +185,14 @@ class _EntryCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(where, style: const TextStyle(color: invexaMuted, fontSize: 12)),
             const SizedBox(height: 8),
-            Text(syncReason(entry.status), style: const TextStyle(fontSize: 13)),
-            if (count?.requiresRecount == true)
-              const Text('Recount required. Open the count task again and enter a fresh quantity.'),
+            Text(
+              count?.requiresRecount == true
+                  ? 'Recount required. Open the count task again and enter a fresh quantity.'
+                  : entry.action?.requiresRescan == true
+                      ? 'Refresh your putaway tasks and scan the destination bin again.'
+                      : syncReason(entry.status),
+              style: const TextStyle(fontSize: 13),
+            ),
             if (entry.lastError != null && attention) ...[
               const SizedBox(height: 6),
               Text('Server said: ${entry.lastError}', style: TextStyle(color: color, fontSize: 12)),
@@ -206,7 +212,7 @@ class _EntryCard extends StatelessWidget {
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Discard'),
                 ),
-                if (attention && count?.requiresRecount != true)
+                if (attention && entry.canRetry)
                   FilledButton.icon(
                     key: ValueKey('retry-${entry.localId}'),
                     onPressed: () => count != null ? controller.retryQueuedCount(entry.localId) : controller.retryQueuedAction(entry.localId),

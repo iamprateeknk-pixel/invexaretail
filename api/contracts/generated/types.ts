@@ -3371,7 +3371,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm where goods were put away. A Warehouse picker (or requireScan) must scan the bin; a bin other than the suggested one needs an override. Moves the stock from the staging bin into the chosen bin. */
+        /** Confirm the destination bin and move stock from staging in one transaction. Warehouse pickers must scan the bin. A different bin needs a supervisor override. A retry by the same operator for the same bin can return the saved confirmation. */
         post: operations["postPutawayTasksIdConfirm"];
         delete?: never;
         options?: never;
@@ -17857,6 +17857,11 @@ export interface operations {
                     binId?: string;
                     binCode?: string;
                     requireScan?: boolean;
+                    /**
+                     * Format: date-time
+                     * @description The task's updatedAt value from the last task list, preserved while offline.
+                     */
+                    taskRevision?: string;
                     allowOverride?: boolean;
                 };
             };
@@ -17904,7 +17909,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description This putaway task is already resolved. */
+            /** @description The task was resolved by a different action, the task revision changed, or staging stock is insufficient. */
             409: {
                 headers: {
                     [name: string]: unknown;

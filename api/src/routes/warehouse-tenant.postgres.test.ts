@@ -11,23 +11,28 @@ import { createEnhancedUser } from '../lib/enterprise-repository.js';
 import { registerLocationCompany } from '../lib/saas/tenant-scope.js';
 import coreRouter from './core.js';
 import operationsExtensionRouter from './operations-extension.js';
+import { STAGING_BIN_ID } from '../lib/bin-stock.js';
+import { extractToken } from './enterprise-auth.js';
+import { mutationIdempotency } from '../lib/mutation-idempotency.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 
-type Api = (method: string, path: string, token: string, body?: unknown) => Promise<{ status: number; body: any }>;
+type Api = (method: string, path: string, token: string, body?: unknown, mutationId?: string) => Promise<{ status: number; body: any }>;
 
 async function withServer(run: (call: Api) => Promise<void>): Promise<void> {
   const app = express();
   app.use(express.json());
+  app.use('/api/v1', extractToken, mutationIdempotency());
   app.use('/api/v1', coreRouter);
   app.use('/api/v1', operationsExtensionRouter);
   const server = app.listen(0);
   const address = server.address();
   if (!address || typeof address === 'string') { server.close(); throw new Error('failed to bind test server'); }
   const base = `http://127.0.0.1:${address.port}/api/v1`;
-  const call: Api = async (method, path, token, body) => {
+  const call: Api = async (method, path, token, body, mutationId) => {
     const response = await fetch(`${base}${path}`, {
-      method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(mutationId ? { 'X-Mutation-Id': mutationId } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     return { status: response.status, body: (await response.json().catch(() => ({}))) as any };
@@ -88,5 +93,57 @@ integration('pick waves, bins and putaway tasks: a foreign id is 404 and nothing
 
     assert.equal((await call('GET', `/pick-waves/${wave.id}`, a.token)).status, 200, 'the identical wave read succeeds for the owner');
     assert.equal((await call('PATCH', `/bins/${bin.id}`, a.token, { zone: 'A' })).status, 200, 'the identical bin patch succeeds for the owner');
+  });
+});
+
+integration('putaway moves staging stock once, rejects stale tasks, and rolls back a short staging balance', async () => {
+  const a = await makeAdmin('putaway');
+  const bin = await prisma.bin.create({ data: { locationId: a.locationId, code: 'PUTAWAY-A' } });
+  const scope = { companyId: a.companyId, itemId: a.itemId, locationId: a.locationId, lotId: '' };
+  await prisma.binStock.create({ data: { ...scope, binId: STAGING_BIN_ID, onHand: 5 } });
+  const task = await prisma.putawayTask.create({ data: {
+    itemId: a.itemId, locationId: a.locationId, quantity: 5, suggestedBinId: bin.id,
+  } });
+  const oldRevision = task.updatedAt.toISOString();
+  const revisedAt = new Date(task.updatedAt.getTime() + 1000);
+  await prisma.putawayTask.update({ where: { id: task.id }, data: { updatedAt: revisedAt } });
+  await withServer(async (call) => {
+    const path = `/putaway-tasks/${task.id}/confirm`;
+    const scan = { scannedBinCode: bin.code, requireScan: true };
+    const stale = await call('POST', path, a.token, { ...scan, taskRevision: oldRevision });
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.equal(stale.body.code, 'PUTAWAY_TASK_CHANGED');
+    const request = { ...scan, taskRevision: revisedAt.toISOString() };
+    const mutationId = randomUUID();
+    const results = await Promise.all(Array.from({ length: 5 }, () => call('POST', path, a.token, request, mutationId)));
+    assert.ok(results.every((result) => result.status === 200), JSON.stringify(results));
+    assert.equal(results.filter((result) => !result.body.duplicate).length, 1);
+    const move = await prisma.binMovement.findMany({ where: { companyId: a.companyId, reference: `putaway:${task.id}` } });
+    assert.equal(move.length, 1);
+    assert.equal(Number(move[0].quantity), 5);
+    assert.equal(await prisma.auditLog.count({ where: { actorId: a.userId, entityId: task.id, action: 'PUTAWAY_CONFIRMED' } }), 1);
+    assert.equal(Number((await prisma.binStock.findFirstOrThrow({ where: { ...scope, binId: bin.id } })).onHand), 5);
+    assert.equal(Number((await prisma.binStock.findFirstOrThrow({ where: { ...scope, binId: STAGING_BIN_ID } })).onHand), 0);
+
+    const short = await prisma.putawayTask.create({ data: {
+      itemId: a.itemId, locationId: a.locationId, quantity: 1, suggestedBinId: bin.id,
+    } });
+    const failure = await call('POST', `/putaway-tasks/${short.id}/confirm`, a.token, scan);
+    assert.equal(failure.status, 409, JSON.stringify(failure.body));
+    assert.equal(failure.body.code, 'PUTAWAY_STAGING_SHORTAGE');
+    assert.equal((await prisma.putawayTask.findUniqueOrThrow({ where: { id: short.id } })).status, 'PENDING');
+    assert.equal(await prisma.binMovement.count({ where: { companyId: a.companyId, reference: `putaway:${short.id}` } }), 0);
+    assert.equal(await prisma.auditLog.count({ where: { actorId: a.userId, entityId: short.id, action: 'PUTAWAY_CONFIRMED' } }), 0);
+    assert.equal(Number((await prisma.binStock.findFirstOrThrow({ where: { ...scope, binId: bin.id } })).onHand), 5);
+
+    const staging = await prisma.binStock.findFirstOrThrow({ where: { ...scope, binId: STAGING_BIN_ID } });
+    await prisma.binStock.update({ where: { id: staging.id }, data: { onHand: 1 } });
+    const competing = await prisma.putawayTask.create({ data: {
+      itemId: a.itemId, locationId: a.locationId, quantity: 1, suggestedBinId: bin.id,
+    } });
+    const sharedStock = await Promise.all([short, competing].map((row) => call('POST', `/putaway-tasks/${row.id}/confirm`, a.token, scan)));
+    assert.deepEqual(sharedStock.map((result) => result.status).sort(), [200, 409]);
+    assert.equal(Number((await prisma.binStock.findUniqueOrThrow({ where: { id: staging.id } })).onHand), 0);
+    assert.equal(Number((await prisma.binStock.findFirstOrThrow({ where: { ...scope, binId: bin.id } })).onHand), 6);
   });
 });

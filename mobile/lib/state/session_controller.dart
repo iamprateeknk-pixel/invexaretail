@@ -822,8 +822,10 @@ class SessionController extends ChangeNotifier {
   Future<void> retryQueuedAction(String localId) async {
     for (final item in queuedActions) {
       if (item.localId == localId) {
+        if (item.requiresRescan) return;
         item.status = 'pending';
         item.lastError = null;
+        item.lastErrorCode = null;
         item.nextAttemptAt = null;
       }
     }
@@ -895,7 +897,7 @@ class SessionController extends ChangeNotifier {
         item.attempts += 1;
         item.lastError = err.message;
         item.lastErrorCode = err.code;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, code: err.code, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
         } else {
@@ -922,7 +924,8 @@ class SessionController extends ChangeNotifier {
         if (!queuedActions.contains(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
+        item.lastErrorCode = err.code;
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, code: err.code, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
         } else {
