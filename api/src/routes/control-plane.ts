@@ -1,5 +1,5 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
+import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { flushControlPlanePersist, saveControlPlaneSnapshot, scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -10,6 +10,9 @@ import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKi
 import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
 import { listStudioAutomationRuns, retryStudioAutomationRun } from '../lib/saas/studio-automation-worker.js';
+import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { getIndustryPack } from '../lib/industry-packs.js';
+import { findCompanyProfile } from '../lib/repository.js';
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof ControlPlaneError) {
@@ -694,15 +697,30 @@ studioRouter.post('/draft/tabs/:tabKey', (req: Request, res: Response) => {
   }
 });
 
-studioRouter.post('/preview', (req: Request, res: Response) => {
+studioRouter.post('/preview', async (req: Request, res: Response) => {
   try {
-    res.json({
-      success: true,
-      preview: controlPlane.preview(requireScope(req), {
-        role: String(req.body?.role ?? 'ADMIN'),
-        device: req.body?.device === 'mobile' || req.body?.device === 'tablet' ? req.body.device : 'desktop',
-      }),
-    });
+    const scope = requireScope(req);
+    const companyId = scopedCompany(req);
+    const role = COLUMN_ROLES.find((candidate) => candidate === (req.body?.role ?? 'ADMIN'));
+    if (!role) throw new ControlPlaneError('Choose an operational role for the preview', 'INVALID_ROLE', 400);
+    const requested = req.body?.locationId;
+    if (requested !== undefined && (typeof requested !== 'string' || !requested.trim())) {
+      throw new ControlPlaneError('Choose a valid preview location', 'INVALID_LOCATION', 400);
+    }
+    const device = req.body?.device ?? 'desktop';
+    if (device !== 'desktop' && device !== 'tablet' && device !== 'mobile') {
+      throw new ControlPlaneError('Choose a valid preview device', 'INVALID_DEVICE', 400);
+    }
+    const locations = await listLocationsForCompany({ companyId, tenantId: scope.tenantId, userId: scope.actorId, role });
+    const location = requested === undefined ? locations[0] : locations.find((entry) => entry.id === requested);
+    if (requested !== undefined && !location) throw new ControlPlaneError('Preview location was not found', 'LOCATION_NOT_FOUND', 404);
+    const preview = controlPlane.preview(scope, { role, device });
+    const company = findCompanyProfile(companyId);
+    const pack = getIndustryPack(company?.industryKey ?? company?.industry);
+    res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
+    res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
+      variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
+    } });
   } catch (error) {
     sendError(res, error);
   }

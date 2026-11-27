@@ -90,8 +90,6 @@ function ControlPlaneWorkspace() {
     setUserName,
     userRole,
     setUserRole,
-    previewRole,
-    setPreviewRole,
     newCompanyName,
     setNewCompanyName,
     newCompanyPlan,

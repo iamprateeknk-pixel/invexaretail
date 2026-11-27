@@ -1,5 +1,9 @@
 export const SYSTEM_STOCK_COLUMNS = new Set(['book', 'variance', 'quarantine', 'reserved', 'value']);
 
+export function canViewSystemStockForRole(role) {
+  return ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
+}
+
 export function visibleStockColumns(page, { role, canViewSystemStock } = {}) {
   return (page?.columns ?? []).filter((column) => {
     if (column.visible === false) return false;

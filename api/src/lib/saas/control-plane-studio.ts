@@ -48,6 +48,16 @@ function ruleOutcomeAction(outcome: Record<string, unknown>): string {
   return String(first ?? '');
 }
 
+function resolveStockPage(source: PageDefinition, role: string, mobile = false): PageDefinition {
+  const page = clonePage(source);
+  const visible = (column: ColumnDefinition) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role))
+    && (!mobile || column.mobileEnabled);
+  page.columns = page.columns.filter(visible);
+  for (const [key, columns] of Object.entries(page.tables ?? {})) page.tables![key] = columns.filter(visible);
+  page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
+  return page;
+}
+
 /** Draft configuration studio: columns, fields, formulas, layouts, publish/rollback (area S5 of the ControlPlane facade). */
 export class ControlPlaneStudio {
   constructor(
@@ -366,14 +376,11 @@ export class ControlPlaneStudio {
     page: PageDefinition;
     version: number;
   } {
-    const draft = this.ensureDraft(scope);
-    const page = clonePage(draft.page);
-    page.columns = page.columns.filter((column) => !column.visibleRoles || column.visibleRoles.includes(input.role));
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(input.role)));
-    if (input.device === 'mobile') {
-      page.columns = page.columns.filter((column) => column.mobileEnabled);
-    }
-    return { role: input.role, device: input.device, page, version: draft.version };
+    const companyId = this.requireLockedCompany(scope);
+    const draft = this.store.drafts.get(companyId);
+    const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, scope.actorId, 1, 'published');
+    const page = resolveStockPage((draft ?? published).page, input.role, input.device === 'mobile');
+    return { role: input.role, device: input.device, page, version: draft?.version ?? published.version + 1 };
   }
 
   diff(companyId: string): Array<{ op: '+' | '-' | '~'; path: string; from?: unknown; to?: unknown }> {
@@ -483,12 +490,7 @@ export class ControlPlaneStudio {
     reports: ReportDefinition[];
   } {
     const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, 'system', 1, 'published');
-    const page = clonePage(published.page);
-    page.columns = page.columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    for (const [key, columns] of Object.entries(page.tables ?? {})) {
-      page.tables![key] = columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    }
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
+    const page = resolveStockPage(published.page, role);
     return {
       companyId,
       version: published.version,

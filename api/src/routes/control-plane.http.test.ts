@@ -59,6 +59,41 @@ test('HTTP: sync endpoints require a locked company session', async () => {
   });
 });
 
+test('HTTP: draft stock preview resolves the requested role, device and company location without publishing', async () => {
+  await withServer(async (url) => {
+    const post = (path: string, payload: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(payload), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const locked = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const token = locked.body.token;
+    const scope = controlPlane.requireControlSession(token).scope;
+    const draft = controlPlane.ensureDraft(scope);
+    draft.page.columns.find((column) => column.key === 'company')!.visible = false;
+    draft.page.columns.find((column) => column.key === 'category')!.mobileEnabled = false;
+    controlPlane.setActionEnabled(scope, 'export', false);
+    const input = { role: 'STORE_USER', device: 'mobile', locationId: 'loc-2' };
+    const preview = (payload: unknown, auth = token) => post('/studio/v1/preview', payload, auth);
+    assert.equal((await preview(input, login.body.token)).status, 401);
+    assert.equal((await preview({ ...input, role: 'PLATFORM_SUPER_ADMIN' })).status, 400);
+    const response = await preview(input);
+    assert.equal(response.status, 200);
+    const result = response.body.preview;
+    assert.equal(result.location.id, 'loc-2');
+    assert.ok(result.locations.every((location: { id: string }) => location.id !== 'loc-jaipur-1'));
+    assert.equal(result.role, 'STORE_USER');
+    assert.equal(result.device, 'mobile');
+    assert.equal(result.version, draft.version);
+    assert.ok(result.page.columns.every((column: { key: string }) => !['company', 'category'].includes(column.key)));
+    assert.ok(!result.page.actions.some((action: { key: string }) => action.key === 'export'));
+    assert.ok(controlPlane.runtimeConfig('default-company').page.columns.some((column) => column.key === 'company'));
+    const foreign = await preview({ ...input, locationId: 'loc-jaipur-1' });
+    const unknown = await preview({ ...input, locationId: 'missing-branch' });
+    assert.deepEqual(foreign, unknown);
+    assert.equal(foreign.status, 404);
+  });
+});
+
 test('HTTP: platform login, company lock, studio publish and sync mutation', async () => {
   await withServer(async (url) => {
     const login = await json(url, '/control/v1/auth/login', {

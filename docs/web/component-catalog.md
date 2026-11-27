@@ -10,6 +10,10 @@ at the same files.
 
 ## Delivered this week
 
+### Stock table and draft preview
+
+Item stock and Studio's Publish tab share the stock table, formula rendering and stock action controls. Studio displays example rows for the selected role, device and location. The preview request resolves the draft under the locked company's session, returns that company's locations, and leaves the published configuration in place. Mobile-width preview removes columns disabled for mobile. The stock table suppresses restricted columns and formulas using restricted values. Preview actions are disabled. The live item table opens details by mouse or keyboard.
+
 ### Feedback states (`web/src/components/ui/feedback-states.jsx`)
 
 | Component | Variants | Used by | Accessibility evidence |

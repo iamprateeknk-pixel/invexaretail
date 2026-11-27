@@ -56,12 +56,13 @@ export async function exchangeSessionHandoff(hash = globalThis.location?.hash ??
   }
 }
 
-export async function controlRequest(path, { token, method = 'GET', body } = {}) {
+export async function controlRequest(path, { token, method = 'GET', body, signal } = {}) {
   const url = method === 'GET'
     ? `${API_BASE}${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}`
     : `${API_BASE}${path}`;
   const response = await fetch(url, {
     method,
+    signal,
     cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
