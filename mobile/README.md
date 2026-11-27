@@ -60,10 +60,11 @@ AAB/APK with the version from `pubspec.yaml`.
 ## iOS app
 
 `ios/` is committed (bundle id `com.invexaretail.invexaretailMobile`, iOS 15+).
-`.github/workflows/ios.yml` runs on macOS: pull requests build unsigned to prove
-the app compiles; `main`/manual runs build a signed App Store / TestFlight IPA
-once the Apple signing secrets are set (see `SETUP.md`, "iOS"). Camera
-scanning and the embedded workspace work as on Android.
+`.github/workflows/ios.yml` runs on macOS. With the Apple signing secrets set,
+`main`/manual runs build a signed App Store / TestFlight IPA (`SETUP.md`, "iOS").
+Without them (and on every pull request) it uploads an unsigned IPA that can be
+side-loaded with a free Apple ID (`SETUP.md`, "iOS without an Apple Developer
+account"). Camera scanning and the embedded workspace work as on Android.
 
 ## Windows app
 

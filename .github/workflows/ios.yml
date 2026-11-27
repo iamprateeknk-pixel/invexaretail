@@ -1,10 +1,15 @@
 name: Build Invexa Retail iOS release
 
 # The iOS platform project is committed under mobile/ios, so this workflow builds
-# exactly what is in the repository. Pull requests prove the app compiles for iOS
-# (unsigned). main/manual runs produce a signed, App Store / TestFlight-ready IPA
-# once the Apple signing secrets below are configured; without them they fail
-# loudly instead of publishing something that cannot be installed.
+# exactly what is in the repository.
+#
+# - All four signing secrets set (main/manual runs): a signed, App Store /
+#   TestFlight-ready IPA.
+# - No signing secrets (and on every pull request): an UNSIGNED IPA artifact. It
+#   cannot be installed as-is; re-sign it with a free Apple ID in Sideloadly or
+#   AltStore (7-day validity, up to 3 devices) - see mobile/SETUP.md, "iOS without
+#   an Apple Developer account".
+# - Only some secrets set: the run fails, so a half-configured setup is noticed.
 #
 # Secrets (see mobile/SETUP.md, "iOS"):
 #   IOS_CERTIFICATE_P12_BASE64   Apple Distribution certificate (.p12), base64
@@ -64,19 +69,41 @@ jobs:
       - name: Test
         working-directory: mobile
         run: flutter test
-      - name: Build unsigned (pull requests)
-        if: github.event_name == 'pull_request'
-        working-directory: mobile
-        run: flutter build ios --release --no-codesign --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
-      - name: Install signing certificate and provisioning profile
-        if: github.event_name != 'pull_request'
+      - name: Decide whether this run signs
         run: |
+          set_count=0
           for name in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
-            if [ -z "${!name}" ]; then
-              echo "$name secret is not configured; refusing to build an unsigned iOS release." >&2
-              exit 1
-            fi
+            if [ -n "${!name}" ]; then set_count=$((set_count + 1)); fi
           done
+          if [ "$set_count" -ne 0 ] && [ "$set_count" -ne 4 ]; then
+            echo "Only $set_count of the 4 iOS signing secrets are set; set all four (mobile/SETUP.md) or none." >&2
+            exit 1
+          fi
+          if [ "$set_count" -eq 4 ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "INVEXA_IOS_SIGN=true" >> "$GITHUB_ENV"
+          else
+            echo "INVEXA_IOS_SIGN=false" >> "$GITHUB_ENV"
+          fi
+      - name: Build unsigned IPA (no signing secrets, or a pull request)
+        if: env.INVEXA_IOS_SIGN != 'true'
+        working-directory: mobile
+        run: |
+          flutter build ios --release --no-codesign --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
+          rm -rf build/unsigned-ipa && mkdir -p build/unsigned-ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/unsigned-ipa/Payload/
+          (cd build/unsigned-ipa && zip -qry "InvexaRetail-iOS-$BUILD_NAME-unsigned.ipa" Payload)
+          test -s "build/unsigned-ipa/InvexaRetail-iOS-$BUILD_NAME-unsigned.ipa"
+      - name: Upload unsigned IPA
+        if: env.INVEXA_IOS_SIGN != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: InvexaRetail-iOS-${{ env.BUILD_NAME }}-unsigned
+          path: mobile/build/unsigned-ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+      - name: Install signing certificate and provisioning profile
+        if: env.INVEXA_IOS_SIGN == 'true'
+        run: |
           KEYCHAIN="$RUNNER_TEMP/invexa-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
           printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/cert.p12"
@@ -117,14 +144,14 @@ jobs:
           PROVISIONING_PROFILE_SPECIFIER = $PROFILE_NAME
           XCCONFIG
       - name: Build signed IPA
-        if: github.event_name != 'pull_request'
+        if: env.INVEXA_IOS_SIGN == 'true'
         working-directory: mobile
         run: |
           flutter build ipa --release \
             --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER \
             --export-options-plist="$RUNNER_TEMP/ExportOptions.plist"
       - name: Upload IPA
-        if: github.event_name != 'pull_request'
+        if: env.INVEXA_IOS_SIGN == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: InvexaRetail-iOS-${{ env.BUILD_NAME }}
@@ -132,5 +159,5 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Remove signing keychain
-        if: always() && github.event_name != 'pull_request'
+        if: always() && env.INVEXA_IOS_SIGN == 'true'
         run: security delete-keychain "$RUNNER_TEMP/invexa-signing.keychain-db" || true

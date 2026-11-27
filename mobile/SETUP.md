@@ -31,6 +31,26 @@ The resulting `.ipa` artifact uploads to TestFlight/App Store Connect with
 Transporter. Without these secrets, `main` builds fail on purpose rather than
 publish an IPA nobody can install; pull requests still build unsigned.
 
+## iOS without an Apple Developer account
+
+Without the four signing secrets, the iOS workflow still builds: it uploads an
+**unsigned** `InvexaRetail-iOS-<version>-unsigned.ipa` artifact (Actions → the
+"Build Invexa Retail iOS release" run → Artifacts). iOS will not install an
+unsigned app, so re-sign it with a free Apple ID:
+
+1. Install [Sideloadly](https://sideloadly.io) (Windows or macOS) or AltStore.
+2. Connect the iPhone by USB, drop the `.ipa` in, sign in with your Apple ID.
+3. On the iPhone: Settings → General → VPN & Device Management → trust the
+   developer profile, then open Invexa Retail.
+
+Limits of a free Apple ID: the signature expires after **7 days** (re-sign to
+keep using it) and works on at most **3 devices**. Fine for testing; for staff
+use either the paid account above or the web app:
+
+**Web app on iPhone (no account, no expiry):** open `https://invexaretail.com` in
+Safari → Share → **Add to Home Screen**. It installs with its icon and runs
+full-screen (it is a PWA: `web/public/manifest.webmanifest` + service worker).
+
 ## Windows
 
 `flutter run -d windows` needs Windows 10/11 with Visual Studio 2022 and the
