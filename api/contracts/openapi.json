@@ -65,6 +65,7 @@
               "INSUFFICIENT_STOCK",
               "INVALID_TRANSITION",
               "CONCURRENT_UPDATE_CONFLICT",
+              "COUNT_STOCK_CHANGED",
               "DUPLICATE_REQUEST",
               "NOT_FOUND",
               "VALIDATION_FAILED",
@@ -14191,6 +14192,10 @@
                           "recount": {
                             "type": "boolean"
                           },
+                          "stockRevision": {
+                            "type": "string",
+                            "description": "Opaque revision to include when submitting an assigned pooled count."
+                          },
                           "item": {
                             "type": "object",
                             "properties": {
@@ -14233,6 +14238,10 @@
                                 },
                                 "lotNo": {
                                   "type": "string"
+                                },
+                                "stockRevision": {
+                                  "type": "string",
+                                  "description": "Opaque revision to include when submitting this assigned lot count."
                                 },
                                 "expiryDate": {
                                   "type": [
@@ -26776,6 +26785,11 @@
                       "weight"
                     ]
                   },
+                  "stockRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The lot revision from mobile work when the operator began the count. Requires requestId."
+                  },
                   "requestId": {
                     "type": "string"
                   }
@@ -26859,11 +26873,11 @@
             }
           },
           "409": {
-            "description": "The lot already has a count awaiting review or the request ID belongs to a different submission.",
+            "description": "The lot has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -26904,6 +26918,11 @@
                   "totalQuantity": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "stockRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The pooled revision from mobile work when the operator began the count. Requires requestId."
                   },
                   "requestId": {
                     "type": "string"
@@ -27024,11 +27043,11 @@
             }
           },
           "409": {
-            "description": "The item already has a count awaiting review or the request ID belongs to a different submission.",
+            "description": "The item has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

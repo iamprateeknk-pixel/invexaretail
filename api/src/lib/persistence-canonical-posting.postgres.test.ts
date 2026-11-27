@@ -221,10 +221,10 @@ integration('a failed multi-lot count batch leaves no partial StockCount rows', 
     reviewedAt: undefined,
   };
 
-  await assert.rejects(persistCountBatch([valid, invalid], f.companyId, fingerprint));
+  await assert.rejects(persistCountBatch([valid, invalid], f.companyId, { fingerprint }));
   assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, itemId: f.item.id } }), 0);
   assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId } }), 0);
-  await persistCountBatch([valid], f.companyId, fingerprint);
+  await persistCountBatch([valid], f.companyId, { fingerprint });
   assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId } }), 1);
 });
 
@@ -289,6 +289,64 @@ integration('count retries use committed PostgreSQL receipts and bind the reques
     const blindReplay = await submit(f, command, true);
     assert.equal(blindReplay.status, 200);
     assert.deepEqual(blindReplay.body, { success: true, duplicate: true, lots: 2 });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+integration('assigned count revisions detect stock changes and preserve completed offline receipts', async () => {
+  const f = await fixture(10);
+  registerLocationCompany(f.loc.id, f.companyId);
+  registerItemCompany(f.item.id, f.companyId);
+  const item = { id: f.item.id, code: f.item.code, name: f.item.name, status: 'ACTIVE' as const,
+    countMethod: 'ITEM_WEIGHT' as const, decimalQuantity: true, lots: [{ id: f.lot.id, itemId: f.item.id, lotNo: f.lot.lotNo }] };
+  items.push(item);
+  await prisma.item.update({ where: { id: f.item.id, companyId: f.companyId }, data: { countMethod: 'ITEM_WEIGHT' } });
+  createEnhancedUser({ id: f.userId, companyId: f.companyId, email: `${f.userId}@test.invexa.local`,
+    name: 'Counter', passwordHash: 'x', role: 'BRANCH_MANAGER', branchIds: [], locationIds: [f.loc.id], status: 'active' });
+  await prisma.countAssignment.create({ data: { itemId: f.item.id, locationId: f.loc.id, assignedToId: f.userId, assignedById: f.userId } });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, mutationIdempotency(), coreRouter);
+  const server = app.listen(0);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const call = (path: string, body?: Record<string, unknown>) => fetch(`http://127.0.0.1:${address.port}/api/v1/${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: { Authorization: `Bearer ${generateJWT(f.userId, f.companyId)}`,
+      ...(body ? { 'Content-Type': 'application/json', 'X-Mutation-Id': String(body.requestId) } : {}) },
+    body: body && JSON.stringify({ itemId: f.item.id, locationId: f.loc.id, ...body }),
+  }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  const task = async () => (await call('mobile/work')).body.countTasks[0];
+  const ledgerKey = { companyId_itemId_lotId_locationId: { companyId: f.companyId, itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id } };
+  try {
+    const original = await task();
+    assert.match(original.stockRevision, /^[a-f0-9]{64}$/);
+    assert.match(original.lots[0].stockRevision, /^[a-f0-9]{64}$/);
+    assert.notEqual(original.stockRevision, original.lots[0].stockRevision);
+    await prisma.stockLedger.update({ where: ledgerKey, data: { onHand: 9, version: { increment: 1 } } });
+    const staleLot = { requestId: randomUUID(), physicalQuantity: 6, lotNo: f.lot.lotNo, stockRevision: original.lots[0].stockRevision };
+    const stale = await call('stock-counts', staleLot);
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.code, 'COUNT_STOCK_CHANGED');
+    assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId, requestId: staleLot.requestId } }), 0);
+
+    const beforeNewLot = await task();
+    const lot = await prisma.lot.create({ data: { itemId: f.item.id, lotNo: `L-${randomUUID()}` } });
+    item.lots.push({ id: lot.id, itemId: f.item.id, lotNo: lot.lotNo });
+    await prisma.stockLedger.create({ data: { companyId: f.companyId, itemId: f.item.id, locationId: f.loc.id, lotId: lot.id, onHand: 2 } });
+    const requestId = randomUUID();
+    const pooled = { requestId, totalQuantity: 8, stockRevision: beforeNewLot.stockRevision };
+    assert.equal((await call('stock-counts/weight', pooled)).status, 409);
+    assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId, requestId } }), 0);
+    const command = { ...pooled, requestId: randomUUID(), stockRevision: (await task()).stockRevision };
+    const accepted = await call('stock-counts/weight', command);
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.body));
+    await prisma.stockLedger.update({ where: ledgerKey, data: { onHand: 8, version: { increment: 1 } } });
+    const replay = await call('stock-counts/weight', command);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replay.body.counts.map((row: { id: string }) => row.id), accepted.body.counts.map((row: { id: string }) => row.id));
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

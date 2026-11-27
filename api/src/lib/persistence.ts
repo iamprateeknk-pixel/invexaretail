@@ -20,7 +20,8 @@ import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFrom
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
-import { reserveCountSubmission } from './count-submission-receipts.js';
+import { reserveCountSubmission, type CountSubmissionGuard } from './count-submission-receipts.js';
+import { verifyCountStockRevision } from './count-stock-revision.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 import { journalTypeForImport, syncJournalToBalances } from './import-journal-sync.js';
 import { replaceContents, pushAll } from './array-utils.js';
@@ -894,11 +895,14 @@ export async function persistCountDeletion(id: string, companyId: string): Promi
   await prisma.stockCount.delete({ where: { id, companyId } }).catch(() => undefined);
 }
 
-export async function persistCount(count: CountRecord, companyId: string, fingerprint?: string): Promise<void> {
+export async function persistCount(count: CountRecord, companyId: string, guard?: CountSubmissionGuard): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    if (fingerprint) await reserveCountSubmission(tx, companyId, [count], fingerprint);
+    if (guard) await reserveCountSubmission(tx, companyId, [count], guard.fingerprint);
+    if (guard?.stockRevision) {
+      await verifyCountStockRevision(tx, { companyId, itemId: count.itemId, locationId: count.locationId, lotId: count.lotId }, [count], guard.stockRevision);
+    }
     const existing = await tx.stockCount.findUnique({ where: { id: count.id, companyId }, select: { id: true } });
     const fields = {
       physicalQty: count.physicalQuantity,
@@ -920,11 +924,15 @@ export async function persistCount(count: CountRecord, companyId: string, finger
 }
 
 /** Creates every lot row for a pooled weight count in one database transaction. */
-export async function persistCountBatch(countBatch: readonly CountRecord[], companyId: string, fingerprint?: string): Promise<void> {
+export async function persistCountBatch(countBatch: readonly CountRecord[], companyId: string, guard?: CountSubmissionGuard): Promise<void> {
   if (!databaseEnabled || countBatch.length === 0) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    if (fingerprint) await reserveCountSubmission(tx, companyId, countBatch, fingerprint);
+    if (guard) await reserveCountSubmission(tx, companyId, countBatch, guard.fingerprint);
+    if (guard?.stockRevision) {
+      const { itemId, locationId } = countBatch[0];
+      await verifyCountStockRevision(tx, { companyId, itemId, locationId }, countBatch, guard.stockRevision);
+    }
     await tx.stockCount.createMany({
       data: countBatch.map((count) => ({
         id: count.id,

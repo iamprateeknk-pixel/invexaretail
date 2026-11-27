@@ -19,7 +19,8 @@ import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listSto
 import type { TenantContext } from '../lib/tenant-context.js';
 import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { getCountRecommendation } from '../lib/count-tolerance.js';
-import { CountSubmissionAlreadyRecorded, countSubmissionFingerprint, findCountSubmission, type CountSubmissionIntent } from '../lib/count-submission-receipts.js';
+import { CountSubmissionAlreadyRecorded, countSubmissionFingerprint, findCountSubmission, type CountSubmissionGuard, type CountSubmissionIntent } from '../lib/count-submission-receipts.js';
+import { countStockChanged } from '../lib/count-stock-revision.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { parseBody } from '../lib/validate.js';
 import {
@@ -158,7 +159,7 @@ type LotCountArgs = {
   physicalQuantity: number;
   mode: 'scan' | 'manual' | 'weight';
   requestId?: string;
-  fingerprint?: string;
+  guard?: CountSubmissionGuard;
   assignment?: ReturnType<typeof findActiveAssignment>;
   companyId?: string;
   // 'auto' closes the assignment once every lot with stock is counted (scan
@@ -187,7 +188,7 @@ async function commitLotCount(args: LotCountArgs) {
     role: args.role,
   });
   const record = { ...saved, bookQty, parentCountId: assignment?.parentCountId, requestId: args.requestId, companyId: args.companyId };
-  if (databaseEnabled) await persistCount(record, args.ctx.companyId, args.fingerprint);
+  if (databaseEnabled) await persistCount(record, args.ctx.companyId, args.guard);
   createCountRecord(record);
   const followUps: Promise<unknown>[] = [
     persistAudit(recordAudit({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
@@ -230,8 +231,10 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
   try {
     const validated = validateBlindCountSubmission(context.role, input);
     const requestId = parseRequestId(input.requestId);
+    if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
+    if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
     if (requestId) intent = { requestId, kind: 'LOT', itemId: validated.itemId, locationId: validated.locationId,
-      lotNo: validated.lotNo, mode: validated.mode ?? 'manual', quantity: validated.physicalQuantity };
+      lotNo: validated.lotNo, mode: validated.mode ?? 'manual', quantity: validated.physicalQuantity, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
@@ -249,7 +252,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     // Blueprint v4 §7: operational users never act on a zero-stock lot.
-    if (hidesZeroStockForRole(context.role) && ((await findStockEntry(tenantContext(req), item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
+    if (!intent?.stockRevision && hidesZeroStockForRole(context.role) && ((await findStockEntry(ctx, item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
       return sendError(res, 400, 'VALIDATION_FAILED', `Lot ${lot.lotNo} has no stock at this location and cannot be counted.`);
     }
 
@@ -270,7 +273,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      fingerprint: intent && countSubmissionFingerprint(intent),
+      guard: intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision },
     });
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
@@ -292,7 +295,7 @@ const weightInFlight = new Set<string>();
 router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
   const ctx = tenantContext(req);
-  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string };
+  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string; stockRevision?: string };
   // The presence check stays ahead of the location check, exactly as
   // before — a missing itemId/locationId is a 400 even for a location
   // this user cannot access.
@@ -308,7 +311,9 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   try {
     const total = Number(input.totalQuantity);
     const requestId = parseRequestId(input.requestId);
-    if (requestId) intent = { requestId, kind: 'POOLED', itemId: input.itemId, locationId, mode: 'weight', quantity: total };
+    if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
+    if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
+    if (requestId) intent = { requestId, kind: 'POOLED', itemId: input.itemId, locationId, mode: 'weight', quantity: total, stockRevision: input.stockRevision };
     if (intent && await replayCountSubmission(res, ctx, intent)) return;
 
     const item = listItems().find((candidate) => candidate.id === input.itemId);
@@ -328,6 +333,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
       bookQty: weightLedger.find((row) => row.itemId === item.id && row.lotId === lot.id)?.onHand ?? 0,
     }));
+    if (intent?.stockRevision && !lots.some((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && lot.bookQty > 0)) throw countStockChanged();
     const allocation = allocateWeightCount(total, lots, item.allocationStrategy ?? 'FEFO');
     if (allocation.some((row) => findPendingCountForLot(req.user!.id, item.id, row.lotId, locationId))) {
       if (intent && await replayCountSubmission(res, ctx, intent)) return;
@@ -363,7 +369,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       });
       await persistBatchThenRecord(
         countBatch,
-        (records) => persistCountBatch(records, companyId, intent && countSubmissionFingerprint(intent)),
+        (records) => persistCountBatch(records, companyId, intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision }),
         (record) => createCountRecord(record),
       );
       for (const count of countBatch) {

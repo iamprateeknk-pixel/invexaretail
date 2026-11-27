@@ -63,12 +63,16 @@ integration('count tasks keep only stocked, available lots; receive tasks list o
   assert.equal(fromDb.countTasks.length, 1, 'the unstocked item is dropped');
   assert.deepEqual(fromDb.countTasks[0].lots.map((lot) => lot.lotNo), ['STOCKED'], 'empty and blocked lots are dropped');
   assert.equal(fromDb.countTasks[0].priority, 'HIGH');
+  assert.match(fromDb.countTasks[0].stockRevision ?? '', /^[a-f0-9]{64}$/);
+  assert.match(fromDb.countTasks[0].lots[0].stockRevision ?? '', /^[a-f0-9]{64}$/);
   assert.deepEqual(fromDb.receiveTasks.map((task) => task.transferId), [inbound.id], "only this company's dispatched transfer");
   assert.equal(fromDb.receiveTasks[0].lineCount, 1);
   assert.equal(fromDb.receiveTasks[0].cartonCount, 3);
 
   const normalise = (work: typeof fromDb) => ({
-    countTasks: work.countTasks,
+    countTasks: work.countTasks.map(({ stockRevision: _revision, lots, ...task }) => ({
+      ...task, lots: lots.map(({ stockRevision: _lotRevision, ...lot }) => lot),
+    })),
     receiveTasks: work.receiveTasks.filter((task) => task.transferId === inbound.id),
   });
   assert.deepEqual(normalise(fromDb), normalise(fromSnapshot));

@@ -14,10 +14,14 @@ export type CountSubmissionIntent = {
   lotNo?: string;
   mode: CountRecord['mode'];
   quantity: number;
+  stockRevision?: string;
 };
+
+export type CountSubmissionGuard = { fingerprint: string; stockRevision?: string };
 
 export function countSubmissionFingerprint(intent: CountSubmissionIntent): string {
   const fields = [intent.kind, intent.itemId, intent.locationId, intent.lotNo?.toLowerCase() ?? null, intent.mode, intent.quantity];
+  if (intent.stockRevision) fields.push(intent.stockRevision);
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }
 

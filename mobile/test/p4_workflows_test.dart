@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:invexaretail_mobile/models/models.dart';
 import 'package:invexaretail_mobile/screens/conflict_center_screen.dart';
+import 'package:invexaretail_mobile/screens/count_screen.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/drift_store.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
@@ -123,6 +124,35 @@ void main() {
     expect(calls, 1, reason: 'a rejected item is not retried automatically');
   });
 
+  test('an offline count retains its stock revision and requires a fresh count after a conflict', () async {
+    final payloads = <Map<String, dynamic>>[];
+    final store = DriftStore.inMemory();
+    addTearDown(store.close);
+    var offline = true;
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/stock-counts/weight')) {
+        payloads.add(jsonDecode(request.body) as Map<String, dynamic>);
+        if (offline) throw const SocketException('offline');
+        return _json({'code': 'COUNT_STOCK_CHANGED', 'error': 'Stock changed since this count was started.'}, 409);
+      }
+      return _json({});
+    }, store: store);
+    const revision = 'original-revision';
+    expect(await controller.submitCount(itemId: 'i1', locationId: 'loc-1', physicalQuantity: 5, weight: true, stockRevision: revision), isTrue);
+    await controller.loadQueuesForTest();
+    expect(controller.queuedCounts.single.stockRevision, revision);
+    offline = false;
+    await controller.flushQueue();
+    await controller.loadQueuesForTest();
+    final stale = controller.queuedCounts.single;
+    expect(stale.requiresRecount, isTrue);
+    expect(stale.status, 'conflict');
+    await controller.retryQueuedCount(stale.localId);
+    expect(payloads, hasLength(2));
+    expect(payloads.map((body) => body['stockRevision']), [revision, revision]);
+    expect(payloads.last['requestId'], payloads.first['requestId']);
+  });
+
   test('concurrent local captures keep both writes in SQLite', () async {
     final store = DriftStore.inMemory();
     addTearDown(store.close);
@@ -188,18 +218,24 @@ void main() {
   });
 
   testWidgets('the Conflict Center lists what needs a decision, with the reason, and can discard it', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = _controller((request) async => _json({}));
     controller.items = const [CatalogItem(id: 'i1', code: 'RICE', name: 'Basmati rice')];
     controller.queuedCounts = [
       QueuedCount(localId: 'local-1', itemId: 'i1', locationId: 'loc-1', physicalQuantity: 4, createdAt: '2026-09-19T00:00:00Z', status: 'conflict', lastError: 'This lot is already submitted'),
       QueuedCount(localId: 'local-2', itemId: 'i1', locationId: 'loc-1', physicalQuantity: 9, createdAt: '2026-09-19T00:00:00Z'),
+      QueuedCount(localId: 'stale', itemId: 'i1', locationId: 'loc-1', physicalQuantity: 8, createdAt: '2026-09-19T00:00:00Z',
+        status: 'conflict', lastErrorCode: 'COUNT_STOCK_CHANGED'),
     ];
     await tester.pumpWidget(MaterialApp(home: ConflictCenterScreen(controller: controller)));
-    expect(find.text('Needs your decision (1)'), findsOneWidget);
+    expect(find.text('Needs your decision (2)'), findsOneWidget);
     expect(find.text('Waiting for connection (1)'), findsOneWidget);
     expect(find.textContaining('Server said: This lot is already submitted'), findsOneWidget);
     expect(find.byKey(const ValueKey('retry-local-1')), findsOneWidget);
     expect(find.byKey(const ValueKey('retry-local-2')), findsNothing, reason: 'a waiting item has nothing to decide yet');
+    expect(find.byKey(const ValueKey('retry-stale')), findsNothing);
+    expect(find.textContaining('Recount required.'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('discard-local-1')));
     await tester.pumpAndSettle();
@@ -212,7 +248,47 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-discard')));
     await tester.pumpAndSettle();
-    expect(controller.queuedCounts.map((row) => row.localId), ['local-2']);
-    expect(find.text('Needs your decision (1)'), findsNothing);
+    expect(controller.queuedCounts.map((row) => row.localId), ['local-2', 'stale']);
+    expect(find.text('Needs your decision (1)'), findsOneWidget);
+  });
+
+  testWidgets('a live refresh cannot replace the revision behind a quantity already entered', (tester) async {
+    final payloads = <Map<String, dynamic>>[];
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/stock-counts')) {
+        payloads.add(jsonDecode(request.body) as Map<String, dynamic>);
+        throw const SocketException('offline');
+      }
+      return _json({});
+    });
+    CountTask task(String revision) => CountTask.fromJson({
+      'assignmentId': 'a1', 'locationId': 'loc-1',
+      'item': {'id': 'i1', 'code': 'PEN', 'name': 'Pen', 'countMethod': 'LOT_SCAN'},
+      'lots': [{'lotId': 'l1', 'lotNo': 'LOT-1', 'stockRevision': revision}],
+    });
+    controller
+      ..locations = const [LocationRecord(id: 'loc-1', name: 'Store', type: 'store')]
+      ..assignments = const [CountAssignment(id: 'a1', itemId: 'i1', locationId: 'loc-1', itemName: 'Pen')]
+      ..countTasks = [task('revision-while-counting')]
+      ..pendingCountItemId = 'i1';
+    await tester.binding.setSurfaceSize(const Size(900, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ListenableBuilder(
+      listenable: controller,
+      builder: (_, _) => CountScreen(controller: controller),
+    ))));
+    await tester.pumpAndSettle();
+    final quantity = find.byKey(const ValueKey('count-qty'));
+    await tester.ensureVisible(quantity);
+    await tester.enterText(quantity, '4');
+    controller.countTasks = [task('revision-after-refresh')];
+    controller.setNotice('Work refreshed.');
+    await tester.pumpAndSettle();
+    final submit = find.widgetWithText(FilledButton, 'Submit count');
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(payloads.single['stockRevision'], 'revision-while-counting');
+    expect(controller.queuedCounts.single.stockRevision, 'revision-while-counting');
   });
 }

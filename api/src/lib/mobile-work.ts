@@ -17,6 +17,7 @@ import {
 } from './repository.js';
 import { listStockForLocation } from './repositories/stock-repository.js';
 import type { TenantContext } from './tenant-context.js';
+import { countStockRevision, type CountStockRevisionRow } from './count-stock-revision.js';
 
 // The database enum only has PARTIAL_RECEIVED; the in-memory record type also allows the legacy PARTIALLY_RECEIVED.
 const RECEIVABLE_STATUSES: string[] = ['DISPATCHED', 'IN_TRANSIT', 'PARTIALLY_RECEIVED', 'PARTIAL_RECEIVED'];
@@ -33,6 +34,10 @@ export type MobileWorkFacts = {
   itemsById: Map<string, ItemRecord>;
   /** On-hand quantity by `${itemId}|${lotId}|${locationId}`. */
   onHand: (itemId: string, lotId: string, locationId: string) => number;
+  revision?: {
+    companyId: string;
+    row: (itemId: string, lotId: string, locationId: string) => CountStockRevisionRow | undefined;
+  };
   transfers: ReceivableTransfer[];
 };
 
@@ -41,9 +46,17 @@ export function buildMobileWork(context: AccessContext, facts: MobileWorkFacts) 
   const countTasks = facts.assignments.flatMap((assignment) => {
     const item = facts.itemsById.get(assignment.itemId);
     if (!item || !isOperationalItem(item) || !canAccessLocation(context, assignment.locationId)) return [];
+    const { locationId } = assignment;
+    const revisionScope = facts.revision && { companyId: facts.revision.companyId, itemId: item.id, locationId };
+    const revisionRows: CountStockRevisionRow[] = [];
     const lots = item.lots
-      .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && facts.onHand(item.id, lot.id, assignment.locationId) > 0)
-      .map((lot) => ({ lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null }));
+      .filter((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && facts.onHand(item.id, lot.id, locationId) > 0)
+      .map((lot) => {
+        const row = facts.revision?.row(item.id, lot.id, locationId);
+        if (row) revisionRows.push(row);
+        return { lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? null,
+          ...(revisionScope && row ? { stockRevision: countStockRevision({ ...revisionScope, lotId: lot.id }, [row]) } : {}) };
+      });
     // Nothing on the shelf to count: not an actionable task for a store user.
     if (!lots.length) return [];
     return [{
@@ -55,6 +68,7 @@ export function buildMobileWork(context: AccessContext, facts: MobileWorkFacts) 
       instructions: assignment.instructions,
       campaignId: assignment.campaignId,
       recount: Boolean(assignment.parentCountId),
+      ...(revisionScope && revisionRows.length === lots.length ? { stockRevision: countStockRevision(revisionScope, revisionRows) } : {}),
       item: {
         id: item.id, code: item.code, name: item.name, barcode: item.barcode, unit: item.unit,
         countMethod: item.countMethod ?? 'LOT_SCAN', decimalQuantity: Boolean(item.decimalQuantity) || item.countMethod === 'ITEM_WEIGHT',
@@ -84,7 +98,10 @@ async function loadFromDatabase(ctx: TenantContext, context: AccessContext, isCo
   const [itemRows, ledgerRows, transferRows] = await Promise.all([
     itemIds.length ? prisma.item.findMany({ where: { id: { in: itemIds }, companyId: ctx.companyId }, include: { lots: true } }) : [],
     itemIds.length
-      ? prisma.stockLedger.findMany({ where: { itemId: { in: itemIds }, locationId: { in: locationIds }, onHand: { gt: 0 } }, select: { itemId: true, lotId: true, locationId: true, onHand: true } })
+      ? prisma.stockLedger.findMany({
+        where: { companyId: ctx.companyId, itemId: { in: itemIds }, locationId: { in: locationIds }, onHand: { gt: 0 } },
+        select: { id: true, itemId: true, lotId: true, locationId: true, onHand: true, version: true, lastUpdatedAt: true },
+      })
       : [],
     canReceive
       ? prisma.transfer.findMany({
@@ -95,11 +112,12 @@ async function loadFromDatabase(ctx: TenantContext, context: AccessContext, isCo
       : [],
   ]);
 
-  const stock = new Map<string, number>(ledgerRows.map((row) => [`${row.itemId}|${row.lotId}|${row.locationId}`, Number(row.onHand)] as const));
+  const stock = new Map(ledgerRows.map((row) => [`${row.itemId}|${row.lotId}|${row.locationId}`, row] as const));
   return {
     assignments,
     itemsById: new Map<string, ItemRecord>(itemRows.map((row) => [row.id, itemRowToRecord(row)] as const)),
-    onHand: (itemId, lotId, locationId) => stock.get(`${itemId}|${lotId}|${locationId}`) ?? 0,
+    onHand: (itemId, lotId, locationId) => Number(stock.get(`${itemId}|${lotId}|${locationId}`)?.onHand ?? 0),
+    revision: { companyId: ctx.companyId, row: (itemId, lotId, locationId) => stock.get(`${itemId}|${lotId}|${locationId}`) },
     transfers: transferRows.map((row) => ({
       id: row.id,
       sourceLocationId: row.sourceLocationId,

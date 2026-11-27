@@ -49,10 +49,11 @@ bool canSubmitAdHocCount(String role) =>
     role == 'ADMIN' || role == 'ADMIN_USER' || role == 'BRANCH_MANAGER' || role == 'AUDITOR';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode, this.retryAfterSeconds});
+  ApiException(this.message, {this.statusCode, this.retryAfterSeconds, this.code});
 
   final String message;
   final int? statusCode;
+  final String? code;
   // From a Retry-After header (seconds); the sync queue waits at least this long.
   final int? retryAfterSeconds;
 
@@ -210,12 +211,14 @@ class LotRecord {
     required this.lotNo,
     this.expiryDate,
     this.status,
+    this.stockRevision,
   });
 
   final String id;
   final String lotNo;
   final String? expiryDate;
   final String? status;
+  final String? stockRevision;
 
   factory LotRecord.fromJson(Map<String, dynamic> json) {
     return LotRecord(
@@ -223,6 +226,7 @@ class LotRecord {
       lotNo: asString(json['lotNo'], asString(json['id'])),
       expiryDate: json['expiryDate'] == null ? null : asString(json['expiryDate']),
       status: json['status'] == null ? null : asString(json['status']),
+      stockRevision: json['stockRevision'] as String?,
     );
   }
 }
@@ -535,6 +539,7 @@ class CountTask {
     required this.item,
     this.lots = const [],
     this.recount = false,
+    this.stockRevision,
   });
 
   final String assignmentId;
@@ -542,6 +547,7 @@ class CountTask {
   final CatalogItem item;
   final List<LotRecord> lots;
   final bool recount;
+  final String? stockRevision;
 
   factory CountTask.fromJson(Map<String, dynamic> json) {
     final item = CatalogItem.fromJson(asMap(json['item']));
@@ -551,6 +557,7 @@ class CountTask {
               id: asString(row['lotId']),
               lotNo: asString(row['lotNo']),
               expiryDate: row['expiryDate'] == null ? null : asString(row['expiryDate']),
+              stockRevision: row['stockRevision'] as String?,
             ))
         .toList();
     return CountTask(
@@ -559,6 +566,7 @@ class CountTask {
       item: item.withLots(lots),
       lots: lots,
       recount: json['recount'] == true,
+      stockRevision: json['stockRevision'] as String?,
     );
   }
 }
@@ -579,6 +587,8 @@ class QueuedCount {
     this.userId = '',
     this.deviceId = '',
     this.nextAttemptAt,
+    this.stockRevision,
+    this.lastErrorCode,
   }) : requestId = requestId ?? localId;
 
   final String localId;
@@ -598,9 +608,12 @@ class QueuedCount {
   // Idempotency key (blueprint v4 §38): sent with every attempt, so a retry
   // after a timeout or a reconnect can never record the count twice.
   final String requestId;
+  final String? stockRevision;
   final String createdAt;
   int attempts;
   String? lastError;
+  String? lastErrorCode;
+  bool get requiresRecount => lastErrorCode == 'COUNT_STOCK_CHANGED';
   // 'pending' auto-retries on the next flush; 'conflict'/'rejected' stop
   // auto-retrying and wait for the user to retry or discard (see
   // classifySyncFailure in sync_resolution.dart).
@@ -622,6 +635,8 @@ class QueuedCount {
       userId: asString(json['userId']),
       deviceId: asString(json['deviceId']),
       nextAttemptAt: json['nextAttemptAt'] == null ? null : asString(json['nextAttemptAt']),
+      stockRevision: json['stockRevision'] as String?,
+      lastErrorCode: json['lastErrorCode'] as String?,
     );
   }
 
@@ -631,6 +646,8 @@ class QueuedCount {
         'deviceId': deviceId,
         'nextAttemptAt': nextAttemptAt,
         'requestId': requestId,
+        if (stockRevision != null) 'stockRevision': stockRevision,
+        if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
         'itemId': itemId,
         'locationId': locationId,
         'physicalQuantity': physicalQuantity,

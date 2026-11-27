@@ -24,6 +24,7 @@ export type StockSnapshot = {
 };
 
 export type BlindCountInput = {
+  stockRevision?: string;
   itemId: string;
   locationId: string;
   physicalQuantity: number;

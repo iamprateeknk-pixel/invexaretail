@@ -23,7 +23,11 @@ Version **1**. A device queues *commands*, not state. Each command is:
 
 **Current replay path.** The app sends the original `requestId` to the existing count endpoints. PostgreSQL commits the receipt, the count rows, and any configured Studio event together. The receipt binds the ID to the company, submitting user, and normalized count input. A matching retry returns the committed result using the user's current role. Reusing the same ID with changed input returns a 409 and the app shows the item in its Conflict Center. Older count rows with a request ID can still be replayed after comparing their stored location, item, mode, lot and quantity where available.
 
-The typed command envelope, per-entity version checks, and common replay for pick, receive and putaway remain open. Verify the complete offline journey on physical devices before release.
+Assigned lot and pooled counts now carry an opaque stock revision from `GET /mobile/work`. The app keeps the revision from the first quantity entry through local storage and replay. PostgreSQL checks the relevant stock inside the count transaction. If it changed, the count and receipt are rolled back and Sync Center keeps the old quantity with a recount prompt. A completed request can still replay after later stock changes. Counts created without a revision retain the existing behavior.
+
+Deploy the revision-aware API before the native pilot. The staged rollback target must also support count revisions while native clients can still have revision-bearing counts in their queues.
+
+The typed command envelope and common versioned replay for pick, receive and putaway remain open. Verify the complete offline journey on physical devices before release.
 
 ## Mobile store - `mobile/lib/services/native_database.dart`
 

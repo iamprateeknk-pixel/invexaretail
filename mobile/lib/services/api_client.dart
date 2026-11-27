@@ -146,6 +146,7 @@ class InvexaApi {
       throw ApiException(
         message,
         statusCode: response.statusCode,
+        code: payload['code'] is String ? payload['code'] as String : null,
         retryAfterSeconds: int.tryParse(response.headers['retry-after'] ?? ''),
       );
     } on ApiException {
@@ -343,6 +344,7 @@ class InvexaApi {
     String? lotNo,
     String mode = 'manual',
     String? requestId,
+    String? stockRevision,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts', body: {
       'itemId': itemId,
@@ -351,6 +353,7 @@ class InvexaApi {
       'mode': mode,
       if (lotNo != null && lotNo.isNotEmpty) 'lotNo': lotNo,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+      if (stockRevision != null) 'stockRevision': stockRevision,
     }, mutationId: requestId);
     return CountRecord.fromJson(asMap(payload['count']));
   }
@@ -362,12 +365,14 @@ class InvexaApi {
     required String locationId,
     required double totalQuantity,
     String? requestId,
+    String? stockRevision,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts/weight', body: {
       'itemId': itemId,
       'locationId': locationId,
       'totalQuantity': totalQuantity,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+      if (stockRevision != null) 'stockRevision': stockRevision,
     }, mutationId: requestId);
     return asList(payload['counts']).map((row) => CountRecord.fromJson(asMap(row))).toList();
   }

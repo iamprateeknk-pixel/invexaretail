@@ -17,6 +17,7 @@ export const ERROR_CODES = [
   'INSUFFICIENT_STOCK',
   'INVALID_TRANSITION',
   'CONCURRENT_UPDATE_CONFLICT',
+  'COUNT_STOCK_CHANGED',
   'DUPLICATE_REQUEST',
   'NOT_FOUND',
   'VALIDATION_FAILED',
@@ -132,6 +133,7 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'VALIDATION_FAILED':
       return 422;
     case 'CONCURRENT_UPDATE_CONFLICT':
+    case 'COUNT_STOCK_CHANGED':
       return 409;
     case 'DUPLICATE_REQUEST':
       return 200;

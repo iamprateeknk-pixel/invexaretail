@@ -4037,7 +4037,7 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
@@ -11183,6 +11183,8 @@ export interface operations {
                             instructions?: string | null;
                             campaignId?: string | null;
                             recount?: boolean;
+                            /** @description Opaque revision to include when submitting an assigned pooled count. */
+                            stockRevision?: string;
                             item?: {
                                 id?: string;
                                 code?: string;
@@ -11195,6 +11197,8 @@ export interface operations {
                             lots?: {
                                 lotId?: string;
                                 lotNo?: string;
+                                /** @description Opaque revision to include when submitting this assigned lot count. */
+                                stockRevision?: string;
                                 expiryDate?: string | null;
                             }[];
                         }[];
@@ -18569,6 +18573,8 @@ export interface operations {
                     physicalQuantity: number;
                     /** @enum {string} */
                     mode?: "scan" | "manual" | "weight";
+                    /** @description The lot revision from mobile work when the operator began the count. Requires requestId. */
+                    stockRevision?: string;
                     requestId?: string;
                 };
             };
@@ -18617,13 +18623,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description The lot already has a count awaiting review or the request ID belongs to a different submission. */
+            /** @description The lot has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -18641,6 +18647,8 @@ export interface operations {
                     itemId: string;
                     locationId: string;
                     totalQuantity: number;
+                    /** @description The pooled revision from mobile work when the operator began the count. Requires requestId. */
+                    stockRevision?: string;
                     requestId?: string;
                 };
             };
@@ -18699,13 +18707,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description The item already has a count awaiting review or the request ID belongs to a different submission. */
+            /** @description The item has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

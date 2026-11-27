@@ -62,9 +62,9 @@ class SessionController extends ChangeNotifier {
   List<CountRecord> counts = [];
   List<TransferRecord> transfers = [];
   List<CountAssignment> assignments = [];
-  // Half-typed quantities, keyed itemId|locationId. Switching tabs rebuilds the
-  // count screen, so a number typed before a phone call is not lost.
-  final Map<String, String> countDrafts = {};
+  // Drafts keep the stock revision from when the quantity was first entered,
+  // even when live updates refresh the work feed or switching tabs rebuilds the form.
+  final Map<({String itemId, String locationId, String? lotNo}), ({String quantity, String? stockRevision})> countDrafts = {};
   // Actionable count tasks from /mobile/work (store users). Empty on an older server.
   List<CountTask> countTasks = [];
   List<QueuedCount> queuedCounts = [];
@@ -678,6 +678,7 @@ class SessionController extends ChangeNotifier {
     required double physicalQuantity,
     String? lotNo,
     bool weight = false,
+    String? stockRevision,
   }) async {
     error = null;
     notice = null;
@@ -686,7 +687,8 @@ class SessionController extends ChangeNotifier {
     final requestId = newRequestId();
     try {
       if (weight) {
-        final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity, requestId: requestId);
+        final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity,
+          requestId: requestId, stockRevision: stockRevision);
         counts = [...created, ...counts];
       } else {
         final created = await api.submitCount(
@@ -695,6 +697,7 @@ class SessionController extends ChangeNotifier {
           physicalQuantity: physicalQuantity,
           lotNo: lotNo,
           requestId: requestId,
+          stockRevision: stockRevision,
         );
         counts = [created, ...counts];
       }
@@ -725,11 +728,13 @@ class SessionController extends ChangeNotifier {
           lotNo: lotNo,
           mode: weight ? 'weight' : 'manual',
           requestId: requestId,
+          stockRevision: stockRevision,
         );
         if (queued && isSignedIn) notice = 'Offline. Count queued and will sync when the API is reachable.';
         return queued;
       }
       error = err.message;
+      if (err.code == 'COUNT_STOCK_CHANGED' && isCountWorker) await _loadCountTasks();
       return false;
     } finally {
       busy = false;
@@ -757,6 +762,7 @@ class SessionController extends ChangeNotifier {
     String? lotNo,
     String mode = 'manual',
     String? requestId,
+    String? stockRevision,
   }) async {
     final generation = api.sessionGeneration;
     final deviceId = await _device();
@@ -769,6 +775,7 @@ class SessionController extends ChangeNotifier {
         userId: _userId,
         deviceId: deviceId,
         requestId: requestId ?? localId,
+        stockRevision: stockRevision,
         itemId: itemId,
         locationId: locationId,
         physicalQuantity: physicalQuantity,
@@ -800,8 +807,10 @@ class SessionController extends ChangeNotifier {
   Future<void> retryQueuedCount(String localId) async {
     for (final item in queuedCounts) {
       if (item.localId == localId) {
+        if (item.requiresRecount) return;
         item.status = 'pending';
         item.lastError = null;
+        item.lastErrorCode = null;
         item.nextAttemptAt = null;
       }
     }
@@ -867,6 +876,7 @@ class SessionController extends ChangeNotifier {
             locationId: item.locationId,
             totalQuantity: item.physicalQuantity,
             requestId: item.requestId,
+            stockRevision: item.stockRevision,
           );
         } else {
           await api.submitCount(
@@ -876,6 +886,7 @@ class SessionController extends ChangeNotifier {
             lotNo: item.lotNo,
             mode: item.mode,
             requestId: item.requestId,
+            stockRevision: item.stockRevision,
           );
         }
       } on ApiException catch (err) {
@@ -883,6 +894,7 @@ class SessionController extends ChangeNotifier {
         if (!queuedCounts.contains(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
+        item.lastErrorCode = err.code;
         final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();

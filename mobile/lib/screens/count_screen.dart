@@ -138,23 +138,45 @@ class _CountScreenState extends State<CountScreen> {
     });
   }
 
-  String? get _draftKey => _itemId == null || _locationId == null ? null : '$_itemId|$_locationId';
+  ({String itemId, String locationId, String? lotNo})? get _draftKey {
+    final itemId = _itemId;
+    final locationId = _locationId ?? widget.controller.selectedLocationId;
+    if (itemId == null || locationId == null) return null;
+    return (itemId: itemId, locationId: locationId, lotNo: _lotNo);
+  }
 
   void _saveDraft() {
     final key = _draftKey;
     if (key == null) return;
-    if (_qty.text.trim().isEmpty) {
-      widget.controller.countDrafts.remove(key);
-    } else {
-      widget.controller.countDrafts[key] = _qty.text;
+    final controller = widget.controller;
+    final quantity = _qty.text;
+    if (quantity.trim().isEmpty) {
+      controller.countDrafts.remove(key);
+      return;
     }
+    final previous = controller.countDrafts[key];
+    String? stockRevision;
+    if (previous != null) {
+      stockRevision = previous.stockRevision;
+    } else {
+      final task = controller.taskFor(key.itemId, key.locationId);
+      if (task?.item.isWeightCounted == true) {
+        stockRevision = task?.stockRevision;
+      } else if (task != null) {
+        for (final lot in task.lots) {
+          if (lot.lotNo == key.lotNo) stockRevision = lot.stockRevision;
+        }
+      }
+    }
+    controller.countDrafts[key] = (quantity: quantity, stockRevision: stockRevision);
   }
 
   /// Switches the item being counted, restoring a draft typed earlier.
   void _pickItem(String? itemId, {String? lotNo}) {
     _itemId = itemId;
-    _lotNo = lotNo;
-    _qty.text = _draftKey == null ? '' : (widget.controller.countDrafts[_draftKey!] ?? '');
+    final item = _find(_countableItems, itemId);
+    _lotNo = item == null || item.isWeightCounted || item.lots.isEmpty ? null : lotNo ?? item.lots.first.lotNo;
+    _qty.text = widget.controller.countDrafts[_draftKey]?.quantity ?? '';
   }
 
   // Blueprint v4 §13: pieces are whole numbers; a KG / decimal item takes one
@@ -192,19 +214,21 @@ class _CountScreenState extends State<CountScreen> {
     }
     final isWeightItem = item != null && item.isWeightCounted;
     final submittedLotNo = isWeightItem ? null : _lotNo;
+    final draftKey = _draftKey;
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
       physicalQuantity: qty,
       lotNo: submittedLotNo,
       weight: isWeightItem,
+      stockRevision: widget.controller.countDrafts[draftKey]?.stockRevision,
     );
     if (!ok || !mounted) {
       if (!ok) await ScanFeedback.rejected();
       return;
     }
     await ScanFeedback.saved();
-    widget.controller.countDrafts.remove(_draftKey);
+    widget.controller.countDrafts.remove(draftKey);
     if (submittedLotNo != null) {
       _submittedLots.putIfAbsent(itemId, () => {}).add(submittedLotNo);
     }
@@ -229,10 +253,6 @@ class _CountScreenState extends State<CountScreen> {
         // Save & Next: go straight to the next item still open in this batch.
         final remaining = _selectedBatchRows.where((row) => row.itemId != itemId).toList();
         _pickItem(remaining.isEmpty ? null : remaining.first.itemId);
-        if (remaining.isNotEmpty) {
-          final next = _find(_countableItems, _itemId);
-          _lotNo = next == null || next.lots.isEmpty ? null : next.lots.first.lotNo;
-        }
       }
     });
   }
@@ -352,7 +372,10 @@ class _CountScreenState extends State<CountScreen> {
                   for (final location in controller.locations)
                     DropdownMenuItem(value: location.id, child: Text(location.name)),
                 ],
-                onChanged: (value) => setState(() => _locationId = value),
+                onChanged: (value) => setState(() {
+                  _locationId = value;
+                  _pickItem(_itemId, lotNo: _lotNo);
+                }),
               ),
             const SizedBox(height: 12),
             Row(
@@ -391,7 +414,7 @@ class _CountScreenState extends State<CountScreen> {
                   for (final lot in lots)
                     DropdownMenuItem(value: lot.lotNo, child: Text(lot.lotNo)),
                 ],
-                onChanged: (value) => setState(() => _lotNo = value),
+                onChanged: (value) => setState(() => _pickItem(_itemId, lotNo: value)),
               ),
             const SizedBox(height: 12),
             Row(

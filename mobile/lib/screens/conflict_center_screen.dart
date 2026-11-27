@@ -28,6 +28,7 @@ class ConflictCenterScreen extends StatelessWidget {
           ...counts.where((row) => row.status == 'pending').map((row) => _Entry.count(row)),
           ...actions.where((row) => row.status == 'pending').map((row) => _Entry.action(row)),
         ];
+        final retryable = needsAttention.where((entry) => entry.count?.requiresRecount != true).toList();
         return Scaffold(
           appBar: AppBar(
             title: const Text('Sync center'),
@@ -61,13 +62,13 @@ class ConflictCenterScreen extends StatelessWidget {
                   style: TextStyle(color: invexaMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 8),
-                if (needsAttention.length > 1)
+                if (retryable.length > 1)
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton.icon(
                       key: const ValueKey('retry-all'),
                       onPressed: () async {
-                        for (final entry in needsAttention) {
+                        for (final entry in retryable) {
                           if (entry.count != null) {
                             await controller.retryQueuedCount(entry.localId);
                           } else {
@@ -184,6 +185,8 @@ class _EntryCard extends StatelessWidget {
             Text(where, style: const TextStyle(color: invexaMuted, fontSize: 12)),
             const SizedBox(height: 8),
             Text(syncReason(entry.status), style: const TextStyle(fontSize: 13)),
+            if (count?.requiresRecount == true)
+              const Text('Recount required. Open the count task again and enter a fresh quantity.'),
             if (entry.lastError != null && attention) ...[
               const SizedBox(height: 6),
               Text('Server said: ${entry.lastError}', style: TextStyle(color: color, fontSize: 12)),
@@ -203,7 +206,7 @@ class _EntryCard extends StatelessWidget {
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Discard'),
                 ),
-                if (attention)
+                if (attention && count?.requiresRecount != true)
                   FilledButton.icon(
                     key: ValueKey('retry-${entry.localId}'),
                     onPressed: () => count != null ? controller.retryQueuedCount(entry.localId) : controller.retryQueuedAction(entry.localId),
