@@ -192,8 +192,8 @@ export function useWorkspaceHydration({
   async function refreshSlices(slices) {
     const { authToken: token, locationId: currentLocation, role: currentRole } = latest.current;
     if (!token) return;
+    if (slices.has('full') || slices.has('configuration')) setConfigurationRevision((current) => current + 1);
     if (slices.has('full')) {
-      setConfigurationRevision((current) => current + 1);
       await loadAppDataRef.current?.(token, currentRole);
       return;
     }

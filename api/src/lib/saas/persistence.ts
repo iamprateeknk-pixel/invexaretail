@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { resolveDatabaseUrl } from '../db.js';
 import type { StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
@@ -87,7 +88,7 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
       snapshot.versions = [...snapshot.versions.filter(([id]) => id !== companyId), [companyId, history]];
       snapshot.audit = [...snapshot.audit, ...audit].slice(-500);
       snapshot.outbox = [...snapshot.outbox, ...outbox].slice(-200);
-      await persistControlPlaneRows(plane, snapshot);
+      await persistControlPlaneRows(plane, snapshot, { companyId, actorId: scope.actorId, versionId: published.id });
     }
     if (draft) plane.drafts.set(companyId, draft);
     else plane.drafts.delete(companyId);
@@ -95,6 +96,10 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
     plane.versions.set(companyId, history);
     plane.audit.push(...audit);
     plane.outbox.push(...outbox);
+    if (!resolveDatabaseUrl()) {
+      const { publishEvent } = await import('../event-bus.js');
+      publishEvent({ topic: 'config.changed', companyId, actorId: scope.actorId, requestId: published.id });
+    }
     return published;
   });
   persistQueue = release.then(() => undefined, () => undefined);

@@ -48,6 +48,8 @@ test('topics map to targeted invalidations and unknown topics invalidate nothing
   assert.ok(invalidationsForTopics(['stock.changed']).has('stock'));
   assert.ok(!invalidationsForTopics(['stock.changed']).has('items'));
   assert.ok(invalidationsForTopics(['permission.changed']).has('full'));
+  assert.ok(invalidationsForTopics(['config.changed']).has('full'));
+  assert.ok(invalidationsForTopics(['*']).has('configuration'));
   assert.ok(invalidationsForTopics(['*']).has('items') && !invalidationsForTopics(['*']).has('full'));
   assert.equal(invalidationsForTopics(['something.else']).size, 0);
 });

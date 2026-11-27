@@ -496,7 +496,7 @@ export class ControlPlaneStudio {
     return restored;
   }
 
-  runtimeConfig(companyId: string, role = 'ADMIN'): {
+  runtimeConfig(companyId: string, role = 'ADMIN', configuration?: ConfigurationVersion | null): {
     companyId: string;
     version: number;
     page: PageDefinition;
@@ -505,7 +505,8 @@ export class ControlPlaneStudio {
     mobilePolicy?: MobilePolicy;
     reports: ReportDefinition[];
   } {
-    const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, 'system', 1, 'published');
+    const published = (configuration === undefined ? this.store.published.get(companyId) : configuration)
+      ?? this.host.blankConfig(companyId, 'system', 1, 'published');
     const page = resolveStockPage(published.page, role);
     return {
       companyId,
@@ -515,7 +516,7 @@ export class ControlPlaneStudio {
         Object.keys(MODULE_REGISTRY).map((key) => [key, this.host.isFeatureEnabled(companyId, key)]),
       ),
       killSwitches: Object.fromEntries(this.store.safety.entries()),
-      mobilePolicy: published.mobilePolicies.find((policy) => policy.role === role),
+      mobilePolicy: published.mobilePolicies?.find((policy) => policy.role === role),
       reports: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role)
         ? structuredClone(published.reports ?? [])
         : [],

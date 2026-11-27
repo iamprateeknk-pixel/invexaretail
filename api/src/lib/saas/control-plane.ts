@@ -1098,7 +1098,7 @@ export class ControlPlane {
       audit: staged.audit, outbox: staged.outbox };
   }
 
-  runtimeConfig(companyId: string, role = 'ADMIN'): {
+  runtimeConfig(companyId: string, role = 'ADMIN', configuration?: ConfigurationVersion | null): {
     companyId: string;
     version: number;
     page: PageDefinition;
@@ -1107,7 +1107,7 @@ export class ControlPlane {
     mobilePolicy?: MobilePolicy;
     reports: ReportDefinition[];
   } {
-    return this.studioSvc.runtimeConfig(companyId, role);
+    return this.studioSvc.runtimeConfig(companyId, role, configuration);
   }
 
   moduleRegistry() {

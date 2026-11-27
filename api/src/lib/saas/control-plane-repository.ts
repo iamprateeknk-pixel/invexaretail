@@ -688,7 +688,9 @@ export class StudioConfigConflict extends Error {
   constructor() { super('Studio configuration changed in another session. Refresh the company configuration before trying again.'); }
 }
 
-async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows) {
+type StudioReleaseEvent = { companyId: string; actorId: string; versionId: string };
+
+async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows, release?: StudioReleaseEvent) {
   const prisma = await getPrisma();
   const changedKeys = new Set([...diff.configs.upserts, ...diff.configs.deletes]);
   if (previous?.configs.some((row) => row.kind === 'history' && changedKeys.has(`${row.versionId}|history`))) {
@@ -697,6 +699,7 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
   const companyIds = previous && changedKeys.size ? [...new Set([...previous.configs, ...nextRows.configs]
     .filter((row) => changedKeys.has(`${row.versionId}|${row.kind}`)).map((row) => row.companyId))].sort() : [];
   if (!companyIds.length || !previous) {
+    if (release) throw new StudioConfigConflict();
     const { ops, written, deleted } = buildDiffOperations(prisma, diff, nextRows);
     if (ops.length) await prisma.$transaction(ops);
     return { written, deleted };
@@ -712,6 +715,11 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
     }
     const { ops, written, deleted } = buildDiffOperations(tx, diff, nextRows);
     for (const op of ops) await op;
+    if (release) {
+      const { recordOutboxEventInTransaction } = await import('../event-bus.js');
+      await recordOutboxEventInTransaction(tx, { topic: 'config.changed', companyId: release.companyId,
+        actorId: release.actorId, requestId: release.versionId });
+    }
     return { written, deleted };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 25_000 });
 }
@@ -732,10 +740,12 @@ function setLastPersisted(plane: ControlPlane, snapshot: ControlPlaneSnapshot): 
 export async function persistControlPlaneRows(
   plane: ControlPlane,
   snapshot: ControlPlaneSnapshot = serializeControlPlane(plane),
+  release?: StudioReleaseEvent,
 ): Promise<{ written: number; deleted: number }> {
   if (!controlPlaneDbEnabled()) return { written: 0, deleted: 0 };
   const prev = lastPersistedByPlane.get(plane);
   if (!prev) {
+    if (release) throw new StudioConfigConflict();
     // First persist for this instance (no hydrate/refresh ran first):
     // upsert-only. Without a baseline we cannot tell a key this instance
     // deleted from a key another replica created, and deleting the latter
@@ -749,7 +759,7 @@ export async function persistControlPlaneRows(
     return result;
   }
   const diff = diffSnapshots(prev, snapshot);
-  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot), rowsFromSnapshot(prev));
+  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot), rowsFromSnapshot(prev), release);
   setLastPersisted(plane, snapshot);
   return result;
 }

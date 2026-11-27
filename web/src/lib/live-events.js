@@ -52,7 +52,7 @@ export function invalidationsForTopics(topics) {
       case '*':
         // Continuity lost: refetch every data slice, but not the full
         // hydrate (that also resets in-progress form defaults).
-        ['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'pickerTasks', 'campaigns'].forEach((slice) => out.add(slice));
+        ['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'pickerTasks', 'campaigns', 'configuration'].forEach((slice) => out.add(slice));
         break;
       case 'permission.changed':
       case 'config.changed':

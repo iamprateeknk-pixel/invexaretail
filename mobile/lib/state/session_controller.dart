@@ -448,6 +448,11 @@ class SessionController extends ChangeNotifier {
         await refreshAll();
         return;
       }
+      if (slices.contains('policy')) {
+        final generation = api.sessionGeneration;
+        await _refreshMobilePolicy();
+        if (!isSignedIn || api.sessionGeneration != generation) return;
+      }
       final locationId = selectedLocationId;
       final jobs = <Future<void>>[
         if (slices.contains('items')) _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),

@@ -197,10 +197,12 @@ router.get('/workspace/profile', (req: Request, res: Response) => {
   });
 });
 
-router.get('/runtime/config', (req: Request, res: Response) => {
+router.get('/runtime/config', async (req: Request, res: Response) => {
   const companyId = req.companyId || DEFAULT_COMPANY_ID;
   const role = req.user?.role ?? 'ADMIN';
-  return res.json({ success: true, runtime: controlPlane.runtimeConfig(companyId, role) });
+  const { readStudioRuntime } = await import('../lib/saas/studio-versions.js');
+  const runtime = await readStudioRuntime(controlPlane, companyId, role);
+  return res.set('Cache-Control', 'no-store').json({ success: true, runtime });
 });
 
 router.get('/company', (req: Request, res: Response) => {

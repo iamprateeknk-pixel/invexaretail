@@ -18,6 +18,8 @@ Item stock and Studio's Publish tab share the stock table, formula rendering and
 
 **Version history** lists the locked company's published versions with their author, date and active status. An operator can compare an earlier compatible version with the active one, review which configuration areas will change, and enter an audit reason before restoring. Studio asks for a fresh comparison if the active version changes before confirmation. A restore creates a new active version and keeps the draft and prior versions available.
 
+Studio publication and rollback append a company-scoped configuration event in the same PostgreSQL transaction as the release. Operational clients fetch the saved active configuration on invalidation. Web and native clients also refresh configuration when a stream reconnect requires a full read refresh.
+
 ### Feedback states (`web/src/components/ui/feedback-states.jsx`)
 
 | Component | Variants | Used by | Accessibility evidence |

@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { ControlPlane } from './control-plane.js';
 import { commitStudioRelease, studioDraftRevision } from './persistence.js';
-import { readStudioVersions } from './studio-versions.js';
+import { readStudioRuntime, readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
   hydrateControlPlaneRows,
@@ -203,6 +203,16 @@ integration('a rejected Studio release leaves its draft intact and rollback crea
   assert.equal(history.active?.id, restoredSecond.id);
   assert.deepEqual(history.active?.page, winner.page);
   assert.deepEqual(history.versions.map((entry) => entry.version), [4, 3, 2, 1]);
+  assert.notEqual(second.runtimeConfig(company.id).version, restoredSecond.version, 'the reader has not refreshed its snapshot');
+  const runtime = await readStudioRuntime(second, company.id, 'STORE_USER');
+  assert.equal(runtime.version, restoredSecond.version);
+  assert.equal(runtime.page.columns.find((column) => column.key === 'item_code')?.label, 'Released label');
+  await assert.rejects(readStudioRuntime(second, randomUUID(), 'STORE_USER'), { code: 'COMPANY_NOT_FOUND' });
+  const foreignRuntime = await readStudioRuntime(second, 'default-company', 'STORE_USER');
+  assert.ok(foreignRuntime.page.columns.every((column) => column.label !== 'Released label'));
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' }, orderBy: { id: 'asc' } });
+  assert.deepEqual(events.map((event) => event.requestId), [winner.id, restored.id, restoredSecond.id]);
+  assert.ok(events.every((event) => event.actorId === a.actorId));
   assert.deepEqual(await readStudioVersions(second, randomUUID()), { active: undefined, versions: [] });
   first.versions.get(company.id)!.find((entry) => entry.id === winner.id)!.page.title = 'Changed after release';
   await assert.rejects(persistControlPlaneRows(first), { code: 'STUDIO_CONFIG_CONFLICT' });

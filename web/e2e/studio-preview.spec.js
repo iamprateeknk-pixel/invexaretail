@@ -61,6 +61,10 @@ test('Studio previews a draft and confirms a selected historical restore at phon
   await expect(dialog.getByText('Stock layout')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Restore version 2' })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('button', { name: 'Compare version 2' })).toBeFocused();
+  expect(restores).toEqual([]);
+  await page.getByRole('button', { name: 'Compare version 2' }).click();
   await dialog.getByLabel('Reason for restoring').fill('Return to the documented stock layout');
   await dialog.getByRole('button', { name: 'Restore version 2' }).click();
   await expect(page.getByText('Version 2 restored as version 4.')).toBeVisible();

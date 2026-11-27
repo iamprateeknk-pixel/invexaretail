@@ -3,6 +3,16 @@ import type { ConfigurationVersion, ControlPlane } from './control-plane.js';
 import { controlPlaneDbEnabled, stableStringify } from './control-plane-repository.js';
 import { validateStudioRelease } from './control-plane-studio.js';
 
+export async function readStudioRuntime(plane: ControlPlane, companyId: string, role: string) {
+  if (!controlPlaneDbEnabled()) return plane.runtimeConfig(companyId, role);
+  const current = await prisma.controlPlaneConfig.findFirst({
+    where: { companyId, kind: 'published', status: 'published' },
+    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
+    select: { payload: true },
+  });
+  return plane.runtimeConfig(companyId, role, current ? current.payload as unknown as ConfigurationVersion : null);
+}
+
 /** The active and historical records are read together so the comparison pins one active version. */
 export async function readStudioVersions(plane: ControlPlane, companyId: string) {
   if (!controlPlaneDbEnabled()) {
