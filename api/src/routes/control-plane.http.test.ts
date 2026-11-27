@@ -5,6 +5,9 @@ import type { Request } from 'express';
 import { controlPlane } from '../lib/saas/control-plane.js';
 import { LOCAL_STRIPE_SECRET, resetLocalStripeSessions, resetStripeTransport, setStripeTransport, signStripePayload } from '../lib/saas/billing-provider.js';
 import { controlRouter, studioRouter, syncRouter } from './control-plane.js';
+import coreRouter from './core.js';
+import { createEnhancedUser } from '../lib/enterprise-repository.js';
+import { generateJWT } from '../lib/otp-auth.js';
 
 async function withServer(run: (url: string) => Promise<void>): Promise<void> {
   controlPlane.reset();
@@ -17,6 +20,7 @@ async function withServer(run: (url: string) => Promise<void>): Promise<void> {
   app.use('/control/v1', controlRouter);
   app.use('/studio/v1', studioRouter);
   app.use('/sync/v1', syncRouter);
+  app.use('/api/v1', coreRouter);
   const server = app.listen(0);
   const address = server.address();
   if (!address || typeof address === 'string') {
@@ -186,6 +190,53 @@ test('HTTP: a requested Studio release requires an independent locked operator',
     const approved = await post('/studio/v1/publish', command, checkerToken);
     assert.equal(approved.status, 200);
     assert.equal(approved.body.published.releaseReview.approvedBy, checker.id);
+  });
+});
+
+test('HTTP: the named company admin can approve a draft without a platform session', async () => {
+  await withServer(async (url) => {
+    const makeAdmin = (id: string, companyId: string, email = `${id}@example.test`) => {
+      createEnhancedUser({ id, email, companyId, name: id, role: 'ADMIN', status: 'active',
+        passwordHash: 'unused', branchIds: [], locationIds: [] });
+      return generateJWT(id, companyId);
+    };
+    const reviewerId = 'assigned-studio-reviewer';
+    const reviewer = makeAdmin(reviewerId, 'default-company');
+    const unrelated = makeAdmin('unassigned-studio-reviewer', 'default-company');
+    const foreign = makeAdmin('foreign-studio-reviewer', 'company-jaipur');
+    makeAdmin('same-email-as-maker', 'default-company', 'superadmin@invexa.local');
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const { body: locked } = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const maker = locked.token;
+    await post('/studio/v1/draft/stock/columns', { name: 'Scoped review', key: 'scoped_review', type: 'number' }, maker);
+    const { body: { preview } } = await post('/studio/v1/preview', {}, maker);
+    const draftRevision = preview.draftRevision;
+    for (const forbiddenId of ['same-email-as-maker', 'foreign-studio-reviewer']) {
+      const refused = await post('/studio/v1/release-review', { draftRevision, reviewerId: forbiddenId }, maker);
+      assert.equal(refused.status, 403);
+    }
+    const requested = await post('/studio/v1/release-review', { draftRevision, reviewerId }, maker);
+    assert.equal(requested.status, 200);
+    const reviewId = requested.body.review.id;
+    const command = { draftRevision, reviewId };
+    assert.equal((await post('/studio/v1/publish', command, maker)).status, 403);
+    const path = '/api/v1/studio-release-review';
+    const get = (token: string) => json(url, path, { headers: { Authorization: `Bearer ${token}` } });
+    assert.deepEqual((await get(foreign)).body, { review: null });
+    assert.deepEqual((await get(unrelated)).body, { review: null });
+    assert.equal((await post(path, { reviewId, revision: draftRevision }, unrelated)).status, 404);
+    assert.equal((await post('/studio/v1/publish', command, reviewer)).status, 401);
+    const assigned = (await get(reviewer)).body.review;
+    assert.equal(assigned.id, reviewId);
+    assert.ok(assigned.changes.some((change: { area: string }) => change.area === 'Stock layout'));
+    const approved = await post(path, { reviewId, revision: draftRevision }, reviewer);
+    assert.equal(approved.status, 200);
+    const published = await post('/studio/v1/publish', command, maker);
+    assert.equal(published.status, 200);
+    assert.equal(published.body.published.releaseReview.approvedBy, reviewerId);
   });
 });
 

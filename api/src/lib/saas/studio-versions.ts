@@ -54,3 +54,9 @@ export function compareStudioVersions(active: ConfigurationVersion, target: Conf
     .filter((key) => stableStringify(active[key]) !== stableStringify(target[key]))
     .map((key) => AREAS[key]);
 }
+
+export function studioReviewChanges(active: ConfigurationVersion | undefined, draft: ConfigurationVersion) {
+  return (Object.keys(AREAS) as (keyof typeof AREAS)[])
+    .filter((key) => stableStringify(active?.[key]) !== stableStringify(draft[key]))
+    .map((key) => ({ area: AREAS[key], before: active?.[key] ?? null, after: draft[key] ?? null }));
+}

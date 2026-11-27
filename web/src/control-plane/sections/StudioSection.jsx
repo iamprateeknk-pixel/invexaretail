@@ -90,7 +90,7 @@ export function StudioSection(props) {
       <TabsContent value="preview" className="grid gap-4">
         <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken}
           onPublish={(draftRevision, reviewId) => submitRelease('/studio/v1/publish', { draftRevision, reviewId }, 'Published')}
-          onRequestReview={(draftRevision) => submitRelease('/studio/v1/release-review', { draftRevision }, 'Approval requested')} />
+          onRequestReview={(draftRevision, reviewerId) => submitRelease('/studio/v1/release-review', { draftRevision, reviewerId }, 'Approval requested')} />
         <Card>
           <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
           <CardContent className="text-sm text-muted-foreground">

@@ -10,7 +10,10 @@ import { isKnownDefaultPassword } from '../lib/production-guard.js';
 import { revokeAllSessionsForUser } from '../lib/session-store.js';
 import { DEFAULT_COMPANY_ID, registerLocationCompany } from '../lib/saas/tenant-scope.js';
 import { hiddenNavigationForCompany } from '../lib/saas/entitlements.js';
-import { controlPlane } from '../lib/saas/control-plane.js';
+import { controlPlane, ControlPlaneError } from '../lib/saas/control-plane.js';
+import { approveAssignedStudioReview, assignedStudioReview, flushControlPlanePersist } from '../lib/saas/persistence.js';
+import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
+import { studioReviewChanges } from '../lib/saas/studio-versions.js';
 import { canAccessLocation, type Role } from '../lib/inventory.js';
 import { canManageCountWork, isCountWorkerRole } from '../lib/count-lifecycle.js';
 import { findUserById, listUsers, locations, saveCompanyProfile, users, type LocationRecord, type UserRecord } from '../lib/repository.js';
@@ -211,6 +214,38 @@ router.get('/runtime/config', async (req: Request, res: Response) => {
   return res.set('Cache-Control', 'no-store').json({ success: true,
     runtime: { ...runtime, offlineCountPermit: offlineCountPermit ?? null, offlineWarehousePermits,
       offlineCommandVersion: OPERATIONAL_OFFLINE_COMMAND_VERSION } });
+});
+
+router.get('/studio-release-review', async (req: Request, res: Response) => {
+  if (req.apiKey || req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Company administrator access is required.' });
+  const { companyId, userId } = tenantContext(req);
+  await refreshControlPlaneFromDb(controlPlane);
+  const assigned = await assignedStudioReview(controlPlane, companyId, userId);
+  res.set('Cache-Control', 'no-store').json({ review: assigned ? {
+    id: assigned.review.id, revision: assigned.review.revision, version: assigned.draft.version,
+    approvedAt: assigned.review.approvedAt ?? null,
+    changes: studioReviewChanges(controlPlane.published.get(companyId), assigned.draft),
+  } : null });
+});
+
+router.post('/studio-release-review', async (req: Request, res: Response) => {
+  if (req.apiKey || req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Company administrator access is required.' });
+  const { reviewId, revision } = req.body ?? {};
+  if (typeof reviewId !== 'string' || !reviewId || reviewId.length > 191 ||
+      typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)) {
+    return res.status(400).json({ error: 'Open the assigned review before approving.' });
+  }
+  const { companyId, userId } = tenantContext(req);
+  try {
+    await flushControlPlanePersist();
+    await refreshControlPlaneFromDb(controlPlane);
+    const approved = await approveAssignedStudioReview(controlPlane, companyId, userId, reviewId, revision);
+    return res.json({ approvedAt: approved.approvedAt });
+  } catch (error) {
+    if (error instanceof StudioConfigConflict) return res.status(409).json({ error: error.message, code: error.code });
+    if (error instanceof ControlPlaneError) return res.status(error.status).json({ error: error.message, code: error.code });
+    throw error;
+  }
 });
 
 router.get('/company', (req: Request, res: Response) => {

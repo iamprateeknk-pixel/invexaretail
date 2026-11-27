@@ -34,6 +34,8 @@ export const CORE_ROUTES: string[] = [
   'GET /industries',
   'GET /workspace/profile',
   'GET /runtime/config',
+  'GET /studio-release-review',
+  'POST /studio-release-review',
   'GET /company',
   'PUT /company',
   'POST /locations',

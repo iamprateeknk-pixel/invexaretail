@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { resolveDatabaseUrl } from '../db.js';
+import { prisma, resolveDatabaseUrl } from '../db.js';
+import { findUserById, listUsersByCompany } from '../enterprise-repository.js';
 import { validateStudioRelease, type StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneError, controlPlane, type ControlPlane, type ConfigurationVersion, type ScopeContext } from './control-plane.js';
 import {
@@ -74,12 +75,33 @@ export function studioReviewStatus(draft: ConfigurationVersion | undefined, acto
   const request = draft?.releaseReview;
   const current = request && request.revision === studioDraftRevision(draft) ? request : null;
   const editors = draft?.editorIds?.length ? draft.editorIds : [draft?.authorId];
-  const canApprove = Boolean(draft && current && actorId !== current.requestedBy &&
-    !editors.includes(actorId));
+  const canApprove = Boolean(draft && current && (current.reviewerId ? current.approvedBy === current.reviewerId :
+    actorId !== current.requestedBy && !editors.includes(actorId)));
   return { required: process.env.REQUIRE_STUDIO_RELEASE_REVIEW === 'true' || Boolean(request), request: current, canApprove };
 }
 
-export async function requestStudioReview(plane: ControlPlane, scope: ScopeContext, revision: string) {
+export function studioCompanyReviewers(plane: ControlPlane, draft: ConfigurationVersion, requestedBy: string) {
+  const editors = draft.editorIds?.length ? draft.editorIds : [draft.authorId];
+  const contributors = new Set([...editors, requestedBy]);
+  const emails = new Set([...contributors].map((id) => plane.platformUsers.get(id)?.email.toLowerCase()).filter(Boolean));
+  return listUsersByCompany(draft.companyId).filter((user) => user.status === 'active' && user.role === 'ADMIN' &&
+    !contributors.has(user.id) && !emails.has(user.email.toLowerCase()))
+    .map(({ id, name, email }) => ({ id, name, email }));
+}
+
+async function persistReviewedDraft(plane: ControlPlane, draft: ConfigurationVersion) {
+  if (databaseEnabled()) {
+    if (!lastPersistedSnapshot(plane)) {
+      throw new ControlPlaneError('Studio could not verify the saved configuration.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
+    }
+    const snapshot = serializeControlPlane(plane);
+    snapshot.drafts = snapshot.drafts.map((entry) => entry.companyId === draft.companyId ? draft : entry);
+    await persistControlPlaneRows(plane, snapshot);
+  }
+  plane.drafts.set(draft.companyId, draft);
+}
+
+export async function requestStudioReview(plane: ControlPlane, scope: ScopeContext, revision: string, reviewerId?: string) {
   const request = persistQueue.then(async () => {
     if (scope.sessionType !== 'control' || !scope.companyId || !scope.companySessionId) {
       throw new ControlPlaneError('Hard-locked company control session required', 'SESSION_REQUIRED', 401);
@@ -91,18 +113,46 @@ export async function requestStudioReview(plane: ControlPlane, scope: ScopeConte
       throw new ControlPlaneError('The draft changed. Review the latest draft before requesting approval.', 'STUDIO_CONFIG_CONFLICT', 409);
     }
     validateStudioRelease(draft);
-    if (draft.releaseReview?.revision === revision) return draft.releaseReview;
-    if (databaseEnabled() && !lastPersistedSnapshot(plane)) {
-      throw new ControlPlaneError('Studio could not verify the saved configuration.', 'STUDIO_CONFIG_UNAVAILABLE', 503);
+    if (reviewerId && !studioCompanyReviewers(plane, draft, scope.actorId).some((user) => user.id === reviewerId)) {
+      throw new ControlPlaneError('Choose an independent active administrator from this company.', 'STUDIO_REVIEWER_UNAVAILABLE', 403);
     }
-    const releaseReview = { id: randomUUID(), revision, requestedBy: scope.actorId, requestedAt: new Date().toISOString() };
-    const reviewed = { ...draft, releaseReview };
-    if (databaseEnabled()) {
-      const snapshot = serializeControlPlane(plane);
-      snapshot.drafts = snapshot.drafts.map((entry) => entry.companyId === companyId ? reviewed : entry);
-      await persistControlPlaneRows(plane, snapshot);
+    if (draft.releaseReview?.revision === revision && draft.releaseReview.reviewerId === reviewerId) return draft.releaseReview;
+    const releaseReview = { id: randomUUID(), revision, requestedBy: scope.actorId, requestedAt: new Date().toISOString(), reviewerId };
+    await persistReviewedDraft(plane, { ...draft, releaseReview });
+    return releaseReview;
+  });
+  persistQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
+export async function assignedStudioReview(plane: ControlPlane, companyId: string, userId: string) {
+  const draft = plane.drafts.get(companyId);
+  const review = draft?.releaseReview;
+  if (!draft || !review || review.reviewerId !== userId || review.revision !== studioDraftRevision(draft)) return null;
+  const eligible = studioCompanyReviewers(plane, draft, review.requestedBy).find((candidate) => candidate.id === userId);
+  if (!eligible || findUserById(userId)?.companyId !== companyId) return null;
+  if (databaseEnabled()) {
+    const active = await prisma.user.findFirst({
+      where: { id: userId, companyId, role: 'ADMIN', status: 'ACTIVE' },
+      select: { email: true },
+    });
+    if (!active || active.email.toLowerCase() !== eligible.email.toLowerCase()) return null;
+  }
+  return { draft, review };
+}
+
+export async function approveAssignedStudioReview(plane: ControlPlane, companyId: string, userId: string, reviewId: string, revision: string) {
+  const request = persistQueue.then(async () => {
+    const assigned = await assignedStudioReview(plane, companyId, userId);
+    if (!assigned || assigned.review.id !== reviewId) {
+      throw new ControlPlaneError('The assigned review was not found.', 'STUDIO_REVIEW_NOT_FOUND', 404);
     }
-    plane.drafts.set(companyId, reviewed);
+    if (assigned.review.revision !== revision) {
+      throw new ControlPlaneError('The Studio draft changed before approval.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
+    if (assigned.review.approvedBy === userId) return assigned.review;
+    const releaseReview = { ...assigned.review, approvedBy: userId, approvedAt: new Date().toISOString() };
+    await persistReviewedDraft(plane, { ...assigned.draft, releaseReview });
     return releaseReview;
   });
   persistQueue = request.then(() => undefined, () => undefined);
@@ -128,6 +178,9 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
         throw new ControlPlaneError('Request approval for this draft revision before publishing.', 'STUDIO_REVIEW_REQUIRED', 409);
       }
       if (!review.canApprove) throw new ControlPlaneError('Another operator must approve this draft.', 'STUDIO_REVIEW_NOT_INDEPENDENT', 403);
+      if (review.request.reviewerId && !await assignedStudioReview(plane, company, review.request.reviewerId)) {
+        throw new ControlPlaneError('The assigned company administrator can no longer approve this draft.', 'STUDIO_REVIEWER_UNAVAILABLE', 403);
+      }
     }
     const stage = plane.prepareStudioRelease(scope, command.rollbackVersion, command, approvingReview);
     const { companyId, published, draft, history, audit, outbox } = stage;
@@ -139,7 +192,8 @@ export async function commitStudioRelease(plane: ControlPlane, scope: ScopeConte
       snapshot.versions = [...snapshot.versions.filter(([id]) => id !== companyId), [companyId, history]];
       snapshot.audit = [...snapshot.audit, ...audit].slice(-500);
       snapshot.outbox = [...snapshot.outbox, ...outbox].slice(-200);
-      await persistControlPlaneRows(plane, snapshot, { companyId, actorId: scope.actorId, versionId: published.id });
+      await persistControlPlaneRows(plane, snapshot, { companyId, actorId: scope.actorId, versionId: published.id,
+        reviewerId: published.releaseReview?.reviewerId });
     }
     if (draft) plane.drafts.set(companyId, draft);
     else plane.drafts.delete(companyId);

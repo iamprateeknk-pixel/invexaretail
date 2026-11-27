@@ -688,7 +688,7 @@ export class StudioConfigConflict extends Error {
   constructor() { super('Studio configuration changed in another session. Refresh the company configuration before trying again.'); }
 }
 
-type StudioReleaseEvent = { companyId: string; actorId: string; versionId: string };
+type StudioReleaseEvent = { companyId: string; actorId: string; versionId: string; reviewerId?: string };
 
 async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows, release?: StudioReleaseEvent) {
   const prisma = await getPrisma();
@@ -712,6 +712,13 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
       const expected = previous.configs.filter((row) => row.companyId === companyId);
       const comparable = (rows: readonly unknown[]) => rows.map(stableStringify).sort();
       if (stableStringify(comparable(current)) !== stableStringify(comparable(expected))) throw new StudioConfigConflict();
+    }
+    if (release?.reviewerId) {
+      const [reviewer] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "User" WHERE id = ${release.reviewerId} AND "companyId" = ${release.companyId}
+          AND role = 'ADMIN' AND status = 'ACTIVE' FOR SHARE
+      `;
+      if (!reviewer) throw new StudioConfigConflict();
     }
     const { ops, written, deleted } = buildDiffOperations(tx, diff, nextRows);
     for (const op of ops) await op;

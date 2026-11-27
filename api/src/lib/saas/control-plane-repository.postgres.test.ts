@@ -8,8 +8,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
+import { createEnhancedUser } from '../enterprise-repository.js';
 import { ControlPlane } from './control-plane.js';
-import { commitStudioRelease, requestStudioReview, studioDraftRevision } from './persistence.js';
+import { approveAssignedStudioReview, commitStudioRelease, requestStudioReview, studioDraftRevision } from './persistence.js';
 import { readStudioRuntime, readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
@@ -75,6 +76,37 @@ function lockedScope(plane: ControlPlane, companyId = 'default-company') {
   const selected = plane.selectCompany(login.user.id, companyId);
   return plane.requireControlSession(selected.token).scope;
 }
+
+integration('a delegated approval is durable and the approver must still be a company admin at publication', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const maker = new ControlPlane();
+  await hydrateControlPlaneRows(maker);
+  const { company } = maker.createCompany(platformScope(maker), {
+    name: 'Delegated Studio Review', planId: 'pro', adminName: 'Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const reviewerId = randomUUID();
+  const email = `${reviewerId}@test.invexa.local`;
+  await prisma.companyProfile.create({ data: { id: company.id, name: company.name } });
+  await prisma.user.create({ data: { id: reviewerId, companyId: company.id, email, name: 'Reviewer',
+    role: 'ADMIN', passwordHash: 'unused', assignedLocations: '[]' } });
+  createEnhancedUser({ id: reviewerId, companyId: company.id, email, name: 'Reviewer',
+    role: 'ADMIN', status: 'active', passwordHash: 'unused', branchIds: [], locationIds: [] });
+  await persistControlPlaneRows(maker);
+  const scope = lockedScope(maker, company.id);
+  maker.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Delegated decision' }]);
+  const revision = studioDraftRevision(maker.drafts.get(company.id))!;
+  const review = await requestStudioReview(maker, scope, revision, reviewerId);
+  const replica = new ControlPlane();
+  await hydrateControlPlaneRows(replica);
+  await assert.rejects(approveAssignedStudioReview(replica, 'default-company', reviewerId, review.id, revision), { code: 'STUDIO_REVIEW_NOT_FOUND' });
+  await approveAssignedStudioReview(replica, company.id, reviewerId, review.id, revision);
+  await refreshControlPlaneFromDb(maker);
+  await prisma.user.update({ where: { id: reviewerId, companyId: company.id }, data: { role: 'AUDITOR' } });
+  await assert.rejects(commitStudioRelease(maker, scope, { draftRevision: revision, reviewId: review.id }), { code: 'STUDIO_REVIEWER_UNAVAILABLE' });
+  await prisma.user.update({ where: { id: reviewerId, companyId: company.id }, data: { role: 'ADMIN' } });
+  const result = await commitStudioRelease(maker, scope, { draftRevision: revision, reviewId: review.id });
+  assert.equal(result.releaseReview?.approvedBy, reviewerId);
+});
 
 integration('kill switch written on one instance is seen by a fresh instance', async () => {
   process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';

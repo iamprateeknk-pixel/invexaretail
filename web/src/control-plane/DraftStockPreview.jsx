@@ -75,13 +75,14 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
 
   const columns = preview ? stockTableColumns(preview.page, { role: preview.role, canViewSystemStock: canViewSystemStockForRole(preview.role) }) : [];
   const review = preview?.releaseReview;
+  const [reviewerId, setReviewerId] = useState('');
   const needsRequest = review?.required && !review.request;
   const waitingForReviewer = Boolean(review?.request && !review.canApprove);
   async function publish() {
     setPublishing(true);
     try {
       if (needsRequest) {
-        await onRequestReview(preview.draftRevision);
+        await onRequestReview(preview.draftRevision, reviewerId || undefined);
         setAttempt((value) => value + 1);
       } else {
         await onPublish(preview.draftRevision, review?.request?.id);
@@ -121,10 +122,20 @@ export function DraftStockPreview({ controlToken, draft, onPublish, onRequestRev
         </Card>
       )}
       {onPublish && <div className="flex flex-wrap items-center gap-3">
+        {needsRequest && Boolean(review.reviewers?.length) && <PreviewSelect label="Reviewer" value={reviewerId} onChange={setReviewerId}>
+          <option value="">Another Studio operator</option>
+          {review.reviewers.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}
+        </PreviewSelect>}
         <Button type="button" disabled={publishing || !preview?.draftRevision || waitingForReviewer || (needsRequest && !onRequestReview)} onClick={publish}>
-          {publishing ? 'Saving…' : needsRequest ? 'Request approval' : review?.request ? 'Approve and publish' : 'Publish reviewed draft'}
+          {publishing ? 'Saving…' : needsRequest ? 'Request approval' : review?.request?.approvedAt
+            ? 'Publish approved draft' : review?.request ? 'Approve and publish' : 'Publish reviewed draft'}
         </Button>
-        {waitingForReviewer && <p role="status" className="text-sm text-muted-foreground">Waiting for another operator to review and publish this draft.</p>}
+        {waitingForReviewer && <>
+          <p role="status" className="text-sm text-muted-foreground">{review.request.reviewerId
+            ? 'Waiting for the assigned company administrator to approve in the workspace.'
+            : 'Waiting for another operator to review and publish this draft.'}</p>
+          <Button type="button" variant="outline" onClick={() => setAttempt((value) => value + 1)}>Refresh approval</Button>
+        </>}
       </div>}
     </section>
   );

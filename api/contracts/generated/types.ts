@@ -2149,6 +2149,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/studio-release-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the Studio draft assigned to the signed-in company administrator. */
+        get: operations["getAssignedStudioReleaseReview"];
+        put?: never;
+        /** Approve the exact assigned Studio draft in the company workspace. */
+        post: operations["approveAssignedStudioReleaseReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runtime/config": {
         parameters: {
             query?: never;
@@ -13580,6 +13598,118 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"] | components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getAssignedStudioReleaseReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assigned review, or null when there is no current assignment for the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        review: {
+                            id: string;
+                            revision: string;
+                            version: number;
+                            /** Format: date-time */
+                            approvedAt: string | null;
+                            changes: {
+                                area: string;
+                                before: unknown;
+                                after: unknown;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description No active session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A company administrator's interactive session is required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approveAssignedStudioReleaseReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reviewId: string;
+                    revision: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Approval saved. A Studio operator can publish the approved revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        approvedAt: string;
+                    };
+                };
+            };
+            /** @description Invalid review ID or revision. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A company administrator's interactive session is required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The review is unavailable for the current administrator. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The reviewed draft changed before approval. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

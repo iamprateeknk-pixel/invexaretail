@@ -1,6 +1,6 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { commitStudioRelease, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
+import { commitStudioRelease, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, studioCompanyReviewers, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
 import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
@@ -714,6 +714,7 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
   try {
     const scope = requireScope(req);
     const companyId = scopedCompany(req);
+    if (controlPlane.drafts.get(companyId)?.releaseReview?.reviewerId) await refreshControlPlaneFromDb(controlPlane);
     const role = COLUMN_ROLES.find((candidate) => candidate === (req.body?.role ?? 'ADMIN'));
     if (!role) throw new ControlPlaneError('Choose an operational role for the preview', 'INVALID_ROLE', 400);
     const requested = req.body?.locationId;
@@ -730,10 +731,13 @@ studioRouter.post('/preview', async (req: Request, res: Response) => {
     const preview = controlPlane.preview(scope, { role, device });
     const company = findCompanyProfile(companyId);
     const pack = getIndustryPack(company?.industryKey ?? company?.industry);
+    const draft = controlPlane.drafts.get(companyId);
+    const releaseReview = studioReviewStatus(draft, scope.actorId);
     res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
     res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
-      draftRevision: studioDraftRevision(controlPlane.drafts.get(companyId)),
-      releaseReview: studioReviewStatus(controlPlane.drafts.get(companyId), scope.actorId),
+      draftRevision: studioDraftRevision(draft),
+      releaseReview: { ...releaseReview, reviewers: releaseReview.required && draft
+        ? studioCompanyReviewers(controlPlane, draft, scope.actorId) : [] },
       variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
     } });
   } catch (error) {
@@ -746,7 +750,7 @@ async function releaseStudioVersion(req: Request, res: Response, command: Studio
   releasingCompanies.add(companyId);
   try {
     await flushControlPlanePersist();
-    if (command.expectedActiveVersionId && command.expectedActiveVersionId !== controlPlane.published.get(companyId)?.id) {
+    if (command.reviewId || (command.expectedActiveVersionId && command.expectedActiveVersionId !== controlPlane.published.get(companyId)?.id)) {
       await refreshControlPlaneFromDb(controlPlane);
     }
     const published = await commitStudioRelease(controlPlane, requireScope(req), command);
@@ -773,14 +777,18 @@ studioRouter.post('/publish', async (req: Request, res: Response) => {
 
 studioRouter.post('/release-review', async (req, res) => {
   const revision = req.body?.draftRevision;
+  const reviewerId = req.body?.reviewerId;
   if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)) {
     return sendError(res, new ControlPlaneError('Preview the draft before requesting approval.', 'INVALID_DRAFT_REVISION', 400));
+  }
+  if (reviewerId !== undefined && (typeof reviewerId !== 'string' || !reviewerId || reviewerId.length > 191)) {
+    return sendError(res, new ControlPlaneError('Choose a valid company reviewer.', 'INVALID_RELEASE_REVIEWER', 400));
   }
   const companyId = scopedCompany(req);
   releasingCompanies.add(companyId);
   try {
     await flushControlPlanePersist();
-    const review = await requestStudioReview(controlPlane, requireScope(req), revision);
+    const review = await requestStudioReview(controlPlane, requireScope(req), revision, reviewerId);
     res.locals.studioPersisted = true;
     res.json({ success: true, review });
   } catch (error) {

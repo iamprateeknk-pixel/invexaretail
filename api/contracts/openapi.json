@@ -18661,6 +18661,82 @@
         }
       }
     },
+    "/studio-release-review": {
+      "get": {
+        "operationId": "getAssignedStudioReleaseReview",
+        "summary": "Read the Studio draft assigned to the signed-in company administrator.",
+        "tags": ["Workspace"],
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The assigned review, or null when there is no current assignment for the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["review"],
+                  "properties": {
+                    "review": {
+                      "type": ["object", "null"],
+                      "required": ["id", "revision", "version", "approvedAt", "changes"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                        "version": { "type": "integer" },
+                        "approvedAt": { "type": ["string", "null"], "format": "date-time" },
+                        "changes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["area", "before", "after"],
+                            "properties": { "area": { "type": "string" }, "before": {}, "after": {} }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "No active session." },
+          "403": { "description": "A company administrator's interactive session is required." }
+        }
+      },
+      "post": {
+        "operationId": "approveAssignedStudioReleaseReview",
+        "summary": "Approve the exact assigned Studio draft in the company workspace.",
+        "tags": ["Workspace"],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": {
+              "type": "object",
+              "required": ["reviewId", "revision"],
+              "properties": {
+                "reviewId": { "type": "string", "minLength": 1, "maxLength": 191 },
+                "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval saved. A Studio operator can publish the approved revision.",
+            "content": { "application/json": { "schema": {
+              "type": "object", "required": ["approvedAt"],
+              "properties": { "approvedAt": { "type": "string", "format": "date-time" } }
+            } } }
+          },
+          "400": { "description": "Invalid review ID or revision." },
+          "401": { "description": "No active session." },
+          "403": { "description": "A company administrator's interactive session is required." },
+          "404": { "description": "The review is unavailable for the current administrator." },
+          "409": { "description": "The reviewed draft changed before approval." }
+        }
+      }
+    },
     "/runtime/config": {
       "get": {
         "operationId": "getRuntimeConfig",

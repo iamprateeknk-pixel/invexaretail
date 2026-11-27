@@ -230,7 +230,8 @@ export type ConfigurationVersion = {
   status: ConfigStatus;
   authorId: string;
   editorIds?: string[];
-  releaseReview?: { id: string; revision: string; requestedBy: string; requestedAt: string; approvedBy?: string; approvedAt?: string };
+  releaseReview?: { id: string; revision: string; requestedBy: string; requestedAt: string;
+    reviewerId?: string; approvedBy?: string; approvedAt?: string };
   parentVersion: number | null;
   page: PageDefinition;
   fields: FieldDefinition[];
@@ -1091,7 +1092,7 @@ export class ControlPlane {
     const staged: ControlPlaneStore = { ...this.store, drafts: copy(this.drafts), published: copy(this.published),
       versions: new Map([[companyId, structuredClone(this.versions.get(companyId) ?? [])]]), audit: [], outbox: [] };
     const review = staged.drafts.get(companyId)?.releaseReview;
-    if (approvingReview && review) {
+    if (approvingReview && review && !review.approvedBy) {
       review.approvedBy = scope.actorId;
       review.approvedAt = new Date().toISOString();
     }
