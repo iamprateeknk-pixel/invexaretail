@@ -1,4 +1,4 @@
-> **Not the production path.** This is an older one-click Render guide kept for history. The canonical production topology (Cloudflare web, Railway API and worker, managed PostgreSQL) and the release, backup and rollback procedures are in [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md).
+> **Not the production path.** This is an older one-click Render guide kept for history. The canonical production topology (Docker Compose behind Nginx on the cloud host: web, API, worker, Control Plane, PostgreSQL) and the release, backup and rollback procedures are in [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md).
 
 # 🚀 Deploy Backend Now - One Click!
 

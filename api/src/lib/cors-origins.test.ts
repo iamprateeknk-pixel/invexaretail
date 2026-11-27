@@ -8,8 +8,8 @@ test('keeps the live website even when ALLOWED_ORIGINS is empty or API-only', ()
   const origins = resolveAllowedOrigins('https://api.invexaretail.com');
   assert.ok(origins.includes('https://invexaretail.com'));
   assert.ok(origins.includes('https://www.invexaretail.com'));
-  assert.ok(origins.includes('https://invexaretail-web.iamprateek-nk.workers.dev'));
-  assert.ok(origins.includes('https://invexaretail.prateek160298.workers.dev'));
+  assert.ok(origins.includes('https://admin.invexaretail.com'), 'the Control Plane must be able to call the API');
+  assert.equal(origins.some((origin) => origin.endsWith('.workers.dev')), false, 'retired Cloudflare Workers hosts are no longer trusted');
   assert.ok(origins.includes('https://control.invexaretail.com'));
   assert.ok(origins.includes('https://api.invexaretail.com'));
 });

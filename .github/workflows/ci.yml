@@ -237,14 +237,14 @@ jobs:
 
       - name: Build Control Plane assets
         env:
-          VITE_API_BASE: https://invexaretail-api-production.up.railway.app
+          VITE_API_BASE: https://invexaretail.com
         run: npm run build
 
-      - name: Confirm login ships in dist and worker
+      - name: Confirm login ships in dist and the Nginx image config
         run: |
           ! grep -R --include="*.js" --include="*.jsx" --include="*.html" --exclude="*.test.js" "Admin panel is ready" dist src
           grep -R "control-email" dist
-          grep -R "x-invexa-panel" src/worker.js
+          grep -q "x-invexa-panel" nginx.conf
 
   mobile:
     name: Mobile static analysis

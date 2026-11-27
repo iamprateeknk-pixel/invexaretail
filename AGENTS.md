@@ -6,8 +6,11 @@ read those first if a rule below seems arbitrary.
 
 ## Repository layout
 
-- `api/` - the deployed backend (Express + Prisma + Postgres). This is the
-  only backend Render deploys (see `render.yaml`); it owns the database.
+- `api/` - the deployed backend (Express + Prisma + Postgres); it owns the
+  database. Production is the root `docker-compose.yml` on the team's own
+  cloud host behind Nginx (`api` + `worker` services), served at
+  `https://invexaretail.com/api/v1` - see `docs/PRODUCTION_RUNBOOK.md`.
+  Cloudflare Workers and Railway are retired.
 - `web/` - the deployed frontend (Vite).
 - `admin-panel/`, `mobile/` - separate deployables, own package.json each.
   `mobile/` is one Flutter codebase shipped as three apps: Android
@@ -984,4 +987,25 @@ tracks how much of it):
   `zod`, `body-parser` upgraded to patched versions; `effect` (pinned exactly
   by `@prisma/config`) forced to a patched 3.x via `overrides`, with the
   Prisma CLI re-verified (validate, generate, migrate, migration matrix).
+- Post-merge follow-up 8 (hosting move, no dedicated ADR - see
+  `docs/PRODUCTION_RUNBOOK.md`): production moved off Cloudflare Workers and
+  Railway onto the team's own cloud host (Docker Compose behind Nginx). Every
+  client default now points at `https://invexaretail.com` (web
+  `api-client.js`, mobile `env.dart`, admin `login-html.js`, the OpenAPI
+  server URL); CORS trusts `https://admin.invexaretail.com` (the Control
+  Plane would otherwise be blocked) and no longer trusts the retired
+  `*.workers.dev` hosts. The admin panel's Cloudflare Worker is replaced by an
+  Nginx image (`admin-panel/Dockerfile`, `nginx.conf`: same `/health`,
+  no-store headers, SPA fallback, proven by running real Nginx), and its
+  build now honours `VITE_WEB_APP_URL` (it was ignored, always baking in the
+  old Workers host). `web/nginx.conf` forwards `/control/` as well as
+  `/api/`, since Control Plane sign-in calls `/control/v1`.
+  `docker-compose.yml` gains the `worker` service - staged import commits,
+  outbox delivery/retention, expiry sweep, reconciliation and alerts run only
+  there - with `RUN_SCHEDULERS=false` on `api`, plus the `admin` service on
+  port 18181. Removed: `web/wrangler.toml`, `admin-panel/wrangler.toml`,
+  `admin-panel/src/worker.js`, `api/railway*.json`,
+  `docs/deployment-railway-cloudflare.md`, web's `npm run deploy`. The
+  runbook now says plainly that a self-hosted database has no automatic
+  backup. Historical per-week docs still mention the old hosts as history.
 

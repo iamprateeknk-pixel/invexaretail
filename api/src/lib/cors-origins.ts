@@ -2,8 +2,8 @@ export const REQUIRED_WEB_ORIGINS = [
   'https://invexaretail.com',
   'https://www.invexaretail.com',
   'https://control.invexaretail.com',
-  'https://invexaretail-web.iamprateek-nk.workers.dev',
-  'https://invexaretail.prateek160298.workers.dev',
+  // Control Plane (admin-panel), served by its own Nginx container on the cloud host.
+  'https://admin.invexaretail.com',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ];

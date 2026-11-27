@@ -6,7 +6,7 @@ Point the app at an API with:
 flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
 ```
 
-Empty `INVEXA_API_BASE` uses `https://invexaretail-api-production.up.railway.app`.
+Empty `INVEXA_API_BASE` uses `https://invexaretail.com`.
 
 Seed/demo logins are created by the API seed (`api/prisma/seed.ts`, or the
 API's in-memory seed mode when `DATABASE_URL` is unset). Their password is
