@@ -140,7 +140,8 @@ export const pickSlipSchema = z
     path: ['lines'],
   });
 
-export const transferReceiptLineSchema = z.object({
+// Keep receipt line extensions while validating fields used by stock posting.
+export const transferReceiptLineSchema = z.looseObject({
   lineId: z.string().optional(),
   itemId: z.string().min(1),
   lotId: z.string().min(1),
@@ -438,13 +439,14 @@ export const purchaseOrderCreateSchema = z.object({
   expectedAt: validDate('expectedAt must be a valid date.'),
 });
 
-const poReceiptLineSchema = z.object({
+// The parsed body replaces the original receipt. Preserve extension fields alongside the validated details.
+const poReceiptLineSchema = z.looseObject({
   lineId: z.string().trim().min(1).optional(),
   receivedQty: z.coerce.number().optional(),
   damagedQty: z.coerce.number().optional(),
   excessQty: z.coerce.number().optional(),
-  lotNo: z.string().optional(),
-  expiryDate: z.string().optional(),
+  lotNo: z.string().nullish(),
+  expiryDate: z.string().nullish(),
 });
 
 /**

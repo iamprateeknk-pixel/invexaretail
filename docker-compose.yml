@@ -3,7 +3,7 @@ services:
     image: postgres:17
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: retail_inventory
       POSTGRES_USER: retail
@@ -20,28 +20,67 @@ services:
     build: ./api
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://retail:retail_password@postgres:5432/retail_inventory
+      DATABASE_URL: ${DATABASE_URL:-postgresql://retail:retail_password@postgres:5432/retail_inventory}
+      REQUIRE_DATABASE: "true"
+      GITHUB_SHA: ${GITHUB_SHA:-}
       # The image runs with NODE_ENV=production, which refuses placeholder secrets (Phase 7).
       # Export both before `docker compose up`, e.g. JWT_SECRET=$(openssl rand -base64 32).
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
       SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD to a non-default password}
       PORT: 4000
       UPLOAD_DIR: /app/uploads
+      # Schedulers belong to the worker service below; running them here too would double-run them.
+      RUN_SCHEDULERS: "false"
     volumes:
       - uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
+
+  # Schedulers (staged import commits, outbox delivery + retention, expiry sweep,
+  # stock reconciliation, alerts) run here only - the API service does not run them.
+  # Without this service, staged imports stay QUEUED_FOR_COMMIT and never post stock.
+  worker:
+    build: ./api
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://retail:retail_password@postgres:5432/retail_inventory}
+      REQUIRE_DATABASE: "true"
+      GITHUB_SHA: ${GITHUB_SHA:-}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
+      SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD to a non-default password}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   web:
-    build: ./web
+    build:
+      context: ./web
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-https://invexaretail.com}
     restart: unless-stopped
     depends_on:
       - api
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
+
+  # Control Plane (admin.invexaretail.com). Static login shell served by Nginx;
+  # API and web app URLs are baked in at build time.
+  admin:
+    build:
+      context: ./admin-panel
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-https://invexaretail.com}
+        VITE_WEB_APP_URL: ${VITE_WEB_APP_URL:-https://invexaretail.com}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18181:80"
 
 volumes:
   postgres_data:

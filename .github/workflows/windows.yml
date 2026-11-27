@@ -1,0 +1,98 @@
+name: Build Invexa Retail Windows release
+
+# The Windows platform project is committed under mobile/windows, so this
+# workflow builds exactly what is in the repository. Every run produces a
+# portable zip and a per-user Setup.exe (Inno Setup, no admin rights needed).
+# Code signing is optional: when WINDOWS_CERTIFICATE_PFX_BASE64 and
+# WINDOWS_CERTIFICATE_PASSWORD are set, the exe and installer are signed so
+# SmartScreen shows the publisher instead of "Unknown publisher".
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/windows.yml"
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.47.2"
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+      - name: Read app version from pubspec.yaml
+        run: |
+          $line = Select-String -Path mobile/pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$' | Select-Object -First 1
+          if (-not $line) { throw "mobile/pubspec.yaml version must look like 1.2.3+45" }
+          "BUILD_NAME=$($line.Matches[0].Groups[1].Value)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BUILD_NUMBER=$($line.Matches[0].Groups[2].Value)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Set up Flutter (pinned)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Install dependencies from the committed lockfile
+        working-directory: mobile
+        run: flutter pub get --enforce-lockfile
+      - name: Test
+        working-directory: mobile
+        run: flutter test
+      - name: Build release
+        working-directory: mobile
+        run: flutter build windows --release --build-name=$env:BUILD_NAME --build-number=$env:BUILD_NUMBER
+      - name: Sign executable (when a certificate is configured)
+        if: env.WINDOWS_CERTIFICATE_PFX_BASE64 != ''
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'invexa.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String(($env:WINDOWS_CERTIFICATE_PFX_BASE64 -replace '\s','')))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -like '*x64*' | Select-Object -Last 1
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD mobile\build\windows\x64\runner\Release\InvexaRetail.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Signing InvexaRetail.exe failed' }
+          "SIGNTOOL=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "INVEXA_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Package portable zip
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path mobile\build\windows\x64\runner\Release\* -DestinationPath "dist\InvexaRetail-Windows-$env:BUILD_NAME-portable.zip"
+      - name: Build installer
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+            $env:PATH = "${env:ProgramFiles(x86)}\Inno Setup 6;$env:PATH"
+          }
+          $source = (Resolve-Path mobile\build\windows\x64\runner\Release).Path
+          iscc /Q "/DAppVersion=$env:BUILD_NAME" "/DSourceDir=$source" "/O$((Resolve-Path dist).Path)" mobile\windows\installer\InvexaRetail.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+      - name: Sign installer (when a certificate is configured)
+        if: env.WINDOWS_CERTIFICATE_PFX_BASE64 != ''
+        run: |
+          & $env:SIGNTOOL sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $env:INVEXA_PFX /p $env:WINDOWS_CERTIFICATE_PASSWORD "dist\InvexaRetail-Setup-$env:BUILD_NAME.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Signing the installer failed' }
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: InvexaRetail-Windows-${{ env.BUILD_NAME }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

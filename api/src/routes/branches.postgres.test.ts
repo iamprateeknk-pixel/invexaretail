@@ -86,8 +86,10 @@ integration('creating a branch, then a duplicate code, then updating and archivi
 });
 
 integration('a branch with a location holding on-hand stock cannot be archived - the StockLedger fix made while porting from foundation.ts', async () => {
+  // The stock fixture must belong to the authenticated admin's company.
   const companyId = findUserByEmail('admin@retail.local')?.companyId;
   assert.ok(companyId, 'the seeded admin has a company session for this route fixture');
+  await prisma.companyProfile.upsert({ where: { id: companyId }, update: {}, create: { id: companyId, name: companyId } });
   const branchCode = `BR-${randomUUID().slice(0, 6)}`.toUpperCase();
   const branch = await prisma.branch.create({ data: { code: branchCode, name: 'Stocked Branch', type: 'WAREHOUSE', companyId } });
   const locationId = `branch-test-loc-${randomUUID()}`;
@@ -103,4 +105,19 @@ integration('a branch with a location holding on-hand stock cannot be archived -
     assert.equal(response.status, 409);
     assert.equal(response.body.blockers.activeStock, 1);
   });
+});
+
+integration('another company cannot archive (or even see) a branch, stocked or not', async () => {
+  const otherCompany = `branch-test-${randomUUID()}`;
+  await prisma.companyProfile.create({ data: { id: otherCompany, name: otherCompany } });
+  const branch = await prisma.branch.create({
+    data: { code: `BR-${randomUUID().slice(0, 6)}`.toUpperCase(), name: 'Foreign Branch', type: 'WAREHOUSE', companyId: otherCompany },
+  });
+
+  await withServer(async (call) => {
+    const admin = tokenFor('admin@retail.local');
+    const response = await call('POST', `/branches/${branch.id}/archive`, admin);
+    assert.equal(response.status, 404, 'a cross-tenant id answers like a missing one, never 403/409');
+  });
+  assert.equal((await prisma.branch.findUniqueOrThrow({ where: { id: branch.id } })).status, 'ACTIVE', 'the foreign branch was not archived');
 });

@@ -9,11 +9,4 @@ const html = controlPlaneHtml(process.env.VITE_API_BASE, process.env.VITE_WEB_AP
 
 await mkdir(dist, { recursive: true });
 await writeFile(join(dist, 'index.html'), html);
-await writeFile(
-  join(dist, '_headers'),
-  `/*
-  Cache-Control: no-store, no-cache, must-revalidate
-  X-Invexa-Panel: control-plane
-`,
-);
 console.log(`Wrote Control Plane login to ${dist}`);

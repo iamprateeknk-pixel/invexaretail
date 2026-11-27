@@ -1,10 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
-export function isRenderRuntime(): boolean {
-  return process.env.RENDER === 'true' || Boolean(process.env.RENDER_SERVICE_ID);
-}
-
 /** Reads DATABASE_URL, or builds one from PG_* / DB_* parts for local/dev setups that prefer discrete env vars. */
 export function resolveDatabaseUrl(): string {
   const direct = process.env.DATABASE_URL?.trim();

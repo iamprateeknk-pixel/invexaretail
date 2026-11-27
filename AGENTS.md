@@ -6,13 +6,17 @@ read those first if a rule below seems arbitrary.
 
 ## Repository layout
 
-- `api/` - the deployed backend (Express + Prisma + Postgres). Railway deploys
-  the API and worker from `api/railway.json` and `api/railway.worker.json`;
-  `render.yaml` is an alternative template. The API owns the database.
+- `api/` - the deployed backend (Express + Prisma + Postgres); it owns the
+  database. Production is the root `docker-compose.yml` on the team's own
+  cloud host behind Nginx (`api` + `worker` services), served at
+  `https://invexaretail.com/api/v1` - see `docs/PRODUCTION_RUNBOOK.md`.
+  Cloudflare Workers, Railway, Render and Vercel are retired.
 - `web/` - the deployed frontend (Vite).
-- `admin-panel/` and `mobile/` are separate deployables. The admin panel uses
-  npm; the Flutter app uses `pubspec.yaml`, with Android release, iOS simulator
-  and Windows release targets. Store signing and device validation remain gates.
+- `admin-panel/`, `mobile/` - separate deployables, own package.json each.
+  `mobile/` is one Flutter codebase shipped as three apps: Android
+  (`android-apk.yml`), iOS (`ios.yml`) and Windows (`windows.yml`). Platform
+  differences (no camera scanner or embedded web view on Windows) are decided
+  only in `mobile/lib/config/platform_caps.dart`.
 - `database/` was the pre-`api/` MySQL/Sequelize schema/migrations half of
   the legacy prototype - already removed (an earlier commit, "Migrate
   Invexa Retail to PostgreSQL and complete Week 1 controls"). `backend/`
@@ -941,3 +945,68 @@ tracks how much of it):
   "Code scanning" feature enabled at all, so the SARIF upload step always
   fails regardless of workflow permissions - a repo-owner-only setting;
   marked that job `continue-on-error: true` until it's enabled.
+- Post-merge follow-up 6 (`mobile/ios/`, `mobile/windows/`,
+  `mobile/lib/state/session_controller.dart`, `.github/workflows/{ios,windows}.yml`,
+  no dedicated ADR - see `mobile/README.md`): adds iOS and Windows builds of
+  the existing Flutter app (no second codebase). Windows has no camera
+  scanner or web view plugin, so scanning becomes a focused keyboard-wedge
+  field and the full workspace opens in the browser; wide windows get a
+  navigation rail. Also fixed four real data/flow bugs in the controller,
+  each with a test proven to fail on the old code
+  (`test/sync_concurrency_test.dart`): a count queued while a sync was in
+  flight was silently dropped (the flush overwrote the queue with its own
+  snapshot), overlapping flushes could replay the same item twice, a slow
+  stock response for the previous location could overwrite the newly
+  selected location's stock, and a save the server accepted was reported as
+  failed when the refresh after it failed - inviting a second tap that posts
+  again under a new idempotency key. Not verifiable in this sandbox (no
+  macOS, Windows or Android SDK): the iOS/Windows/Android builds themselves
+  - they are proven by those three CI workflows.
+- Post-merge follow-up 7 (`api/scripts/architecture-lint.mjs`,
+  `api/prisma/migrations/20270128090000_drop_tenant_column_defaults`,
+  `api/contracts/`, `api/prisma/seed.ts`, `api/package.json`, Postgres
+  test assertions, no dedicated ADR): `main`'s CI had been red since at
+  least 2026-10-24, and because `lint:arch` failed early every later API
+  step - contract checks, migrations, seed, all real-Postgres suites - had
+  stopped running at all. Fixed in order: three lint findings
+  (`transfer-repository.ts` was scoped but hid `companyId` inside a helper -
+  the helper now takes it explicitly; the test-only
+  `stock-parity-harness.ts` is allowlisted and a new check fails the lint
+  if production code ever imports it; `ControlPlaneUsage.value`/
+  `ControlPlaneLedger.value` are exempted by `Model.field` with a reason,
+  not by line number); a duplicated `/items/version` path in
+  `openapi.json`; a real tenant-isolation gap - `20270126090000_drop_company_defaults`
+  shipped no DDL on the mistaken belief that Prisma defaults live only in
+  the client, so 35 `companyId` columns and `MarketplaceConnector.tenantId`
+  still had `DEFAULT 'default-company'` in Postgres (a raw INSERT without a
+  tenant silently landed in the phantom tenant) - now dropped by a real
+  migration; the seed's stale `StockLedger` unique key; the contract-coverage
+  test only reading top-level router routes (it now walks nested routers like
+  `route-auth-coverage.test.ts`); and Postgres tests comparing Prisma
+  `Decimal` objects to numbers (wrapped in `Number()`). Security: `multer`,
+  `zod`, `body-parser` upgraded to patched versions; `effect` (pinned exactly
+  by `@prisma/config`) forced to a patched 3.x via `overrides`, with the
+  Prisma CLI re-verified (validate, generate, migrate, migration matrix).
+- Post-merge follow-up 8 (hosting move, no dedicated ADR - see
+  `docs/PRODUCTION_RUNBOOK.md`): production moved off Cloudflare Workers and
+  Railway onto the team's own cloud host (Docker Compose behind Nginx). Every
+  client default now points at `https://invexaretail.com` (web
+  `api-client.js`, mobile `env.dart`, admin `login-html.js`, the OpenAPI
+  server URL); CORS trusts `https://admin.invexaretail.com` (the Control
+  Plane would otherwise be blocked) and no longer trusts the retired
+  `*.workers.dev` hosts. The admin panel's Cloudflare Worker is replaced by an
+  Nginx image (`admin-panel/Dockerfile`, `nginx.conf`: same `/health`,
+  no-store headers, SPA fallback, proven by running real Nginx), and its
+  build now honours `VITE_WEB_APP_URL` (it was ignored, always baking in the
+  old Workers host). `web/nginx.conf` forwards `/control/` as well as
+  `/api/`, since Control Plane sign-in calls `/control/v1`.
+  `docker-compose.yml` gains the `worker` service - staged import commits,
+  outbox delivery/retention, expiry sweep, reconciliation and alerts run only
+  there - with `RUN_SCHEDULERS=false` on `api`, plus the `admin` service on
+  port 18181. Removed: `web/wrangler.toml`, `admin-panel/wrangler.toml`,
+  `admin-panel/src/worker.js`, `api/railway*.json`,
+  `docs/deployment-railway-cloudflare.md`, web's `npm run deploy`, and -
+  with Render and Vercel retired too - `render.yaml`, `vercel.json`,
+  `api/vercel.json`, `DEPLOY_NOW.md` and the unused `isRenderRuntime()`. The
+  runbook now says plainly that a self-hosted database has no automatic
+  backup. Historical per-week docs still mention the old hosts as history.

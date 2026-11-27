@@ -2,7 +2,8 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
-const productionApiBase = 'https://invexaretail-api-production.up.railway.app';
+const productionApiBase = 'https://invexaretail.com';
+const _retiredProductionApiHost = 'invexaretail-api-production.up.railway.app';
 const workspaceOrigin = 'https://invexaretail.com/';
 
 /// Which build this is (plan Area H WP4). Set with `--dart-define=INVEXA_ENV=...`.
@@ -70,6 +71,7 @@ String? _originProblem(String value, InvexaEnvironment environment, String name)
 final _productionHosts = {
   Uri.parse(productionApiBase).host,
   Uri.parse(workspaceOrigin).host,
+  _retiredProductionApiHost,
   'api.invexaretail.com',
   'www.invexaretail.com',
   'invexaretail-web.iamprateek-nk.workers.dev',

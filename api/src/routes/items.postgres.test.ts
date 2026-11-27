@@ -247,7 +247,7 @@ integration('GET /items/:itemId/stock-detail returns branch balances, lots and m
     const detail = await call('GET', `/items/${fixture.itemId}/stock-detail`, fixture.token);
     assert.equal(detail.status, 200);
     assert.equal(detail.body.branches.length, 1);
-    assert.equal(detail.body.branches[0].onHand, 15);
+    assert.equal(Number(detail.body.branches[0].onHand), 15);
     assert.equal(detail.body.lots.length, 1);
     assert.equal(detail.body.movements.length, 1);
     assert.equal(detail.body.reconciliation.length, 1);

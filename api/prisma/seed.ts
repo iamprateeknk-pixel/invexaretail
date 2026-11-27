@@ -64,7 +64,7 @@ async function main() {
     await prisma.stockLedger.upsert({
       where: { companyId_itemId_lotId_locationId: { companyId: 'default-company', itemId, lotId, locationId } },
       update: { onHand, reserved: 0, inTransit: 0 },
-      create: { itemId, lotId, locationId, companyId: 'default-company', onHand, reserved: 0, inTransit: 0 },
+      create: { companyId: 'default-company', itemId, lotId, locationId, onHand, reserved: 0, inTransit: 0 },
     });
   }
 

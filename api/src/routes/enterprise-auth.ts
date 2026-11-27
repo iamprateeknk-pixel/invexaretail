@@ -175,7 +175,7 @@ function publicUser(user: repo.EnhancedUserRecord) {
 
 // ADR-003: the refresh token lives in a Secure HttpOnly SameSite cookie for
 // browser clients. `SameSite=None` is required for the API and web app to be
-// on different origins (per ALLOWED_ORIGINS/render.yaml), which in turn
+// on different origins (e.g. admin.invexaretail.com, see lib/cors-origins.ts), which in turn
 // requires Secure - so this cookie is never usable over plain HTTP.
 const REFRESH_COOKIE_NAME = 'invexa_rt';
 const REFRESH_COOKIE_PATH = '/api/v1/auth';

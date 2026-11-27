@@ -8,10 +8,10 @@ Multi-tenant retail inventory, warehouse-transfer, counting, procurement and ord
 
 | Path | What it is | Deployed as |
 |---|---|---|
-| `api/` | Express + Prisma + PostgreSQL backend, worker, OpenAPI contract | Railway API + worker (`api/railway.json`, `api/railway.worker.json`); `render.yaml` is an alternative template |
-| `web/` | Vite/React operations workspace (shadcn/ui, design tokens) | Cloudflare (`web/wrangler.toml`) |
-| `admin-panel/` | SaaS control-plane UI (tenants, entitlements, API keys, kill switches) | Cloudflare Worker `invexaretail` |
-| `mobile/` | Flutter Android/iOS/Windows client (counts, pick, receive, putaway, scan; offline SQLite queue) | Android AAB/APK; Windows and iOS simulator builds run in CI; signing/store release remains pending |
+| `api/` | Express + Prisma + PostgreSQL backend, worker, OpenAPI contract | Docker Compose `api` + `worker` on the cloud host (`https://invexaretail.com/api/v1`) |
+| `web/` | Vite/React operations workspace (shadcn/ui, design tokens) | Docker Compose `web` (Nginx) on the cloud host |
+| `admin-panel/` | SaaS control-plane UI (tenants, entitlements, API keys, kill switches) | Docker Compose `admin` (Nginx) at `https://admin.invexaretail.com` |
+| `mobile/` | Flutter client for Android, iOS and Windows (counts, pick, receive, putaway, scan; offline SQLite queue) | `.github/workflows/{android-apk,ios,windows}.yml` |
 | `docs/` | ADRs, runbooks, per-week evidence, security/SLO policy | - |
 
 Architecture rules that bind every change live in [AGENTS.md](AGENTS.md) and [docs/adr/](docs/adr/) (ADR-001..006): one canonical stock journal, mandatory tenant scope, rotating refresh sessions, Prisma migrations as the only schema authority, bounded contexts, versioned contract + idempotency + outbox.
@@ -58,7 +58,7 @@ CI: `.github/workflows/ci.yml` (build, tests, architecture lint, contract, Postg
 
 ## Operating it
 
-- Deploy / rollback / backup-restore: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md), [docs/deployment-railway-cloudflare.md](docs/deployment-railway-cloudflare.md), [docs/release-evidence/week-01-containment/backup-restore-runbook.md](docs/release-evidence/week-01-containment/backup-restore-runbook.md)
+- Deploy / rollback / backup-restore: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md), [docs/release-evidence/week-01-containment/backup-restore-runbook.md](docs/release-evidence/week-01-containment/backup-restore-runbook.md)
 - SLOs, alerts and tracing (OpenTelemetry via `OTEL_EXPORTER_OTLP_ENDPOINT`): [docs/slo-and-alerting.md](docs/slo-and-alerting.md)
 - Offline mobile contract and local database: [docs/offline-contract-and-mobile-store.md](docs/offline-contract-and-mobile-store.md)
 - Where each route lives and what is still in the two large routers: [docs/route-ownership-matrix.md](docs/route-ownership-matrix.md)

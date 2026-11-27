@@ -234,8 +234,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on TwoFactorRequiredException catch (challenge) {
       twoFactorChallenge = challenge.challengeToken;
@@ -252,6 +251,18 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Signed in is signed in: if the first data load fails (one endpoint down, a slow
+  /// network), the person still lands on the home screen with the reason shown and can
+  /// pull to refresh, instead of being told sign-in failed while their session is saved.
+  Future<void> _loadAfterSignIn() async {
+    try {
+      await refreshAll();
+    } on ApiException catch (err) {
+      error = err.message;
+    }
+    startLive();
+  }
+
   Future<bool> completeTwoFactor(String code) async {
     final challenge = twoFactorChallenge;
     if (challenge == null) return false;
@@ -266,8 +277,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on ApiException catch (err) {
       error = err.message;
@@ -321,8 +331,7 @@ class SessionController extends ChangeNotifier {
       api.refreshToken = result.refreshToken;
       await persistTokens(result.token, result.refreshToken);
       await _loadQueues();
-      await refreshAll();
-      startLive();
+      await _loadAfterSignIn();
       return true;
     } on TwoFactorRequiredException catch (challenge) {
       twoFactorChallenge = challenge.challengeToken;
@@ -481,9 +490,14 @@ class SessionController extends ChangeNotifier {
           _policyRead(api.myAssignments(), <CountAssignment>[]).then((value) => assignments = value),
         if ((slices.contains('assignments') || slices.contains('stock')) && isCountWorker)
           _loadCountTasks(),
-        if (slices.contains('stock') && locationId != null) _policyRead(api.stock(locationId), <StockRow>[]).then((value) => stock = value),
+        if (slices.contains('stock') && locationId != null)
+          _policyRead(api.stock(locationId), <StockRow>[]).then((value) {
+            if (selectedLocationId == locationId) stock = value;
+          }),
         if (slices.contains('putaway') && locationId != null)
-          _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]).then((value) => putawayTasks = value),
+          _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]).then((value) {
+            if (selectedLocationId == locationId) putawayTasks = value;
+          }),
         if (slices.contains('transfers')) _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
         if (slices.contains('dashboard')) _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
       ];
@@ -495,38 +509,54 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> selectLocation(String locationId) async {
+    if (selectedLocationId == locationId) return;
     selectedLocationId = locationId;
+    // The old location's rows must never be shown under the new one, even for a moment.
+    stock = [];
+    putawayTasks = [];
     notifyListeners();
-    await refreshStock();
+    try {
+      await Future.wait<void>([refreshStock(notify: false), refreshPutaway(notify: false)]);
+    } on ApiException catch (err) {
+      error = err.message;
+    }
+    notifyListeners();
   }
 
+  /// Loads everything the home screens need. Independent reads run in parallel;
+  /// only stock and putaway wait for the location list (they need a location).
   Future<void> refreshAll({bool refreshPolicy = true}) async {
     error = null;
     _snapshotExpiry?.cancel();
     offlineReadsUnavailable = false;
     api.servedFromCacheAt = null;
     if (refreshPolicy) await _refreshMobilePolicy();
+    final countWorker = isCountWorker;
     await Future.wait<void>([
-      _policyRead(api.locations(), <LocationRecord>[]).then((value) => locations = value),
+      _policyRead(api.locations(), <LocationRecord>[]).then((value) async {
+        locations = value;
+        final selected = selectedLocationId;
+        // A location the user can no longer access (re-assigned, deactivated) is not kept selected.
+        if (selected == null || !value.any((location) => location.id == selected)) {
+          selectedLocationId = value.isEmpty ? null : value.first.id;
+        }
+        await Future.wait<void>([refreshStock(notify: false), refreshPutaway(notify: false)]);
+      }),
       _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),
       _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
       _policyRead(api.counts(), <CountRecord>[]).then((value) => counts = value),
       _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
+      if (countWorker)
+        _policyRead(api.myAssignments(), <CountAssignment>[]).then((value) => assignments = value).catchError(
+              (Object _) => assignments = <CountAssignment>[],
+              test: (err) => err is ApiException,
+            ),
+      if (countWorker) _loadCountTasks(),
     ]);
-    if (isCountWorker) {
-      try {
-        assignments = await _policyRead(api.myAssignments(), <CountAssignment>[]);
-      } on ApiException {
-        assignments = [];
-      }
-      await _loadCountTasks();
-    } else {
+    if (!countWorker) {
       assignments = [];
       countTasks = [];
     }
-    selectedLocationId ??= locations.isEmpty ? null : locations.first.id;
-    await refreshStock();
-    await refreshPutaway();
     await flushQueue();
     notifyListeners();
   }
@@ -646,28 +676,35 @@ class SessionController extends ChangeNotifier {
     return null;
   }
 
-  Future<void> refreshStock() async {
+  /// Stock for the selected location. A response that arrives after the user
+  /// has switched location is dropped, so one location's rows never show under another.
+  Future<void> refreshStock({bool notify = true}) async {
     final locationId = selectedLocationId;
     if (locationId == null) {
       stock = [];
       return;
     }
-    stock = await _policyRead(api.stock(locationId), <StockRow>[]);
-    notifyListeners();
+    final rows = await _policyRead(api.stock(locationId), <StockRow>[]);
+    if (selectedLocationId != locationId) return;
+    stock = rows;
+    if (notify) notifyListeners();
   }
 
-  Future<void> refreshPutaway() async {
+  Future<void> refreshPutaway({bool notify = true}) async {
     final locationId = selectedLocationId;
     if (locationId == null) {
       putawayTasks = [];
       return;
     }
+    List<Map<String, dynamic>> tasks;
     try {
-      putawayTasks = await _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]);
+      tasks = await _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]);
     } on ApiException {
-      putawayTasks = [];
+      tasks = [];
     }
-    notifyListeners();
+    if (selectedLocationId != locationId) return;
+    putawayTasks = tasks;
+    if (notify) notifyListeners();
   }
 
   Future<bool> enqueueAction({
@@ -743,12 +780,9 @@ class SessionController extends ChangeNotifier {
     final capturedPermit = workflow == null ? null : warehousePermits?[workflow.scope]?.currentToken;
     try {
       await api.sendRaw(method, path, body: body, mutationId: mutationId);
-      if (generation != api.sessionGeneration || !isSignedIn) return false;
-      notice = '$type saved.';
-      await refreshAll();
-      return true;
     } on ApiException catch (err) {
       if (generation != api.sessionGeneration || !isSignedIn) return false;
+      busy = false;
       if (err.isOffline) {
         if (warehousePermits != null && workflow != null) {
           final hasRevision = asString(body[workflow.revision]).isNotEmpty;
@@ -765,11 +799,22 @@ class SessionController extends ChangeNotifier {
         return enqueueAction(type: type, method: method, path: path, body: body, mutationId: mutationId);
       }
       error = err.message;
+      notifyListeners();
       return false;
+    }
+    // The server has the change. A failed re-read afterwards must not report the save as failed:
+    // the person would tap again and, with a fresh idempotency key, post it a second time.
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
+    notice = '$type saved.';
+    try {
+      await refreshAll();
+    } on ApiException {
+      notice = '$type saved. Pull down to refresh the latest data.';
     } finally {
       busy = false;
       notifyListeners();
     }
+    return true;
   }
 
   /// [weight] counts send one decimal total for the item (server splits it
@@ -988,7 +1033,6 @@ class SessionController extends ChangeNotifier {
         return order == 0 ? a.index.compareTo(b.index) : order;
       });
     var sent = 0;
-
     bool stillQueued(QueuedOperation item) => switch (item) {
       QueuedCount() => queuedCounts.contains(item),
       QueuedAction() => queuedActions.contains(item),

@@ -57,6 +57,15 @@ jobs:
       - name: Test migration ownership and image verifier packaging
         run: node --test scripts/deployment-config.test.cjs
 
+      - name: Validate the Compose deployment configuration
+        working-directory: .
+        env:
+          JWT_SECRET: invexa-ci-only-secret-1234567890-abcdefghijklmnopqrstuvwxyz
+          SEED_PASSWORD: InvexaCiOnly123
+          VITE_API_BASE: https://api.example.test
+          VITE_WEB_APP_URL: https://workspace.example.test
+        run: docker compose config --quiet
+
       - name: Build the final API runtime image
         run: docker build --tag invexa-api:ci .
 
@@ -199,7 +208,7 @@ jobs:
 
   api:
     name: API build tests and startup smoke
-    needs: [api_build, api_postgres]
+    needs: [api_build, api_postgres, compose_smoke]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -207,10 +216,55 @@ jobs:
         env:
           BUILD_RESULT: ${{ needs.api_build.result }}
           POSTGRES_RESULT: ${{ needs.api_postgres.result }}
+          COMPOSE_RESULT: ${{ needs.compose_smoke.result }}
         run: |
           printf 'API build and image checks: %s\nPostgreSQL suites: %s\n' "$BUILD_RESULT" "$POSTGRES_RESULT"
           test "$BUILD_RESULT" = success
           test "$POSTGRES_RESULT" = success
+          test "$COMPOSE_RESULT" = success
+
+  compose_smoke:
+    name: Self-hosted Compose routing smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      JWT_SECRET: invexa-compose-ci-only-abcdefghijklmnopqrstuvwxyz
+      SEED_PASSWORD: InvexaComposeCiOnly123
+      VITE_API_BASE: https://api.example.test
+      VITE_WEB_APP_URL: https://workspace.example.test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install seed tooling
+        working-directory: api
+        run: npm ci --ignore-scripts --no-audit --no-fund && npm run db:generate
+      - name: Start and verify the Compose services
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker compose logs --tail=50; docker compose down' EXIT
+          docker compose up -d --wait postgres
+          docker compose build api worker web admin
+          docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'
+          DATABASE_URL=postgresql://retail:retail_password@127.0.0.1:5432/retail_inventory npm --prefix api run db:seed
+          docker compose up -d --no-build api worker web admin
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5173/ready | jq -e '.ok and .persistence == "database"' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5173/health | jq -e --arg release "${GITHUB_SHA:0:12}" '.release == $release'
+          curl --fail --silent http://127.0.0.1:18181/health | jq -e '.ok and .panel == "control-plane"'
+          for path in /api/v1/items /control/v1/companies /studio/v1/versions /sync/v1/status; do
+            status=$(curl --silent --show-error --output /tmp/invexa-route.json --write-out '%{http_code}' "http://127.0.0.1:5173$path")
+            test "$status" = 401
+            jq -e 'type == "object"' /tmp/invexa-route.json
+          done
+          docker compose logs worker | grep -F 'Invexa durable worker is running.'
 
   web:
     name: Web lint and production build
@@ -282,11 +336,11 @@ jobs:
           VITE_WEB_APP_URL: https://workspace.example.test
         run: npm run build
 
-      - name: Confirm login ships in dist and worker
+      - name: Confirm login ships in dist and the Nginx image config
         run: |
           ! grep -R --include="*.js" --include="*.jsx" --include="*.html" --exclude="*.test.js" "Admin panel is ready" dist src
           grep -R "control-email" dist
-          grep -R "x-invexa-panel" src/worker.js
+          grep -qi "x-invexa-panel" nginx.conf
 
   mobile:
     name: Mobile static analysis

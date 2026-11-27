@@ -62,7 +62,7 @@ assertProductionSecrets();
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const startedAt = Date.now();
-const release = process.env.APP_VERSION ?? process.env.GITHUB_SHA?.slice(0, 12) ?? 'unknown';
+const release = process.env.APP_VERSION || process.env.GITHUB_SHA?.slice(0, 12) || 'unknown';
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';

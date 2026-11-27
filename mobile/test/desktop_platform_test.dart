@@ -1,103 +1,85 @@
+// Windows build: no camera scanner or embedded web view exists there, so the app must
+// route scanning to a keyboard-wedge field and lay out for a wide window.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:invexaretail_mobile/screens/workspace_screen.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:invexaretail_mobile/config/platform_caps.dart';
+import 'package:invexaretail_mobile/models/models.dart';
+import 'package:invexaretail_mobile/screens/home_shell.dart';
+import 'package:invexaretail_mobile/services/api_client.dart';
+import 'package:invexaretail_mobile/services/local_store.dart';
+import 'package:invexaretail_mobile/state/session_controller.dart';
 import 'package:invexaretail_mobile/widgets/barcode_scan_sheet.dart';
 
+SessionController _adminController() => SessionController(
+      api: InvexaApi(baseUrl: 'http://api.test', httpClient: MockClient((_) async => http.Response('nope', 500))),
+      store: MemoryStore(),
+    )
+      ..restoring = false
+      ..user = const AuthUser(id: 'u1', name: 'Admin', email: 'a@retail.local', role: 'ADMIN')
+      ..api.token = 'jwt';
+
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
 
-  testWidgets('Windows opens the trusted workspace in the default browser with the handoff fragment', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    Uri? opened;
-
-    try {
-      await tester.pumpWidget(MaterialApp(
-        home: WorkspaceScreen(
-          fetchHandoffCode: () async => 'one-time-code',
-          externalWorkspaceLauncher: (uri) async {
-            opened = uri;
-            return true;
-          },
-        ),
-      ));
-      await tester.pumpAndSettle();
-
-      expect(opened.toString(), 'https://invexaretail.com/#/handoff?code=one-time-code');
-      expect(find.text('The workspace is open in your browser.'), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
+  test('phones get the camera scanner and embedded workspace; Windows gets neither', () {
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      debugDefaultTargetPlatformOverride = platform;
+      expect(PlatformCaps.hasCameraScanner, isTrue, reason: '$platform');
+      expect(PlatformCaps.hasEmbeddedWebView, isTrue, reason: '$platform');
+      expect(PlatformCaps.isDesktop, isFalse, reason: '$platform');
     }
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    expect(PlatformCaps.hasCameraScanner, isFalse);
+    expect(PlatformCaps.hasEmbeddedWebView, isFalse);
+    expect(PlatformCaps.isDesktop, isTrue);
   });
 
-  testWidgets('Windows shows a retry when the default browser cannot be opened', (tester) async {
+  testWidgets('on Windows a scan opens a focused field; a USB scanner\'s code + Enter is returned', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    var attempts = 0;
-
-    try {
-      await tester.pumpWidget(MaterialApp(
-        home: WorkspaceScreen(
-          externalWorkspaceLauncher: (_) async {
-            attempts += 1;
-            return false;
-          },
+    String? scanned;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () async => scanned = await showBarcodeScanner(context, title: 'Scan item'),
+          child: const Text('scan'),
         ),
-      ));
-      await tester.pumpAndSettle();
+      ),
+    ));
+    await tester.tap(find.text('scan'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('We could not open the workspace.'), findsOneWidget);
-      await tester.tap(find.text('Open in browser'));
-      await tester.pumpAndSettle();
-      expect(attempts, 2);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
+    expect(find.byType(KeyboardScanScreen), findsOneWidget);
+    final field = find.byKey(const ValueKey('keyboard-scan-field'));
+    expect(tester.widget<TextField>(field).autofocus, isTrue, reason: 'the first scan must land without a click');
+
+    await tester.enterText(field, '  8901234567890  ');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(scanned, '8901234567890');
+    debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Windows sends the handoff to the configured staging workspace', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    Uri? opened;
-    try {
-      await tester.pumpWidget(MaterialApp(
-        home: WorkspaceScreen(
-          workspaceUri: Uri.parse('https://workspace.example.test/'),
-          fetchHandoffCode: () async => 'staging-code',
-          externalWorkspaceLauncher: (uri) async {
-            opened = uri;
-            return true;
-          },
-        ),
-      ));
-      await tester.pumpAndSettle();
-      expect(opened.toString(), 'https://workspace.example.test/#/handoff?code=staging-code');
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
+  testWidgets('a wide window uses a side rail; a phone keeps the bottom bar', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
 
-  testWidgets('Windows barcode input accepts a USB scanner value without camera support', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    String? result;
+    tester.view.physicalSize = const Size(1280, 800);
+    await tester.pumpWidget(MaterialApp(home: HomeShell(controller: _adminController())));
+    await tester.pump();
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
 
-    try {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Builder(builder: (context) => FilledButton(
-                onPressed: () async => result = await showBarcodeScanner(context),
-                child: const Text('Open scanner'),
-              )),
-        ),
-      ));
-      await tester.tap(find.text('Open scanner'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Stock'));
+    await tester.pump();
+    expect(tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex, isNot(0));
 
-      expect(find.text('Use a USB barcode scanner or enter the code below.'), findsOneWidget);
-      await tester.enterText(find.byType(TextField), 'SKU-1001');
-      await tester.tap(find.text('Use'));
-      await tester.pumpAndSettle();
-      expect(result, 'SKU-1001');
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
+    tester.view.physicalSize = const Size(400, 800);
+    await tester.pumpWidget(MaterialApp(home: HomeShell(controller: _adminController())));
+    await tester.pump();
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
   });
 }

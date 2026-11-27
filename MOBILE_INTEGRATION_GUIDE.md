@@ -52,7 +52,7 @@ Key dependencies (from `mobile/pubspec.yaml`): `http`,
 - The API base URL is set at run/build time:
   `flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000`.
   When `INVEXA_API_BASE` is empty the app uses
-  `https://invexaretail-api-production.up.railway.app`.
+  `https://invexaretail.com`.
 
 ## Local persistence and offline behaviour
 

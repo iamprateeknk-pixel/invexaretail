@@ -56,7 +56,14 @@ const STOCK_WRITE_ALLOWLIST = new Set([
   'src/lib/opening-journal-backfill.ts',
   // Adds ONE journal row per touched balance after a legacy bulk stock change; never edits a balance or a movement.
   'src/lib/import-journal-sync.ts',
+  // Test-only fixture: seeds known StockLedger rows for the stock-parity Postgres suites.
+  // Never imported by production code - TEST_ONLY_MODULES below fails the lint if it ever is.
+  'src/lib/repositories/stock-parity-harness.ts',
 ]);
+
+// Modules that exist only to support tests. Importing one from production code (any
+// non-.test.ts file under src/) is a violation: they bypass the posting service on purpose.
+const TEST_ONLY_MODULES = ['stock-parity-harness'];
 
 const RULES = [
   {
@@ -201,6 +208,17 @@ function findUnscopedTenantQueries(file, lines) {
 
 const MONEY_FIELD_NAME = /^\s*\w*(price|cost|amount|total|tax|discount|freight|landedCost|mrp|value|refund)\w*\s+Float\b/i;
 
+// `Model.field` pairs the money-name heuristic matches but which are not money, each with why.
+// Keyed by model, not line number, so a schema edit elsewhere cannot silently re-hide or
+// re-expose them. Adding one needs a reason a reviewer can check against the code.
+const FLOAT_NOT_MONEY = new Map([
+  // Per-company usage meter (API calls, imports...): a count, see incrementUsage in lib/saas/control-plane.ts.
+  ['ControlPlaneUsage.value', 'usage meter count, not money'],
+  // Offline-sync demo on-hand per company+item (lib/saas/control-plane-sync.ts): a quantity, part of the
+  // pre-existing Float-quantity baseline docs/decimal-migration-plan.md covers - not a price or amount.
+  ['ControlPlaneLedger.value', 'on-hand quantity (Float-quantity baseline), not money'],
+]);
+
 function run() {
   const files = listFiles();
   const violations = [];
@@ -215,12 +233,24 @@ function run() {
       }
     });
     violations.push(...findUnscopedTenantQueries(file, lines));
+    lines.forEach((line, idx) => {
+      if (!/^\s*(import|export)\b.*from\s+['"]/.test(line)) return;
+      if (TEST_ONLY_MODULES.some((name) => line.includes(`/${name}.js'`) || line.includes(`/${name}.js"`) || line.includes(`/${name}'`))) {
+        violations.push({ rule: 'direct-stock-write', file, line: idx + 1, snippet: `production import of test-only module: ${line.trim().slice(0, 120)}` });
+      }
+    });
     violations.push(...findBareStatusWrites(file, lines));
   }
   const schemaPath = join(ROOT, 'prisma', 'schema.prisma');
   if (existsSync(schemaPath)) {
     const schemaLines = readFileSync(schemaPath, 'utf8').split('\n');
+    let model = null;
     schemaLines.forEach((line, idx) => {
+      const opened = /^\s*model\s+(\w+)\s*\{/.exec(line);
+      if (opened) model = opened[1];
+      else if (/^\s*\}/.test(line)) model = null;
+      const field = /^\s*(\w+)/.exec(line)?.[1];
+      if (model && field && FLOAT_NOT_MONEY.has(`${model}.${field}`)) return;
       if (MONEY_FIELD_NAME.test(line)) {
         violations.push({ rule: 'float-money', file: 'prisma/schema.prisma', line: idx + 1, snippet: line.trim().slice(0, 160) });
       }

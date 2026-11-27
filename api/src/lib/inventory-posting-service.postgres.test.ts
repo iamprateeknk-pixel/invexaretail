@@ -42,7 +42,7 @@ integration('posting an opening-stock movement creates the journal row and the S
     reason: 'Initial stock', idempotencyKey: randomUUID(),
   });
   assert.equal(result.duplicate, false);
-  assert.equal(result.balance.onHand, 10);
+  assert.equal(Number(result.balance.onHand), 10);
 
   const ledger = await prisma.stockLedger.findUnique({ where: { companyId_itemId_lotId_locationId: { companyId: tenant.companyId, itemId, lotId, locationId } } });
   assert.equal(Number(ledger?.onHand), 10);

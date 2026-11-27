@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.invexaretail" "\0"
-            VALUE "FileDescription", "invexaretail_mobile" "\0"
+            VALUE "CompanyName", "Invexa Retail" "\0"
+            VALUE "FileDescription", "Invexa Retail" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "invexaretail_mobile" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.invexaretail. All rights reserved." "\0"
-            VALUE "OriginalFilename", "invexaretail_mobile.exe" "\0"
-            VALUE "ProductName", "invexaretail_mobile" "\0"
+            VALUE "InternalName", "InvexaRetail" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Invexa Retail. All rights reserved." "\0"
+            VALUE "OriginalFilename", "InvexaRetail.exe" "\0"
+            VALUE "ProductName", "Invexa Retail" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

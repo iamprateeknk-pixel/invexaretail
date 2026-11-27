@@ -25,23 +25,29 @@ import enterpriseAuthRouter from './routes/enterprise-auth.js';
 
 type Layer = {
   route?: { path: string | string[]; methods: Record<string, boolean> };
-  path?: string;
   handle?: { stack?: Layer[] };
 };
 
+// Walks nested routers too: core.ts serves most of its surface through sub-routers mounted with
+// router.use(subRouter) (identity, catalog, counts, imports, item photos...). Reading only the top-level
+// stack missed every one of those routes and reported their documented operations as "not served".
+// Same walk as route-auth-coverage.test.ts's collect().
 function endpoints(router: Router, prefix = ''): string[] {
   const out: string[] = [];
-  for (const layer of (router as unknown as { stack: Layer[] }).stack) {
-    if (!layer.route) {
-      if (layer.handle?.stack) out.push(...endpoints(layer.handle as unknown as Router, `${prefix}${layer.path ?? ''}`));
-      continue;
+  const walk = (stack: Layer[]) => {
+    for (const layer of stack) {
+      if (layer.route) {
+        const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+        for (const path of paths) {
+          if (typeof path !== 'string') continue;
+          for (const method of Object.keys(layer.route.methods)) out.push(`${method.toUpperCase()} ${prefix}${path.replace(/:([A-Za-z]+)\??/g, '{$1}')}`);
+        }
+        continue;
+      }
+      if (Array.isArray(layer.handle?.stack)) walk(layer.handle.stack);
     }
-    const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
-    for (const path of paths) {
-      if (typeof path !== 'string') continue;
-      for (const method of Object.keys(layer.route.methods)) out.push(`${method.toUpperCase()} ${prefix}${path.replace(/:([A-Za-z]+)\??/g, '{$1}')}`);
-    }
-  }
+  };
+  walk((router as unknown as { stack: Layer[] }).stack);
   return out;
 }
 
