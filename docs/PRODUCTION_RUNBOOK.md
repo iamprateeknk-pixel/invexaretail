@@ -1,10 +1,9 @@
 # Production runbook
 
-This is the one canonical production map. Other deployment notes in this
-repository (`render.yaml`, `DEPLOY_NOW.md`, `api/vercel.json`, Hostinger-era
-files) are history or fallbacks; where they disagree with this page, this page
-wins. Cloudflare Workers and Railway are retired (2026-11-27): production runs
-on the team's own cloud host with Docker Compose behind Nginx.
+This is the one canonical production map; where any other note disagrees with
+this page, this page wins. Cloudflare Workers, Railway, Render and Vercel are
+retired (2026-11-27) and their config files removed: production runs on the
+team's own cloud host with Docker Compose behind Nginx.
 
 ## 1. Topology
 

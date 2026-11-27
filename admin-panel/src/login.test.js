@@ -18,7 +18,7 @@ function scriptLines(html) {
 }
 
 test('served HTML is the Control Plane login, not a stub', () => {
-  const html = controlPlaneHtml('https://invexaretail.onrender.com');
+  const html = controlPlaneHtml('https://api.example.test');
   assert.match(html, /id="login-form"/);
   assert.match(html, /id="control-email"/);
   assert.match(html, /id="control-password"/);
@@ -31,7 +31,7 @@ test('served HTML is the Control Plane login, not a stub', () => {
 });
 
 test('the login shell carries all three screens: login, company select, locked handoff', () => {
-  const html = controlPlaneHtml('https://invexaretail.onrender.com');
+  const html = controlPlaneHtml('https://api.example.test');
   assert.match(html, /id="login-view"/);
   assert.match(html, /id="company-view"/);
   assert.match(html, /id="company-list"/);
@@ -40,7 +40,7 @@ test('the login shell carries all three screens: login, company select, locked h
 });
 
 test('the email field ships empty: no prefilled value, no credential-shaped placeholder', () => {
-  const html = controlPlaneHtml('https://invexaretail.onrender.com');
+  const html = controlPlaneHtml('https://api.example.test');
   assert.equal(html.includes('superadmin@invexa.local'), false);
   const emailTag = html.match(/<input id="control-email"[^>]*>/)?.[0] ?? '';
   assert.notEqual(emailTag, '');
@@ -75,7 +75,7 @@ test('production defaults point at the self-hosted domain, not a retired host', 
 });
 
 test('locking a company hands the session off to the web app instead of rendering a dead-end panel', () => {
-  const html = controlPlaneHtml('https://invexaretail.onrender.com', 'https://invexaretail.com');
+  const html = controlPlaneHtml('https://api.example.test', 'https://invexaretail.com');
   assert.match(html, /const WEB_APP_URL = "https:\/\/invexaretail\.com"/);
   assert.match(html, /window\.location\.href = WEB_APP_URL \+ "\/#\/control\?code=" \+ encodeURIComponent\(result\.code\)/);
   assert.match(html, /\/control\/v1\/sessions\/handoff/);

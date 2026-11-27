@@ -10,7 +10,7 @@ read those first if a rule below seems arbitrary.
   database. Production is the root `docker-compose.yml` on the team's own
   cloud host behind Nginx (`api` + `worker` services), served at
   `https://invexaretail.com/api/v1` - see `docs/PRODUCTION_RUNBOOK.md`.
-  Cloudflare Workers and Railway are retired.
+  Cloudflare Workers, Railway, Render and Vercel are retired.
 - `web/` - the deployed frontend (Vite).
 - `admin-panel/`, `mobile/` - separate deployables, own package.json each.
   `mobile/` is one Flutter codebase shipped as three apps: Android
@@ -1005,7 +1005,9 @@ tracks how much of it):
   there - with `RUN_SCHEDULERS=false` on `api`, plus the `admin` service on
   port 18181. Removed: `web/wrangler.toml`, `admin-panel/wrangler.toml`,
   `admin-panel/src/worker.js`, `api/railway*.json`,
-  `docs/deployment-railway-cloudflare.md`, web's `npm run deploy`. The
+  `docs/deployment-railway-cloudflare.md`, web's `npm run deploy`, and -
+  with Render and Vercel retired too - `render.yaml`, `vercel.json`,
+  `api/vercel.json`, `DEPLOY_NOW.md` and the unused `isRenderRuntime()`. The
   runbook now says plainly that a self-hosted database has no automatic
   backup. Historical per-week docs still mention the old hosts as history.
 
