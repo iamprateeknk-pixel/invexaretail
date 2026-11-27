@@ -104,7 +104,7 @@ jobs:
         run: node --test ../scripts/verify.test.mjs
 
       - name: Test the migration matrix and dependency audit gate helpers (Plan Area J)
-        run: node --test scripts/migration-matrix.test.mjs ../scripts/audit-gate.test.mjs
+        run: node --test scripts/migration-matrix.test.mjs scripts/offline-rollback-rehearsal.test.mjs ../scripts/audit-gate.test.mjs
 
       - name: Start API from the final image and verify health endpoints
         env:
