@@ -1,11 +1,11 @@
 ; Inno Setup script for the Invexa Retail Windows app. Built by
 ; .github/workflows/windows.yml from the Flutter release output:
-;   iscc /DAppVersion=1.3.0 /DSourceDir=<build\windows\x64\runner\Release> InvexaRetail.iss
+;   iscc /DAppVersion=<pubspec version> /DSourceDir=<build\windows\x64\runner\Release> InvexaRetail.iss
 ; Installs per-user (no admin prompt) with a Start Menu entry and an optional
 ; desktop shortcut; uninstalls cleanly from Settings > Apps.
 
 #ifndef AppVersion
-  #define AppVersion "1.3.0"
+  #define AppVersion "0.0.0-dev"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\build\windows\x64\runner\Release"

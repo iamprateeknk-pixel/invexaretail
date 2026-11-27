@@ -31,8 +31,6 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.47.2"
-  BUILD_NAME: "1.3.0"
-  BUILD_NUMBER: "4"
 
 jobs:
   ios:
@@ -46,6 +44,14 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
+      - name: Read app version from pubspec.yaml
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*//p' mobile/pubspec.yaml | tr -d '[:space:]')
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'; then
+            echo "mobile/pubspec.yaml version '$version' must look like 1.2.3+45" >&2; exit 1
+          fi
+          echo "BUILD_NAME=${version%%+*}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=${version##*+}" >> "$GITHUB_ENV"
       - name: Set up Flutter (pinned)
         uses: subosito/flutter-action@v2
         with:
