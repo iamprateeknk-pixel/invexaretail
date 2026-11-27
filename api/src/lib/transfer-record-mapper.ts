@@ -8,6 +8,8 @@
 // excessQty to clients is a deliberate product change, not something to smuggle into this migration.
 import type { TransferRecord } from './repository.js';
 import type { TransferCartonRecord } from './transfer-packing.js';
+import { receiveRevision } from './receive-revision.js';
+import { isReceivableStatus } from './transfer-lifecycle.js';
 
 // Packing/dispatch details live in one JSON column; JSON null means "not set yet".
 export function logisticsOf(transfer: unknown): Pick<TransferRecord, 'packing' | 'dispatch'> {
@@ -25,6 +27,7 @@ export function transferRowToRecord(transfer: any): TransferRecord {
     role: 'ADMIN' as const,
     status: transfer.status,
     cartonCount: transfer.cartonCount ?? undefined,
+    ...(Array.isArray(transfer.lines) && isReceivableStatus(transfer.status) ? { receiveRevision: receiveRevision(transfer, transfer.lines) } : {}),
     notes: transfer.notes ?? undefined,
     lines: (transfer.lines ?? []).map((line: any) => ({ itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty ?? 0) })),
     ...logisticsOf(transfer),

@@ -4,6 +4,8 @@ import { databaseEnabled } from './persistence.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 import type { TenantContext } from './tenant-context.js';
 import { DomainError } from './errors.js';
+import { receiveRevision, transferReceiveChanged } from './receive-revision.js';
+import { isReceivableStatus } from './transfer-lifecycle.js';
 import { validateReceiptLines, type ReceiptLineInput, type TransferReceiptLine } from './receipt-validation.js';
 
 type DbTransferLine = {
@@ -94,6 +96,7 @@ export async function persistTransferReceipt(input: {
   notes: string;
   lines: ReceiptLineInput[];
   tenant: TenantContext;
+  expectedRevision?: string;
 }): Promise<PersistedReceiptResult | null> {
   if (!databaseEnabled) return null;
   if (input.receivedById !== input.tenant.userId) throw new DomainError('FORBIDDEN', 'The receiver must match the signed-in account.');
@@ -121,12 +124,16 @@ export async function persistTransferReceipt(input: {
       return { duplicate: true, status: duplicate[0].status, receiptId: duplicate[0].id, receivedAt: duplicate[0].createdAt.toISOString(), notes: duplicate[0].notes ?? '', receivedQty: Number(total.receivedQty), damagedQty: Number(total.damagedQty), shortageQty: Number(total.shortageQty), excessQty: Number(total.excessQty), lines: lines.map((line) => ({ ...line, requestedQty: Number(line.requestedQty), receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty), excessQty: Number(line.excessQty) })) };
     }
 
-    if (!['DISPATCHED', 'IN_TRANSIT', 'PARTIAL_RECEIVED'].includes(transfers[0].status)) {
+    if (!isReceivableStatus(transfers[0].status)) {
+      if (input.expectedRevision) throw transferReceiveChanged();
       throw new Error(`Transfer cannot be received while ${transfers[0].status}.`);
     }
     const dbLines = await queryRaw<DbTransferLine[]>(tx,
       'SELECT id,"itemId","lotId","requestedQty","receivedQty","damagedQty","shortageQty","excessQty" FROM "TransferLine" WHERE "transferId" = ? ORDER BY "createdAt",id FOR UPDATE',
       input.transferId);
+    if (input.expectedRevision && input.expectedRevision !== receiveRevision({
+      id: input.transferId, destinationLocationId: input.destinationLocationId, status: transfers[0].status,
+    }, dbLines)) throw transferReceiveChanged();
     const transferLines: TransferReceiptLine[] = dbLines.map((line) => ({
       id: line.id, itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
       receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),

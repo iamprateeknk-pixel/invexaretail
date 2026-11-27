@@ -52,6 +52,7 @@ import { DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
 import { canReceiveTransfer, type ReceiptLineInput, validateReceiptLines } from '../lib/receipt-validation.js';
 import { findReceiptByRequestId, beginReceiptRequest, persistTransferReceipt, rememberReceipt, endReceiptRequest } from '../lib/transfer-receipt.js';
 import { isReceivableStatus } from '../lib/transfer-lifecycle.js';
+import { transferReceiveChanged } from '../lib/receive-revision.js';
 import { requireEvidenceForDamage } from '../lib/evidence-rules.js';
 import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { type InspectionLike, quarantineFailedLines, verdictForLine } from '../lib/qc-gate.js';
@@ -646,13 +647,21 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
     });
   }
-  if (!isReceivableStatus(transfer.status)) {
+  if (!isReceivableStatus(transfer.status) && req.body.receiveRevision === undefined) {
     return sendError(res, 400, 'INVALID_TRANSITION', 'Only dispatched, in-transit or partially received transfers can be received.');
   }
   // Shape validation for the receipt lines runs here, after the
   // requestId/status guards above (the requestId check itself stays
   // where it was, ahead of the retry lookup).
-  if (parseBody(req, res, transferReceiveSchema) === null) return;
+  const input = parseBody(req, res, transferReceiveSchema);
+  if (input === null) return;
+  if (input.receiveRevision) {
+    if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Receive revisions require a connected database.');
+    if (!isReceivableStatus(transfer.status) || transfer.receiveRevision !== input.receiveRevision) {
+      const conflict = transferReceiveChanged();
+      return sendError(res, 409, conflict.code, conflict.message);
+    }
+  }
   if (!beginReceiptRequest(ctx, requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt request ID is unavailable.');
   try {
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
@@ -727,7 +736,7 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
-      tenant: ctx,
+      tenant: ctx, expectedRevision: input.receiveRevision,
     });
 
     let status: TransferRecord['status'];

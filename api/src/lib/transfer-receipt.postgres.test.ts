@@ -15,6 +15,7 @@ import { createEnhancedUser } from './enterprise-repository.js';
 import { generateJWT } from './otp-auth.js';
 import { registerLocationCompany } from './saas/tenant-scope.js';
 import transfersRouter from '../routes/transfers.js';
+import transferLogisticsRouter from '../routes/transfer-logistics.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -125,6 +126,71 @@ integration('the receiving route replays a committed receipt without a transfer 
     assert.equal(body.receipt.receivedAt, prior?.receivedAt);
     assert.equal(body.receipt.notes, 'Five checked');
     assert.equal((await journal(f.item.id, f.dst.id)).length, 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+integration('a carton scan gives the current receive revision and a stale offline receipt cannot change stock', async () => {
+  const f = await makeTransfer(6);
+  const foreign = await makeTransfer(6);
+  for (const own of [f, foreign]) {
+    registerLocationCompany(own.dst.id, own.tenant.companyId);
+    createEnhancedUser({ id: own.userId, companyId: own.tenant.companyId, email: `${own.userId}@test.invexa.local`, name: 'Receiver',
+      passwordHash: 'x', role: 'ADMIN', branchIds: [], locationIds: [own.dst.id], status: 'active' });
+  }
+  const qrCode = `PKG-${randomUUID()}`;
+  await prisma.transferCarton.create({ data: { transferId: f.transfer.id, cartonNumber: '1', qrCode, quantity: 6, status: 'SEALED' } });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', transfersRouter, transferLogisticsRouter);
+  const server = app.listen(0);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const call = (path: string, body?: Record<string, unknown>, actor = f) => fetch(`http://127.0.0.1:${address.port}/api/v1/transfers/${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: { Authorization: `Bearer ${generateJWT(actor.userId, actor.tenant.companyId)}`, ...(body && { 'Content-Type': 'application/json' }) },
+    body: body && JSON.stringify(body),
+  }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  try {
+    const scanPath = `by-package/${qrCode.toLowerCase()}`;
+    const scan = await call(scanPath);
+    assert.equal(scan.status, 200, JSON.stringify(scan.body));
+    const initial = scan.body.transfer.receiveRevision;
+    assert.match(initial, /^[a-f0-9]{64}$/);
+    assert.equal((await call(scanPath, undefined, foreign)).status, 404);
+    assert.equal((await call('list')).body.transfers.find((row: { id: string }) => row.id === f.transfer.id).receiveRevision, initial);
+    const lines = [{ lineId: f.transfer.lines[0].id, itemId: f.item.id, lotId: f.lot.id, receivedQty: 2 }];
+    const receive = `${f.transfer.id}/receive`;
+    const savedCommand = { requestId: randomUUID(), receiveRevision: initial, lines };
+    const saved = await call(receive, savedCommand);
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const current = (await call(scanPath)).body.transfer.receiveRevision;
+    assert.notEqual(current, initial);
+    const staleCommand = { ...savedCommand, requestId: randomUUID() };
+    const stale = await call(receive, staleCommand);
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.equal(stale.body.code, 'TRANSFER_RECEIVE_CHANGED');
+    assert.equal(await prisma.transferReceipt.count({ where: { transferId: f.transfer.id } }), 1);
+    assert.equal(Number((await journal(f.item.id, f.dst.id))[0].qtyDelta), 2);
+    const replay = await call(receive, savedCommand);
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.duplicate, true);
+    assert.equal(replay.body.receipt.receiptId, saved.body.receipt.receiptId);
+    assert.equal((await journal(f.item.id, f.dst.id)).length, 1);
+
+    // Distinct commands may reach persistence after both read the same state.
+    // Only the first can apply, even though both quantities fit the transfer.
+    const competing = await Promise.allSettled(Array.from({ length: 2 }, () => persistTransferReceipt({
+      requestId: randomUUID(), expectedRevision: current, transferId: f.transfer.id, destinationLocationId: f.dst.id,
+      receivedById: f.userId, notes: '', tenant: f.tenant,
+      lines: [{ ...lines[0], damagedQty: 0, shortageQty: 0 }],
+    })));
+    assert.equal(competing.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejected = competing.find((result) => result.status === 'rejected');
+    assert.equal(rejected?.reason.code, 'TRANSFER_RECEIVE_CHANGED');
+    assert.equal((await journal(f.item.id, f.dst.id)).reduce((total, row) => total + Number(row.qtyDelta), 0), 4);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

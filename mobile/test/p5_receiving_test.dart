@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,12 +31,13 @@ SessionController _controller(Future<http.Response> Function(http.Request reques
   return controller;
 }
 
-TransferRecord _transfer({double received = 0}) => TransferRecord.fromJson({
+TransferRecord _transfer({double received = 0, String? revision}) => TransferRecord.fromJson({
       'id': 'tr-1',
       'sourceLocationId': 'wh-1',
       'destinationLocationId': 'loc-1',
       'status': received > 0 ? 'PARTIAL_RECEIVED' : 'DISPATCHED',
       'cartonCount': 2,
+      if (revision != null) 'receiveRevision': revision,
       'lines': [
         {'itemId': 'i1', 'lotId': 'l1', 'quantity': 10, 'receivedQty': received},
         {'itemId': 'i2', 'lotId': 'l2', 'quantity': 5.5},
@@ -145,5 +147,38 @@ void main() {
       ['i1', 7, 3, 0],
       ['i2', 5.5, 0, 0.5],
     ]);
+  });
+
+  testWidgets('an offline receipt keeps the revision from the opened transfer and asks for a fresh scan after conflict', (tester) async {
+    final bodies = <Map<String, dynamic>>[];
+    var offline = true;
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/receive')) {
+        bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+        if (offline) throw const SocketException('offline');
+        return _json({'code': 'TRANSFER_RECEIVE_CHANGED', 'error': 'Refresh the transfer.'}, 409);
+      }
+      return _json({'evidence': []});
+    });
+    const originalRevision = 'revision-from-carton-scan';
+    await tester.pumpWidget(MaterialApp(home: TransferDetailScreen(
+      transfer: _transfer(revision: originalRevision), controller: controller,
+    )));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '2');
+    controller.transfers = [_transfer(received: 1, revision: 'newer-revision')];
+    await tester.scrollUntilVisible(find.text('Confirm receipt'), 300, scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Confirm receipt'));
+    await tester.pumpAndSettle();
+    await controller.loadQueuesForTest();
+    expect(controller.queuedActions.single.body['receiveRevision'], originalRevision);
+    offline = false;
+    await controller.flushQueue();
+    await controller.loadQueuesForTest();
+    final stale = controller.queuedActions.single;
+    expect(stale.requiresRescan, isTrue);
+    await controller.retryQueuedAction(stale.localId);
+    expect(bodies, hasLength(2));
+    expect(bodies.last, bodies.first);
   });
 }

@@ -3694,7 +3694,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Receive a dispatched transfer at its destination (Admin or destination store user). Retry-safe by requestId. */
+        /** Receive a dispatched transfer at its destination. Retries use requestId. An optional receive revision verifies that the expected quantities are current. */
         post: operations["postTransfersTransferIdReceive"];
         delete?: never;
         options?: never;
@@ -4037,7 +4037,7 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "TRANSFER_RECEIVE_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
@@ -5069,6 +5069,8 @@ export interface components {
             updatedAt?: string;
         };
         TransferRecord: {
+            /** @description Opaque revision supplied on receivable transfers in database mode. */
+            receiveRevision?: string;
             id: string;
             sourceLocationId: string;
             destinationLocationId: string;
@@ -19198,6 +19200,8 @@ export interface operations {
                 "application/json": {
                     /** @description Retry key; a repeat returns the recorded receipt with duplicate=true. */
                     requestId: string;
+                    /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
+                    receiveRevision?: string;
                     notes?: string;
                     lines?: {
                         lineId?: string;
@@ -19272,7 +19276,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description requestId belongs to another transfer, or this receipt is still being processed. */
+            /** @description The receive revision changed, the request ID is unavailable, or a matching receipt is still being processed. */
             409: {
                 headers: {
                     [name: string]: unknown;

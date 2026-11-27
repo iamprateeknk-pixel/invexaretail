@@ -140,6 +140,7 @@ export type TransferRecord = {
   status: 'SUBMITTED' | 'DRAFT' | 'PENDING_PICK' | 'REQUESTED' | 'PICKING' | 'PARTIAL' | 'PICKED' | 'READY_FOR_ADMIN' | 'CONFIRMED' | 'IN_TRANSIT' | 'DISPATCHED' | 'PARTIALLY_RECEIVED' | 'PARTIAL_RECEIVED' | 'RECEIVED' | 'CLOSED' | 'REJECTED' | 'CANCELLED';
   lines: Array<{ itemId: string; lotId: string; quantity: number; receivedQty?: number; damagedQty?: number; shortageQty?: number; excessQty?: number }>;
   cartonCount?: number;
+  receiveRevision?: string;
   photos?: string[];
   notes?: string;
   // Blueprint v4 §16: set once every expected line is covered by sealed cartons.

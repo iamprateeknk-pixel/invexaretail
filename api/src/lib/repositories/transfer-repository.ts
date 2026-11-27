@@ -121,4 +121,25 @@ export async function listTransfersForContextDb(ctx: AccessContext, tenant: Tena
   return visible.map((transfer) => toListItem(transfer, cartons.filter((carton) => carton.transferId === transfer.id)));
 }
 
+export async function findTransferForSealedPackage(ctx: TenantContext, packageId: string): Promise<{ transfer: TransferRecord; packageId: string } | null> {
+  if (databaseEnabled) {
+    const [carton] = await prisma.$queryRaw<Array<{ transferId: string; packageId: string }>>`
+      SELECT c."transferId", COALESCE(c."qrCode", c."cartonNumber") AS "packageId"
+      FROM "TransferCarton" AS c JOIN "Transfer" AS t ON t.id = c."transferId"
+      WHERE c.status = 'SEALED' AND lower(COALESCE(c."qrCode", c."cartonNumber")) = lower(${packageId})
+        AND (t."companyId" = ${ctx.companyId} OR EXISTS (
+          SELECT 1 FROM "Location" AS l WHERE l.id = t."destinationLocationId" AND l."companyId" = ${ctx.companyId}
+        ))
+      ORDER BY c."createdAt", c.id LIMIT 1
+    `;
+    if (!carton) return null;
+    const transfer = await findTransferForCompany(ctx, carton.transferId);
+    return transfer ? { transfer, packageId: carton.packageId } : null;
+  }
+  const carton = listTransferCartons().find((row) => row.status === 'SEALED' && row.packageId.toLowerCase() === packageId.toLowerCase());
+  if (!carton) return null;
+  const transfer = findSnapshotTransferForCompany(carton.transferId, ctx.companyId);
+  return transfer ? { transfer, packageId: carton.packageId } : null;
+}
+
 export { createTransferRecord };

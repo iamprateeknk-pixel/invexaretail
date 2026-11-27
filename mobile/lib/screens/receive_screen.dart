@@ -273,7 +273,8 @@ class _TransferDetailScreenState extends State<TransferDetailScreen> {
       body: {
         'requestId': _requestId,
         'lines': lines,
-        if (_controller.selectedLocationId != null) 'locationId': _controller.selectedLocationId,
+        if (_transfer.destinationLocationId.isNotEmpty) 'locationId': _transfer.destinationLocationId,
+        if (_transfer.receiveRevision != null) 'receiveRevision': _transfer.receiveRevision,
       },
     );
     if (ok && mounted) {

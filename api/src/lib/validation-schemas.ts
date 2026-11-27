@@ -155,6 +155,7 @@ const transferReceiptLineSchema = z.object({
  */
 export const transferReceiveSchema = z.object({
   requestId: z.string({ error: 'A valid requestId is required for retry-safe receiving.' }).trim().min(1, 'A valid requestId is required for retry-safe receiving.').max(191, 'A valid requestId is required for retry-safe receiving.'),
+  receiveRevision: z.string().regex(/^[a-f0-9]{64}$/, 'Receive revision is invalid.').optional(),
   lines: z.preprocess(
     (value) => (Array.isArray(value) ? value : undefined),
     z.array(transferReceiptLineSchema).min(1).optional(),

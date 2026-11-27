@@ -66,6 +66,7 @@
               "INVALID_TRANSITION",
               "CONCURRENT_UPDATE_CONFLICT",
               "COUNT_STOCK_CHANGED",
+              "TRANSFER_RECEIVE_CHANGED",
               "DUPLICATE_REQUEST",
               "NOT_FOUND",
               "VALIDATION_FAILED",
@@ -3653,6 +3654,10 @@
           "lines"
         ],
         "properties": {
+          "receiveRevision": {
+            "type": "string",
+            "description": "Opaque revision supplied on receivable transfers in database mode."
+          },
           "id": {
             "type": "string"
           },
@@ -27845,7 +27850,7 @@
     "/transfers/{transferId}/receive": {
       "post": {
         "operationId": "postTransfersTransferIdReceive",
-        "summary": "Receive a dispatched transfer at its destination (Admin or destination store user). Retry-safe by requestId.",
+        "summary": "Receive a dispatched transfer at its destination. Retries use requestId. An optional receive revision verifies that the expected quantities are current.",
         "tags": [
           "transfers"
         ],
@@ -27913,7 +27918,7 @@
             }
           },
           "409": {
-            "description": "requestId belongs to another transfer, or this receipt is still being processed.",
+            "description": "The receive revision changed, the request ID is unavailable, or a matching receipt is still being processed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -27953,6 +27958,11 @@
                     "minLength": 1,
                     "maxLength": 191,
                     "description": "Retry key; a repeat returns the recorded receipt with duplicate=true."
+                  },
+                  "receiveRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The revision of the transfer opened for receiving. Preserve it on queued retries."
                   },
                   "notes": {
                     "type": "string",

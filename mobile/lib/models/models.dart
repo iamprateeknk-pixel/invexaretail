@@ -434,6 +434,7 @@ class TransferRecord {
     required this.destinationLocationId,
     required this.status,
     this.cartonCount,
+    this.receiveRevision,
     this.lines = const [],
     this.createdAt,
     this.cartons = const [],
@@ -446,6 +447,7 @@ class TransferRecord {
   final String destinationLocationId;
   final String status;
   final int? cartonCount;
+  final String? receiveRevision;
   final List<TransferLine> lines;
   final String? createdAt;
   final List<TransferCarton> cartons;
@@ -470,6 +472,7 @@ class TransferRecord {
       destinationLocationId: asString(json['destinationLocationId']),
       status: asString(json['status']),
       cartonCount: json.containsKey('cartonCount') ? asInt(json['cartonCount']) : null,
+      receiveRevision: json['receiveRevision'] is String ? json['receiveRevision'] as String : null,
       lines: asList(json['lines']).map((row) => TransferLine.fromJson(asMap(row))).toList(),
       createdAt: json['createdAt'] == null ? null : asString(json['createdAt']),
       cartons: asList(json['cartons']).map((row) => TransferCarton.fromJson(asMap(row))).toList(),
@@ -734,7 +737,7 @@ class QueuedAction {
   int attempts;
   String? lastError;
   String? lastErrorCode;
-  bool get requiresRescan => lastErrorCode == 'PUTAWAY_TASK_CHANGED';
+  bool get requiresRescan => lastErrorCode == 'PUTAWAY_TASK_CHANGED' || lastErrorCode == 'TRANSFER_RECEIVE_CHANGED';
   // See QueuedCount.status - same conflict/rejected/pending contract.
   String status;
 
