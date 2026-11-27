@@ -12,6 +12,11 @@ import { controlPlaneHtml } from './login-html.js';
 // runs, and it duplicated these same three screens with zero feature
 // delta. These tests guard the single implementation and the removal.
 
+/** Every trimmed line of the generated page, for exact whole-line assertions. */
+function scriptLines(html) {
+  return new Set(html.split('\n').map((line) => line.trim()));
+}
+
 test('served HTML is the Control Plane login, not a stub', () => {
   const html = controlPlaneHtml('https://invexaretail.onrender.com');
   assert.match(html, /id="login-form"/);
@@ -57,15 +62,16 @@ test('the build bakes in both VITE_API_BASE and VITE_WEB_APP_URL', () => {
     cwd: root,
     env: { ...process.env, VITE_API_BASE: 'https://api.example.test', VITE_WEB_APP_URL: 'https://web.example.test' },
   });
-  const html = readFileSync(join(root, 'dist', 'index.html'), 'utf8');
-  assert.match(html, /https:\/\/api\.example\.test/);
-  assert.match(html, /const WEB_APP_URL = "https:\/\/web\.example\.test"/);
+  const lines = scriptLines(readFileSync(join(root, 'dist', 'index.html'), 'utf8'));
+  assert.equal(lines.has('const API_BASE = "https://api.example.test";'), true);
+  assert.equal(lines.has('const WEB_APP_URL = "https://web.example.test";'), true);
 });
 
 test('production defaults point at the self-hosted domain, not a retired host', () => {
-  const html = controlPlaneHtml();
-  assert.match(html, /https:\/\/invexaretail\.com/);
-  assert.equal(/railway\.app|workers\.dev/.test(html), false);
+  const lines = scriptLines(controlPlaneHtml());
+  // Whole-line equality, so the exact configured hosts are asserted (no substring/regex URL matching).
+  assert.equal(lines.has('const API_BASE = "https://invexaretail.com";'), true);
+  assert.equal(lines.has('const WEB_APP_URL = "https://invexaretail.com";'), true);
 });
 
 test('locking a company hands the session off to the web app instead of rendering a dead-end panel', () => {

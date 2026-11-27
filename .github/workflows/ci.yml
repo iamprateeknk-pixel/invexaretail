@@ -244,7 +244,7 @@ jobs:
         run: |
           ! grep -R --include="*.js" --include="*.jsx" --include="*.html" --exclude="*.test.js" "Admin panel is ready" dist src
           grep -R "control-email" dist
-          grep -q "x-invexa-panel" nginx.conf
+          grep -qi "x-invexa-panel" nginx.conf
 
   mobile:
     name: Mobile static analysis
