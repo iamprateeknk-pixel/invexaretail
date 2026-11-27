@@ -1,0 +1,130 @@
+name: Build Invexa Retail iOS release
+
+# The iOS platform project is committed under mobile/ios, so this workflow builds
+# exactly what is in the repository. Pull requests prove the app compiles for iOS
+# (unsigned). main/manual runs produce a signed, App Store / TestFlight-ready IPA
+# once the Apple signing secrets below are configured; without them they fail
+# loudly instead of publishing something that cannot be installed.
+#
+# Secrets (see mobile/SETUP.md, "iOS"):
+#   IOS_CERTIFICATE_P12_BASE64   Apple Distribution certificate (.p12), base64
+#   IOS_CERTIFICATE_PASSWORD     password of that .p12
+#   IOS_PROVISIONING_PROFILE_BASE64  App Store provisioning profile for
+#                                com.invexaretail.invexaretailMobile, base64
+#   IOS_TEAM_ID                  10-character Apple Developer Team ID
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.47.2"
+  BUILD_NAME: "1.3.0"
+  BUILD_NUMBER: "4"
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+      - name: Set up Flutter (pinned)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Install dependencies from the committed lockfile
+        working-directory: mobile
+        run: flutter pub get --enforce-lockfile
+      - name: Test
+        working-directory: mobile
+        run: flutter test
+      - name: Build unsigned (pull requests)
+        if: github.event_name == 'pull_request'
+        working-directory: mobile
+        run: flutter build ios --release --no-codesign --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
+      - name: Install signing certificate and provisioning profile
+        if: github.event_name != 'pull_request'
+        run: |
+          for name in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "$name secret is not configured; refusing to build an unsigned iOS release." >&2
+              exit 1
+            fi
+          done
+          KEYCHAIN="$RUNNER_TEMP/invexa-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$IOS_TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.invexaretail.invexaretailMobile</key><string>$PROFILE_NAME</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          # Manual signing for the Runner target's Release build only, applied in CI so no team
+          # id or profile name is committed. Release.xcconfig is the Runner target's base config.
+          cat >> mobile/ios/Flutter/Release.xcconfig <<XCCONFIG
+          DEVELOPMENT_TEAM = $IOS_TEAM_ID
+          CODE_SIGN_STYLE = Manual
+          CODE_SIGN_IDENTITY = Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER = $PROFILE_NAME
+          XCCONFIG
+      - name: Build signed IPA
+        if: github.event_name != 'pull_request'
+        working-directory: mobile
+        run: |
+          flutter build ipa --release \
+            --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER \
+            --export-options-plist="$RUNNER_TEMP/ExportOptions.plist"
+      - name: Upload IPA
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: InvexaRetail-iOS-${{ env.BUILD_NAME }}
+          path: mobile/build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove signing keychain
+        if: always() && github.event_name != 'pull_request'
+        run: security delete-keychain "$RUNNER_TEMP/invexa-signing.keychain-db" || true

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../config/platform_caps.dart';
 import '../config/theme.dart';
 import '../services/scan_feedback.dart';
 
@@ -8,10 +9,91 @@ import '../services/scan_feedback.dart';
 /// barcode value, or null if the user backs out or types it manually.
 /// A single reusable entry point so every "scan" action in the app uses
 /// the same real camera component instead of a bare text field.
+/// On a platform without a camera scanner (Windows), the same entry point opens
+/// a focused input instead: a USB/Bluetooth scanner types the code and Enter.
 Future<String?> showBarcodeScanner(BuildContext context, {String title = 'Scan barcode'}) {
   return Navigator.of(context).push<String>(
-    MaterialPageRoute(builder: (_) => _BarcodeScanScreen(title: title)),
+    MaterialPageRoute(
+      builder: (_) => PlatformCaps.hasCameraScanner ? _BarcodeScanScreen(title: title) : KeyboardScanScreen(title: title),
+    ),
   );
+}
+
+/// Scanner screen for keyboard-wedge scanners and typed codes. The field is
+/// focused on open, so the first scan lands without a click.
+class KeyboardScanScreen extends StatefulWidget {
+  const KeyboardScanScreen({super.key, required this.title});
+
+  final String title;
+
+  @override
+  State<KeyboardScanScreen> createState() => _KeyboardScanScreenState();
+}
+
+class _KeyboardScanScreenState extends State<KeyboardScanScreen> {
+  final _code = TextEditingController();
+  bool _handled = false;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  void _accept(String value) {
+    final code = value.trim();
+    if (_handled || code.isEmpty) return;
+    _handled = true;
+    ScanFeedback.accepted();
+    Navigator.of(context).pop(code);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.qr_code_scanner, size: 56, color: invexaEmerald),
+                const SizedBox(height: 16),
+                const Text(
+                  'Scan with your barcode scanner, or type the code and press Enter.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  key: const ValueKey('keyboard-scan-field'),
+                  controller: _code,
+                  autofocus: true,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Barcode, item code or lot',
+                    prefixIcon: Icon(Icons.qr_code_2),
+                  ),
+                  onSubmitted: _accept,
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => _accept(_code.text),
+                    child: const Text('Use code'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _BarcodeScanScreen extends StatefulWidget {
