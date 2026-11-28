@@ -7,6 +7,7 @@ import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';
 import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
 import { validateLiveAutomation } from './studio-automation-config.js';
+import { studioReportDefinition } from './studio-report-config.js';
 
 function validateLiveApproval(workflow: WorkflowDefinition): void {
   try {
@@ -42,10 +43,18 @@ function validateAutomationForPublish(automation: AutomationDefinition): void {
   }
 }
 
+function validateReport(report: ReportDefinition): void {
+  if (!report || typeof report.key !== 'string' || !/^[a-zA-Z0-9_.-]{1,100}$/.test(report.key)
+    || typeof report.name !== 'string' || !report.name.trim() || report.name.length > 160 || !studioReportDefinition(report)) {
+    throw new ControlPlaneError('Choose a supported report dataset, columns, typed filters and grouping.', 'INVALID_REPORT', 400);
+  }
+}
+
 export function validateStudioRelease(version: ConfigurationVersion): void {
   for (const workflow of version.workflows ?? []) validateLiveApproval(workflow);
   for (const rule of version.rules ?? []) validateRuleForPublish(rule);
   for (const automation of version.automations ?? []) validateAutomationForPublish(automation);
+  for (const report of version.reports ?? []) validateReport(report);
 }
 
 export type StudioRollbackOptions = { targetVersionId?: string; reason?: string };
@@ -626,6 +635,7 @@ export class ControlPlaneStudio {
 
   upsertReport(scope: ScopeContext, report: ReportDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateReport(report);
     const index = draft.reports.findIndex((entry) => entry.key === report.key);
     if (index >= 0) draft.reports[index] = report;
     else draft.reports.push(report);

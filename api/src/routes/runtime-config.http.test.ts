@@ -125,7 +125,13 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     });
     assert.equal(mobilePolicy.status, 200);
     const reportKey = `runtime_report_${Date.now().toString(36)}`;
-    const report = { key: reportKey, name: 'Dispatch report', entity: 'transfers', columns: ['status', 'to'], filters: { status: 'DISPATCHED' } };
+    const report = { key: reportKey, name: 'Dispatch report', entity: 'transfers', columns: ['status', 'to'],
+      filters: { status: 'DISPATCHED' }, groupBy: 'to', view: 'bar' };
+    const saveReport = (body: unknown) => json(url, '/studio/v1/reports', { method: 'POST', headers: studioAuth, body: JSON.stringify(body) });
+    assert.equal((await saveReport({ ...report, columns: ['customer_email'] })).status, 400);
+    assert.equal((await saveReport({ ...report, filters: { items: '2' } })).status, 400);
+    assert.equal((await saveReport({ ...report, groupBy: 'items' })).status, 400);
+    assert.equal((await saveReport({ ...report, groupBy: undefined })).status, 400);
     const reportDraft = await json(url, '/studio/v1/reports', { method: 'POST', headers: studioAuth, body: JSON.stringify(report) });
     assert.equal(reportDraft.status, 200);
     const workflow = {

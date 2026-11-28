@@ -1,4 +1,4 @@
-import { datasetOf } from '../control-plane/studio-catalog.js';
+import { STUDIO_REPORT_ROW_LIMIT } from './studio-report-config.js';
 import { availableQuantity, stockRowValues } from './stock-table.js';
 
 export const remoteReportPaths = {
@@ -6,19 +6,7 @@ export const remoteReportPaths = {
   purchase_orders: '/api/v1/purchase-orders',
 };
 
-export function studioReportDefinition(report) {
-  const dataset = datasetOf(report?.entity);
-  const columns = new Map(dataset?.columns.map(({ value, label }) => [value, label]));
-  const selected = [...new Set(Array.isArray(report?.columns) ? report.columns : [])];
-  const filters = Object.entries(report?.filters ?? {});
-  if (!dataset || !selected.length || selected.some((key) => !columns.has(key)) ||
-      filters.some(([key, value]) => !columns.has(key) || !['string', 'number', 'boolean'].includes(typeof value))) {
-    return null;
-  }
-  return { columns: selected.map((key) => ({ key, label: columns.get(key) })), filters };
-}
-
-export function studioReportRows(report, definition, { locationId, stockRows = [], items = [], counts = [], transfers = [], locations = [], remote = [] }) {
+export function studioReportResult(report, definition, { locationId, stockRows = [], items = [], counts = [], transfers = [], locations = [], remote = [] }) {
   const itemLabel = ({ code, name } = {}) => [code, name].filter(Boolean).join(' · ');
   const catalog = new Map(items.map((item) => [item.id, item]));
   const places = new Map(locations.map(({ id, name }) => [id, name]));
@@ -55,8 +43,22 @@ export function studioReportRows(report, definition, { locationId, stockRows = [
         po_no: row.number, supplier: row.supplier?.name, status: row.status, expected_at: row.expectedAt, value: row.totalAmount,
       }));
       break;
-    default: return [];
+    default: rows = [];
   }
-  return rows.filter((row) => definition.filters.every(([key, value]) => row[key] === value))
-    .map((row) => Object.fromEntries(definition.columns.map(({ key, label }) => [label, row[key] ?? ''])));
+  rows = rows.filter((row) => definition.filters.every(([key, value]) => row[key] === value));
+  if (definition.groupBy) {
+    const groups = new Map();
+    for (const row of rows) {
+      const key = String(row[definition.groupBy] ?? '');
+      groups.set(key, (groups.get(key) ?? 0) + 1);
+    }
+    rows = Array.from(groups, ([key, records]) => ({ [definition.groupBy]: key, records }))
+      .sort((left, right) => right.records - left.records || left[definition.groupBy].localeCompare(right[definition.groupBy], 'en-IN'));
+  }
+  return {
+    total: rows.length,
+    truncated: rows.length > STUDIO_REPORT_ROW_LIMIT,
+    rows: rows.slice(0, STUDIO_REPORT_ROW_LIMIT)
+      .map((row) => Object.fromEntries(definition.columns.map(({ key, label }) => [label, row[key] ?? '']))),
+  };
 }

@@ -4115,6 +4115,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        PublishedStudioReport: {
+            key: string;
+            name: string;
+            entity: string;
+            columns: string[];
+            /** @description Exact match values for allowlisted columns. Filter values must match their column type. */
+            filters?: {
+                [key: string]: string | number;
+            };
+            /** @description Supported category to count matching records by. */
+            groupBy?: string;
+            /** @enum {string} */
+            view?: "table" | "bar";
+        };
         StudioItemFields: {
             versionId: string | null;
             configVersion: number | null;
@@ -13815,6 +13829,8 @@ export interface operations {
                     "application/json": {
                         success?: boolean;
                         runtime?: {
+                            /** @description Published reports available to the caller's role. */
+                            reports?: components["schemas"]["PublishedStudioReport"][];
                             /** @constant */
                             offlineCommandVersion?: 2;
                             /** @description Account-bound permit for offline counts. Null if the published role policy does not permit them. */

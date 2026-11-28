@@ -320,9 +320,15 @@ integration('a rejected Studio release leaves its draft intact and rollback crea
   const b = lockedScope(second, company.id);
   const original = first.published.get(company.id)!;
   first.setStockColumnLayout(a, [{ key: 'item_code', label: 'Released label' }]);
+  const report = { key: 'grouped-count-status', name: 'Counts by status', entity: 'counts', columns: ['status'],
+    filters: { counted: 7 }, groupBy: 'status', view: 'bar' as const };
+  first.upsertReport(a, report);
+  const reportsFor = async (role: string) => (await readStudioRuntime(second, company.id, role)).reports;
+  assert.ok(!(await reportsFor('ADMIN')).some(({ key }) => key === report.key));
   second.setStockColumnLayout(b, [{ key: 'item_code', label: 'Unreleased label' }]);
   const unreleased = structuredClone(second.drafts.get(company.id));
   const winner = await commitStudioRelease(first, a, { draftRevision: studioDraftRevision(first.drafts.get(company.id))! });
+  assert.deepEqual((await reportsFor('ADMIN')).find(({ key }) => key === report.key), report);
   await assert.rejects(commitStudioRelease(second, b, { draftRevision: studioDraftRevision(unreleased)! }), { code: 'STUDIO_CONFIG_CONFLICT' });
   assert.deepEqual(second.drafts.get(company.id), unreleased);
   assert.equal(second.published.get(company.id)?.id, original.id);
@@ -335,6 +341,7 @@ integration('a rejected Studio release leaves its draft intact and rollback crea
   const restored = await commitStudioRelease(first, a, { rollbackVersion: original.version });
   assert.equal(restored.version, winner.version + 1);
   assert.deepEqual(restored.page, original.page);
+  assert.ok(!(await reportsFor('ADMIN')).some(({ key }) => key === report.key));
   const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
   assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [restored.id]);
   assert.deepEqual(new Set(rows.filter((row) => row.kind === 'history').map((row) => row.versionId)), new Set([original.id, winner.id, restored.id]));
@@ -348,6 +355,8 @@ integration('a rejected Studio release leaves its draft intact and rollback crea
   assert.notEqual(second.runtimeConfig(company.id).version, restoredSecond.version, 'the reader has not refreshed its snapshot');
   const runtime = await readStudioRuntime(second, company.id, 'STORE_USER');
   assert.equal(runtime.version, restoredSecond.version);
+  assert.deepEqual(runtime.reports, []);
+  assert.deepEqual((await reportsFor('ADMIN')).find(({ key }) => key === report.key), report);
   assert.equal(runtime.page.columns.find((column) => column.key === 'item_code')?.label, 'Released label');
   await assert.rejects(readStudioRuntime(second, randomUUID(), 'STORE_USER'), { code: 'COMPANY_NOT_FOUND' });
   const foreignRuntime = await readStudioRuntime(second, 'default-company', 'STORE_USER');

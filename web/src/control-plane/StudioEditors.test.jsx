@@ -3,7 +3,7 @@ import test from 'node:test';
 import 'global-jsdom/register';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
-import { AutomationsEditor, MobilePolicyEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
+import { AutomationsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
 import { modelToWorkflow } from './studio-catalog.js';
 import { ModeSwitch, StudioModeProvider } from './studio-mode.jsx';
 
@@ -13,6 +13,23 @@ const draft = {
   rules: [{ key: 'high_value_adjustment', name: 'High value adjustment approval', condition: { branchCity: 'Jaipur', adjustmentValueGt: 10000 }, outcome: { requireApproval: 'BRANCH_MANAGER' } }],
   mobilePolicies: [{ role: 'STORE_USER', offlineMaxHours: 12, syncScope: ['stock', 'counts'], navigation: ['dashboard', 'stock', 'counts'], encryptedLocalStore: true }],
 };
+
+test('Studio saves a typed filter and grouped chart on a report draft', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  const report = { key: 'stock', name: 'Stock report', entity: 'inventory', columns: ['item_code', 'available'], filters: {} };
+  try {
+    mount(React.createElement(ReportsEditor, { controlToken: 't', draft: { reports: [report] } }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Group results by' }), { target: { value: 'category' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Display' }), { target: { value: 'bar' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add filter' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter field for Item code & name' }), { target: { value: 'available' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Match Available' }), { target: { value: '10.5' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.match(calls[0].url, /\/studio\/v1\/reports$/);
+    assert.deepEqual(calls[0].body, { ...report, groupBy: 'category', view: 'bar', filters: { available: 10.5 } });
+  } finally { restore(); }
+});
 
 function mount(element) {
   return render(React.createElement(StudioModeProvider, { initialAdvanced: false }, React.createElement(ModeSwitch), element));

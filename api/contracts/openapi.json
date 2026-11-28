@@ -45,6 +45,23 @@
       }
     },
     "schemas": {
+      "PublishedStudioReport": {
+        "type": "object",
+        "required": ["key", "name", "entity", "columns"],
+        "properties": {
+          "key": { "type": "string" },
+          "name": { "type": "string" },
+          "entity": { "type": "string" },
+          "columns": { "type": "array", "items": { "type": "string" } },
+          "filters": {
+            "type": "object",
+            "description": "Exact match values for allowlisted columns. Filter values must match their column type.",
+            "additionalProperties": { "type": ["string", "number"] }
+          },
+          "groupBy": { "type": "string", "description": "Supported category to count matching records by." },
+          "view": { "type": "string", "enum": ["table", "bar"] }
+        }
+      },
       "StudioItemFields": {
         "type": "object", "required": ["versionId", "configVersion", "fields"],
         "properties": {
@@ -18811,6 +18828,11 @@
                     "runtime": {
                       "type": "object",
                       "properties": {
+                        "reports": {
+                          "type": "array",
+                          "description": "Published reports available to the caller's role.",
+                          "items": { "$ref": "#/components/schemas/PublishedStudioReport" }
+                        },
                         "offlineCommandVersion": { "type": "integer", "const": 2 },
                         "offlineCountPermit": {
                           "type": ["object", "null"],

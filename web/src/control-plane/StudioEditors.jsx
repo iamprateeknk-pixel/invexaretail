@@ -191,19 +191,59 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
 
 // ---- reports ------------------------------------------------------------------
 
+function ReportFilters({ dataset, filters, onChange }) {
+  const entries = Object.entries(filters ?? {});
+  const available = dataset.columns.filter(({ value }) => !Object.hasOwn(filters ?? {}, value));
+  const remove = (key) => Object.fromEntries(entries.filter(([field]) => field !== key));
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">Exact match filters</legend>
+      {entries.map(([key, value]) => {
+        const column = dataset.columns.find((entry) => entry.value === key);
+        const label = column?.label ?? key;
+        return (
+          <div key={key} className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <Choice label={`Filter field for ${label}`} value={key} options={[column ?? { value: key, label }, ...available]}
+              onChange={(next) => onChange({ ...remove(key), [next]: '' })} />
+            <Text label={`Match ${label}`} value={value} type={column?.type ?? 'text'}
+              onChange={(next) => onChange({ ...filters, [key]: next })} />
+            <Button type="button" variant="outline" size="sm" onClick={() => onChange(remove(key))}>Remove {label} filter</Button>
+          </div>
+        );
+      })}
+      {available.length > 0 && <Button type="button" variant="outline" size="sm"
+        onClick={() => onChange({ ...filters, [available[0].value]: '' })}>Add filter</Button>}
+    </fieldset>
+  );
+}
+
 export function ReportsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.reports ?? [];
   return (
     <StudioListEditor
       title="Reports"
-      description="Name a report and choose its columns. Published reports appear in the Reports workspace."
+      description="Choose columns and exact match filters. Group results to count records by category, status or another supported field."
       entries={entries}
       idOf={(report) => report.key}
       newEntry={(current) => ({ key: slugKey('new report', current.map((report) => report.key)), name: 'New report', entity: 'inventory', columns: ['item_code', 'available'], filters: {} })}
-      summarize={(report) => `${report.name}: ${labelOf(REPORT_DATASETS, report.entity)} - ${report.columns.map((column) => reportColumnLabel(report.entity, column)).join(', ') || 'no columns'}`}
+      summarize={(report) => `${report.name}: ${labelOf(REPORT_DATASETS, report.entity)} - ${report.groupBy
+        ? `count by ${reportColumnLabel(report.entity, report.groupBy)}`
+        : (Array.isArray(report.columns) ? report.columns : []).map((column) => reportColumnLabel(report.entity, column)).join(', ') || 'no columns'}`}
       addLabel="Add report"
       emptyText="No reports yet."
-      save={(report) => post(controlToken, '/studio/v1/reports', report)}
+      save={(report) => {
+        const columns = datasetOf(report.entity)?.columns ?? [];
+        const filters = Object.fromEntries(Object.entries(report.filters ?? {}).map(([key, value]) => {
+          const numeric = columns.some((column) => column.value === key && column.type === 'number');
+          if (!numeric || typeof value === 'number') return [key, value];
+          const number = Number(value);
+          if (typeof value !== 'string' || !value.trim() || !Number.isFinite(number)) {
+            throw new Error(`Enter a number for ${reportColumnLabel(report.entity, key)}.`);
+          }
+          return [key, number];
+        }));
+        return post(controlToken, '/studio/v1/reports', { ...report, filters });
+      }}
       remove={(key) => del(controlToken, `/studio/v1/reports/${encodeURIComponent(key)}`)}
       onSaved={onSaved}
       renderEntry={(report, set, { isNew, others }) => {
@@ -213,12 +253,22 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
             <div className="grid gap-3 md:grid-cols-2">
               <Text label="Report name" value={report.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
               <Choice label="About" value={report.entity} options={dataset ? REPORT_DATASETS : [...REPORT_DATASETS, { value: report.entity, label: report.entity }]}
-                onChange={(entity) => set({ entity, columns: (datasetOf(entity)?.columns ?? []).slice(0, 2).map((column) => column.value) })} />
+                onChange={(entity) => set({ entity, columns: (datasetOf(entity)?.columns ?? []).slice(0, 2).map((column) => column.value),
+                  filters: {}, groupBy: undefined, view: undefined })} />
             </div>
-            {dataset && <ChipPicker label="Columns" options={dataset.columns} value={report.columns} onChange={(columns) => set({ columns })} />}
+            {dataset && <>
+              <Choice label="Group results by" value={report.groupBy ?? ''} options={[
+                { value: '', label: 'Do not group' }, ...dataset.columns.filter(({ groupable }) => groupable),
+              ]} onChange={(groupBy) => set({ groupBy: groupBy || undefined, view: groupBy ? report.view : undefined })} />
+              {report.groupBy ? <Choice label="Display" value={report.view ?? 'table'}
+                options={[{ value: 'table', label: 'Table' }, { value: 'bar', label: 'Table with bars' }]}
+                onChange={(view) => set({ view })} />
+                : <ChipPicker label="Columns" options={dataset.columns} value={report.columns ?? []} onChange={(columns) => set({ columns })} />}
+              <ReportFilters dataset={dataset} filters={report.filters} onChange={(filters) => set({ filters })} />
+            </>}
             <Advanced>
               <Text label="Technical key" mono value={report.key} onChange={(key) => isNew && set({ key })} />
-              <Text label="Column keys (comma separated)" mono value={report.columns.join(', ')} onChange={(raw) => set({ columns: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
+              <Text label="Column keys (comma separated)" mono value={Array.isArray(report.columns) ? report.columns.join(', ') : ''} onChange={(raw) => set({ columns: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
             </Advanced>
           </>
         );

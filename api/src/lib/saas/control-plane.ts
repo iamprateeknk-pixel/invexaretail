@@ -261,6 +261,8 @@ export type ReportDefinition = {
   entity: string;
   columns: string[];
   filters: Record<string, unknown>;
+  groupBy?: string;
+  view?: 'table' | 'bar';
 };
 
 export type AutomationDefinition = {

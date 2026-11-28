@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
-import { remoteReportPaths, studioReportDefinition, studioReportRows } from '../../../lib/studio-report-data';
+import { remoteReportPaths, studioReportResult } from '../../../lib/studio-report-data';
+import { studioReportDefinition } from '../../../lib/studio-report-config';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -35,8 +36,9 @@ export function StudioReports() {
   const current = result?.resource === resource && result?.authToken === authToken ? result : null;
   const remote = current?.data?.[report?.entity === 'purchase_orders' ? 'purchaseOrders' : 'orders'];
   const remoteReady = Array.isArray(remote);
-  const rows = definition && locationId && (!endpoint || remoteReady)
-    ? studioReportRows(report, definition, { ...workspace, remote }) : [];
+  const reportResult = definition && locationId && (!endpoint || remoteReady)
+    ? studioReportResult(report, definition, { ...workspace, remote }) : null;
+  const rows = reportResult?.rows ?? [];
 
   return (
     <Card>
@@ -49,16 +51,25 @@ export function StudioReports() {
           </Select>
           <Button variant="outline" disabled={!rows.length} onClick={() => downloadReportCsv(rows, `studio-${report.key}`)}>Export published report</Button>
         </div>
-        {report && (!definition ? <p role="status">This report has an unsupported dataset, column or filter. Update it in Studio.</p>
+        {report && (!definition ? <p role="status">This report has an unsupported configuration. Update it in Studio.</p>
           : !locationId ? <p role="status">Choose a location to run this report.</p>
           : current?.error || (current?.data && !remoteReady) ? <p role="alert">The report data is unavailable. Refresh to try again.</p>
           : endpoint && !remoteReady ? <p role="status">Loading report data…</p>
           : <>
             {endpoint && <p className="text-sm text-muted-foreground">Shows up to 200 recent records for the selected location.</p>}
+            {reportResult?.truncated && <p role="status" className="text-sm text-muted-foreground">
+              Showing and exporting {rows.length} of {reportResult.total} matching {definition.groupBy ? 'groups' : 'records'}.
+            </p>}
             <Table>
               <TableHeader><TableRow>{definition.columns.map(({ key, label }) => <TableHead key={key}>{label}</TableHead>)}</TableRow></TableHeader>
               <TableBody>{rows.length ? rows.map((row, index) => (
-                <TableRow key={index}>{definition.columns.map(({ key, label }) => <TableCell key={key}>{String(row[label])}</TableCell>)}</TableRow>
+                <TableRow key={index}>{definition.columns.map(({ key, label }) => (
+                  <TableCell key={key}>
+                    {definition.chart && key === 'records' && <meter aria-hidden="true" className="mr-3 w-24 align-middle accent-primary"
+                      min={0} max={rows[0].Records} value={row.Records} />}
+                    {row[label] === '' && key === definition.groupBy ? 'No value' : String(row[label])}
+                  </TableCell>
+                ))}</TableRow>
               )) : <TableRow><TableCell colSpan={definition.columns.length}>No records match this report at this location.</TableCell></TableRow>}</TableBody>
             </Table>
           </>)}

@@ -3,6 +3,9 @@
 // these helpers turn them into something a store owner can read and back again,
 // so the "Simple" view never shows a key or JSON while "Advanced" still can.
 
+import { datasetOf } from '../lib/studio-report-config.js';
+export { datasetOf, REPORT_DATASETS } from '../lib/studio-report-config.js';
+
 export const ROLE_OPTIONS = [
   { value: 'ADMIN', label: 'Admin' },
   { value: 'BRANCH_MANAGER', label: 'Branch manager' },
@@ -121,49 +124,6 @@ export function describeRule(rule) {
 }
 
 // ---- reports ----------------------------------------------------------------
-
-export const REPORT_DATASETS = [
-  {
-    value: 'inventory', label: 'Stock',
-    columns: [
-      { value: 'item_code', label: 'Item code & name' }, { value: 'category', label: 'Category' }, { value: 'company', label: 'Company' },
-      { value: 'physical', label: 'Total physical' }, { value: 'book', label: 'Total book' }, { value: 'variance', label: 'Variance' },
-      { value: 'reserved', label: 'Reserved' }, { value: 'quarantine', label: 'Quarantine' }, { value: 'available', label: 'Available' }, { value: 'value', label: 'Value' },
-    ],
-  },
-  {
-    value: 'transfers', label: 'Transfers',
-    columns: [
-      { value: 'transfer_no', label: 'Transfer no.' }, { value: 'from', label: 'From' }, { value: 'to', label: 'To' },
-      { value: 'status', label: 'Status' }, { value: 'items', label: 'Items' }, { value: 'created_at', label: 'Created' },
-    ],
-  },
-  {
-    value: 'counts', label: 'Stock counts',
-    columns: [
-      { value: 'item_code', label: 'Item' }, { value: 'counted', label: 'Counted qty' }, { value: 'book', label: 'Book qty' },
-      { value: 'variance', label: 'Difference' }, { value: 'counted_by', label: 'Counted by' }, { value: 'status', label: 'Status' },
-    ],
-  },
-  {
-    value: 'orders', label: 'Sales orders',
-    columns: [
-      { value: 'order_no', label: 'Order no.' }, { value: 'channel', label: 'Channel' }, { value: 'status', label: 'Status' },
-      { value: 'lines', label: 'Lines' }, { value: 'created_at', label: 'Created' },
-    ],
-  },
-  {
-    value: 'purchase_orders', label: 'Purchase orders',
-    columns: [
-      { value: 'po_no', label: 'PO no.' }, { value: 'supplier', label: 'Supplier' }, { value: 'status', label: 'Status' },
-      { value: 'expected_at', label: 'Expected' }, { value: 'value', label: 'Value' },
-    ],
-  },
-];
-
-export function datasetOf(entity) {
-  return REPORT_DATASETS.find((dataset) => dataset.value === entity);
-}
 
 export function reportColumnLabel(entity, column) {
   return datasetOf(entity)?.columns.find((entry) => entry.value === column)?.label ?? column;
