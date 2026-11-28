@@ -229,7 +229,7 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 
 // ---- automations --------------------------------------------------------------
 
-const LIVE_AUTOMATION_EVENTS = new Set(['count.submitted', 'transfer.created', 'order.created', 'item.near_expiry', 'inventory.low_stock']);
+const LIVE_AUTOMATION_EVENTS = new Set(AUTOMATION_EVENTS.map(({ value }) => value));
 
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];

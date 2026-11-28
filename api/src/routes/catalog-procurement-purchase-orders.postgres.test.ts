@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../lib/db.js';
 import { generateJWT } from '../lib/otp-auth.js';
 import { createEnhancedUser } from '../lib/enterprise-repository.js';
+import { drainStudioAutomationRuns } from '../lib/saas/studio-automation-worker.js';
 import catalogProcurementRouter from './catalog-procurement.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -172,6 +173,68 @@ integration('POST /purchase-orders/:id/receive posts a journal row atomically wi
   assert.equal(Number(movements[0].afterBalance), 8);
   assert.equal(movements[0].companyId, a.companyId);
   assert.equal(movements.reduce((sum, m) => sum + Number(m.qtyDelta), 0), Number(ledger[0].onHand), 'journal sum equals the projection');
+});
+
+integration('published Studio purchase-receipt automation runs once per committed receipt and stays in its company', async () => {
+  const company = await makeFixture();
+  const other = await makeFixture();
+  const item = await prisma.item.create({ data: { code: randomUUID(), name: 'Receipt stock', companyId: company.companyId } });
+  const order = await prisma.purchaseOrder.create({
+    data: {
+      number: `PO-${randomUUID().slice(0, 8)}`, supplierId: company.supplierId, locationId: company.locationId,
+      createdById: company.userId, companyId: company.companyId, status: 'APPROVED',
+      lines: { create: [{ itemId: item.id, quantity: 20, unitCost: 5 }] },
+    },
+    include: { lines: true },
+  });
+  const configuration = {
+    companyId: company.companyId, version: 2, versionId: randomUUID(),
+    payload: { automations: [{
+      key: 'received', name: 'Receipt recorded', enforce: true, trigger: 'event',
+      expression: 'purchase-order.received', actionKey: 'SEND_NOTIFICATION',
+    }] },
+  };
+  await prisma.controlPlaneConfig.create({ data: { ...configuration, kind: 'draft', status: 'draft' } });
+  const automationRuns = () => prisma.studioAutomationRun.findMany({ where: { companyId: company.companyId } });
+  const path = `/purchase-orders/${order.id}/receive`;
+  const makeBody = () => ({ requestId: randomUUID(), lines: [{ lineId: order.lines[0].id, receivedQty: 4, lotNo: 'RECEIPT-LOT' }] });
+  await withServer(async (call) => {
+    const first = await call('POST', path, company.token, makeBody());
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal((await automationRuns()).length, 0, 'a draft cannot schedule a run');
+    await prisma.controlPlaneConfig.create({ data: { ...configuration, kind: 'published', status: 'published' } });
+
+    const rolledBack = makeBody();
+    await prisma.lot.update({
+      where: { itemId_lotNo: { itemId: item.id, lotNo: 'RECEIPT-LOT' } },
+      data: { expiryDate: new Date('2028-01-01') },
+    });
+    const failure = await call('POST', path, company.token, { ...rolledBack,
+      lines: rolledBack.lines.map((line) => ({ ...line, expiryDate: '2029-01-01' })) });
+    assert.equal(failure.status, 400);
+    assert.equal((await automationRuns()).length, 0, 'a rejected receipt cannot schedule a run');
+
+    for (let index = 0; index < 2; index += 1) {
+      const body = makeBody();
+      const received = await call('POST', path, company.token, body);
+      assert.equal(received.status, 200, JSON.stringify(received.body));
+      assert.equal(received.body.duplicate, false);
+      const retry = await call('POST', path, company.token, body);
+      assert.equal(retry.status, 200);
+      assert.equal(retry.body.duplicate, true);
+      const foreign = await call('POST', path, other.token, body);
+      assert.equal(foreign.status, 404, 'a known request ID cannot expose another company’s receipt');
+      const receipt = await prisma.purchaseReceipt.findUniqueOrThrow({ where: { requestId: body.requestId } });
+      const runs = await automationRuns();
+      assert.equal(runs.length, index + 1);
+      assert.ok(runs.some((run) => run.occurrence === `purchase-order.received:${receipt.id}` && run.versionId === configuration.versionId));
+    }
+  });
+  await drainStudioAutomationRuns(new Date());
+  const allRuns = await automationRuns();
+  assert.ok(allRuns.every((run) => run.status === 'DELIVERED'));
+  assert.equal(await prisma.userNotification.count({ where: { userId: company.userId, title: 'Receipt recorded' } }), 2);
+  assert.equal(await prisma.userNotification.count({ where: { userId: other.userId, title: 'Receipt recorded' } }), 0);
 });
 
 integration('a failing receipt leaves neither a journal row nor a ledger change (atomic)', async () => {

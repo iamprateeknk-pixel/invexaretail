@@ -17,6 +17,7 @@ import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { listReorderRules, upsertReorderRule, validateReorderQuantities } from '../lib/reorder-store.js';
 import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { emitWebhookEvent } from '../lib/webhook-dispatcher.js';
+import { queueStudioBusinessEvent } from '../lib/saas/studio-business-events.js';
 import { allocateLandedCost, type LandedCostMethod } from '../lib/landed-cost.js';
 import { computeVendorScore, computePriceVariance, supplierLeadTimeStats } from '../lib/vendor-score.js';
 import { canOrderFrom, parseSupplierFields, presentSupplier } from '../lib/supplier-master.js';
@@ -559,14 +560,15 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
   if (!requestId || requestId.length > 191) return sendError(res, 400, 'VALIDATION_FAILED', 'A valid requestId is required for retry-safe receiving.');
 
-  const priorReceipt = await prisma.purchaseReceipt.findUnique({ where: { requestId } }).catch(() => null);
+  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
+
+  const priorReceipt = await prisma.purchaseReceipt.findUnique({ where: { requestId } });
   if (priorReceipt) {
-    if (priorReceipt.purchaseOrderId !== req.params.id) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
+    if (priorReceipt.purchaseOrderId !== order.id) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
     return res.json({ ...(priorReceipt.result as Record<string, unknown>), duplicate: true });
   }
 
-  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
-  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
   if (!isReceivablePo(order.status)) return sendError(res, 409, 'INVALID_TRANSITION', `A purchase order in ${order.status} cannot be received. It must be approved and still open.`);
 
   // Shape validation for the receipt lines runs here, after the
@@ -667,16 +669,19 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
         data: { status },
         include: { supplier: true, lines: { include: { item: true } } },
       }));
-      await tx.purchaseReceipt.create({
+      const savedReceipt = await tx.purchaseReceipt.create({
         data: { requestId, purchaseOrderId: order.id, receivedById: req.user!.id, result: JSON.parse(JSON.stringify({ purchaseOrder, stockPosted: postedStock })) },
+        select: { id: true },
       });
+      await queueStudioBusinessEvent(tx, { event: 'purchase-order.received', companyId: order.companyId, entityId: savedReceipt.id });
       return { purchaseOrder, postedStock };
     });
   } catch (error) {
     // Two identical requests at once: the loser hits the unique requestId and gets the winner's result.
     if ((error as { code?: string })?.code === 'P2002') {
       const winner = await prisma.purchaseReceipt.findUnique({ where: { requestId } });
-      if (winner) return res.json({ ...(winner.result as Record<string, unknown>), duplicate: true });
+      if (winner?.purchaseOrderId === order.id) return res.json({ ...(winner.result as Record<string, unknown>), duplicate: true });
+      if (winner) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
     }
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to receive this purchase order.');
   }

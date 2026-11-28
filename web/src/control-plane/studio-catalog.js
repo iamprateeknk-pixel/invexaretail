@@ -177,6 +177,7 @@ export const AUTOMATION_EVENTS = [
   { value: 'transfer.created', label: 'A transfer is created' },
   { value: 'count.submitted', label: 'A stock count is submitted' },
   { value: 'order.created', label: 'A sales order arrives' },
+  { value: 'purchase-order.received', label: 'A purchase receipt is recorded' },
 ];
 
 export const AUTOMATION_SCHEDULES = [

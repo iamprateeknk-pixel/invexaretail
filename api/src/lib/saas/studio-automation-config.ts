@@ -5,6 +5,7 @@ export const STUDIO_EVENT_MESSAGES = {
   'count.submitted': 'A stock count was submitted.',
   'transfer.created': 'A transfer was created.',
   'order.created': 'A sales order was created.',
+  'purchase-order.received': 'A purchase order receipt was recorded.',
   'item.near_expiry': 'A stocked lot is approaching expiry.',
   'inventory.low_stock': 'Stock has reached its reorder level.',
 } as const;

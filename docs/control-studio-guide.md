@@ -75,11 +75,13 @@ the same way as Import columns: edit in place, **Add**, the bin icon to remove, 
 | Extra fields | Field name, what it is for (item, transfer, ...), kind of value, must be filled | Not yet - stored and published only |
 | Rules | When *this* is more/less than *that* (several conditions = all must be true), then *do this*. **Try your rules** checks a made-up case. | Not yet - only the Try box runs them |
 | Reports | Name, what it is about, which columns | Not yet |
-| Automations | When something happens / on a schedule, then do something | Not yet |
+| Automations | When something happens / on a schedule, then do something | Published, enabled rules can send an in-app notification to company admins. They can also create an Exception Inbox task when task delivery is enabled. |
 | Mobile app | Per role: screens, what is kept offline, how long it may stay offline | Not yet - the phone app shows its standard screens |
 | Approvals | For transfers / adjustments / ...: approve automatically up to Rs X, above that a branch manager or admin. **Try an amount** checks it. | Not yet - live approvals use the main app's approval rules |
 
 Each of these screens shows a yellow note while the app does not act on it yet, so nobody expects an effect.
+
+For purchase receiving, pick **A purchase receipt is recorded**, choose a notification or task, enable it, then save and publish. Each successful partial or final receipt can trigger the rule once. Retrying a receipt and rejecting a receipt do not trigger another run. Studio shows the configuration version used for each run.
 
 ## 5. Going live and undoing
 

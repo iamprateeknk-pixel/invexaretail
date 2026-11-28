@@ -162,12 +162,13 @@ test('an event automation can be enabled with a supported action and a fresh opt
     fireEvent.change(action, { target: { value: 'SEND_EMAIL' } });
     assert.ok(!screen.queryByRole('checkbox', { name: 'Send for new events after publishing' }));
     fireEvent.change(action, { target: { value: 'CREATE_TASK' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'What happens' }), { target: { value: 'inventory.low_stock' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'What happens' }), { target: { value: 'purchase-order.received' } });
+    assert.ok(screen.getByRole('option', { name: 'A purchase receipt is recorded' }).selected);
     const taskToggle = screen.getByRole('checkbox', { name: 'Create tasks after publishing' });
     assert.equal(taskToggle.getAttribute('aria-checked'), 'false');
     fireEvent.click(taskToggle);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
-    assert.deepEqual(saved, [{ ...automation, expression: 'inventory.low_stock', actionKey: 'CREATE_TASK', enforce: true }]);
+    assert.deepEqual(saved, [{ ...automation, expression: 'purchase-order.received', actionKey: 'CREATE_TASK', enforce: true }]);
   } finally { globalThis.fetch = original; }
 });
 
