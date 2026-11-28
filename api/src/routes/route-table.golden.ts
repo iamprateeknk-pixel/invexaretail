@@ -209,6 +209,7 @@ export const CONTROL_ROUTES: string[] = [
   'POST /sessions/select-company',
   'POST /sessions/handoff',
   'POST /sessions/handoff/exchange',
+  'POST /auth/app-link/exchange',
   'POST /sessions/exit',
   'GET /session',
   'POST /companies/:companyId/suspend',

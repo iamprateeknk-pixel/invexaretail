@@ -13,7 +13,7 @@ export const HANDOFF_TTL_MS = 60_000;
 const MAX_PENDING = 500;
 
 /** What a code may be redeemed for. A code minted for one purpose is useless for the other. */
-export type HandoffPurpose = 'control' | 'web';
+export type HandoffPurpose = 'control' | 'web' | 'panel';
 
 type Entry = { session: unknown; expiresAt: number; purpose: HandoffPurpose };
 

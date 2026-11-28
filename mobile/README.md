@@ -84,8 +84,15 @@ decided in one place (`lib/config/platform_caps.dart`):
   (`web/src/lib/permissions.js`) and the API re-checks every request.
 - **ADMIN:** lands on the Workspace tab, keeps every native screen, and gets a
   Control panel tab (the same rule as the web app's `adminOnly` sections). It
-  opens `https://admin.invexaretail.com` and still asks for its own platform
-  sign-in - a company ADMIN is not automatically a platform administrator.
+  opens `https://admin.invexaretail.com`. A company ADMIN is not automatically a
+  platform administrator, so the first time it asks for the platform sign-in.
+  **Link account** on that tab links the platform account to this app user
+  once (the platform email and password are checked together with the app
+  session); from then on the tab opens already signed in through a one-time
+  code. The link works only while the user is an active ADMIN of the same
+  company and the platform account is active; **Unlink** removes it. Linking,
+  unlinking and every linked sign-in are in the Control Plane audit trail
+  (`api/src/lib/saas/control-app-link.ts`).
   Other roles land on their usual screen and get the Workspace tab, never the
   Control panel.
 - **Shared PCs:** each open starts with no cookies and no stored web session,

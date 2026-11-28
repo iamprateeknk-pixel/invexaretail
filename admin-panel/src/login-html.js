@@ -276,7 +276,22 @@ export function controlPlaneHtml(apiBase = DEFAULT_API_BASE, webAppUrl = DEFAULT
 
       document.getElementById("sign-out-companies").addEventListener("click", signOut);
       document.getElementById("sign-out-locked").addEventListener("click", signOut);
-      render(readSession());
+
+      // Linked sign-in from the Windows app (#link=<one-time code>). The code is removed from the
+      // address bar before anything else, then traded once for a platform session.
+      async function redeemLinkCode() {
+        const match = /^#link=([A-Za-z0-9_-]{20,200})$/.exec(window.location.hash || "");
+        if (!match) return;
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+        try {
+          const result = await controlRequest("/control/v1/auth/app-link/exchange", { method: "POST", body: { code: match[1] } });
+          if (result && result.session && result.session.platformToken) writeSession(result.session);
+        } catch (caught) {
+          showError(loginError, "The linked sign-in has expired. Reload, or sign in with your platform account.");
+        }
+      }
+
+      redeemLinkCode().finally(function () { render(readSession()); });
     </script>
   </body>
 </html>`;

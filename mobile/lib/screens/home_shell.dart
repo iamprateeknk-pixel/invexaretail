@@ -29,6 +29,7 @@ import 'scan_screen.dart';
 import 'stock_screen.dart';
 import 'transfers_screen.dart';
 import 'work_screen.dart';
+import 'control_panel_tab.dart';
 import 'desktop_web_screen.dart';
 import 'workspace_screen.dart';
 
@@ -241,12 +242,7 @@ class _HomeShellState extends State<HomeShell> {
           unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
         );
       case 'control':
-        return DesktopWebView(
-          key: ValueKey('control-$sessionKey'),
-          sessionKey: sessionKey,
-          trustedHosts: controlPanelHosts,
-          resolveTarget: () async => Uri.parse(controlPanelOrigin),
-        );
+        return ControlPanelTab(key: ValueKey('control-$sessionKey'), controller: controller, sessionKey: sessionKey);
       case 'work':
         return WorkScreen(
           controller: controller,

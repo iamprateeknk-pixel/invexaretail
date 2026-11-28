@@ -196,6 +196,18 @@ controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) =
   res.json({ success: true, session });
 });
 
+// The Control Panel trades a linked app user's one-time code (POST /api/v1/auth/control-link/handoff)
+// for the platform session it stands for. Codes minted for the web app or a company handoff fail here.
+controlRouter.post('/auth/app-link/exchange', (req: Request, res: Response) => {
+  const session = redeemHandoff(String(req.body?.code ?? ''), Date.now(), 'panel');
+  if (!session) {
+    res.status(401).json({ error: 'Sign-in code is invalid or expired', code: 'HANDOFF_INVALID' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ success: true, session });
+});
+
 controlRouter.post('/sessions/exit', requireLockedCompany, (req: Request, res: Response) => {
   try {
     const scope = requireScope(req);

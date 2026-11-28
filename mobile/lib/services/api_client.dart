@@ -88,6 +88,8 @@ class InvexaApi {
           response = await httpClient.post(uri, headers: headers, body: encoded).timeout(timeout);
         case 'PATCH':
           response = await httpClient.patch(uri, headers: headers, body: encoded).timeout(timeout);
+        case 'DELETE':
+          response = await httpClient.delete(uri, headers: headers, body: encoded).timeout(timeout);
         default:
           throw ApiException('Unsupported method $method');
       }
@@ -185,6 +187,29 @@ class InvexaApi {
     final payload = await _send('POST', '/api/v1/auth/web-handoff', body: const <String, Object?>{});
     final code = asString(payload['code']);
     if (code.isEmpty) throw ApiException('The server did not return a handoff code.');
+    return code;
+  }
+
+  /// Linked Control Panel sign-in (Windows, ADMIN): whether this app user is linked to a platform account.
+  Future<bool> controlPanelLinked() async {
+    final payload = await _send('GET', '/api/v1/auth/control-link');
+    return payload['linked'] == true;
+  }
+
+  /// Links this app user to a platform account. Needs that account's own email and password once.
+  Future<void> linkControlPanel(String email, String password) async {
+    await _send('POST', '/api/v1/auth/control-link', body: {'email': email, 'password': password});
+  }
+
+  Future<void> unlinkControlPanel() async {
+    await _send('DELETE', '/api/v1/auth/control-link');
+  }
+
+  /// A one-time code the Control Panel trades for the linked platform session.
+  Future<String> controlPanelHandoffCode() async {
+    final payload = await _send('POST', '/api/v1/auth/control-link/handoff', body: const <String, Object?>{});
+    final code = asString(payload['code']);
+    if (code.isEmpty) throw ApiException('The server did not return a sign-in code.');
     return code;
   }
 

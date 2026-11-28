@@ -44,6 +44,7 @@ import { PASSKEY_CEREMONY_TTL_SECONDS, signPasskeyCeremony, verifyPasskeyCeremon
 import * as repo from '../lib/enterprise-repository.js';
 import { isCompanySuspended, rejectSuspendedCompany } from '../lib/saas/company-access.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
+import { linkAppUser, linkStatus, linkedPlatformSession, unlinkAppUser } from '../lib/saas/control-app-link.js';
 import { ControlPlaneError, apiKeyAllowsMethod, controlPlane } from '../lib/saas/control-plane.js';
 
 const router = Router();
@@ -583,6 +584,71 @@ router.post('/web-handoff', extractToken, requireAuth, loginLimiter, (req: Reque
   const { code, expiresInSeconds } = createHandoff({ userId: req.user!.id }, Date.now(), 'web');
   res.setHeader('Cache-Control', 'no-store');
   res.status(201).json({ success: true, code, expiresInSeconds });
+});
+
+// ============================================
+// LINKED CONTROL PANEL SIGN-IN (Windows app, ADMIN only) - see lib/saas/control-app-link.ts
+// ============================================
+const controlLinkKey = (userId: string) => `control-link:${userId}`;
+
+function sendControlLinkError(res: Response, error: unknown): Response {
+  if (error instanceof ControlPlaneError) return res.status(error.status).json({ error: error.message, code: error.code });
+  console.error('Control Panel link error:', error);
+  return res.status(500).json({ error: 'Control Panel link failed' });
+}
+
+router.get('/control-link', extractToken, requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ success: true, ...(await linkStatus(req.user!)) });
+  } catch (error) {
+    return sendControlLinkError(res, error);
+  }
+});
+
+// Proves both identities at once: this request's app session and the platform password.
+router.post('/control-link', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  const key = controlLinkKey(req.user!.id);
+  try {
+    if (respondIfLocked(res, await lockState(key))) return;
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const password = String(req.body?.password ?? '');
+    const result = await linkAppUser(req.user!, email, password);
+    await clearFailures(key);
+    repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'CONTROL_PANEL_LINKED', entityType: 'USER', entityId: req.user!.id });
+    return res.status(201).json({ success: true, linked: true, platformEmail: result.platformEmail });
+  } catch (error) {
+    if (error instanceof ControlPlaneError && error.code === 'INVALID_CREDENTIALS') {
+      if (respondIfLocked(res, await registerFailure(key))) return;
+      // 400, not 401: the app's own session is fine, so a client must not try to refresh it.
+      return res.status(400).json({ error: 'That platform email or password is not right.', code: 'INVALID_CREDENTIALS' });
+    }
+    return sendControlLinkError(res, error);
+  }
+});
+
+router.delete('/control-link', extractToken, requireAuth, async (req: Request, res: Response) => {
+  try {
+    const result = await unlinkAppUser(req.user!);
+    if (result.removed) {
+      repo.logAuditAction({ companyId: req.user!.companyId, userId: req.user!.id, userName: req.user!.name, action: 'CONTROL_PANEL_UNLINKED', entityType: 'USER', entityId: req.user!.id });
+    }
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return sendControlLinkError(res, error);
+  }
+});
+
+// A one-time code the Control Panel trades for a platform session (`#link=...`, a URL fragment).
+router.post('/control-link/handoff', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const session = await linkedPlatformSession(req.user!);
+    const { code, expiresInSeconds } = createHandoff({ platformToken: session.token, user: session.user, companies: session.companies }, Date.now(), 'panel');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(201).json({ success: true, code, expiresInSeconds });
+  } catch (error) {
+    return sendControlLinkError(res, error);
+  }
 });
 
 router.post('/web-handoff/exchange', loginLimiter, async (req: Request, res: Response) => {
