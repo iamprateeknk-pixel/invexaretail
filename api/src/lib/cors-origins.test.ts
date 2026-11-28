@@ -34,6 +34,13 @@ test('normalizes Hostinger env values and browser origins', () => {
   assert.equal(isAllowedOrigin(undefined, origins), true);
 });
 
+test('opaque and malformed origins never become allowed configuration values', () => {
+  for (const invalid of ['null', 'file:///tmp/test', 'data:text/plain,opaque', 'bad-host' + '/'.repeat(8192)]) {
+    assert.equal(normalizeOrigin(invalid), null);
+    assert.equal(isAllowedOrigin(invalid, resolveAllowedOrigins(invalid)), false);
+  }
+});
+
 const staging = {
   INVEXA_ENV: 'staging',
   PUBLIC_API_URL: 'https://api.staging.example.test',

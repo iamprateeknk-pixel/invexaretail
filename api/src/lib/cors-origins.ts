@@ -11,13 +11,8 @@ export const REQUIRED_WEB_ORIGINS = [
 ];
 
 export function normalizeOrigin(value: string): string | null {
-  const candidate = value.trim();
-  if (!candidate) return null;
-  try {
-    return new URL(candidate).origin.toLowerCase();
-  } catch {
-    return candidate.replace(/\/+$/, '').toLowerCase();
-  }
+  const url = URL.parse(value.trim());
+  return url && (url.protocol === 'https:' || url.protocol === 'http:') ? url.origin.toLowerCase() : null;
 }
 
 const productionHosts = new Set([
