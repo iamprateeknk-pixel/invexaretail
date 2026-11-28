@@ -76,9 +76,18 @@ decided in one place (`lib/config/platform_caps.dart`):
 - **Scanning:** no camera scanner exists on Windows, so every "Scan" opens a
   focused field instead. A USB/Bluetooth barcode scanner types the code plus
   Enter into it, so scanning works hands-free like on a phone.
-- **Full workspace:** opens in the default browser (no embedded web view on
-  Windows). The one-time sign-in code is not passed, so it never lands in
-  browser history; the workspace asks for sign-in itself.
+- **Full workspace:** opens inside the app (Microsoft Edge WebView2,
+  `lib/screens/desktop_web_screen.dart`), already signed in as the app user via
+  a one-time code. Rights are the web app's own: menus follow the user's role
+  (`web/src/lib/permissions.js`) and the API re-checks every request.
+- **Control panel:** an extra toolbar entry for `ADMIN` users only (the same
+  rule as the web app's `adminOnly` sections). It opens
+  `https://admin.invexaretail.com` inside the app and still asks for its own
+  platform sign-in.
+- **Shared PCs:** each open starts with no cookies and no stored web session,
+  and the workspace does not open at all if the sign-in code cannot be fetched,
+  so one person never lands in another person's session. Only
+  `invexaretail.com` hosts load inside the app; other links open in the browser.
 
 Wide windows (Windows, iPad, tablets in landscape) use a side navigation rail
 instead of the bottom bar.
