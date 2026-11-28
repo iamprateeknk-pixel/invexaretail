@@ -13,7 +13,7 @@ import { buildCycleCountPlan, cycleCountInstructions, selectEligibleCycleCountIt
 import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import { signedSalesQty } from '../lib/sales-demand.js';
 import { submitStockCount } from '../lib/store.js';
-import { createCountAssignment, deleteCountAssignment, createCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment, users } from '../lib/repository.js';
+import { createCountAssignment, deleteCountAssignment, createCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment } from '../lib/repository.js';
 import type { CountRecord } from '../lib/repository.js';
 import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listStockForLocation } from '../lib/repositories/stock-repository.js';
 import type { TenantContext } from '../lib/tenant-context.js';
@@ -276,7 +276,7 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-      guard: intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision },
+      guard: intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision, offlineCountPermit: input.offlineCountPermit },
     });
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
@@ -374,7 +374,9 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       });
       await persistBatchThenRecord(
         countBatch,
-        (records) => persistCountBatch(records, companyId, intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision }),
+        (records) => persistCountBatch(records, companyId, intent && {
+          fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision, offlineCountPermit: input.offlineCountPermit,
+        }),
         (record) => createCountRecord(record),
       );
       for (const count of countBatch) {

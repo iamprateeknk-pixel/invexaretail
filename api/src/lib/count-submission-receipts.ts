@@ -17,7 +17,7 @@ export type CountSubmissionIntent = {
   stockRevision?: string;
 };
 
-export type CountSubmissionGuard = { fingerprint: string; stockRevision?: string };
+export type CountSubmissionGuard = { fingerprint: string; stockRevision?: string; offlineCountPermit?: string };
 
 export function countSubmissionFingerprint(intent: CountSubmissionIntent): string {
   const fields = [intent.kind, intent.itemId, intent.locationId, intent.lotNo?.toLowerCase() ?? null, intent.mode, intent.quantity];

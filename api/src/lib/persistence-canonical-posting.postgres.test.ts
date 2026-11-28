@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import express from 'express';
 import { prisma } from './db.js';
 import { persistConfirmedPickAllocations, persistCount, persistCountBatch, persistCountReview, persistTransfer } from './persistence.js';
@@ -18,7 +19,10 @@ import { enforceOperationalCompanyScope, registerItemCompany, registerLocationCo
 import { extractToken } from '../routes/enterprise-auth.js';
 import coreRouter from '../routes/core.js';
 import { countSubmissionFingerprint } from './count-submission-receipts.js';
+import { countStockRevision } from './count-stock-revision.js';
 import { controlPlane } from './saas/control-plane.js';
+import { lockStudioConfig } from './saas/control-plane-repository.js';
+import { enforceMobilePermit } from './saas/mobile-offline-permits.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -296,6 +300,74 @@ integration('count retries use committed PostgreSQL receipts and bind the reques
   }
 });
 
+integration('a revoked offline count permit cannot create either a lot or pooled count in storage', async (t) => {
+  const f = await fixture(12);
+  const previous = process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  controlPlane.companies.set(f.companyId, { ...controlPlane.requireCompany('default-company'), id: f.companyId });
+  t.after(() => {
+    if (previous === undefined) delete process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
+    else process.env.CONTROL_PLANE_PERSIST_IN_TESTS = previous;
+    controlPlane.companies.delete(f.companyId);
+  });
+  const permit = issueOfflineCountPermit(f.userId, f.companyId, 'ADMIN', 300).token;
+  const configuration = controlPlane.runtimeConfig(f.companyId, 'ADMIN');
+  const versionId = randomUUID();
+  const policy = { role: 'ADMIN', offlineMaxHours: 2, navigation: [], encryptedLocalStore: true };
+  const active = { page: configuration.page, mobilePolicies: [{ ...policy, syncScope: ['counts'] }] };
+  const revoked = { ...active, mobilePolicies: [{ ...policy, syncScope: ['stock'] }] };
+  await prisma.controlPlaneConfig.create({ data: { companyId: f.companyId, versionId, version: 2,
+    kind: 'published', status: 'published', payload: active } });
+  const row = await prisma.stockLedger.findFirstOrThrow({ where: { companyId: f.companyId, itemId: f.item.id } });
+  const count = { id: randomUUID(), itemId: f.item.id, lotId: f.lot.id, locationId: f.loc.id, physicalQuantity: 11,
+    bookQty: 12, mode: 'manual', submittedBy: f.userId, role: 'ADMIN', createdAt: new Date().toISOString(),
+    requestId: randomUUID() } satisfies CountRecord;
+  const scope = { companyId: f.companyId, itemId: f.item.id, locationId: f.loc.id };
+  const guard = { fingerprint: 'test-policy-revocation', offlineCountPermit: permit };
+  const lotGuard = { ...guard, stockRevision: countStockRevision({ ...scope, lotId: f.lot.id }, [row]) };
+  await enforceMobilePermit({ companyId: f.companyId, tenantId: 'tenant-invexa', userId: f.userId, role: 'ADMIN' }, permit, 'counts');
+  let releasePublication!: () => void;
+  let notifyStaged!: () => void;
+  const release = new Promise<void>((resolve) => { releasePublication = resolve; });
+  const staged = new Promise<void>((resolve) => { notifyStaged = resolve; });
+  const publication = prisma.$transaction(async (tx) => {
+    await lockStudioConfig(tx, f.companyId, 'exclusive');
+    await tx.controlPlaneConfig.update({ where: { versionId_kind: { versionId, kind: 'published' } }, data: { payload: revoked } });
+    notifyStaged();
+    await release;
+  });
+  await Promise.race([staged, publication]);
+  const lotWrite = assert.rejects(persistCount(count, f.companyId, lotGuard), { code: 'OFFLINE_COUNT_POLICY_REJECTED' });
+  void lotWrite.catch(() => undefined);
+  try {
+    let waiting = false;
+    for (let attempt = 0; attempt < 40 && !waiting; attempt += 1) {
+      const [state] = await prisma.$queryRaw<Array<{ waiting: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+            AND wait_event_type = 'Lock' AND wait_event = 'advisory'
+            AND query LIKE '%pg_advisory_xact_lock_shared%'
+        ) AS waiting
+      `;
+      waiting = state.waiting;
+      if (!waiting) await delay(20);
+    }
+    assert.equal(waiting, true, 'the count waits for the published policy transaction');
+  } finally {
+    releasePublication();
+    await publication;
+    await lotWrite;
+  }
+  await assert.rejects(persistCountBatch([{ ...count, mode: 'weight' }], f.companyId, {
+    ...guard, stockRevision: countStockRevision(scope, [row]),
+  }), { code: 'OFFLINE_COUNT_POLICY_REJECTED' });
+  await prisma.controlPlaneConfig.update({ where: { versionId_kind: { versionId, kind: 'published' } }, data: { payload: active } });
+  await prisma.user.update({ where: { id: f.userId, companyId: f.companyId }, data: { role: 'AUDITOR' } });
+  await assert.rejects(persistCount(count, f.companyId, lotGuard), { code: 'OFFLINE_COUNT_POLICY_REJECTED' });
+  assert.equal(await prisma.stockCount.count({ where: { companyId: f.companyId } }), 0);
+  assert.equal(await prisma.countSubmissionReceipt.count({ where: { companyId: f.companyId } }), 0);
+});
+
 integration('assigned count revisions detect stock changes and preserve completed offline receipts', async () => {
   const f = await fixture(10);
   const previousPersistenceFlag = process.env.CONTROL_PLANE_PERSIST_IN_TESTS;
@@ -314,6 +386,7 @@ integration('assigned count revisions detect stock changes and preserve complete
     countMethod: 'ITEM_WEIGHT' as const, decimalQuantity: true, lots: [{ id: f.lot.id, itemId: f.item.id, lotNo: f.lot.lotNo }] };
   items.push(item);
   await prisma.item.update({ where: { id: f.item.id, companyId: f.companyId }, data: { countMethod: 'ITEM_WEIGHT' } });
+  await prisma.user.update({ where: { id: f.userId, companyId: f.companyId }, data: { role: 'BRANCH_MANAGER' } });
   createEnhancedUser({ id: f.userId, companyId: f.companyId, email: `${f.userId}@test.invexa.local`,
     name: 'Counter', passwordHash: 'x', role: 'BRANCH_MANAGER', branchIds: [], locationIds: [f.loc.id], status: 'active' });
   await prisma.countAssignment.create({ data: { itemId: f.item.id, locationId: f.loc.id, assignedToId: f.userId, assignedById: f.userId } });

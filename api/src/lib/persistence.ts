@@ -12,6 +12,8 @@ import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
 import type { AppliedCountWorkflow } from './saas/workflow-approval-policy.js';
+import { lockStudioConfig } from './saas/control-plane-repository.js';
+import { enforceMobilePermit } from './saas/mobile-offline-permits.js';
 import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 import { itemRowToRecord } from './item-record-mapper.js';
 import { transferRowToRecord, transferCartonRowToRecord } from './transfer-record-mapper.js';
@@ -896,14 +898,28 @@ export async function persistCountDeletion(id: string, companyId: string): Promi
   await prisma.stockCount.delete({ where: { id, companyId } }).catch(() => undefined);
 }
 
+async function verifyCountSubmission(tx: Prisma.TransactionClient, companyId: string, counts: readonly CountRecord[],
+  guard: CountSubmissionGuard, lotId?: string): Promise<void> {
+  await reserveCountSubmission(tx, companyId, counts, guard.fingerprint);
+  const { itemId, locationId, submittedBy: userId, role } = counts[0];
+  if (guard.offlineCountPermit !== undefined) {
+    if (!guard.stockRevision) throw new DomainError('VALIDATION_FAILED', 'An offline count requires a stock revision.');
+    await lockStudioConfig(tx, companyId, 'shared');
+    const [actor] = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "User" WHERE id = ${userId} AND "companyId" = ${companyId}
+        AND role::text = ${role} AND status = 'ACTIVE' FOR SHARE
+    `;
+    if (!actor) throw new DomainError('OFFLINE_COUNT_POLICY_REJECTED', 'Your count permission changed. Refresh the task and count again.');
+    await enforceMobilePermit({ companyId, tenantId: DEFAULT_TENANT_ID, userId, role }, guard.offlineCountPermit, 'counts', tx);
+  }
+  if (guard.stockRevision) await verifyCountStockRevision(tx, { companyId, itemId, locationId, lotId }, counts, guard.stockRevision);
+}
+
 export async function persistCount(count: CountRecord, companyId: string, guard?: CountSubmissionGuard): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    if (guard) await reserveCountSubmission(tx, companyId, [count], guard.fingerprint);
-    if (guard?.stockRevision) {
-      await verifyCountStockRevision(tx, { companyId, itemId: count.itemId, locationId: count.locationId, lotId: count.lotId }, [count], guard.stockRevision);
-    }
+    if (guard) await verifyCountSubmission(tx, companyId, [count], guard, count.lotId);
     const existing = await tx.stockCount.findUnique({ where: { id: count.id, companyId }, select: { id: true } });
     const fields = {
       physicalQty: count.physicalQuantity,
@@ -929,11 +945,7 @@ export async function persistCountBatch(countBatch: readonly CountRecord[], comp
   if (!databaseEnabled || countBatch.length === 0) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
-    if (guard) await reserveCountSubmission(tx, companyId, countBatch, guard.fingerprint);
-    if (guard?.stockRevision) {
-      const { itemId, locationId } = countBatch[0];
-      await verifyCountStockRevision(tx, { companyId, itemId, locationId }, countBatch, guard.stockRevision);
-    }
+    if (guard) await verifyCountSubmission(tx, companyId, countBatch, guard);
     await tx.stockCount.createMany({
       data: countBatch.map((count) => ({
         id: count.id,

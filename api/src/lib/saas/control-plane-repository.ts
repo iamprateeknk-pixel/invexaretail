@@ -690,6 +690,15 @@ export class StudioConfigConflict extends Error {
 
 type StudioReleaseEvent = { companyId: string; actorId: string; versionId: string; reviewerId?: string; scheduled?: boolean };
 
+/** Coordinate live policy reads with publication of a company configuration. */
+export async function lockStudioConfig(tx: Prisma.TransactionClient, companyId: string, mode: 'shared' | 'exclusive'): Promise<void> {
+  if (mode === 'shared') {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock_shared(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+  } else {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+  }
+}
+
 async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows, release?: StudioReleaseEvent) {
   const prisma = await getPrisma();
   const changedKeys = new Set([...diff.configs.upserts, ...diff.configs.deletes]);
@@ -706,7 +715,7 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
   }
   return prisma.$transaction(async (tx) => {
     for (const companyId of companyIds) {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+      await lockStudioConfig(tx, companyId, 'exclusive');
       const current = await tx.controlPlaneConfig.findMany({ where: { companyId },
         select: { companyId: true, versionId: true, version: true, kind: true, status: true, payload: true } });
       const expected = previous.configs.filter((row) => row.companyId === companyId);
