@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
-import { remoteReportSources, studioReportResult } from '../../../lib/studio-report-data';
+import { reportSourcePaths, studioReportResult } from '../../../lib/studio-report-data';
 import { studioReportDefinition } from '../../../lib/studio-report-config';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
@@ -18,16 +18,18 @@ export function StudioReports() {
   const [attempt, setAttempt] = useState(0);
   const report = reports.find(({ key }) => key === selectedKey) ?? reports[0];
   const configured = report && studioReportDefinition(report);
-  const source = configured && Object.hasOwn(remoteReportSources, report.entity) ? remoteReportSources[report.entity] : null;
+  const source = configured ? reportSourcePaths.get(report.entity) : null;
   const resource = source && locationId && authToken
     ? `/api/v1/reports/studio/${source}?${new URLSearchParams({ reportKey: report.key, locationId })}` : null;
   const version = runtimeConfig?.version;
+  const snapshot = source === 'stock' ? workspace.stockRows : source === 'counts' ? workspace.counts
+    : source === 'transfers' ? workspace.transfers : undefined;
 
   useEffect(() => {
     if (!resource) return;
     const controller = new AbortController();
     const options = { signal: controller.signal, headers: { Authorization: `Bearer ${authToken}` } };
-    const context = { resource, authToken, version, attempt };
+    const context = { resource, authToken, version, attempt, snapshot };
     async function load() {
       try {
         const data = await apiRequest(resource, options);
@@ -37,6 +39,10 @@ export function StudioReports() {
         if (controller.signal.aborted) return;
         // Database-free demo keeps the existing local report behavior.
         if (error?.status === 501) {
+          if (source !== 'orders' && source !== 'purchase-orders') {
+            setResult({ ...context, local: true });
+            return;
+          }
           try {
             const response = await apiRequest(`/api/v1/${source}?${new URLSearchParams({ locationId })}`, options);
             const remote = response[source === 'orders' ? 'orders' : 'purchaseOrders'];
@@ -52,13 +58,13 @@ export function StudioReports() {
     }
     void load();
     return () => controller.abort();
-  }, [resource, authToken, version, attempt, source, locationId]);
+  }, [resource, authToken, version, attempt, source, locationId, snapshot]);
 
   if (!reports.length) return null;
   const current = result?.resource === resource && result?.authToken === authToken
-    && result?.version === version && result?.attempt === attempt ? result : null;
+    && result?.version === version && result?.attempt === attempt && result?.snapshot === snapshot ? result : null;
   const definition = current?.data ?? configured;
-  const reportResult = current?.data ?? (configured && locationId && (!source || current?.remote)
+  const reportResult = current?.data ?? (configured && locationId && (current?.local || current?.remote)
     ? studioReportResult(report, configured, { ...workspace, remote: current?.remote }) : null);
   const rows = reportResult?.rows ?? [];
 
@@ -80,6 +86,7 @@ export function StudioReports() {
           : source && !reportResult ? <LoadingState label="Loading report data…" className="min-h-24" />
           : <>
             {current?.remote && <p className="text-sm text-muted-foreground">Demo report using up to 200 recent records.</p>}
+            {current?.local && <p className="text-sm text-muted-foreground">Demo report using workspace data.</p>}
             {reportResult?.truncated && <p role="status" className="text-sm text-muted-foreground">
               Showing and exporting {rows.length} of {reportResult.total} matching {definition.groupBy ? 'groups' : 'records'}.
             </p>}

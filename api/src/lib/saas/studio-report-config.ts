@@ -67,6 +67,13 @@ export function datasetOf(entity: unknown) {
 
 export const STUDIO_REPORT_ROW_LIMIT = 500;
 
+// Preserve the source URL segments used by the API entitlement and permission gates.
+export const STUDIO_REPORT_SOURCES = [
+  ['stock', 'inventory'], ['counts', 'counts'], ['transfers', 'transfers'],
+  ['orders', 'orders'], ['purchase-orders', 'purchase_orders'],
+] as const;
+export type StudioReportDataset = typeof STUDIO_REPORT_SOURCES[number][1];
+
 export function canViewStudioReports(role: string) {
   return ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
 }

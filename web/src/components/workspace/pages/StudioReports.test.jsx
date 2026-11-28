@@ -5,31 +5,48 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { WorkspaceProvider } from '../WorkspaceContext.jsx';
 import { StudioReports } from './StudioReports.jsx';
 
-test('published reports render the configured columns and export only matching stock', () => {
+test('published inventory reports render and export the server result instead of cached stock', async () => {
+  const previous = globalThis.fetch;
   const downloads = [];
+  const requests = [];
+  let available = 8;
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    return Response.json({
+      version: 3, columns: [{ key: 'available', label: 'Available' }, { key: 'item_code', label: 'Item code & name' }],
+      groupBy: null, chart: false, total: 1, truncated: false, rows: [{ Available: available, 'Item code & name': 'A1 · Nuts' }],
+    });
+  };
   const workspace = {
-    runtimeConfig: { reports: [{ key: 'snacks', name: 'Snack stock', entity: 'inventory', columns: ['available', 'item_code'], filters: { category: 'Snacks' } }] },
-    locationId: 'warehouse',
+    runtimeConfig: { version: 3, reports: [{ key: 'snacks', name: 'Snack stock', entity: 'inventory', columns: ['available', 'item_code'], filters: { category: 'Snacks' } }] },
+    authToken: 'test-token', locationId: 'warehouse',
     items: [{ id: 'a', name: 'Nuts', code: 'A1', category: 'Snacks' }],
     stockRows: [{ itemId: 'a', locationId: 'warehouse', physicalQuantity: 7 }, { itemId: 'a', locationId: 'store', physicalQuantity: 20 }],
     downloadReportCsv: (...args) => downloads.push(args),
   };
   try {
-    render(<WorkspaceProvider value={workspace}><StudioReports /></WorkspaceProvider>);
+    const { rerender } = render(<WorkspaceProvider value={workspace}><StudioReports /></WorkspaceProvider>);
+    await screen.findByText('8');
     assert.deepEqual(screen.getAllByRole('columnheader').map((header) => header.textContent), ['Available', 'Item code & name']);
-    assert.ok(screen.getByText('7'));
-    assert.equal(screen.queryByText('20'), null);
+    assert.equal(screen.queryByText('7'), null);
+    assert.deepEqual(requests, ['/api/v1/reports/studio/stock?reportKey=snacks&locationId=warehouse']);
     fireEvent.click(screen.getByRole('button', { name: 'Export published report' }));
-    assert.deepEqual(downloads, [[[ { Available: 7, 'Item code & name': 'A1 · Nuts' } ], 'studio-snacks']]);
-  } finally { cleanup(); }
+    assert.deepEqual(downloads, [[[ { Available: 8, 'Item code & name': 'A1 · Nuts' } ], 'studio-snacks']]);
+    available = 9;
+    rerender(<WorkspaceProvider value={{ ...workspace, stockRows: [...workspace.stockRows] }}><StudioReports /></WorkspaceProvider>);
+    await screen.findByText('9');
+    assert.equal(requests.length, 2, 'an operational stock refresh reruns the published report');
+  } finally { cleanup(); globalThis.fetch = previous; }
 });
 
-test('a published chart displays exact totals in the table and exports the grouped result', () => {
+test('a database-free demo displays exact grouped totals from the scoped workspace rows', async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ message: 'Database required.' }, { status: 501 });
   const downloads = [];
   const workspace = {
     runtimeConfig: { reports: [{ key: 'by-status', name: 'Counts by status', entity: 'counts', columns: ['status'],
       groupBy: 'status', view: 'bar', filters: { counted: 7 } }] },
-    locationId: 'warehouse',
+    authToken: 'test-token', locationId: 'warehouse',
     counts: [
       { locationId: 'warehouse', status: 'Approved', physicalQuantity: 7 },
       { locationId: 'warehouse', status: 'Approved', physicalQuantity: 7 },
@@ -40,6 +57,7 @@ test('a published chart displays exact totals in the table and exports the group
   };
   try {
     render(<WorkspaceProvider value={workspace}><StudioReports /></WorkspaceProvider>);
+    await screen.findByText('Approved');
     assert.deepEqual(screen.getAllByRole('columnheader').map((header) => header.textContent), ['Status', 'Records']);
     const [label, count] = screen.getAllByRole('cell');
     assert.equal(label.textContent, 'Approved');
@@ -47,7 +65,7 @@ test('a published chart displays exact totals in the table and exports the group
     assert.equal(count.querySelector('meter').getAttribute('value'), '2');
     fireEvent.click(screen.getByRole('button', { name: 'Export published report' }));
     assert.deepEqual(downloads, [[[ { Status: 'Approved', Records: 2 } ], 'studio-by-status']]);
-  } finally { cleanup(); }
+  } finally { cleanup(); globalThis.fetch = previous; }
 });
 
 test('order reports fetch a published report key and location and use the API result for CSV', async () => {

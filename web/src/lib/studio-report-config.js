@@ -62,6 +62,11 @@ export function datasetOf(entity) {
     return REPORT_DATASETS.find((dataset) => dataset.value === entity);
 }
 export const STUDIO_REPORT_ROW_LIMIT = 500;
+// Preserve the source URL segments used by the API entitlement and permission gates.
+export const STUDIO_REPORT_SOURCES = [
+    ['stock', 'inventory'], ['counts', 'counts'], ['transfers', 'transfers'],
+    ['orders', 'orders'], ['purchase-orders', 'purchase_orders'],
+];
 export function canViewStudioReports(role) {
     return ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
 }

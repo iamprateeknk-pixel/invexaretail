@@ -27,8 +27,8 @@ import { accessContext } from './core-shared.js';
 import { canAccessLocation as canAccessOrderLocation } from './opext-shared.js';
 import { controlPlane } from '../lib/saas/control-plane.js';
 import { readStudioRuntime } from '../lib/saas/studio-versions.js';
-import { canViewStudioReports, studioReportDefinition } from '../lib/saas/studio-report-config.js';
-import { runStudioOrderReport } from '../lib/repositories/studio-order-report-repository.js';
+import { canViewStudioReports, STUDIO_REPORT_SOURCES, studioReportDefinition } from '../lib/saas/studio-report-config.js';
+import { runStudioReport } from '../lib/repositories/studio-report-repository.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -56,8 +56,7 @@ function requireDatabaseForReport(res: Response): boolean {
   return false;
 }
 
-// Preserve the orders and purchase-orders path segments so the normal plan and source permission gates apply.
-for (const [path, dataset] of [['orders', 'orders'], ['purchase-orders', 'purchase_orders']] as const) {
+for (const [path, dataset] of STUDIO_REPORT_SOURCES) {
   router.get(`/reports/studio/${path}`, async (req, res) => {
     if (req.apiKey || !canViewStudioReports(req.user!.role)) {
       return sendError(res, 403, 'FORBIDDEN', 'This role cannot run published Studio reports.');
@@ -80,7 +79,7 @@ for (const [path, dataset] of [['orders', 'orders'], ['purchase-orders', 'purcha
     if (!report) return sendError(res, 404, 'NOT_FOUND', 'Published report not found.');
     const definition = studioReportDefinition(report);
     if (!definition) return sendError(res, 422, 'VALIDATION_FAILED', 'Update this report in Studio before running it.');
-    const result = await runStudioOrderReport(ctx, locationId, dataset, definition);
+    const result = await runStudioReport(ctx, locationId, dataset, definition, assignedLocationIds);
     res.set('Cache-Control', 'no-store');
     return res.json({ version: runtime.version, ...result });
   });

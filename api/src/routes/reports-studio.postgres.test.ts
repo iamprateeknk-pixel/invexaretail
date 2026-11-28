@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import express from 'express';
 import { prisma } from '../lib/db.js';
 import { createEnhancedUser } from '../lib/enterprise-repository.js';
@@ -17,7 +17,7 @@ async function fixture() {
   const companyId = `reports-${randomUUID()}`;
   const standard = controlPlane.companies.get('default-company')!;
   controlPlane.companies.set(companyId, { ...standard, id: companyId, name: companyId, planId: 'pro' });
-  controlPlane.entitlements.set(companyId, { OMS: true, PURCHASING: true });
+  controlPlane.entitlements.set(companyId, { OMS: true, PURCHASING: true, INVENTORY: true, WMS: true });
   await prisma.companyProfile.create({ data: { id: companyId, name: companyId } });
   const location = async () => {
     const id = randomUUID();
@@ -42,6 +42,21 @@ async function config(companyId: string, reports: ReportDefinition[], version: n
     companyId, version, versionId, kind, status: kind,
     payload: JSON.parse(JSON.stringify({ ...base, id: versionId, companyId, version, reports })),
   } });
+}
+
+async function reportApi(t: TestContext) {
+  const app = express();
+  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, enforcePlanEntitlements, reportsRouter);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return async (token: string, key: string, locationId: string, source: string) => {
+    const path = `/api/v1/reports/studio/${source}?${new URLSearchParams({ reportKey: key, locationId })}`;
+    const response = await fetch(`http://127.0.0.1:${address.port}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  };
 }
 
 integration('published order reports apply company and branch scope, typed filters, grouping and output limits in PostgreSQL', async (t) => {
@@ -85,19 +100,8 @@ integration('published order reports apply company and branch scope, typed filte
     number: 'PO-OTHER-AMOUNT', totalAmount: 17.36,
   } });
 
-  const app = express();
-  app.use('/api/v1', extractToken, enforceOperationalCompanyScope, enforcePlanEntitlements, reportsRouter);
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise<void>((resolve) => server.once('listening', resolve));
-  t.after(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  const origin = `http://127.0.0.1:${address.port}/api/v1/reports/studio`;
-  async function report(token: string, key: string, locationId = owner.locationId, source = 'orders') {
-    const url = `${origin}/${source}?${new URLSearchParams({ reportKey: key, locationId })}`;
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    return { status: response.status, body: await response.json().catch(() => ({})) };
-  }
+  const run = await reportApi(t);
+  const report = (token: string, key: string, locationId = owner.locationId, source = 'orders') => run(token, key, locationId, source);
 
   assert.equal((await report(owner.admin.token, 'grouped')).status, 404);
   await config(owner.companyId, [draft, detail, purchase], 2, 'published');
@@ -142,4 +146,70 @@ integration('published order reports apply company and branch scope, typed filte
   controlPlane.entitlements.set(owner.companyId, { OMS: true, PURCHASING: true });
   await config(owner.companyId, [], 3, 'published');
   assert.equal((await report(owner.admin.token, 'grouped')).status, 404, 'the current release no longer allows the report');
+});
+
+integration('inventory, count and transfer reports use scoped database rows and preserve report values', async (t) => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const owner = await fixture();
+  const foreign = await fixture();
+  t.after(async () => { await prisma.controlPlaneConfig.deleteMany({ where: { companyId: owner.companyId } }); });
+  const assigned = await owner.user('BRANCH_MANAGER', [owner.locationId]);
+  const store = await owner.user('STORE_USER', [owner.locationId]);
+  await config(owner.companyId, [
+    { key: 'stock', name: 'Staple stock', entity: 'inventory', columns: ['item_code', 'physical', 'available', 'quarantine'], filters: { category: 'Staples' } },
+    { key: 'counts', name: 'Approved counts', entity: 'counts', columns: ['item_code', 'variance', 'status'], filters: { status: 'Approved' } },
+    { key: 'transfers', name: 'Open transfers', entity: 'transfers', columns: ['transfer_no', 'from', 'to', 'items'], filters: { status: 'REQUESTED' } },
+  ], 2, 'published');
+  const item = await prisma.item.create({ data: { companyId: owner.companyId, code: 'RICE', name: 'Rice', category: 'Staples' } });
+  const archive = await prisma.item.create({ data: { companyId: owner.companyId, code: 'OLD', name: 'Old rice', category: 'Staples', status: 'ARCHIVED' } });
+  const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'A' } });
+  const lotB = await prisma.lot.create({ data: { itemId: item.id, lotNo: 'B' } });
+  const archivedLot = await prisma.lot.create({ data: { itemId: archive.id, lotNo: 'OLD' } });
+  await prisma.stockLedger.createMany({ data: [
+    { companyId: owner.companyId, itemId: item.id, lotId: lot.id, locationId: owner.locationId, onHand: 10, reserved: 2, quarantine: 3 },
+    { companyId: owner.companyId, itemId: archive.id, lotId: archivedLot.id, locationId: owner.locationId, onHand: 5 },
+    { companyId: owner.companyId, itemId: item.id, lotId: lot.id, locationId: owner.secondLocationId, onHand: 99 },
+  ] });
+  await prisma.stockCount.createMany({ data: [
+    { companyId: owner.companyId, itemId: item.id, lotId: lot.id, locationId: owner.locationId,
+      submittedById: owner.admin.id, reviewStatus: 'APPROVED', physicalQty: 7.25, bookQty: 8.3 },
+    { companyId: owner.companyId, itemId: item.id, lotId: lotB.id, locationId: owner.locationId,
+      submittedById: owner.admin.id, reviewStatus: 'REJECTED', physicalQty: 1, bookQty: 2 },
+    { companyId: owner.companyId, itemId: item.id, lotId: lot.id, locationId: owner.secondLocationId,
+      submittedById: owner.admin.id, reviewStatus: 'APPROVED', physicalQty: 100, bookQty: 0 },
+  ] });
+  const transfer = await prisma.transfer.create({ data: {
+    companyId: owner.companyId, sourceLocationId: owner.locationId, destinationLocationId: owner.secondLocationId,
+    requestedById: owner.admin.id, lines: { create: [lot, lotB].map((entry) => ({ itemId: item.id, lotId: entry.id, requestedQty: 1 })) },
+  } });
+  const incoming = await prisma.transfer.create({ data: {
+    companyId: foreign.companyId, sourceLocationId: foreign.locationId, destinationLocationId: owner.locationId,
+    requestedById: foreign.admin.id,
+  } });
+  await prisma.transfer.create({ data: {
+    companyId: foreign.companyId, sourceLocationId: foreign.locationId, destinationLocationId: foreign.secondLocationId,
+    requestedById: foreign.admin.id,
+  } });
+
+  const run = await reportApi(t);
+  const stock = await run(assigned.token, 'stock', owner.locationId, 'stock');
+  assert.equal(stock.status, 200, JSON.stringify(stock.body));
+  assert.deepEqual(stock.body.rows, [{ 'Item code & name': 'RICE · Rice', 'Total physical': 10, Available: 8, Quarantine: 3 }]);
+  assert.equal((await run(owner.admin.token, 'stock', owner.locationId, 'stock')).body.total, 2, 'admins can still see archived stock');
+  assert.equal((await run(assigned.token, 'stock', owner.secondLocationId, 'stock')).status, 403);
+  assert.equal((await run(foreign.admin.token, 'stock', owner.locationId, 'stock')).status, 404);
+  assert.equal((await run(store.token, 'counts', owner.locationId, 'counts')).status, 403, 'blind counts stay blind');
+
+  const counts = await run(assigned.token, 'counts', owner.locationId, 'counts');
+  assert.equal(counts.status, 200, JSON.stringify(counts.body));
+  assert.deepEqual(counts.body.rows, [{ Item: 'RICE · Rice', Difference: -1.05, Status: 'Approved' }]);
+  const transfers = await run(assigned.token, 'transfers', owner.locationId, 'transfers');
+  assert.equal(transfers.status, 200, JSON.stringify(transfers.body));
+  assert.deepEqual(transfers.body.rows.find((row: Record<string, unknown>) => row['Transfer no.'] === transfer.id),
+    { 'Transfer no.': transfer.id, From: owner.locationId, To: '', Items: 1 });
+  assert.deepEqual(transfers.body.rows.find((row: Record<string, unknown>) => row['Transfer no.'] === incoming.id),
+    { 'Transfer no.': incoming.id, From: '', To: owner.locationId, Items: 0 });
+  assert.equal(transfers.body.total, 2);
+  const adminTransfers = await run(owner.admin.token, 'transfers', owner.locationId, 'transfers');
+  assert.equal(adminTransfers.body.rows.find((row: Record<string, unknown>) => row['Transfer no.'] === transfer.id).To, owner.secondLocationId);
 });

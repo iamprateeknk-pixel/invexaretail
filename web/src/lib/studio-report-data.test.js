@@ -64,3 +64,12 @@ test('counts, transfers, and both order datasets exclude other locations', () =>
 test('spreadsheet exports treat formula-like text as data and retain numeric negatives', () => {
   assert.equal(rowsToCsv([{ Item: '=1+1', Quantity: -2 }]), '\"Item\",\"Quantity\"\n\"\'=1+1\",\"-2\"');
 });
+
+test('inventory displays the supplied ledger availability without subtracting quarantine again', () => {
+  const report = { entity: 'inventory', columns: ['available'] };
+  const result = studioReportResult(report, studioReportDefinition(report), {
+    locationId: 'warehouse',
+    stockRows: [{ itemId: 'one', locationId: 'warehouse', physicalQuantity: 10, reservedQuantity: 2, quarantineQuantity: 3, availableQuantity: 8 }],
+  });
+  assert.deepEqual(result.rows, [{ Available: 8 }]);
+});

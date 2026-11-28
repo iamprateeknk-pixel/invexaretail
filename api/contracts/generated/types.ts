@@ -311,6 +311,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/studio/stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published stock report at the selected location */
+        get: operations["getStudioInventoryReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published stock-count report at the selected location */
+        get: operations["getStudioCountReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published transfer report at the selected location */
+        get: operations["getStudioTransferReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reports/studio/orders": {
         parameters: {
             query?: never;
@@ -4149,7 +4200,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        StudioOrderReportResult: {
+        StudioOrderReportResult: components["schemas"]["StudioReportResult"];
+        StudioReportResult: {
             /** @description Published configuration version used for the report. */
             version: number;
             columns: {
@@ -6803,6 +6855,201 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getStudioInventoryReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, stock permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published stock report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioCountReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, count permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published stock-count report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioTransferReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. Counterparty locations outside the viewer's scope have no name in the result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, transfer permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published transfer report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
