@@ -1,5 +1,6 @@
 import { REPORT_TYPE_LABELS } from '../../../lib/workspace';
 import { useWorkspace } from '../WorkspaceContext';
+import { StudioReports } from './StudioReports';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +24,7 @@ export function ReportsPage() {
   ];
   const reportColumns = currentReportRows.length ? Object.keys(currentReportRows[0]) : [];
   return <div className="space-y-6">
+    <StudioReports />
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{reportCards.map(([name, value, description, Icon]) => <Card key={name}><CardContent className="flex items-start gap-4 p-5"><div className="rounded-lg bg-primary/10 p-2.5 text-primary"><Icon className="size-5" /></div><div><p className="text-sm text-muted-foreground">{name}</p><p className="mt-1 text-2xl font-bold tracking-tight">{value}</p><p className="mt-1 text-xs text-muted-foreground">{description}</p></div></CardContent></Card>)}</div>
     <Card>
       <CardHeader className="gap-4">

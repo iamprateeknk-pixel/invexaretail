@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,8 +32,8 @@ export function FieldsEditor({ controlToken, draft, onSaved }) {
   return (
     <StudioListEditor
       title="Extra fields"
-      description="Add your own fields to items, transfers, orders and more - for example Shelf no. or Supplier batch. Pick what it is for, give it a name and say what kind of value it holds."
-      notLive="Saved and published, but forms in the app do not show these fields yet. For stock table columns use the Stock columns tab; for item details filled by imports use Import columns."
+      description="Publish text, number, date and yes/no fields to Item Stock Detail for the roles you select."
+      notLive="List fields and fields for other screens can be configured here and have no operational form yet."
       entries={entries}
       idOf={(field) => `${field.entityType}:${field.fieldKey}`}
       newEntry={(current) => ({ entityType: 'item', fieldKey: slugKey('New field', current.map((field) => field.fieldKey)), label: 'New field', dataType: 'text', required: false, visibleRoles: ['ADMIN', 'BRANCH_MANAGER'], editableRoles: ['ADMIN'] })}
@@ -149,8 +149,7 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Rules"
-        description="If-this-then-that checks, for example: when days left to expiry is less than 30, create an expiry task. Every condition of a rule must be true for it to fire."
-        notLive="Saved, published and testable below, but the app does not run these rules on its own yet."
+        description="All conditions must match. Published rules can create expiry tasks or enforce limits on transfer confirmations and manual stock adjustments."
         entries={entries}
         idOf={(rule) => rule.key}
         newEntry={(current) => ({ key: slugKey('new rule', current.map((rule) => rule.key)), name: 'New rule', condition: { daysToExpiryLt: 30 }, outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' } })}
@@ -165,6 +164,19 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
             <Text label="Rule name" value={rule.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
             <RuleConditions rule={rule} set={set} />
             <Choice label="Then" value={outcomeToAction(rule.outcome)} options={RULE_ACTIONS.some((entry) => entry.value === outcomeToAction(rule.outcome)) ? RULE_ACTIONS : [...RULE_ACTIONS, { value: outcomeToAction(rule.outcome), label: outcomeToAction(rule.outcome) }]} onChange={(action) => set({ outcome: actionToOutcome(action) })} />
+            <Choice label="Apply rule to" value={rule.liveFor ?? 'simulation'} options={[
+              { value: 'simulation', label: 'Simulation only' },
+              { value: 'STOCK_ADJUSTMENT', label: 'Manual stock adjustment after publication' },
+              { value: 'TRANSFER_CONFIRM', label: 'Transfer confirmation after publication' },
+              { value: 'EXPIRY_SWEEP', label: 'Expiry task sweep after publication' },
+            ]} onChange={(liveFor) => set({ liveFor: liveFor === 'simulation' ? undefined : liveFor })} />
+            {rule.liveFor === 'EXPIRY_SWEEP' ? (
+              <p className="text-xs text-muted-foreground">Use Days to expiry for each condition and choose Create an expiry task. Matching stocked lots appear in the Expiry workspace after the next sweep.</p>
+            ) : rule.liveFor && (
+              <p className="text-xs text-muted-foreground">
+                Use {rule.liveFor === 'STOCK_ADJUSTMENT' ? 'stock adjustment value' : 'transfer value'} for each condition. Choose Stop the action or ask a branch manager or administrator to approve.
+              </p>
+            )}
             <Advanced>
               <Text label="Technical key" mono value={rule.key} onChange={(key) => isNew && set({ key })} />
               <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[11px]">{JSON.stringify({ condition: rule.condition, outcome: rule.outcome }, null, 2)}</pre>
@@ -179,20 +191,59 @@ export function RulesEditor({ controlToken, draft, onSaved }) {
 
 // ---- reports ------------------------------------------------------------------
 
+function ReportFilters({ dataset, filters, onChange }) {
+  const entries = Object.entries(filters ?? {});
+  const available = dataset.columns.filter(({ value }) => !Object.hasOwn(filters ?? {}, value));
+  const remove = (key) => Object.fromEntries(entries.filter(([field]) => field !== key));
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">Exact match filters</legend>
+      {entries.map(([key, value]) => {
+        const column = dataset.columns.find((entry) => entry.value === key);
+        const label = column?.label ?? key;
+        return (
+          <div key={key} className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <Choice label={`Filter field for ${label}`} value={key} options={[column ?? { value: key, label }, ...available]}
+              onChange={(next) => onChange({ ...remove(key), [next]: '' })} />
+            <Text label={`Match ${label}`} value={value} type={column?.type ?? 'text'}
+              onChange={(next) => onChange({ ...filters, [key]: next })} />
+            <Button type="button" variant="outline" size="sm" onClick={() => onChange(remove(key))}>Remove {label} filter</Button>
+          </div>
+        );
+      })}
+      {available.length > 0 && <Button type="button" variant="outline" size="sm"
+        onClick={() => onChange({ ...filters, [available[0].value]: '' })}>Add filter</Button>}
+    </fieldset>
+  );
+}
+
 export function ReportsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.reports ?? [];
   return (
     <StudioListEditor
       title="Reports"
-      description="Name a report, choose what it is about and tick the columns it shows, in the order you tick them."
-      notLive="Saved and published, but these reports do not appear in the app's Reports page yet."
+      description="Choose columns and exact match filters. Group results to count records by category, status or another supported field."
       entries={entries}
       idOf={(report) => report.key}
       newEntry={(current) => ({ key: slugKey('new report', current.map((report) => report.key)), name: 'New report', entity: 'inventory', columns: ['item_code', 'available'], filters: {} })}
-      summarize={(report) => `${report.name}: ${labelOf(REPORT_DATASETS, report.entity)} - ${report.columns.map((column) => reportColumnLabel(report.entity, column)).join(', ') || 'no columns'}`}
+      summarize={(report) => `${report.name}: ${labelOf(REPORT_DATASETS, report.entity)} - ${report.groupBy
+        ? `count by ${reportColumnLabel(report.entity, report.groupBy)}`
+        : (Array.isArray(report.columns) ? report.columns : []).map((column) => reportColumnLabel(report.entity, column)).join(', ') || 'no columns'}`}
       addLabel="Add report"
       emptyText="No reports yet."
-      save={(report) => post(controlToken, '/studio/v1/reports', report)}
+      save={(report) => {
+        const columns = datasetOf(report.entity)?.columns ?? [];
+        const filters = Object.fromEntries(Object.entries(report.filters ?? {}).map(([key, value]) => {
+          const numeric = columns.some((column) => column.value === key && column.type === 'number');
+          if (!numeric || typeof value === 'number') return [key, value];
+          const number = Number(value);
+          if (typeof value !== 'string' || !value.trim() || !Number.isFinite(number)) {
+            throw new Error(`Enter a number for ${reportColumnLabel(report.entity, key)}.`);
+          }
+          return [key, number];
+        }));
+        return post(controlToken, '/studio/v1/reports', { ...report, filters });
+      }}
       remove={(key) => del(controlToken, `/studio/v1/reports/${encodeURIComponent(key)}`)}
       onSaved={onSaved}
       renderEntry={(report, set, { isNew, others }) => {
@@ -202,12 +253,22 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
             <div className="grid gap-3 md:grid-cols-2">
               <Text label="Report name" value={report.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
               <Choice label="About" value={report.entity} options={dataset ? REPORT_DATASETS : [...REPORT_DATASETS, { value: report.entity, label: report.entity }]}
-                onChange={(entity) => set({ entity, columns: (datasetOf(entity)?.columns ?? []).slice(0, 2).map((column) => column.value) })} />
+                onChange={(entity) => set({ entity, columns: (datasetOf(entity)?.columns ?? []).slice(0, 2).map((column) => column.value),
+                  filters: {}, groupBy: undefined, view: undefined })} />
             </div>
-            {dataset && <ChipPicker label="Columns" options={dataset.columns} value={report.columns} onChange={(columns) => set({ columns })} />}
+            {dataset && <>
+              <Choice label="Group results by" value={report.groupBy ?? ''} options={[
+                { value: '', label: 'Do not group' }, ...dataset.columns.filter(({ groupable }) => groupable),
+              ]} onChange={(groupBy) => set({ groupBy: groupBy || undefined, view: groupBy ? report.view : undefined })} />
+              {report.groupBy ? <Choice label="Display" value={report.view ?? 'table'}
+                options={[{ value: 'table', label: 'Table' }, { value: 'bar', label: 'Table with bars' }]}
+                onChange={(view) => set({ view })} />
+                : <ChipPicker label="Columns" options={dataset.columns} value={report.columns ?? []} onChange={(columns) => set({ columns })} />}
+              <ReportFilters dataset={dataset} filters={report.filters} onChange={(filters) => set({ filters })} />
+            </>}
             <Advanced>
               <Text label="Technical key" mono value={report.key} onChange={(key) => isNew && set({ key })} />
-              <Text label="Column keys (comma separated)" mono value={report.columns.join(', ')} onChange={(raw) => set({ columns: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
+              <Text label="Column keys (comma separated)" mono value={Array.isArray(report.columns) ? report.columns.join(', ') : ''} onChange={(raw) => set({ columns: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
             </Advanced>
           </>
         );
@@ -218,13 +279,15 @@ export function ReportsEditor({ controlToken, draft, onSaved }) {
 
 // ---- automations --------------------------------------------------------------
 
+const LIVE_AUTOMATION_EVENTS = new Set(AUTOMATION_EVENTS.map(({ value }) => value));
+
 export function AutomationsEditor({ controlToken, draft, onSaved }) {
   const entries = draft?.automations ?? [];
   return (
+    <div className="grid gap-4">
     <StudioListEditor
       title="Automations"
-      description="Something happens (or a time comes round) and Invexa does something for you - for example, when stock falls low, send a notification."
-      notLive="Saved and published, but the app does not carry these out on its own yet."
+      description="Send reminders or create Exception Inbox tasks for company admins on a schedule or when an event occurs."
       entries={entries}
       idOf={(automation) => automation.key}
       newEntry={(current) => ({ key: slugKey('new automation', current.map((automation) => automation.key)), name: 'New automation', trigger: 'event', expression: 'inventory.low_stock', actionKey: 'SEND_NOTIFICATION' })}
@@ -237,15 +300,31 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
       renderEntry={(automation, set, { isNew, others }) => {
         const list = automation.trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS;
         const options = list.some((entry) => entry.value === automation.expression) ? list : [...list, { value: automation.expression, label: automation.expression }];
+        const supportsLive = automation.trigger === 'schedule' || LIVE_AUTOMATION_EVENTS.has(automation.expression);
         return (
           <>
             <Text label="Automation name" value={automation.name} onChange={(name) => set(isNew ? { name, key: slugKey(name, others.map((other) => other.key)) } : { name })} />
             <div className="grid gap-3 md:grid-cols-3">
               <Choice label="Starts" value={automation.trigger} options={[{ value: 'event', label: 'When something happens' }, { value: 'schedule', label: 'On a schedule' }]}
-                onChange={(trigger) => set({ trigger, expression: (trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS)[0].value })} />
-              <Choice label={automation.trigger === 'schedule' ? 'When' : 'What happens'} value={automation.expression} options={options} onChange={(expression) => set({ expression })} />
-              <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey })} />
+                onChange={(trigger) => set({ trigger, expression: (trigger === 'schedule' ? AUTOMATION_SCHEDULES : AUTOMATION_EVENTS)[0].value, enforce: undefined })} />
+              <Choice label={automation.trigger === 'schedule' ? 'When' : 'What happens'} value={automation.expression} options={options} onChange={(expression) => set({
+                expression, enforce: automation.trigger === 'schedule' || LIVE_AUTOMATION_EVENTS.has(expression) ? automation.enforce : undefined,
+              })} />
+              <Choice label="Then" value={automation.actionKey} options={AUTOMATION_ACTIONS.some((entry) => entry.value === automation.actionKey) ? AUTOMATION_ACTIONS : [...AUTOMATION_ACTIONS, { value: automation.actionKey, label: automation.actionKey }]} onChange={(actionKey) => set({ actionKey, enforce: undefined })} />
             </div>
+            {supportsLive && ['SEND_NOTIFICATION', 'CREATE_TASK'].includes(automation.actionKey) && (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={automation.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
+                {automation.actionKey === 'CREATE_TASK' ? 'Create tasks after publishing'
+                  : automation.trigger === 'schedule' ? 'Send after publishing, using the company timezone' : 'Send for new events after publishing'}
+              </label>
+            )}
+            {automation.trigger === 'event' && automation.expression === 'item.near_expiry' && (
+              <p className="text-sm text-muted-foreground">Admins receive one reminder per stocked lot, location, and expiry date within the next 30 days.</p>
+            )}
+            {automation.trigger === 'event' && automation.expression === 'inventory.low_stock' && (
+              <p className="text-sm text-muted-foreground">Admins are notified when the worker sees on-hand stock at or below the location’s reorder minimum. Stock must recover before another alert is sent.</p>
+            )}
             <Advanced>
               <Text label="Technical key" mono value={automation.key} onChange={(key) => isNew && set({ key })} />
               <Text label="Event or schedule expression" mono value={automation.expression} onChange={(expression) => set({ expression })} />
@@ -255,6 +334,80 @@ export function AutomationsEditor({ controlToken, draft, onSaved }) {
         );
       }}
     />
+    <AutomationRunHistory key={controlToken} controlToken={controlToken} />
+    </div>
+  );
+}
+
+const AUTOMATION_RUN_STATUS = {
+  PENDING: 'Pending', DELIVERED: 'Delivered', CANCELLED: 'Cancelled', DEAD_LETTER: 'Failed after retries',
+};
+
+function AutomationRunHistory({ controlToken }) {
+  const [history, setHistory] = useState(null);
+  const [refresh, setRefresh] = useState(0);
+  const [retrying, setRetrying] = useState(null);
+  const [retryResult, setRetryResult] = useState(null);
+  useEffect(() => {
+    let active = true;
+    controlRequest('/studio/v1/automations/runs', { token: controlToken })
+      .then(({ runs }) => { if (active) setHistory({ runs }); })
+      .catch((error) => { if (active) setHistory({ error: error.message }); });
+    return () => { active = false; };
+  }, [controlToken, refresh]);
+
+  async function retryRun(run) {
+    setRetrying(run.id);
+    setRetryResult(null);
+    try {
+      await post(controlToken, `/studio/v1/automations/runs/${encodeURIComponent(run.id)}/retry`, { finishedAt: run.finishedAt });
+      setRetryResult({ message: 'Retry queued.' });
+      setRefresh((version) => version + 1);
+    } catch (error) {
+      setRetryResult({ error: error.message });
+    } finally {
+      setRetrying(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Recent automation runs</CardTitle>
+        <Button type="button" size="sm" variant="outline" onClick={() => { setHistory(null); setRefresh((version) => version + 1); }}>Refresh</Button>
+      </CardHeader>
+      <CardContent>
+        {!history && <p role="status" className="text-sm text-muted-foreground">Loading runs…</p>}
+        {history?.error && <p role="alert" className="text-sm text-destructive">{history.error}</p>}
+        {retryResult?.error && <p role="alert" className="text-sm text-destructive">{retryResult.error}</p>}
+        {retryResult?.message && <p role="status" className="text-sm">{retryResult.message}</p>}
+        {history?.runs?.length === 0 && <p className="text-sm text-muted-foreground">No automation runs yet.</p>}
+        {history?.runs?.length > 0 && (
+          <ul className="divide-y">
+            {history.runs.map((run) => (
+              <li key={run.id} className="flex flex-wrap justify-between gap-2 py-2 text-sm">
+                <div>
+                  <p className="font-medium">{run.name}</p>
+                  <p className="text-muted-foreground">{LIVE_AUTOMATION_EVENTS.has(run.expression) ? labelOf(AUTOMATION_EVENTS, run.expression) : run.occurrence} · Configuration {run.configVersion}</p>
+                  {LIVE_AUTOMATION_EVENTS.has(run.expression) && <p className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</p>}
+                </div>
+                <div>
+                  <p>{run.executionPaused ? 'Task creation paused' : run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry'
+                    : run.status === 'DELIVERED' && run.actionKey === 'CREATE_TASK' ? 'Task created' : AUTOMATION_RUN_STATUS[run.status]}</p>
+                  {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins'
+                    : run.actionKey === 'CREATE_TASK' ? 'Task could not be created' : 'Notification could not be delivered'}</p>}
+                  {run.status === 'DEAD_LETTER' && run.finishedAt && (
+                    <Button type="button" variant="outline" size="sm" aria-label={`Retry ${run.name}`} disabled={retrying !== null} onClick={() => retryRun(run)}>
+                      {retrying === run.id ? 'Queuing…' : 'Retry'}
+                    </Button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -266,8 +419,7 @@ export function MobilePolicyEditor({ controlToken, draft, onSaved }) {
   return (
     <StudioListEditor
       title="Mobile app, per role"
-      description="For each role: which screens the phone app shows, what it keeps for offline work, and how long it may stay offline before it must sync. Data on the phone is always encrypted."
-      notLive="Saved and published, but the phone app does not read this yet: it still shows its standard screens."
+      description="Choose each role’s screens and which downloaded data the app can show offline. The time limit applies to downloaded data."
       entries={entries}
       idOf={(policy) => policy.role}
       canAdd={entries.length < ROLE_OPTIONS.length}
@@ -284,12 +436,12 @@ export function MobilePolicyEditor({ controlToken, draft, onSaved }) {
             {isNew
               ? <Choice label="Role" value={policy.role} options={ROLE_OPTIONS.filter((role) => role.value === policy.role || !entries.some((entry) => entry.role === role.value))} onChange={(role) => set({ role })} />
               : <p className="grid gap-1 text-xs"><span className="font-medium text-muted-foreground">Role</span><span className="py-2 text-sm font-medium">{labelOf(ROLE_OPTIONS, policy.role)}</span></p>}
-            <Choice label="May stay offline for" value={String(policy.offlineMaxHours)}
-              options={[...new Set([...OFFLINE_HOURS_OPTIONS, Number(policy.offlineMaxHours)])].sort((a, b) => a - b).map((hours) => ({ value: String(hours), label: `${hours} hours` }))}
+            <Choice label="Show downloaded data for up to" value={String(policy.offlineMaxHours)}
+              options={[...new Set([0, ...OFFLINE_HOURS_OPTIONS, Number(policy.offlineMaxHours)])].sort((a, b) => a - b).map((hours) => ({ value: String(hours), label: hours === 0 ? 'Online only' : `${hours} hours` }))}
               onChange={(hours) => set({ offlineMaxHours: Number(hours) })} />
           </div>
           <ChipPicker label="Screens in the app (in this order)" options={MOBILE_SCREENS} value={policy.navigation} onChange={(navigation) => set({ navigation })} />
-          <ChipPicker label="Keep on the phone for offline work" options={MOBILE_SCREENS.filter((screen) => screen.value !== 'dashboard')} value={policy.syncScope} onChange={(syncScope) => set({ syncScope })} />
+          <ChipPicker label="Download for offline use" options={MOBILE_SCREENS} value={policy.syncScope} onChange={(syncScope) => set({ syncScope })} />
           <Advanced>
             <Text label="Navigation keys (comma separated)" mono value={policy.navigation.join(', ')} onChange={(raw) => set({ navigation: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
             <Text label="Sync scope keys (comma separated)" mono value={policy.syncScope.join(', ')} onChange={(raw) => set({ syncScope: raw.split(',').map((part) => part.trim()).filter(Boolean) })} />
@@ -315,7 +467,10 @@ function WorkflowSimulator({ controlToken, models }) {
     try {
       const response = await post(controlToken, '/studio/v1/workflows/simulate', { key: chosen?.key, value: Number(value) });
       const auto = response.simulation.outcome === 'auto_approve';
-      setResult(auto ? `Approved automatically (published version ${response.simulation.pinnedVersion}).` : `Needs approval from a ${labelOf(ROLE_OPTIONS, chosen?.approverRole ?? 'BRANCH_MANAGER').toLowerCase()} (published version ${response.simulation.pinnedVersion}).`);
+      const reviewer = labelOf(ROLE_OPTIONS, response.simulation.reviewerRole ?? 'BRANCH_MANAGER').toLowerCase();
+      setResult(auto
+        ? chosen.target === 'count' ? 'The regular independent count review applies.' : 'This limit does not require review.'
+        : `This limit requires review by a ${reviewer}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Check failed');
     }
@@ -329,7 +484,7 @@ function WorkflowSimulator({ controlToken, models }) {
       </CardHeader>
       <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
         <Choice label="Approval" value={chosen?.key ?? ''} options={models.map((model) => ({ value: model.key, label: model.name }))} onChange={setKey} />
-        <Text label="Value (₹)" type="number" value={value} onChange={setValue} />
+        <Text label={chosen?.target === 'count' ? 'Estimated variance value (₹)' : 'Value (₹)'} type="number" value={value} onChange={setValue} />
         <Button type="button" variant="outline" onClick={run}>Check</Button>
         {result && <p aria-live="polite" className="text-sm md:col-span-3">{result}</p>}
         {error && <p role="alert" className="text-sm text-destructive md:col-span-3">{error}</p>}
@@ -351,8 +506,7 @@ export function WorkflowsEditor({ controlToken, draft, onSaved }) {
     <div className="grid gap-4">
       <StudioListEditor
         title="Approval limits"
-        description="Set a value limit: anything at or under it is approved automatically, anything above it waits for the person you choose."
-        notLive="Saved, published and testable below. Live approvals in the app still use the approval rules set in the main app (Settings), not these yet."
+        description="Enable a limit for live commands and publish it. Commands above the limit require a reviewer. Existing approval rules can still require review."
         entries={models}
         idOf={(model) => model.key}
         newEntry={(current) => {
@@ -372,9 +526,18 @@ export function WorkflowsEditor({ controlToken, draft, onSaved }) {
               {isNew
                 ? <Choice label="For" value={model.target} options={WORKFLOW_TARGETS} onChange={(target) => set({ target, key: workflowKey(target, others), name: `${labelOf(WORKFLOW_TARGETS, target)} approval` })} />
                 : <p className="grid gap-1 text-xs"><span className="font-medium text-muted-foreground">For</span><span className="py-2 text-sm">{labelOf(WORKFLOW_TARGETS, model.target)}</span></p>}
-              <Text label="Approve automatically up to (₹)" type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
-              <Choice label="Above that, who approves" value={model.approverRole} options={ROLE_OPTIONS.filter((role) => ['ADMIN', 'BRANCH_MANAGER'].includes(role.value))} onChange={(approverRole) => set({ approverRole })} />
+              <Text label={model.target === 'count' ? 'Variance value threshold (₹)' : 'Approval threshold (₹)'} type="number" value={model.threshold} onChange={(threshold) => set({ threshold })} />
+              <Choice label="Above that, who approves" value={model.approverRole} options={ROLE_OPTIONS.filter((role) => ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role.value))} onChange={(approverRole) => set({ approverRole })} />
             </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={model.enforce === true} onCheckedChange={(checked) => set({ enforce: checked === true })} />
+              Enforce on live commands after publishing
+            </label>
+            {model.target === 'count' && (
+              <p className="text-xs text-muted-foreground">
+                All counts still need an independent reviewer. The limit uses the latest known purchase cost to value the difference. If the cost is missing, the highest published reviewer role applies to a nonzero difference.
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">{describeWorkflow(model)}</p>
             <Advanced>
               <Text label="Technical key" mono value={model.key} onChange={(key) => isNew && set({ key })} />

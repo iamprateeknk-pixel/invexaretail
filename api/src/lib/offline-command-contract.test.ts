@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateOfflineCommand, OFFLINE_CONTRACT_VERSION, type AppliedCommandStore } from './offline-command-contract.js';
+import { evaluateOfflineCommand, OFFLINE_CONTRACT_VERSION, OPERATIONAL_OFFLINE_COMMAND_VERSION,
+  operationalOfflineCommandSchema, operationalReplayRequest, type AppliedCommandStore } from './offline-command-contract.js';
 
 const caller = { companyId: 'c1', actorId: 'u1' };
 const command = (over: Record<string, unknown> = {}) => ({
@@ -36,4 +37,32 @@ test('tenant/actor come from the session; other contract versions and malformed 
   for (const bad of [null, command({ commandId: 'nope' }), command({ type: 'X' }), command({ baseVersion: -1 }), command({ payload: [] }), command({ occurredAt: 'x' })]) {
     assert.equal(code(evaluateOfflineCommand(bad, caller, store(2))), 'INVALID_COMMAND');
   }
+});
+
+test('operational replay selects the fixed domain route and keeps the permit and revision', () => {
+  const hash = 'a'.repeat(64);
+  const base = { contractVersion: OPERATIONAL_OFFLINE_COMMAND_VERSION, commandId: 'req-offline-1',
+    entityId: 'entity-1', revision: hash, permit: 'permit' };
+  const commands = [
+    { type: 'COUNT_SUBMIT', payload: { mode: 'weight', locationId: 'location-1', totalQuantity: 2 } },
+    { type: 'COUNT_SUBMIT', payload: { mode: 'scan', locationId: 'location-1', physicalQuantity: 2 } },
+    { type: 'PICK_CONFIRM', payload: { lines: [{ itemId: 'item-1', quantity: 2 }] } },
+    { type: 'RECEIVE_CONFIRM', payload: { lines: [{ itemId: 'item-1', lotId: 'lot-1', receivedQty: 2 }] } },
+    { type: 'PUTAWAY_CONFIRM', revision: '2026-11-01T10:00:00Z', payload: { scannedBinCode: 'BIN-1' } },
+  ];
+  const paths = ['/stock-counts/weight', '/stock-counts', '/picker/transfers/entity-1/pick-slips',
+    '/transfers/entity-1/receive', '/putaway-tasks/entity-1/confirm'];
+  const revisionFields = ['stockRevision', 'stockRevision', 'pickRevision', 'receiveRevision', 'taskRevision'] as const;
+  for (const [i, input] of commands.entries()) {
+    const parsed = operationalOfflineCommandSchema.parse({ ...base, ...input });
+    const replay = operationalReplayRequest(parsed);
+    const body = replay.body as Record<string, unknown>;
+    assert.equal(replay.path, paths[i]);
+    assert.equal(body[revisionFields[i]], parsed.revision);
+    assert.equal(body.offlineCountPermit ?? body.offlinePermit, base.permit);
+    if (parsed.type !== 'PUTAWAY_CONFIRM') assert.equal(body.requestId, base.commandId);
+  }
+  assert.equal(operationalOfflineCommandSchema.safeParse({ ...base, ...commands[0], entityId: 'not/a-segment' }).success, false);
+  assert.equal(operationalOfflineCommandSchema.safeParse({ ...base, ...commands[0], companyId: 'foreign' }).success, false);
+  assert.equal(operationalOfflineCommandSchema.safeParse({ ...base, ...commands[0], permit: '' }).success, false);
 });

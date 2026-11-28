@@ -2,7 +2,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { jwtSecret, timingSafeEqual } from './control-plane-tokens.js';
 import { controlPlaneDbEnabled, refreshApiKeyFromDb, writeApiKeyRow } from './control-plane-repository.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
-import { ControlPlaneError, nowIso } from './control-plane.js';
+import { ControlPlaneError, nowIso } from './control-plane-values.js';
 import type { PublicControlPlaneWebhook, PublicApiKey, ScopeContext, CompanyRecord, AuditEvent, BillingInvoice } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 

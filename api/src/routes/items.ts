@@ -8,13 +8,18 @@ import { type Request, type Response, Router } from 'express';
 import { extractToken, requireAuth } from './enterprise-auth.js';
 import { enforcePermissionOverrides } from '../lib/access-control.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
-import { isDomainError, statusForErrorCode } from '../lib/errors.js';
+import { DomainError, isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import type { TenantContext } from '../lib/tenant-context.js';
-import { searchItems, assertItemOwnedByTenant, getCatalogueVersion, ItemNotFoundError } from '../lib/repositories/item-repository.js';
+import { searchItems, requireItemById, getCatalogueVersion, ItemNotFoundError } from '../lib/repositories/item-repository.js';
 import { getStockDetail } from '../lib/stock-detail-service.js';
 import { postInventoryMovement, reverseInventoryMovement, NegativeStockBlockedError, MovementNotFoundError, AlreadyReversedError } from '../lib/inventory-posting-service.js';
+import { decimalsToNumbers } from '../lib/decimal-json.js';
 import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { prisma } from '../lib/db.js';
+import { checkApprovalGate, type GateResult } from '../lib/approval-rules.js';
+import { readValueAtRisk } from '../lib/exceptions.js';
+import { getStudioItemCreateFields, getStudioItemFields, setStudioItemField } from '../lib/saas/studio-item-fields.js';
+import { isOperationalAdmin } from './core-shared.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -64,7 +69,44 @@ router.get('/items/:itemId/stock-detail', async (req: Request, res: Response) =>
   }
 });
 
+router.get('/items/studio-create-fields', async (req, res) => {
+  if (req.apiKey || !isOperationalAdmin(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company admin to create items.');
+  res.set('Cache-Control', 'no-store');
+  return res.json(await getStudioItemCreateFields(tenantContextFor(req)));
+});
+
+router.get('/items/:itemId/studio-fields', async (req, res) => {
+  if (req.apiKey) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company user to view item fields.');
+  try {
+    return res.json(await getStudioItemFields(tenantContextFor(req), firstParam(req.params.itemId)));
+  } catch (error) {
+    if (error instanceof ItemNotFoundError) return sendError(res, 404, 'NOT_FOUND', error.message);
+    throw error;
+  }
+});
+
+router.put('/items/:itemId/studio-fields/:fieldKey', async (req, res) => {
+  if (req.apiKey) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company user to edit item fields.');
+  const { value, versionId } = req.body ?? {};
+  if (typeof versionId !== 'string' || !versionId || versionId.length > 191 || value === undefined) {
+    return sendError(res, 400, 'VALIDATION_FAILED', 'The published version and field value are required.');
+  }
+  try {
+    return res.json(await setStudioItemField(tenantContextFor(req), firstParam(req.params.itemId), firstParam(req.params.fieldKey), versionId, value));
+  } catch (error) {
+    if (error instanceof ItemNotFoundError) return sendError(res, 404, 'NOT_FOUND', error.message);
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
+    throw error;
+  }
+});
+
 type AdjustBody = { locationId?: string; lotId?: string; qtyDelta?: number; reason?: string; idempotencyKey?: string };
+
+class AdjustmentApprovalRequired extends DomainError {
+  constructor(readonly approval: Extract<GateResult, { blocked: true }>) {
+    super('CONFLICT', `${approval.reason} Submit the same adjustment again after approval.`);
+  }
+}
 
 // Manual stock adjustments and reversals change on-hand quantity, so they are an
 // admin action (the web wizard is already limited to these roles). Before this
@@ -104,7 +146,7 @@ router.post('/items/:itemId/adjust', requireAdjustRole, async (req: Request, res
     // it in this codebase already follows. This is the one place a client
     // can name arbitrary ids in the request body, so it is the one place
     // that check must happen before posting, not after.
-    await assertItemOwnedByTenant(ctx, itemId);
+    const item = await requireItemById(ctx, itemId);
     if (!companyOwnsLocation(ctx.companyId, body.locationId)) {
       return res.status(404).json({ message: `Location ${body.locationId} was not found.` });
     }
@@ -113,7 +155,7 @@ router.post('/items/:itemId/adjust', requireAdjustRole, async (req: Request, res
       return res.status(404).json({ message: `Lot ${body.lotId} was not found for this item.` });
     }
 
-    const result = await postInventoryMovement({
+    const command = {
       tenant: ctx,
       itemId,
       lotId: body.lotId,
@@ -122,15 +164,34 @@ router.post('/items/:itemId/adjust', requireAdjustRole, async (req: Request, res
       qtyDelta: body.qtyDelta,
       reason: body.reason.trim(),
       idempotencyKey: body.idempotencyKey.trim(),
+    };
+    const result = await postInventoryMovement(command, async () => {
+      const gate = await checkApprovalGate({
+        triggerType: 'STOCK_ADJUSTMENT',
+        entityType: 'StockAdjustment',
+        entityId: `item-adjustment:${command.idempotencyKey}`,
+        category: item.category ?? null,
+        locationId: command.locationId,
+        value: async () => (await readValueAtRisk(ctx, itemId, Math.abs(command.qtyDelta))) ?? 0,
+        intent: [itemId, command.lotId, command.locationId, command.qtyDelta, command.reason],
+        requestedById: ctx.userId,
+        companyId: ctx.companyId,
+      });
+      if (gate.blocked) throw new AdjustmentApprovalRequired(gate);
     });
-    return res.status(result.duplicate ? 200 : 201).json({
+    return res.status(result.duplicate ? 200 : 201).json(decimalsToNumbers({
       duplicate: result.duplicate,
       movement: result.movement,
       balance: result.balance,
-    });
+    }));
   } catch (error) {
     if (error instanceof ItemNotFoundError) return res.status(404).json({ message: error.message });
     if (error instanceof NegativeStockBlockedError) return res.status(422).json({ message: error.message, code: 'INSUFFICIENT_STOCK' });
+    if (error instanceof AdjustmentApprovalRequired) {
+      return sendError(res, 409, error.code, error.message, {
+        approvalRequestId: error.approval.requestId, requiredApproverRole: error.approval.requiredApproverRole,
+      });
+    }
     if (isDomainError(error)) return res.status(statusForErrorCode(error.code)).json(error.toEnvelope());
     throw error;
   }

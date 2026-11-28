@@ -157,9 +157,10 @@ class NativeDatabase {
     return db;
   }
 
-  static Future<NativeDatabase> openApp() async {
+  static Future<NativeDatabase> openApp({String? scope}) async {
     final dir = await getApplicationSupportDirectory();
-    return NativeDatabase.file(File(p.join(dir.path, 'invexa_drift.sqlite')));
+    final filename = scope == null ? 'invexa_drift.sqlite' : 'invexa_drift_$scope.sqlite';
+    return NativeDatabase.file(File(p.join(dir.path, filename)));
   }
 
   final sqlite.Database _db;
@@ -268,6 +269,20 @@ class NativeDatabase {
   }
 
   void clearReadModel(String scope) => _db.execute('DELETE FROM read_model WHERE scope = ?', [scope]);
+
+  String? loadMobilePolicy(String scope) {
+    final rows = _db.select('SELECT value FROM device_meta WHERE key = ?', ['mobile_policy:$scope']);
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  void saveMobilePolicy(String scope, String? policy) {
+    final key = 'mobile_policy:$scope';
+    if (policy == null) {
+      _db.execute('DELETE FROM device_meta WHERE key = ?', [key]);
+    } else {
+      _db.execute('INSERT OR REPLACE INTO device_meta (key, value) VALUES (?, ?)', [key, policy]);
+    }
+  }
 
   // ---- count / action queues (stored as sync_commands of type COUNT / ACTION) ----------------
 

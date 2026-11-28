@@ -220,14 +220,14 @@ export function allocateLots(
 
 export const PICK_EXCEPTION_REASONS = ['NO_STOCK', 'WRONG_ITEM', 'DAMAGED_ITEM'] as const;
 
-export function validatePickInput(input: { unit?: string; quantity: number; inputMethod: string; scanCode?: string; itemCode: string; lotNo: string }): void {
+export function validatePickInput(input: { unit?: string; quantity: number; inputMethod: string; scanCode?: string; itemCode: string; itemBarcode?: string; lotNo: string }): void {
   if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new Error('Picked quantity must be greater than zero.');
   const unit = (input.unit ?? 'PCS').trim().toUpperCase();
   if (unit === 'PCS') {
     if (!Number.isInteger(input.quantity)) throw new Error('PCS quantity must be a whole number.');
     if (input.inputMethod !== 'SCAN') throw new Error('PCS items must be picked by barcode/QR scan.');
     const scan = (input.scanCode ?? '').trim().toLowerCase();
-    if (!scan || ![input.itemCode, input.lotNo].some((value) => value.trim().toLowerCase() === scan)) throw new Error('Wrong Item: scan does not match the requested item or lot.');
+    if (!scan || ![input.itemCode, input.itemBarcode, input.lotNo].some((value) => value?.trim().toLowerCase() === scan)) throw new Error('Wrong Item: scan does not match the requested item or lot.');
   } else if (unit === 'KG') {
     if (input.inputMethod !== 'MANUAL') throw new Error('KG items use manual decimal entry.');
     if (Math.round(input.quantity * 1000) !== input.quantity * 1000) throw new Error('KG quantity supports up to 3 decimal places.');

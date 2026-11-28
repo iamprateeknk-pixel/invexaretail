@@ -4,12 +4,13 @@ import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
 import { profileKey, type ImportKind, type ImportProfile } from '../import-profile.js';
 import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
-import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, DEFAULT_TABLE_COLUMNS, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
+import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY } from './control-plane-defaults.js';
+import { clonePage, ControlPlaneError, nowIso } from './control-plane-values.js';
 import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
 import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
 import { ControlPlaneBilling } from './control-plane-billing.js';
 import { ControlPlaneIntegrations } from './control-plane-integrations.js';
-import { ControlPlaneStudio } from './control-plane-studio.js';
+import { ControlPlaneStudio, type StudioRollbackOptions } from './control-plane-studio.js';
 import { ControlPlaneSync } from './control-plane-sync.js';
 import {
   controlPlaneDbEnabled,
@@ -18,6 +19,8 @@ import {
   syncUsageBaseline,
   writeSessionRows,
 } from './control-plane-repository.js';
+
+export { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane-values.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -73,17 +76,6 @@ export type ControlPlaneApiKeyRecord = {
   scopes: string[];
   status: 'active' | 'revoked';
 };
-
-export class ControlPlaneError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly status = 400,
-  ) {
-    super(message);
-    this.name = 'ControlPlaneError';
-  }
-}
 
 export type ScopeContext = {
   tenantId: string;
@@ -229,6 +221,11 @@ export type ConfigurationVersion = {
   version: number;
   status: ConfigStatus;
   authorId: string;
+  editorIds?: string[];
+  releaseReview?: { id: string; revision: string; requestedBy: string; requestedAt: string;
+    reviewerId?: string; approvedBy?: string; approvedAt?: string };
+  releaseSchedule?: { id: string; revision: string; reviewId: string; activateAt: string; requestedAt: string;
+    requestedBy: string; status: 'scheduled' | 'blocked' | 'activated'; failure?: string; activatedAt?: string };
   parentVersion: number | null;
   page: PageDefinition;
   fields: FieldDefinition[];
@@ -246,10 +243,12 @@ export type WorkflowDefinition = {
   key: string;
   name: string;
   version: number;
+  enforce?: boolean;
   graph: { nodes: Array<{ id: string; type: string; config: Record<string, unknown> }> };
 };
 
 export type RuleDefinition = {
+  liveFor?: import('./live-studio-rules.js').LiveRuleTrigger;
   key: string;
   name: string;
   condition: Record<string, unknown>;
@@ -262,9 +261,12 @@ export type ReportDefinition = {
   entity: string;
   columns: string[];
   filters: Record<string, unknown>;
+  groupBy?: string;
+  view?: 'table' | 'bar';
 };
 
 export type AutomationDefinition = {
+  enforce?: boolean;
   key: string;
   name: string;
   trigger: 'schedule' | 'event';
@@ -312,42 +314,18 @@ export type ControlTokenPayload = {
   tokenType: 'access' | 'refresh';
 };
 
-export function nowIso(): string {
-  return new Date().toISOString();
-}
-
 export type TableKey = 'stock' | 'lots' | 'itemLots';
 export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots', 'itemLots'];
-
-/**
- * Which roles may see a column. No list (or every role) = everyone. ADMIN is always included so a layout
- * can never hide a column from the people who manage it.
- */
-export function normalizeColumnRoles(input: unknown): string[] | undefined {
-  if (input === null || input === undefined) return undefined;
-  if (!Array.isArray(input)) throw new ControlPlaneError('Roles must be a list', 'INVALID_ROLE', 400);
-  if (input.length === 0) return undefined;
-  const roles = new Set<string>(['ADMIN']);
-  for (const role of input) {
-    if (!(COLUMN_ROLES as readonly string[]).includes(String(role))) throw new ControlPlaneError(`Unknown role "${String(role)}"`, 'INVALID_ROLE', 400);
-    roles.add(String(role));
-  }
-  return roles.size === COLUMN_ROLES.length ? undefined : COLUMN_ROLES.filter((role) => roles.has(role));
-}
 
 export function isTableKey(value: unknown): value is TableKey {
   return typeof value === 'string' && (TABLE_KEYS as readonly string[]).includes(value);
 }
 
-/** Columns of one table on a page; non-stock tables are created from their defaults on first use. */
-export function pageTableColumns(page: PageDefinition, table: TableKey): ColumnDefinition[] {
-  if (table === 'stock') return page.columns;
-  page.tables ??= {};
-  return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_TABLE_COLUMNS[table])) as ColumnDefinition[]);
-}
-
-export function clonePage(page: PageDefinition): PageDefinition {
-  return JSON.parse(JSON.stringify(page)) as PageDefinition;
+function appendControlAudit(store: Pick<ControlPlaneStore, 'audit' | 'outbox'>, input: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEvent {
+  const event: AuditEvent = { ...input, id: randomUUID(), timestamp: nowIso() };
+  store.audit.push(event);
+  store.outbox.push({ id: event.id, event: `audit.${input.action.toLowerCase()}`, payload: event, createdAt: event.timestamp });
+  return event;
 }
 
 export class ControlPlane {
@@ -640,10 +618,7 @@ export class ControlPlane {
   }
 
   auditEvent(input: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEvent {
-    const event: AuditEvent = { ...input, id: randomUUID(), timestamp: nowIso() };
-    this.audit.push(event);
-    this.outbox.push({ id: event.id, event: `audit.${input.action.toLowerCase()}`, payload: event, createdAt: event.timestamp });
-    return event;
+    return appendControlAudit(this.store, input);
   }
 
   createScope(input: Partial<ScopeContext> & Pick<ScopeContext, 'actorId' | 'sessionType'>): ScopeContext {
@@ -760,13 +735,11 @@ export class ControlPlane {
     return { session, token };
   }
 
-  exitSession(sessionId: string, actorId: string): void {
+  async exitSession(sessionId: string, actorId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new ControlPlaneError('Session not found', 'SESSION_NOT_FOUND', 404);
     session.status = 'closed';
-    writeSessionRows([session]).catch((error) => {
-      console.warn('Control plane session could not be written through.', error instanceof Error ? error.message : error);
-    });
+    await writeSessionRows([session]);
     this.auditEvent({
       actorUserId: actorId,
       actorType: 'platform',
@@ -1073,15 +1046,42 @@ export class ControlPlane {
     return this.studioSvc.rollback(scope, version);
   }
 
-  runtimeConfig(companyId: string, role = 'ADMIN'): {
+  prepareStudioRelease(scope: ScopeContext, rollbackVersion?: number, options?: StudioRollbackOptions, approvingReview = false,
+    activation?: { id: string; now: Date }) {
+    const companyId = activation && scope.actorType === 'system' && scope.companyId
+      ? scope.companyId : this.studioSvc.requireLockedCompany(scope);
+    const copy = (versions: Map<string, ConfigurationVersion>) => {
+      const value = versions.get(companyId);
+      return new Map(value ? [[companyId, structuredClone(value)]] : []);
+    };
+    const staged: ControlPlaneStore = { ...this.store, drafts: copy(this.drafts), published: copy(this.published),
+      versions: new Map([[companyId, structuredClone(this.versions.get(companyId) ?? [])]]), audit: [], outbox: [] };
+    const review = staged.drafts.get(companyId)?.releaseReview;
+    if (approvingReview && review && !review.approvedBy) {
+      review.approvedBy = scope.actorId;
+      review.approvedAt = new Date().toISOString();
+    }
+    const studio = new ControlPlaneStudio(staged, {
+      requireCompany: this.requireCompany.bind(this), blankConfig: this.blankConfig.bind(this),
+      assertFeature: this.assertFeature.bind(this), assertBillingWritable: this.assertBillingWritable.bind(this),
+      isFeatureEnabled: this.isFeatureEnabled.bind(this), auditEvent: (input) => appendControlAudit(staged, input),
+    });
+    const published = activation ? studio.activateScheduled(scope, activation)
+      : rollbackVersion === undefined ? studio.publish(scope) : studio.rollback(scope, rollbackVersion, options);
+    return { companyId, published, draft: staged.drafts.get(companyId), history: staged.versions.get(companyId)!,
+      audit: staged.audit, outbox: staged.outbox };
+  }
+
+  runtimeConfig(companyId: string, role = 'ADMIN', configuration?: ConfigurationVersion | null): {
     companyId: string;
     version: number;
     page: PageDefinition;
     modules: Record<string, boolean>;
     killSwitches: Record<string, boolean>;
     mobilePolicy?: MobilePolicy;
+    reports: ReportDefinition[];
   } {
-    return this.studioSvc.runtimeConfig(companyId, role);
+    return this.studioSvc.runtimeConfig(companyId, role, configuration);
   }
 
   moduleRegistry() {
@@ -1096,7 +1096,7 @@ export class ControlPlane {
     return this.studioSvc.upsertWorkflow(scope, workflow);
   }
 
-  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }): { outcome: string; pinnedVersion: number } {
+  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }) {
     return this.studioSvc.simulateWorkflow(companyId, workflowKey, context);
   }
   evaluateRule(companyId: string, context: Record<string, unknown>): string[] {

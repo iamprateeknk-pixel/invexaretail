@@ -8,7 +8,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
+import { createEnhancedUser } from '../enterprise-repository.js';
 import { ControlPlane } from './control-plane.js';
+import { approveAssignedStudioReview, commitStudioRelease, finishStudioSchedule, requestStudioReview, scheduleStudioRelease, studioDraftRevision } from './persistence.js';
+import { activateDueStudioReleases } from './studio-release-worker.js';
+import { readStudioRuntime, readStudioVersions } from './studio-versions.js';
 import {
   controlPlaneDbEnabled,
   hydrateControlPlaneRows,
@@ -21,6 +25,49 @@ import {
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 
+integration('the same operator cannot approve a draft, and review survives a replica restart', async (t) => {
+  const previous = process.env.REQUIRE_STUDIO_RELEASE_REVIEW;
+  process.env.REQUIRE_STUDIO_RELEASE_REVIEW = 'true';
+  t.after(() => {
+    if (previous === undefined) delete process.env.REQUIRE_STUDIO_RELEASE_REVIEW;
+    else process.env.REQUIRE_STUDIO_RELEASE_REVIEW = previous;
+  });
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const makerPlane = new ControlPlane();
+  await hydrateControlPlaneRows(makerPlane);
+  const { company } = makerPlane.createCompany(platformScope(makerPlane), {
+    name: 'Independent Studio Review', planId: 'pro', adminName: 'Review owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const reviewerId = randomUUID();
+  const email = `${reviewerId}@test.invexa.local`;
+  makerPlane.platformUsers.set(reviewerId, { ...makerPlane.platformUsers.get('platform-super-1')!, id: reviewerId, email });
+  await persistControlPlaneRows(makerPlane);
+  const maker = lockedScope(makerPlane, company.id);
+  makerPlane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'First proposed label' }]);
+  let revision = studioDraftRevision(makerPlane.drafts.get(company.id))!;
+  await assert.rejects(commitStudioRelease(makerPlane, maker, { draftRevision: revision }), { code: 'STUDIO_REVIEW_REQUIRED' });
+  const stale = await requestStudioReview(makerPlane, maker, revision);
+  makerPlane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'Final proposed label' }]);
+  await assert.rejects(commitStudioRelease(makerPlane, maker, { draftRevision: revision, reviewId: stale.id }), { code: 'STUDIO_CONFIG_CONFLICT' });
+  revision = studioDraftRevision(makerPlane.drafts.get(company.id))!;
+  const review = await requestStudioReview(makerPlane, maker, revision);
+  assert.notEqual(review.id, stale.id);
+  const command = { draftRevision: revision, reviewId: review.id };
+  await assert.rejects(commitStudioRelease(makerPlane, maker, command), { code: 'STUDIO_REVIEW_NOT_INDEPENDENT' });
+  assert.deepEqual(await requestStudioReview(makerPlane, maker, revision), review);
+
+  const checkerPlane = new ControlPlane();
+  await hydrateControlPlaneRows(checkerPlane);
+  const login = checkerPlane.platformLogin(email, checkerPlane.seedPassword);
+  const checker = checkerPlane.requireControlSession(checkerPlane.selectCompany(login.user.id, company.id).token).scope;
+  const published = await commitStudioRelease(checkerPlane, checker, command);
+  assert.equal(published.releaseReview?.requestedBy, maker.actorId);
+  assert.equal(published.releaseReview?.approvedBy, checker.actorId);
+  assert.equal((await readStudioVersions(makerPlane, company.id)).active?.releaseReview?.id, review.id);
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' } });
+  assert.deepEqual(events.map((event) => event.actorId), [checker.actorId]);
+});
+
 function platformScope(plane: ControlPlane) {
   return plane.createScope({ actorId: 'platform-super-1', sessionType: 'platform' });
 }
@@ -30,6 +77,103 @@ function lockedScope(plane: ControlPlane, companyId = 'default-company') {
   const selected = plane.selectCompany(login.user.id, companyId);
   return plane.requireControlSession(selected.token).scope;
 }
+
+integration('a delegated approval is durable and the approver must still be a company admin at publication', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const maker = new ControlPlane();
+  await hydrateControlPlaneRows(maker);
+  const { company } = maker.createCompany(platformScope(maker), {
+    name: 'Delegated Studio Review', planId: 'pro', adminName: 'Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const reviewerId = randomUUID();
+  const email = `${reviewerId}@test.invexa.local`;
+  await prisma.companyProfile.create({ data: { id: company.id, name: company.name } });
+  await prisma.user.create({ data: { id: reviewerId, companyId: company.id, email, name: 'Reviewer',
+    role: 'ADMIN', passwordHash: 'unused', assignedLocations: '[]' } });
+  createEnhancedUser({ id: reviewerId, companyId: company.id, email, name: 'Reviewer',
+    role: 'ADMIN', status: 'active', passwordHash: 'unused', branchIds: [], locationIds: [] });
+  await persistControlPlaneRows(maker);
+  const scope = lockedScope(maker, company.id);
+  maker.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Delegated decision' }]);
+  const revision = studioDraftRevision(maker.drafts.get(company.id))!;
+  const review = await requestStudioReview(maker, scope, revision, reviewerId);
+  const replica = new ControlPlane();
+  await hydrateControlPlaneRows(replica);
+  await assert.rejects(approveAssignedStudioReview(replica, 'default-company', reviewerId, review.id, revision), { code: 'STUDIO_REVIEW_NOT_FOUND' });
+  await approveAssignedStudioReview(replica, company.id, reviewerId, review.id, revision);
+  await refreshControlPlaneFromDb(maker);
+  await prisma.user.update({ where: { id: reviewerId, companyId: company.id }, data: { role: 'AUDITOR' } });
+  await assert.rejects(commitStudioRelease(maker, scope, { draftRevision: revision, reviewId: review.id }), { code: 'STUDIO_REVIEWER_UNAVAILABLE' });
+  await prisma.user.update({ where: { id: reviewerId, companyId: company.id }, data: { role: 'ADMIN' } });
+  const result = await commitStudioRelease(maker, scope, { draftRevision: revision, reviewId: review.id });
+  assert.equal(result.releaseReview?.approvedBy, reviewerId);
+});
+
+integration('a worker activates only the approved scheduled revision once and leaves changed or cancelled drafts unpublished', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const plane = new ControlPlane();
+  await hydrateControlPlaneRows(plane);
+  const { company } = plane.createCompany(platformScope(plane), {
+    name: 'Scheduled Studio Release', planId: 'pro', adminName: 'Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  const checkerId = randomUUID();
+  const email = `${checkerId}@test.invexa.local`;
+  plane.platformUsers.set(checkerId, { ...plane.platformUsers.get('platform-super-1')!, id: checkerId, email });
+  await persistControlPlaneRows(plane);
+  const maker = lockedScope(plane, company.id);
+  const login = plane.platformLogin(email, plane.seedPassword);
+  const checker = plane.requireControlSession(plane.selectCompany(login.user.id, company.id).token).scope;
+  const original = plane.published.get(company.id)!;
+  const now = new Date();
+  const due = new Date(now.getTime() + 60_000);
+  async function reviewDraft(label: string) {
+    plane.setStockColumnLayout(maker, [{ key: 'item_code', label }]);
+    const draftRevision = studioDraftRevision(plane.drafts.get(company.id))!;
+    const review = await requestStudioReview(plane, maker, draftRevision);
+    return { draftRevision, reviewId: review.id };
+  }
+  const command = await reviewDraft('Scheduled item label');
+  const input = { ...command, activateAt: due };
+  await assert.rejects(scheduleStudioRelease(plane, maker, input, now), { code: 'STUDIO_REVIEW_NOT_INDEPENDENT' });
+  const schedule = await scheduleStudioRelease(plane, checker, input, now);
+  await assert.rejects(commitStudioRelease(plane, checker, command), { code: 'STUDIO_SCHEDULE_EXISTS' });
+  assert.equal(await activateDueStudioReleases(now, new ControlPlane()), 0);
+  assert.equal((await readStudioVersions(plane, company.id)).active?.id, original.id);
+  await prisma.controlPlaneSession.update({ where: { id: checker.companySessionId! }, data: { status: 'closed' } });
+  const results = await Promise.all([activateDueStudioReleases(due, new ControlPlane()), activateDueStudioReleases(due, new ControlPlane())]);
+  assert.equal(results[0] + results[1], 1);
+  const { active } = await readStudioVersions(plane, company.id);
+  assert.equal(active?.version, original.version + 1);
+  assert.equal(active?.page.columns.find((column) => column.key === 'item_code')?.label, 'Scheduled item label');
+  assert.deepEqual(active?.releaseSchedule, { ...schedule, status: 'activated', activatedAt: due.toISOString() });
+  assert.equal(active?.releaseReview?.approvedBy, checkerId);
+
+  await refreshControlPlaneFromDb(plane);
+  const nextChecker = plane.requireControlSession(plane.selectCompany(login.user.id, company.id).token).scope;
+  const nextDue = new Date(due.getTime() + 60_000);
+  const changed = await reviewDraft('Approved before editing');
+  const stale = await scheduleStudioRelease(plane, nextChecker, { ...changed, activateAt: nextDue }, due);
+  plane.setStockColumnLayout(maker, [{ key: 'item_code', label: 'Changed after scheduling' }]);
+  await persistControlPlaneRows(plane);
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  await refreshControlPlaneFromDb(plane);
+  assert.equal(plane.drafts.get(company.id)?.releaseSchedule?.status, 'blocked');
+  assert.equal(await finishStudioSchedule(plane, 'default-company', stale.id), false);
+  assert.equal(await finishStudioSchedule(plane, company.id, stale.id), true);
+  const cancelled = await reviewDraft('Cancelled before activation');
+  const pending = await scheduleStudioRelease(plane, nextChecker, { ...cancelled, activateAt: nextDue }, due);
+  assert.equal(await finishStudioSchedule(plane, company.id, pending.id), true);
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  const revoked = await reviewDraft('Operator disabled before activation');
+  await scheduleStudioRelease(plane, nextChecker, { ...revoked, activateAt: nextDue }, due);
+  await prisma.controlPlanePlatformUser.update({ where: { id: checkerId }, data: { status: 'disabled' } });
+  assert.equal(await activateDueStudioReleases(nextDue, new ControlPlane()), 0);
+  await refreshControlPlaneFromDb(plane);
+  assert.match(plane.drafts.get(company.id)?.releaseSchedule?.failure ?? '', /inactive/);
+  assert.equal((await readStudioVersions(plane, company.id)).active?.id, active?.id);
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' } });
+  assert.deepEqual(events.map((event) => event.requestId), [active?.id]);
+});
 
 integration('kill switch written on one instance is seen by a fresh instance', async () => {
   process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
@@ -136,4 +280,93 @@ integration('a company survives a row round-trip and a remote status change conv
   await persistControlPlaneRows(plane);
   await refreshControlPlaneFromDb(reader);
   assert.equal(reader.companies.get(company.id)?.status, 'suspended');
+});
+
+integration('two replicas cannot both publish different changes from the same Studio version', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const first = new ControlPlane();
+  const { company } = first.createCompany(platformScope(first), {
+    name: 'Concurrent Studio Publishing', planId: 'pro', adminName: 'Studio Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  await persistControlPlaneRows(first);
+  const second = new ControlPlane();
+  await hydrateControlPlaneRows(second);
+  const a = lockedScope(first, company.id);
+  const b = lockedScope(second, company.id);
+  first.setStockColumnLayout(a, [{ key: 'item_code', label: 'First item label' }]);
+  second.setStockColumnLayout(b, [{ key: 'item_code', label: 'Second item label' }]);
+  const left = first.publish(a);
+  const right = second.publish(b);
+  const results = await Promise.allSettled([persistControlPlaneRows(first), persistControlPlaneRows(second)]);
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+  const rejected = results.find((result) => result.status === 'rejected');
+  assert.equal(rejected?.reason.code, 'STUDIO_CONFIG_CONFLICT');
+  const winner = results[0].status === 'fulfilled' ? left : right;
+  const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
+  assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [winner.id]);
+  assert.equal(rows.filter((row) => row.kind === 'history' && row.version === winner.version).length, 1);
+});
+
+integration('a rejected Studio release leaves its draft intact and rollback creates immutable history', async () => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const first = new ControlPlane();
+  const { company } = first.createCompany(platformScope(first), {
+    name: 'Studio Release History', planId: 'pro', adminName: 'Studio Owner', adminEmail: `${randomUUID()}@test.invexa.local`,
+  });
+  await persistControlPlaneRows(first);
+  const second = new ControlPlane();
+  await hydrateControlPlaneRows(second);
+  const a = lockedScope(first, company.id);
+  const b = lockedScope(second, company.id);
+  const original = first.published.get(company.id)!;
+  first.setStockColumnLayout(a, [{ key: 'item_code', label: 'Released label' }]);
+  const report = { key: 'grouped-count-status', name: 'Counts by status', entity: 'counts', columns: ['status'],
+    filters: { counted: 7 }, groupBy: 'status', view: 'bar' as const };
+  first.upsertReport(a, report);
+  const reportsFor = async (role: string) => (await readStudioRuntime(second, company.id, role)).reports;
+  assert.ok(!(await reportsFor('ADMIN')).some(({ key }) => key === report.key));
+  second.setStockColumnLayout(b, [{ key: 'item_code', label: 'Unreleased label' }]);
+  const unreleased = structuredClone(second.drafts.get(company.id));
+  const winner = await commitStudioRelease(first, a, { draftRevision: studioDraftRevision(first.drafts.get(company.id))! });
+  assert.deepEqual((await reportsFor('ADMIN')).find(({ key }) => key === report.key), report);
+  await assert.rejects(commitStudioRelease(second, b, { draftRevision: studioDraftRevision(unreleased)! }), { code: 'STUDIO_CONFIG_CONFLICT' });
+  assert.deepEqual(second.drafts.get(company.id), unreleased);
+  assert.equal(second.published.get(company.id)?.id, original.id);
+  assert.ok(!second.audit.some((entry) => entry.companyId === company.id && entry.action === 'CONFIG_PUBLISHED'));
+  await refreshControlPlaneFromDb(second);
+  assert.equal(second.published.get(company.id)?.id, winner.id);
+  assert.deepEqual(second.drafts.get(company.id), unreleased);
+  await assert.rejects(commitStudioRelease(second, b, { draftRevision: studioDraftRevision(unreleased)! }), { code: 'STUDIO_CONFIG_CONFLICT' });
+
+  const restored = await commitStudioRelease(first, a, { rollbackVersion: original.version });
+  assert.equal(restored.version, winner.version + 1);
+  assert.deepEqual(restored.page, original.page);
+  assert.ok(!(await reportsFor('ADMIN')).some(({ key }) => key === report.key));
+  const rows = await prisma.controlPlaneConfig.findMany({ where: { companyId: company.id } });
+  assert.deepEqual(rows.filter((row) => row.kind === 'published').map((row) => row.versionId), [restored.id]);
+  assert.deepEqual(new Set(rows.filter((row) => row.kind === 'history').map((row) => row.versionId)), new Set([original.id, winner.id, restored.id]));
+
+  const restoredSecond = await commitStudioRelease(first, a, { rollbackVersion: winner.version, targetVersionId: winner.id,
+    expectedActiveVersionId: restored.id, reason: 'Return to the second release' });
+  const history = await readStudioVersions(second, company.id);
+  assert.equal(history.active?.id, restoredSecond.id);
+  assert.deepEqual(history.active?.page, winner.page);
+  assert.deepEqual(history.versions.map((entry) => entry.version), [4, 3, 2, 1]);
+  assert.notEqual(second.runtimeConfig(company.id).version, restoredSecond.version, 'the reader has not refreshed its snapshot');
+  const runtime = await readStudioRuntime(second, company.id, 'STORE_USER');
+  assert.equal(runtime.version, restoredSecond.version);
+  assert.deepEqual(runtime.reports, []);
+  assert.deepEqual((await reportsFor('ADMIN')).find(({ key }) => key === report.key), report);
+  assert.equal(runtime.page.columns.find((column) => column.key === 'item_code')?.label, 'Released label');
+  await assert.rejects(readStudioRuntime(second, randomUUID(), 'STORE_USER'), { code: 'COMPANY_NOT_FOUND' });
+  const foreignRuntime = await readStudioRuntime(second, 'default-company', 'STORE_USER');
+  assert.ok(foreignRuntime.page.columns.every((column) => column.label !== 'Released label'));
+  const events = await prisma.domainEventOutbox.findMany({ where: { companyId: company.id, topic: 'config.changed' }, orderBy: { id: 'asc' } });
+  assert.deepEqual(events.map((event) => event.requestId), [winner.id, restored.id, restoredSecond.id]);
+  assert.ok(events.every((event) => event.actorId === a.actorId));
+  assert.deepEqual(await readStudioVersions(second, randomUUID()), { active: undefined, versions: [] });
+  first.versions.get(company.id)!.find((entry) => entry.id === winner.id)!.page.title = 'Changed after release';
+  await assert.rejects(persistControlPlaneRows(first), { code: 'STUDIO_CONFIG_CONFLICT' });
+  const unchanged = await prisma.controlPlaneConfig.findUniqueOrThrow({ where: { versionId_kind: { versionId: winner.id, kind: 'history' } } });
+  assert.deepEqual(unchanged.payload, winner);
 });

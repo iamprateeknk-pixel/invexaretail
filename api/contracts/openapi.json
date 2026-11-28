@@ -24,6 +24,14 @@
       }
     },
     "parameters": {
+      "StudioReportKey": {
+        "name": "reportKey", "in": "query", "required": true,
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$" }
+      },
+      "StudioReportLocation": {
+        "name": "locationId", "in": "query", "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 191 }
+      },
       "IdempotencyKey": {
         "name": "requestId",
         "in": "query",
@@ -45,6 +53,265 @@
       }
     },
     "schemas": {
+      "StudioOrderReportResult": { "$ref": "#/components/schemas/StudioReportResult" },
+      "StudioReportResult": {
+        "type": "object",
+        "required": ["version", "columns", "groupBy", "chart", "total", "truncated", "rows"],
+        "properties": {
+          "version": { "type": "integer", "description": "Published configuration version used for the report." },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["key", "label"],
+              "properties": { "key": { "type": "string" }, "label": { "type": "string" } }
+            }
+          },
+          "groupBy": { "type": ["string", "null"] },
+          "chart": { "type": "boolean" },
+          "total": { "type": "integer", "minimum": 0, "description": "Number of matching records or groups before the output limit." },
+          "truncated": { "type": "boolean" },
+          "rows": {
+            "type": "array", "maxItems": 500,
+            "items": { "type": "object", "additionalProperties": { "type": ["string", "number"] } }
+          }
+        }
+      },
+      "PublishedStudioReport": {
+        "type": "object",
+        "required": ["key", "name", "entity", "columns"],
+        "properties": {
+          "key": { "type": "string" },
+          "name": { "type": "string" },
+          "entity": { "type": "string" },
+          "columns": { "type": "array", "items": { "type": "string" } },
+          "filters": {
+            "type": "object",
+            "description": "Exact match values for allowlisted columns. Filter values must match their column type.",
+            "additionalProperties": { "type": ["string", "number"] }
+          },
+          "groupBy": { "type": "string", "description": "Supported category to count matching records by." },
+          "view": { "type": "string", "enum": ["table", "bar"] }
+        }
+      },
+      "StudioItemFields": {
+        "type": "object", "required": ["versionId", "configVersion", "fields"],
+        "properties": {
+          "versionId": { "type": ["string", "null"] },
+          "configVersion": { "type": ["integer", "null"] },
+          "fields": { "type": "array", "items": { "type": "object",
+            "required": ["key", "label", "type", "required", "editable", "value"],
+            "properties": {
+              "key": { "type": "string" }, "label": { "type": "string" },
+              "type": { "type": "string", "enum": ["text", "number", "date", "boolean"] },
+              "required": { "type": "boolean" }, "editable": { "type": "boolean" },
+              "value": { "type": ["string", "number", "boolean", "null"] }
+            }
+          } }
+        }
+      },
+      "LotCountReplay": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "count": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StockCount"
+              },
+              {
+                "$ref": "#/components/schemas/BlindCount"
+              }
+            ]
+          }
+        }
+      },
+      "LotCountSubmission": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "count": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StockCount"
+              },
+              {
+                "$ref": "#/components/schemas/BlindCount"
+              }
+            ]
+          }
+        }
+      },
+      "PooledCountReplay": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "lots": {
+            "type": "integer"
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockCount"
+                },
+                {
+                  "$ref": "#/components/schemas/BlindCount"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "PooledCountSubmission": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "lots": {
+            "type": "integer",
+            "description": "Store users only."
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockCount"
+                },
+                {
+                  "$ref": "#/components/schemas/BlindCount"
+                }
+              ]
+            }
+          },
+          "allocation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "lotId": {
+                  "type": "string"
+                },
+                "lotNo": {
+                  "type": "string"
+                },
+                "bookQty": {
+                  "type": "number"
+                },
+                "physicalQuantity": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "totalVariance": {
+            "type": "number"
+          }
+        }
+      },
+      "PickSlipReplay": {
+        "type": "object",
+        "required": [
+          "duplicate",
+          "pickSlip"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "duplicate": {
+            "type": "boolean",
+            "const": true
+          },
+          "pickSlip": {
+            "$ref": "#/components/schemas/PickSlip"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          }
+        }
+      },
+      "PickSlipSubmission": {
+        "type": "object",
+        "required": [
+          "pickSlip",
+          "transfer"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "pickSlip": {
+            "$ref": "#/components/schemas/PickSlip"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          }
+        }
+      },
+      "TransferReceiptResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "transfer",
+          "receipt"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/TransferRecord"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ReceiptSummary"
+          }
+        }
+      },
+      "PutawayConfirmationResponse": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/PutawayTask"
+          },
+          "bin": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "OfflineActionPermit": {
+        "type": ["object", "null"],
+        "required": ["token", "expiresAt"],
+        "properties": {
+          "token": { "type": "string" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
       "ErrorEnvelope": {
         "type": "object",
         "description": "The stable error shape (ADR-006 / lib/errors.ts's DomainError) that new and extracted code returns. Not yet the shape of every endpoint in the full API - see AGENTS.md's Error catalog row.",
@@ -65,9 +332,21 @@
               "INSUFFICIENT_STOCK",
               "INVALID_TRANSITION",
               "CONCURRENT_UPDATE_CONFLICT",
+              "COUNT_STOCK_CHANGED",
+              "OFFLINE_COUNT_POLICY_REJECTED",
+              "OFFLINE_COUNT_POLICY_UNAVAILABLE",
+              "OFFLINE_WAREHOUSE_POLICY_REJECTED",
+              "OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE",
+              "TRANSFER_RECEIVE_CHANGED",
+              "TRANSFER_PICK_CHANGED",
               "DUPLICATE_REQUEST",
               "NOT_FOUND",
-              "VALIDATION_FAILED"
+              "VALIDATION_FAILED",
+              "CONFLICT",
+              "STUDIO_RULE_BLOCKED",
+              "APPROVAL_UNAVAILABLE",
+              "FORBIDDEN",
+              "SELF_REVIEW"
             ]
           },
           "traceId": {
@@ -87,6 +366,18 @@
             "type": "string"
           }
         }
+      },
+      "StockAdjustmentConflict": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ErrorEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "approvalRequestId": { "type": "string", "description": "Present when this adjustment is awaiting review." },
+              "requiredApproverRole": { "type": "string", "description": "The role required to review this adjustment." }
+            }
+          }
+        ]
       },
       "TransferLine": {
         "type": "object",
@@ -1286,7 +1577,8 @@
             "type": "string"
           },
           "ruleId": {
-            "type": "string"
+            "type": "string",
+            "description": "Operational rule ID or an inactive snapshot rule for a Studio request."
           },
           "triggerType": {
             "type": "string"
@@ -1317,6 +1609,27 @@
               "string",
               "null"
             ]
+          },
+          "workflowPolicy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Pinned Studio approval workflow details when the request uses a published policy.",
+            "properties": {
+              "workflowKey": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "requiredApproverRole": {
+                "type": "string"
+              },
+              "configVersion": {
+                "type": "integer"
+              }
+            }
           }
         }
       },
@@ -2597,7 +2910,8 @@
               "QC_FAIL",
               "TRANSFER_DISCREPANCY",
               "COUNT_VARIANCE",
-              "QUARANTINE"
+              "QUARANTINE",
+              "AUTOMATION_TASK"
             ]
           },
           "status": {
@@ -2916,7 +3230,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Stable hash of item, lot and location; not a stored row."
+            "description": "Stable hash of item, lot and location. Studio tasks use this ID for their stored alert."
           },
           "itemId": {
             "type": "string"
@@ -3612,6 +3926,10 @@
           "lines"
         ],
         "properties": {
+          "receiveRevision": {
+            "type": "string",
+            "description": "Opaque revision supplied on receivable transfers in database mode."
+          },
           "id": {
             "type": "string"
           },
@@ -6304,10 +6622,72 @@
         }
       }
     },
+    "/items/studio-create-fields": {
+      "get": {
+        "operationId": "getItemStudioCreateFields",
+        "summary": "Read the published fields the company admin can fill on the item creation form",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Editable fields and defaults for the current role, with the form version.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioItemFields" } } }
+          },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Company scope or route access denied." }
+        }
+      }
+    },
+    "/items/{itemId}/studio-fields": {
+      "get": {
+        "operationId": "getItemStudioFields",
+        "summary": "Read visible published Studio fields and saved values for an item",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "Fields for the current role and published version.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioItemFields" } } }
+          },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Company scope or route access denied." },
+          "404": { "description": "Item not found in the caller's company." }
+        }
+      }
+    },
+    "/items/{itemId}/studio-fields/{fieldKey}": {
+      "put": {
+        "operationId": "putItemStudioField",
+        "summary": "Save a value for an editable published Studio item field",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "fieldKey", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["versionId", "value"], "properties": {
+            "versionId": { "type": "string" }, "value": { "type": ["string", "number", "boolean", "null"] }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Field saved.", "content": { "application/json": { "schema": {
+            "type": "object", "required": ["key", "value", "versionId", "configVersion"], "properties": {
+              "key": { "type": "string" }, "value": { "type": ["string", "number", "boolean", "null"] },
+              "versionId": { "type": "string" }, "configVersion": { "type": "integer" }
+            }
+          } } } },
+          "400": { "description": "Missing version ID or value." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Field editing or route access denied." },
+          "404": { "description": "Item or visible field not found." },
+          "409": { "description": "The published version changed. Reload the field definitions." },
+          "422": { "description": "Value does not satisfy the published field definition." }
+        }
+      }
+    },
     "/items/{itemId}/adjust": {
       "post": {
         "operationId": "adjustItemStock",
-        "summary": "Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice.",
+        "summary": "Guided manual stock adjustment. A published policy can require approval or stop a new adjustment. Use the same idempotency key and payload after approval. An already posted adjustment returns its original result (200, duplicate: true).",
         "tags": [
           "Items"
         ],
@@ -6390,6 +6770,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          "409": {
+            "description": "Awaiting approval or stopped by a published rule. The approval response includes the review request ID.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StockAdjustmentConflict" }
+              }
+            }
+          },
+          "503": {
+            "description": "The API could not verify the approval policy. No stock change was posted.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -6800,6 +7196,107 @@
               }
             }
           }
+        }
+      }
+    },
+    "/reports/studio/stock": {
+      "get": {
+        "operationId": "getStudioInventoryReport",
+        "summary": "Run a published stock report at the selected location",
+        "description": "The lot column identifies the stock lot. Value is on-hand quantity times landed unit cost or purchase rate, rounded to two decimal places. Unpriced lots return a blank value.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement, stock permission or location access denied." },
+          "404": { "description": "Location or published stock report not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
+        }
+      }
+    },
+    "/reports/studio/counts": {
+      "get": {
+        "operationId": "getStudioCountReport",
+        "summary": "Run a published stock-count report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement, count permission or location access denied." },
+          "404": { "description": "Location or published stock-count report not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
+        }
+      }
+    },
+    "/reports/studio/transfers": {
+      "get": {
+        "operationId": "getStudioTransferReport",
+        "summary": "Run a published transfer report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition. Counterparty locations outside the viewer's scope have no name in the result.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement, transfer permission or location access denied." },
+          "404": { "description": "Location or published transfer report not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
+        }
+      }
+    },
+    "/reports/studio/orders": {
+      "get": {
+        "operationId": "getStudioSalesOrderReport",
+        "summary": "Run a published sales order report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioOrderReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement or location access denied." },
+          "404": { "description": "The location or published sales order report was not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
+        }
+      }
+    },
+    "/reports/studio/purchase-orders": {
+      "get": {
+        "operationId": "getStudioPurchaseOrderReport",
+        "summary": "Run a published purchase order report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioOrderReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement, purchase permission or location access denied." },
+          "404": { "description": "The location or published purchase order report was not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
         }
       }
     },
@@ -7881,7 +8378,7 @@
     "/approval-requests/{id}/decide": {
       "post": {
         "operationId": "decideApprovalRequest",
-        "summary": "Approve or reject a pending request.",
+        "summary": "Approve or reject a pending request as an independent reviewer.",
         "tags": [
           "Approvals"
         ],
@@ -7941,11 +8438,38 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid decision or notes."
+          },
           "403": {
-            "description": "The caller's role is below the rule's required approver role."
+            "description": "The caller submitted this request or does not meet the required approver role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Not found (also for another company's id) or already decided."
+            "description": "Request not found, already decided, or changed during review.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The approval decision could not be saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -11204,7 +11728,7 @@
     "/exceptions": {
       "get": {
         "operationId": "getExceptions",
-        "summary": "The caller's company exception cases, highest priority first (max 300), with their item, lot, location, owner and reporter. Closed and rejected cases are hidden unless status asks for them. Managers and auditors see all locations; others only their assigned ones; mine=true limits to cases they own.",
+        "summary": "Company exception cases, highest priority first (max 300). Closed and rejected cases are hidden unless requested. Managers and auditors can see all locations, and mine=true limits results to cases the caller owns. Company admins also see unlocated Studio tasks when a location is selected.",
         "tags": [
           "Exceptions"
         ],
@@ -11249,7 +11773,8 @@
                 "QC_FAIL",
                 "TRANSFER_DISCREPANCY",
                 "COUNT_VARIANCE",
-                "QUARANTINE"
+                "QUARANTINE",
+                "AUTOMATION_TASK"
               ]
             }
           },
@@ -11457,7 +11982,7 @@
     "/expiry-alerts": {
       "get": {
         "operationId": "getExpiryAlerts",
-        "summary": "Lots at a location that hold stock and have an expiry date, soonest first, computed live from the ledger. Requires access to the location.",
+        "summary": "Lots at an accessible location that hold stock and have an expiry date. Filter by source=studio to list open and acknowledged expiry tasks created by Studio.",
         "tags": [
           "Expiry"
         ],
@@ -11469,6 +11994,11 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["studio"] }
           }
         ],
         "responses": {
@@ -12200,7 +12730,7 @@
       },
       "post": {
         "operationId": "postItems",
-        "summary": "Create an item. The code, barcode and aliases must be unique within the caller's company; a conflict names the company's own item, never another company's. Admin and Admin user.",
+        "summary": "Create an item and save its published Studio form values in the same transaction. Codes, barcodes and aliases are company-scoped. Admin and Admin user.",
         "tags": [
           "Items"
         ],
@@ -12215,6 +12745,14 @@
                   "name"
                 ],
                 "properties": {
+                  "studioFields": {
+                    "type": "object",
+                    "required": ["versionId", "values"],
+                    "properties": {
+                      "versionId": { "type": ["string", "null"] },
+                      "values": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean", "null"] } }
+                    }
+                  },
                   "code": {
                     "type": "string"
                   },
@@ -12322,24 +12860,28 @@
             }
           },
           "403": {
-            "description": "Only admins can create items.",
+            "description": "Only admins can create items or submit fields editable by their role.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "oneOf": [{ "$ref": "#/components/schemas/LegacyErrorMessage" }, { "$ref": "#/components/schemas/ErrorEnvelope" }]
                 }
               }
             }
           },
           "409": {
-            "description": "The code, barcode or alias is already used by another of the company's items.",
+            "description": "The code, barcode or alias already exists, or the item form version changed.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "oneOf": [{ "$ref": "#/components/schemas/LegacyErrorMessage" }, { "$ref": "#/components/schemas/ErrorEnvelope" }]
                 }
               }
             }
+          },
+          "422": {
+            "description": "The published form has a missing, invalid or malformed field value.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
           }
         },
         "security": [
@@ -14102,6 +14644,10 @@
                           "recount": {
                             "type": "boolean"
                           },
+                          "stockRevision": {
+                            "type": "string",
+                            "description": "Opaque revision to include when submitting an assigned pooled count."
+                          },
                           "item": {
                             "type": "object",
                             "properties": {
@@ -14144,6 +14690,10 @@
                                 },
                                 "lotNo": {
                                   "type": "string"
+                                },
+                                "stockRevision": {
+                                  "type": "string",
+                                  "description": "Opaque revision to include when submitting this assigned lot count."
                                 },
                                 "expiryDate": {
                                   "type": [
@@ -14249,7 +14799,7 @@
     "/ops/metrics": {
       "get": {
         "operationId": "getOpsMetrics",
-        "summary": "Operational metrics for admins: request RED metrics, live sync clients, stuck transfers, process, database, reconciliation freshness and the outbox SLO.",
+        "summary": "Operational metrics for admins: request metrics, live sync clients, stuck transfers, database, worker progress, reconciliation freshness and the outbox SLO.",
         "tags": [
           "ops"
         ],
@@ -14379,6 +14929,31 @@
                       "type": "object",
                       "additionalProperties": true,
                       "description": "Freshness of the in-memory snapshot; stale = 3 failed refreshes or no success for 3 intervals."
+                    },
+                    "worker": {
+                      "type": ["object", "null"],
+                      "description": "Dedicated worker progress for the API release. Null in memory mode.",
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["ready", "degraded", "stale", "missing", "unidentified", "unavailable"]
+                        },
+                        "heartbeatAt": {
+                          "type": ["string", "null"],
+                          "format": "date-time"
+                        },
+                        "lastSuccess": {
+                          "type": "object",
+                          "required": ["outbox", "imports", "automations", "studioReleases"],
+                          "properties": {
+                            "outbox": { "type": ["string", "null"], "format": "date-time" },
+                            "imports": { "type": ["string", "null"], "format": "date-time" },
+                            "automations": { "type": ["string", "null"], "format": "date-time" },
+                            "studioReleases": { "type": ["string", "null"], "format": "date-time" }
+                          }
+                        }
+                      }
                     },
                     "stockReconciliation": {
                       "oneOf": [
@@ -15679,7 +16254,13 @@
                         },
                         {
                           "type": "object",
+                          "required": ["pickRevision"],
                           "properties": {
+                            "pickRevision": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$",
+                              "description": "Revision of the task, saved slips and source stock. Retain it for offline replay."
+                            },
                             "lines": {
                               "type": "array",
                               "items": {
@@ -15768,6 +16349,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "Limit results to one authorized location.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -15797,6 +16387,12 @@
           },
           "401": {
             "description": "No or invalid credentials."
+          },
+          "403": {
+            "description": "Caller lacks access to the selected location."
+          },
+          "404": {
+            "description": "Selected location was not found in the company."
           }
         },
         "security": [
@@ -17823,6 +18419,526 @@
         ]
       }
     },
+    "/sync/commands": {
+      "post": {
+        "operationId": "postOperationalOfflineCommand",
+        "summary": "Replay a permitted count, pick, receipt or putaway through its operational workflow.",
+        "tags": [
+          "Sync"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "COUNT_SUBMIT"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "The lot revision from mobile work when the operator began the count. Requires requestId."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "mode",
+                              "locationId",
+                              "physicalQuantity"
+                            ],
+                            "properties": {
+                              "locationId": {
+                                "type": "string"
+                              },
+                              "physicalQuantity": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "lotNo": {
+                                "type": "string",
+                                "description": "Defaults to the item's first lot."
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "scan",
+                                  "manual"
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "mode",
+                              "locationId",
+                              "totalQuantity"
+                            ],
+                            "properties": {
+                              "locationId": {
+                                "type": "string"
+                              },
+                              "totalQuantity": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "weight"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "PICK_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Revision from the opened picker task. Native offline saves send it unchanged."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "itemId",
+                                "quantity"
+                              ],
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "number"
+                                },
+                                "inputMethod": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "exceptions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "number"
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "finished": {
+                            "type": "boolean",
+                            "description": "true moves the transfer to READY_FOR_ADMIN."
+                          },
+                          "startedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "RECEIVE_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "The revision of the transfer opened for receiving. Preserve it on queued retries."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "required": [
+                          "lines"
+                        ],
+                        "properties": {
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "itemId",
+                                "lotId",
+                                "receivedQty"
+                              ],
+                              "properties": {
+                                "lineId": {
+                                  "type": "string"
+                                },
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lotId": {
+                                  "type": "string"
+                                },
+                                "receivedQty": {
+                                  "type": "number"
+                                },
+                                "damagedQty": {
+                                  "type": "number"
+                                },
+                                "shortageQty": {
+                                  "type": "number"
+                                },
+                                "excessQty": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 4000
+                          },
+                          "qcInspections": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "itemId": {
+                                  "type": "string"
+                                },
+                                "lineId": {
+                                  "type": "string"
+                                },
+                                "results": {
+                                  "type": "object",
+                                  "additionalProperties": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contractVersion",
+                      "commandId",
+                      "type",
+                      "entityId",
+                      "revision",
+                      "permit",
+                      "payload"
+                    ],
+                    "properties": {
+                      "contractVersion": {
+                        "type": "integer",
+                        "const": 2
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "PUTAWAY_CONFIRM"
+                      },
+                      "entityId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The task's updatedAt value from the last task list, preserved while offline."
+                      },
+                      "permit": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "payload": {
+                        "type": "object",
+                        "required": [
+                          "scannedBinCode"
+                        ],
+                        "properties": {
+                          "scannedBinCode": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The canonical workflow receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LotCountReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PooledCountReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PickSlipReplay"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TransferReceiptResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PutawayConfirmationResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The canonical workflow receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LotCountSubmission"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PooledCountSubmission"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PickSlipSubmission"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "The canonical workflow error or command validation failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LegacyErrorMessage"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/studio-release-review": {
+      "get": {
+        "operationId": "getAssignedStudioReleaseReview",
+        "summary": "Read the Studio draft assigned to the signed-in company administrator.",
+        "tags": ["Workspace"],
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The assigned review, or null when there is no current assignment for the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["review"],
+                  "properties": {
+                    "review": {
+                      "type": ["object", "null"],
+                      "required": ["id", "revision", "version", "approvedAt", "changes"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                        "version": { "type": "integer" },
+                        "approvedAt": { "type": ["string", "null"], "format": "date-time" },
+                        "changes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["area", "before", "after"],
+                            "properties": { "area": { "type": "string" }, "before": {}, "after": {} }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "No active session." },
+          "403": { "description": "A company administrator's interactive session is required." }
+        }
+      },
+      "post": {
+        "operationId": "approveAssignedStudioReleaseReview",
+        "summary": "Approve the exact assigned Studio draft in the company workspace.",
+        "tags": ["Workspace"],
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": {
+              "type": "object",
+              "required": ["reviewId", "revision"],
+              "properties": {
+                "reviewId": { "type": "string", "minLength": 1, "maxLength": 191 },
+                "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval saved. A Studio operator can publish the approved revision.",
+            "content": { "application/json": { "schema": {
+              "type": "object", "required": ["approvedAt"],
+              "properties": { "approvedAt": { "type": "string", "format": "date-time" } }
+            } } }
+          },
+          "400": { "description": "Invalid review ID or revision." },
+          "401": { "description": "No active session." },
+          "403": { "description": "A company administrator's interactive session is required." },
+          "404": { "description": "The review is unavailable for the current administrator." },
+          "409": { "description": "The reviewed draft changed before approval." }
+        }
+      }
+    },
     "/runtime/config": {
       "get": {
         "operationId": "getRuntimeConfig",
@@ -17843,6 +18959,32 @@
                     },
                     "runtime": {
                       "type": "object",
+                      "properties": {
+                        "reports": {
+                          "type": "array",
+                          "description": "Published reports available to the caller's role.",
+                          "items": { "$ref": "#/components/schemas/PublishedStudioReport" }
+                        },
+                        "offlineCommandVersion": { "type": "integer", "const": 2 },
+                        "offlineCountPermit": {
+                          "type": ["object", "null"],
+                          "description": "Account-bound permit for offline counts. Null if the published role policy does not permit them.",
+                          "required": ["token", "expiresAt"],
+                          "properties": {
+                            "token": { "type": "string" },
+                            "expiresAt": { "type": "string", "format": "date-time" }
+                          }
+                        },
+                        "offlineWarehousePermits": {
+                          "type": "object",
+                          "description": "Account-bound permits by workflow. Null means the published role policy does not permit that workflow.",
+                          "properties": {
+                            "picks": { "$ref": "#/components/schemas/OfflineActionPermit" },
+                            "receiving": { "$ref": "#/components/schemas/OfflineActionPermit" },
+                            "putaway": { "$ref": "#/components/schemas/OfflineActionPermit" }
+                          }
+                        }
+                      },
                       "additionalProperties": true
                     }
                   }
@@ -20054,6 +21196,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The alert was resolved or changed concurrently."
           }
         },
         "security": [
@@ -20721,6 +21866,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -21072,7 +22227,7 @@
     "/stock-counts/{countId}/review": {
       "patch": {
         "operationId": "patchStockCountsCountIdReview",
-        "summary": "Approve, reject or request a recount. Approval posts the variance to the ledger exactly once. Optional enforcement requires a recount when variance is out of tolerance and that a recount is done by a different person. Admin, Admin user and Branch manager.",
+        "summary": "Approve, reject or request a recount. Approval requires an independent reviewer and posts the variance exactly once. Published count workflows can require a higher reviewer role based on the variance value. Optional recount enforcement applies independently.",
         "tags": [
           "Stock counts"
         ],
@@ -21148,11 +22303,11 @@
             }
           },
           "403": {
-            "description": "Role or location not allowed.",
+            "description": "Role or location not allowed, self-review, or the published count workflow requires a higher reviewer role.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -21174,6 +22329,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/LegacyErrorMessage"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The published approval policy could not be verified. The count was not approved.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -24964,7 +26127,7 @@
     "/picker/transfers/{transferId}/pick-slips": {
       "post": {
         "operationId": "postPickerTransfersTransferIdPickSlips",
-        "summary": "Save what the picker picked (and any exceptions). Retry-safe by requestId.",
+        "summary": "Save what the picker picked (and any exceptions). A matching retry can recover the saved slip by requestId.",
         "tags": [
           "picker"
         ],
@@ -24973,28 +26136,7 @@
             "description": "This requestId was already saved; the original slip is returned.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "duplicate",
-                    "pickSlip"
-                  ],
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "duplicate": {
-                      "type": "boolean",
-                      "const": true
-                    },
-                    "pickSlip": {
-                      "$ref": "#/components/schemas/PickSlip"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PickSlipReplay"}
               }
             }
           },
@@ -25002,24 +26144,7 @@
             "description": "Pick slip saved.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "pickSlip",
-                    "transfer"
-                  ],
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "pickSlip": {
-                      "$ref": "#/components/schemas/PickSlip"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PickSlipSubmission"}
               }
             }
           },
@@ -25037,12 +26162,28 @@
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location.",
+            "description": "Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "409": {
+            "description": "The request ID was used for a different pick submission, or the pick task or source stock changed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -25072,7 +26213,18 @@
                   "requestId": {
                     "type": "string",
                     "maxLength": 191,
-                    "description": "Retry key: the same id from the same picker returns the saved slip."
+                    "description": "Retry key: send the same id and the original pick submission to recover its saved slip."
+                  },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline pick permit from runtime configuration. Preserve the original permit and revision on retry."
+                  },
+                  "pickRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "Revision from the opened picker task. Native offline saves send it unchanged."
                   },
                   "startedAt": {
                     "type": "string",
@@ -25455,7 +26607,7 @@
     "/putaway-tasks/{id}/confirm": {
       "post": {
         "operationId": "postPutawayTasksIdConfirm",
-        "summary": "Confirm where goods were put away. A Warehouse picker (or requireScan) must scan the bin; a bin other than the suggested one needs an override. Moves the stock from the staging bin into the chosen bin.",
+        "summary": "Confirm the destination bin and move stock from staging in one transaction. Warehouse pickers must scan the bin. A different bin needs a supervisor override. A retry by the same operator for the same bin can return the saved confirmation.",
         "tags": [
           "Putaway"
         ],
@@ -25488,6 +26640,17 @@
                   "requireScan": {
                     "type": "boolean"
                   },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline putaway permit from runtime configuration. Preserve the original permit and revision on retry."
+                  },
+                  "taskRevision": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The task's updatedAt value from the last task list, preserved while offline."
+                  },
                   "allowOverride": {
                     "type": "boolean"
                   }
@@ -25501,25 +26664,7 @@
             "description": "Confirmed.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "task": {
-                      "$ref": "#/components/schemas/PutawayTask"
-                    },
-                    "bin": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string"
-                        },
-                        "code": {
-                          "type": "string"
-                        }
-                      }
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PutawayConfirmationResponse"}
               }
             }
           },
@@ -25534,11 +26679,14 @@
             }
           },
           "403": {
-            "description": "Location access denied.",
+            "description": "Location access denied. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "anyOf": [
+                    { "$ref": "#/components/schemas/ErrorEnvelope" },
+                    { "$ref": "#/components/schemas/LegacyErrorMessage" }
+                  ]
                 }
               }
             }
@@ -25554,12 +26702,20 @@
             }
           },
           "409": {
-            "description": "This putaway task is already resolved.",
+            "description": "The task was resolved by a different action, the task revision changed, or staging stock is insufficient.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LegacyErrorMessage"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -26591,6 +27747,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -26603,7 +27769,7 @@
     "/stock-counts": {
       "post": {
         "operationId": "postStockCounts",
-        "summary": "Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A repeat requestId returns the original (200, duplicate true). Whole units unless the item is weight/decimal.",
+        "summary": "Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A matching requestId replays the committed count (200, duplicate true). Whole units unless the item is weight/decimal.",
         "tags": [
           "Stock counts"
         ],
@@ -26641,6 +27807,17 @@
                       "weight"
                     ]
                   },
+                  "stockRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The lot revision from mobile work when the operator began the count. Requires requestId."
+                  },
+                  "offlineCountPermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Permit from runtime config for a saved offline count. Requires requestId and stockRevision."
+                  },
                   "requestId": {
                     "type": "string"
                   }
@@ -26654,27 +27831,7 @@
             "description": "Duplicate of an earlier submission with the same requestId.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "count": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/StockCount"
-                        },
-                        {
-                          "$ref": "#/components/schemas/BlindCount"
-                        }
-                      ]
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/LotCountReplay"}
               }
             }
           },
@@ -26682,24 +27839,7 @@
             "description": "Recorded.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "count": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/StockCount"
-                        },
-                        {
-                          "$ref": "#/components/schemas/BlindCount"
-                        }
-                      ]
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/LotCountSubmission"}
               }
             }
           },
@@ -26714,22 +27854,30 @@
             }
           },
           "403": {
-            "description": "No access to the location, or the item is not assigned to this user.",
+            "description": "No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "409": {
-            "description": "This lot is already submitted and waiting for review.",
+            "description": "The lot has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -26744,7 +27892,7 @@
     "/stock-counts/weight": {
       "post": {
         "operationId": "postStockCountsWeight",
-        "summary": "Submit one decimal total for a weight-counted item; the server spreads it over the item's lots in FEFO/FIFO order and creates a count per lot, all or nothing. Store users get only the number of lots, never the split.",
+        "summary": "Submit one decimal total for a weight-counted item. The server allocates it over the lots in FEFO/FIFO order and saves the counts together. Store users and Warehouse pickers get the number of lots. A matching requestId replays the committed counts.",
         "tags": [
           "Stock counts"
         ],
@@ -26770,6 +27918,17 @@
                     "type": "number",
                     "minimum": 0
                   },
+                  "stockRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The pooled revision from mobile work when the operator began the count. Requires requestId."
+                  },
+                  "offlineCountPermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Permit from runtime config for a saved offline count. Requires requestId and stockRevision."
+                  },
                   "requestId": {
                     "type": "string"
                   }
@@ -26783,33 +27942,7 @@
             "description": "Duplicate of an earlier submission.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "lots": {
-                      "type": "integer"
-                    },
-                    "counts": {
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "$ref": "#/components/schemas/StockCount"
-                          },
-                          {
-                            "$ref": "#/components/schemas/BlindCount"
-                          }
-                        ]
-                      }
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PooledCountReplay"}
               }
             }
           },
@@ -26817,54 +27950,7 @@
             "description": "Recorded.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "lots": {
-                      "type": "integer",
-                      "description": "Store users only."
-                    },
-                    "counts": {
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "$ref": "#/components/schemas/StockCount"
-                          },
-                          {
-                            "$ref": "#/components/schemas/BlindCount"
-                          }
-                        ]
-                      }
-                    },
-                    "allocation": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "lotId": {
-                            "type": "string"
-                          },
-                          "lotNo": {
-                            "type": "string"
-                          },
-                          "bookQty": {
-                            "type": "number"
-                          },
-                          "physicalQuantity": {
-                            "type": "number"
-                          }
-                        }
-                      }
-                    },
-                    "totalVariance": {
-                      "type": "number"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/PooledCountSubmission"}
               }
             }
           },
@@ -26879,22 +27965,30 @@
             }
           },
           "403": {
-            "description": "No access to the location, or the item is not assigned to this user.",
+            "description": "No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "409": {
-            "description": "Already submitted, or already being saved.",
+            "description": "The item has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -27645,22 +28739,30 @@
             }
           },
           "409": {
-            "description": "Blocked pending approval.",
+            "description": "Blocked pending approval, or pick progress changed before confirmation and must be reviewed again.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "approvalRequestId": {
-                      "type": "string"
-                    },
-                    "requiredApproverRole": {
-                      "type": "string"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/ErrorEnvelope" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "approvalRequestId": { "type": "string" },
+                        "requiredApproverRole": { "type": "string" }
+                      }
                     }
-                  }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Approval could not be verified. Retry when the service is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -27676,7 +28778,7 @@
     "/transfers/{transferId}/receive": {
       "post": {
         "operationId": "postTransfersTransferIdReceive",
-        "summary": "Receive a dispatched transfer at its destination (Admin or destination store user). Retry-safe by requestId.",
+        "summary": "Receive a dispatched transfer at its destination. Matching retries recover the original receipt. An optional receive revision verifies that the expected quantities are current.",
         "tags": [
           "transfers"
         ],
@@ -27685,28 +28787,7 @@
             "description": "OK.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success",
-                    "transfer",
-                    "receipt"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "transfer": {
-                      "$ref": "#/components/schemas/TransferRecord"
-                    },
-                    "receipt": {
-                      "$ref": "#/components/schemas/ReceiptSummary"
-                    }
-                  }
-                }
+                "schema": {"$ref": "#/components/schemas/TransferReceiptResponse"}
               }
             }
           },
@@ -27724,11 +28805,11 @@
             "description": "No or invalid credentials."
           },
           "403": {
-            "description": "Role cannot receive, or not the destination.",
+            "description": "Role cannot receive, or not the destination. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -27744,12 +28825,20 @@
             }
           },
           "409": {
-            "description": "requestId belongs to another transfer, or this receipt is still being processed.",
+            "description": "The receive revision changed, the request ID is unavailable, or the same ID was submitted with changed receipt details.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              }
+            }
+          },
+          "503": {
+            "description": "The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
               }
             }
           }
@@ -27783,7 +28872,18 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 191,
-                    "description": "Retry key; a repeat returns the recorded receipt with duplicate=true."
+                    "description": "Retry key; send the original receipt details to recover the recorded result with duplicate=true."
+                  },
+                  "offlinePermit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Signed offline receiving permit from runtime configuration. Preserve the original permit and revision on retry."
+                  },
+                  "receiveRevision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "The revision of the transfer opened for receiving. Preserve it on queued retries."
                   },
                   "notes": {
                     "type": "string",

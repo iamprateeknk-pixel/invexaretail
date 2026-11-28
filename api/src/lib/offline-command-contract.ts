@@ -4,10 +4,76 @@
 // protocol (what a command is, when it is a duplicate, when it conflicts)
 // without deciding where results are persisted.
 
+import { z } from 'zod';
+import { pickExceptionSchema, pickSlipLineSchema, transferReceiptLineSchema } from './validation-schemas.js';
+
 export const OFFLINE_CONTRACT_VERSION = 1;
+export const OPERATIONAL_OFFLINE_COMMAND_VERSION = 2;
 
 export const OFFLINE_COMMAND_TYPES = ['COUNT_SUBMIT', 'PICK_CONFIRM', 'RECEIVE_CONFIRM', 'PUTAWAY_CONFIRM'] as const;
 export type OfflineCommandType = (typeof OFFLINE_COMMAND_TYPES)[number];
+
+const opaqueRevision = z.string().regex(/^[a-f0-9]{64}$/);
+const resourceId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,190}$/);
+const baseOperationalCommand = z.object({
+  contractVersion: z.literal(OPERATIONAL_OFFLINE_COMMAND_VERSION),
+  commandId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
+  entityId: resourceId,
+  permit: z.string().min(1).max(2_048),
+});
+
+export const operationalOfflineCommandSchema = z.discriminatedUnion('type', [
+  baseOperationalCommand.extend({
+    type: z.literal('COUNT_SUBMIT'),
+    revision: opaqueRevision,
+    payload: z.discriminatedUnion('mode', [
+      z.object({ locationId: resourceId, mode: z.literal('weight'), totalQuantity: z.number().min(0) }),
+      z.object({ locationId: resourceId, mode: z.enum(['scan', 'manual']), lotNo: z.string().optional(), physicalQuantity: z.number().min(0) }),
+    ]),
+  }).strict(),
+  baseOperationalCommand.extend({
+    type: z.literal('PICK_CONFIRM'),
+    revision: opaqueRevision,
+    payload: z.object({
+      lines: z.array(pickSlipLineSchema).optional(), exceptions: z.array(pickExceptionSchema).optional(),
+      finished: z.boolean().optional(), startedAt: z.string().optional(),
+    }),
+  }).strict(),
+  baseOperationalCommand.extend({
+    type: z.literal('RECEIVE_CONFIRM'),
+    revision: opaqueRevision,
+    payload: z.object({
+      lines: z.array(transferReceiptLineSchema).min(1), notes: z.string().optional(),
+      qcInspections: z.array(z.object({
+        itemId: z.string().optional(), lineId: z.string().optional(), results: z.record(z.string(), z.unknown()).nullable().optional(),
+      })).optional(),
+    }),
+  }).strict(),
+  baseOperationalCommand.extend({
+    type: z.literal('PUTAWAY_CONFIRM'),
+    revision: z.iso.datetime(),
+    payload: z.object({ scannedBinCode: z.string().trim().min(1) }),
+  }).strict(),
+]);
+
+export function operationalReplayRequest(command: z.infer<typeof operationalOfflineCommandSchema>) {
+  const { commandId, entityId, revision, permit, payload } = command;
+  // Route and identity-bearing fields are derived here, never read from a client-selected URL.
+  switch (command.type) {
+    case 'COUNT_SUBMIT':
+      return { path: command.payload.mode === 'weight' ? '/stock-counts/weight' : '/stock-counts',
+        body: { ...payload, itemId: entityId, requestId: commandId, stockRevision: revision, offlineCountPermit: permit } };
+    case 'PICK_CONFIRM':
+      return { path: `/picker/transfers/${entityId}/pick-slips`,
+        body: { ...payload, requestId: commandId, pickRevision: revision, offlinePermit: permit } };
+    case 'RECEIVE_CONFIRM':
+      return { path: `/transfers/${entityId}/receive`,
+        body: { ...payload, requestId: commandId, receiveRevision: revision, offlinePermit: permit } };
+    case 'PUTAWAY_CONFIRM':
+      return { path: `/putaway-tasks/${entityId}/confirm`,
+        body: { ...payload, requireScan: true, taskRevision: revision, offlinePermit: permit } };
+  }
+}
 
 export type OfflineCommand = {
   contractVersion: number;

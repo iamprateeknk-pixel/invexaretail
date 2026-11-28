@@ -17,6 +17,7 @@ import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { listReorderRules, upsertReorderRule, validateReorderQuantities } from '../lib/reorder-store.js';
 import { ensureLotRecord, listItems } from '../lib/repository.js';
 import { emitWebhookEvent } from '../lib/webhook-dispatcher.js';
+import { queueStudioBusinessEvent } from '../lib/saas/studio-business-events.js';
 import { allocateLandedCost, type LandedCostMethod } from '../lib/landed-cost.js';
 import { computeVendorScore, computePriceVariance, supplierLeadTimeStats } from '../lib/vendor-score.js';
 import { canOrderFrom, parseSupplierFields, presentSupplier } from '../lib/supplier-master.js';
@@ -38,6 +39,8 @@ import type { TenantContext } from '../lib/tenant-context.js';
 import { applySavedViewFilter, type SavedViewFilterConfig } from '../lib/saved-view-filter.js';
 import { transitionPurchaseOrderStatus } from '../lib/domain-policies.js';
 import { sendError } from '../lib/errors.js';
+import { accessContext } from './core-shared.js';
+import { canAccessLocation } from '../lib/inventory.js';
 import { parseBody } from '../lib/validate.js';
 import {
   tagCreateSchema,
@@ -485,11 +488,20 @@ router.get('/suppliers/:id/score', async (req, res) => {
 // Bounded (audit O-8): newest first, at most `limit` (default 200, max 500) with a cursor for the next page,
 // instead of loading every purchase order the company has ever raised on each request.
 router.get('/purchase-orders', async (req, res) => {
+  const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+  const locationId = typeof req.query.locationId === 'string' && req.query.locationId ? req.query.locationId : undefined;
+  if (locationId) {
+    const location = await prisma.location.findFirst({ where: { id: locationId, companyId }, select: { id: true } });
+    if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
+    // Ownership was resolved from Postgres above. Apply role/location restrictions to that result.
+    const { role, assignedLocationIds } = accessContext(req.user!);
+    if (!canAccessLocation({ role, assignedLocationIds }, locationId)) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
+  }
   const requested = Number(req.query.limit);
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 200;
   const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
   const rows = decimalsToNumbers(await prisma.purchaseOrder.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID },
+    where: { companyId, ...(locationId ? { locationId } : {}) },
     include: { supplier: true, lines: { include: { item: true } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
@@ -548,14 +560,15 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
   const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim() : '';
   if (!requestId || requestId.length > 191) return sendError(res, 400, 'VALIDATION_FAILED', 'A valid requestId is required for retry-safe receiving.');
 
-  const priorReceipt = await prisma.purchaseReceipt.findUnique({ where: { requestId } }).catch(() => null);
+  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
+  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
+
+  const priorReceipt = await prisma.purchaseReceipt.findUnique({ where: { requestId } });
   if (priorReceipt) {
-    if (priorReceipt.purchaseOrderId !== req.params.id) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
+    if (priorReceipt.purchaseOrderId !== order.id) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
     return res.json({ ...(priorReceipt.result as Record<string, unknown>), duplicate: true });
   }
 
-  const order = decimalsToNumbers(await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID }, include: { lines: true } }));
-  if (!order) return sendError(res, 404, 'NOT_FOUND', 'Purchase order not found.');
   if (!isReceivablePo(order.status)) return sendError(res, 409, 'INVALID_TRANSITION', `A purchase order in ${order.status} cannot be received. It must be approved and still open.`);
 
   // Shape validation for the receipt lines runs here, after the
@@ -656,16 +669,19 @@ router.post('/purchase-orders/:id/receive', async (req, res) => {
         data: { status },
         include: { supplier: true, lines: { include: { item: true } } },
       }));
-      await tx.purchaseReceipt.create({
+      const savedReceipt = await tx.purchaseReceipt.create({
         data: { requestId, purchaseOrderId: order.id, receivedById: req.user!.id, result: JSON.parse(JSON.stringify({ purchaseOrder, stockPosted: postedStock })) },
+        select: { id: true },
       });
+      await queueStudioBusinessEvent(tx, { event: 'purchase-order.received', companyId: order.companyId, entityId: savedReceipt.id });
       return { purchaseOrder, postedStock };
     });
   } catch (error) {
     // Two identical requests at once: the loser hits the unique requestId and gets the winner's result.
     if ((error as { code?: string })?.code === 'P2002') {
       const winner = await prisma.purchaseReceipt.findUnique({ where: { requestId } });
-      if (winner) return res.json({ ...(winner.result as Record<string, unknown>), duplicate: true });
+      if (winner?.purchaseOrderId === order.id) return res.json({ ...(winner.result as Record<string, unknown>), duplicate: true });
+      if (winner) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different purchase order.');
     }
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to receive this purchase order.');
   }
@@ -752,10 +768,11 @@ router.patch('/purchase-orders/:id/status', async (req, res) => {
 
   // Blueprint §27: approval is a policy gate (value / branch thresholds), not just a status flip.
   if (to === 'APPROVED') {
-    const location = await prisma.location.findUnique({ where: { id: order.locationId }, select: { branchId: true } }).catch(() => null);
+    const lineRevisions = order.lines.map((line) => `${line.id}:${line.updatedAt.toISOString()}`).sort();
     const gate = await checkApprovalGate({
       triggerType: 'PO_APPROVE', entityType: 'PurchaseOrder', entityId: order.id,
-      branchId: location?.branchId ?? null, value: order.totalAmount, requestedById: req.user!.id,
+      locationId: order.locationId, value: order.totalAmount, requestedById: req.user!.id,
+      intent: [order.supplierId, order.updatedAt.toISOString(), lineRevisions],
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
     });
     if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });

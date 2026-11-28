@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
-import { ControlPlaneError, type ControlTokenPayload } from './control-plane.js';
+import { ControlPlaneError } from './control-plane-values.js';
+import type { ControlTokenPayload } from './control-plane.js';
 
 export function jwtSecret(): string {
   const configured = process.env.JWT_SECRET?.trim();

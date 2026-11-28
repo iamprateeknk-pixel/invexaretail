@@ -124,7 +124,7 @@ test('a weight count is allocated over lots by the server and stays blind for a 
     createCountAssignment({ id: `asg-${unique()}`, locationId: 'loc-1', itemId: item.id, assignedToId: 'user-store-1', assignedById: 'user-admin-1', countDate: '2026-09-19' });
     const key = `w-${tag}`;
     const submitted = await call('POST', '/stock-counts/weight', store, { itemId: item.id, locationId: 'loc-1', totalQuantity: 5, requestId: key });
-    assert.equal(submitted.status, 201);
+    assert.equal(submitted.status, 201, JSON.stringify(submitted.body));
     assert.deepEqual(submitted.body, { success: true, lots: 3 }, 'no book quantity, variance or split reaches a store user');
 
     // The split is what an admin sees: 2 + 2 + 1, variance -1.
@@ -147,7 +147,7 @@ test('a manager sees the allocation and total variance of a weight count', async
     const admin = tokenFor('admin@retail.local');
     const { item } = weightItem(unique());
     const result = await call('POST', '/stock-counts/weight', admin, { itemId: item.id, locationId: 'loc-1', totalQuantity: 5.5 });
-    assert.equal(result.status, 201);
+    assert.equal(result.status, 201, JSON.stringify(result.body));
     assert.deepEqual(result.body.allocation.map((row: { physicalQuantity: number }) => row.physicalQuantity), [2, 2, 1.5]);
     assert.equal(result.body.totalVariance, -0.5);
     assert.equal(result.body.counts[0].variance, 0);
@@ -236,5 +236,23 @@ test('warehouse pickers are also assigned counts, and their own work feed offers
     const submitted = await call('POST', '/stock-counts', picker, { itemId: item.id, locationId: 'wh-1', physicalQuantity: 4, mode: 'manual' });
     assert.equal(submitted.status, 201, JSON.stringify(submitted.body));
     assert.equal(submitted.body.count.bookQty, undefined, 'a picker\'s count is blind, same as a store user\'s');
+  });
+});
+
+test('pooled warehouse counts require an assignment and stay blind on submission and replay', async () => {
+  await withServer(async (call) => {
+    const picker = tokenFor('picker@retail.local');
+    const { item, lots } = weightItem(unique());
+    for (const lot of lots) adjustStockLedger(item.id, lot.id, 'wh-1', 2);
+    const body = { itemId: item.id, locationId: 'wh-1', totalQuantity: 5, requestId: `picker-${unique()}` };
+    assert.equal((await call('POST', '/stock-counts/weight', picker, body)).status, 403);
+    createCountAssignment({ id: `asg-${unique()}`, locationId: 'wh-1', itemId: item.id,
+      assignedToId: 'user-picker-1', assignedById: 'user-admin-1', countDate: '2026-09-19' });
+    const submitted = await call('POST', '/stock-counts/weight', picker, body);
+    assert.equal(submitted.status, 201);
+    assert.deepEqual(submitted.body, { success: true, lots: 3 });
+    const replay = await call('POST', '/stock-counts/weight', picker, body);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replay.body, { success: true, duplicate: true, lots: 3 });
   });
 });

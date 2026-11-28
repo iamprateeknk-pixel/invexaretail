@@ -95,3 +95,59 @@ test('HTTP: handoff refuses unauthenticated callers, a platform-only token, and 
     assert.equal(garbage.status, 401);
   });
 });
+
+test('HTTP: staging rejects production browser handoffs before consuming their code', async (t) => {
+  const env = {
+    INVEXA_ENV: 'staging',
+    PUBLIC_API_URL: 'https://api.staging.example.test',
+    PUBLIC_WEB_URL: 'https://app.staging.example.test',
+    PUBLIC_CONTROL_URL: 'https://control.staging.example.test',
+    ALLOWED_ORIGINS: 'https://app.staging.example.test,https://control.staging.example.test',
+  };
+  for (const [key, value] of Object.entries(env)) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+  await withServer(async (url) => {
+    const { controlToken, session } = await lockedSession(url);
+    const issue = (origin: string) => json(url, '/control/v1/sessions/handoff', {
+      method: 'POST', headers: { Origin: origin, Authorization: `Bearer ${controlToken}` }, body: JSON.stringify({ session }),
+    });
+    assert.equal((await issue('https://admin.invexaretail.com')).status, 403);
+    assert.equal((await issue(env.PUBLIC_WEB_URL)).status, 403);
+    const issued = await issue(env.PUBLIC_CONTROL_URL);
+    assert.equal(issued.status, 201);
+    const exchange = (origin: string) => json(url, '/control/v1/sessions/handoff/exchange', {
+      method: 'POST', headers: { Origin: origin }, body: JSON.stringify({ code: issued.body.code }),
+    });
+    const refused = await exchange('https://invexaretail.com');
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.code, 'CSRF_ORIGIN_MISMATCH');
+    assert.equal((await exchange(env.PUBLIC_CONTROL_URL)).status, 403);
+    const accepted = await exchange(env.PUBLIC_WEB_URL);
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.session.controlToken, controlToken);
+    assert.equal((await exchange(env.PUBLIC_WEB_URL)).status, 401);
+  });
+});
+
+test('HTTP: an issued handoff cannot restore a company session that was closed', async () => {
+  await withServer(async (url) => {
+    const { controlToken, session } = await lockedSession(url);
+    const headers = { Authorization: `Bearer ${controlToken}` };
+    const issued = await json(url, '/control/v1/sessions/handoff', {
+      method: 'POST', headers, body: JSON.stringify({ session }),
+    });
+    assert.equal(issued.status, 201);
+    assert.equal((await json(url, '/control/v1/sessions/exit', { method: 'POST', headers })).status, 200);
+    const exchange = await json(url, '/control/v1/sessions/handoff/exchange', {
+      method: 'POST', body: JSON.stringify({ code: issued.body.code }),
+    });
+    assert.equal(exchange.status, 401);
+    assert.equal(exchange.body.session, undefined);
+  });
+});

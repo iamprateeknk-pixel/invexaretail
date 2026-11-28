@@ -10,6 +10,16 @@ at the same files.
 
 ## Delivered this week
 
+### Stock table and draft preview
+
+Item stock and Studio's Publish tab share the stock table, formula rendering and stock action controls. Studio displays example rows for the selected role, device and location. The preview request resolves the draft under the locked company's session, returns that company's locations, and leaves the published configuration in place. Mobile-width preview removes columns disabled for mobile. The stock table suppresses restricted columns and formulas using restricted values. Preview actions are disabled. The live item table opens details by mouse or keyboard.
+
+**Publish reviewed draft** submits the revision returned with the preview. A stale revision leaves the published configuration in place. PostgreSQL serializes configuration writes per company and checks the saved draft and version history before persisting a release. Publication and rollback each write the new active version and audit in the same transaction. Rollback adds a new version and preserves the previous versions. Studio refreshes its view after a conflicting publish. An operator with a draft based on an older release must reapply its changes to the current version.
+
+**Version history** lists the locked company's published versions with their author, date and active status. An operator can compare an earlier compatible version with the active one, review which configuration areas will change, and enter an audit reason before restoring. Studio asks for a fresh comparison if the active version changes before confirmation. A restore creates a new active version and keeps the draft and prior versions available.
+
+Studio publication and rollback append a company-scoped configuration event in the same PostgreSQL transaction as the release. Operational clients fetch the saved active configuration on invalidation. Web and native clients also refresh configuration when a stream reconnect requires a full read refresh.
+
 ### Feedback states (`web/src/components/ui/feedback-states.jsx`)
 
 | Component | Variants | Used by | Accessibility evidence |
@@ -92,3 +102,17 @@ interactive visual browsing a real component catalog tool would.
   real, separate work, not something to assert without having measured it.
   Flagged for the accessibility-baseline gate the guide names before page
   rebuild begins.
+
+### Studio release approval
+
+Set `REQUIRE_STUDIO_RELEASE_REVIEW=true` on all API replicas when an independent reviewer is available. The draft preview offers **Request approval** for the exact previewed revision. Another Studio operator can use **Approve and publish**, or the requester can assign an active company administrator. An assigned administrator opens **Studio release review** in the workspace, compares the proposed and published configuration, and approves the exact revision. A Studio operator then refreshes the approval and publishes. The delegated workspace role grants no Studio session or publication access.
+
+The requester and recorded editors cannot approve. For a draft without editor records, the recorded draft creator cannot approve it. Matching email addresses are excluded when assigning company reviewers. Editing the draft invalidates the request, and publication rechecks the assigned administrator's current role. The published version and audit record retain the requester and approver.
+
+The approval mode covers publication of Studio drafts. Emergency restoration still uses the existing version comparison and reason. Keep an API build that enforces review available for rollback once the flag is on. Finish any jointly edited draft from before editor tracking before enabling the flag. Single-operator environments can keep the flag off until independent review is available.
+
+### Scheduled Studio activation
+
+Studio operators can request approval for scheduling even when immediate publishing does not require a review. The Publish tab accepts a local date and time and sends it as a UTC instant for the approved draft revision. Operators can refresh the release status or cancel a pending or blocked schedule. Editing the draft after scheduling invalidates its approval. The worker records the failed check and keeps the live version available.
+
+The database-backed worker checks for due releases every 30 seconds. It rechecks the company, the scheduling operator and any assigned company reviewer before activation. Successful activation writes the version, audit entry and configuration-change event in one transaction. The audit records the scheduling operator and the worker activation time. Start the schedule-aware API and worker together in staging and verify a scheduled release before enabling operator access in production. Keep a schedule-aware rollback build available while there are pending releases.

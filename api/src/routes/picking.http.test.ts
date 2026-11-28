@@ -8,7 +8,7 @@ import { adjustStockLedger, createItemRecord, createTransferRecord, ensureLotRec
 import { extractToken } from './enterprise-auth.js';
 import coreRouter from './core.js';
 import transfersRouter from './transfers.js';
-import { enforceOperationalCompanyScope } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, enforceOperationalCompanyScope, registerItemCompany } from '../lib/saas/tenant-scope.js';
 
 type Api = (method: string, path: string, token: string, body?: unknown) => Promise<{ status: number; body: any }>;
 
@@ -54,6 +54,7 @@ const unique = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 function looseItem() {
   const tag = unique();
   const item = createItemRecord({ code: `LK-${tag}`, name: `Loose ${tag}`, unit: 'KG', pickMethod: 'ITEM_QTY_FIFO', allocationStrategy: 'FEFO', decimalQuantity: true });
+  registerItemCompany(item.id, DEFAULT_COMPANY_ID);
   const lots = [
     ensureLotRecord(item.id, `E1-${tag}`, '2027-06-01'),
     ensureLotRecord(item.id, `E0-${tag}`, '2027-01-01'),
@@ -90,7 +91,11 @@ test('a KG pick is allocated by the server FEFO, previewed first, and never spli
     assert.equal(slip.body.transfer.status, 'PARTIAL');
 
     // A retry of the same slip returns it instead of picking twice.
-    const retry = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ itemId: item.id, quantity: 4, inputMethod: 'MANUAL' }] });
+    const retry = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ inputMethod: 'MANUAL', quantity: 4, itemId: item.id }] });
+    const changed = await call('POST', `/picker/transfers/${transferId}/pick-slips`, picker, { requestId, lines: [{ itemId: item.id, quantity: 3, inputMethod: 'MANUAL' }] });
+    assert.equal(changed.status, 409);
+    assert.equal(changed.body.code, 'DUPLICATE_REQUEST');
+    assert.equal('requestFingerprint' in retry.body.pickSlip, false);
     assert.equal(retry.status, 200);
     assert.equal(retry.body.duplicate, true);
     assert.equal(retry.body.pickSlip.id, slip.body.pickSlip.id);
@@ -108,6 +113,37 @@ test('a KG pick is allocated by the server FEFO, previewed first, and never spli
   });
 });
 
+test('a cached pick cannot save against changed source stock or prior pick slips', async () => {
+  await withServer(async (call) => {
+    const picker = tokenFor('picker@retail.local');
+    const { item, lots, transferId } = looseItem();
+    const task = `/picker/transfers/${transferId}`;
+    const revision = async () => {
+      const response = await call('GET', task, picker);
+      assert.equal(response.status, 200);
+      assert.match(response.body.transfer.pickRevision, /^[a-f0-9]{64}$/);
+      return response.body.transfer.pickRevision;
+    };
+    const original = await revision();
+    adjustStockLedger(item.id, lots.soon.id, 'wh-1', -1);
+    const current = await revision();
+    assert.notEqual(current, original);
+    const body = { requestId: `slip-${unique()}`, lines: [{ itemId: item.id, quantity: 1, inputMethod: 'MANUAL' }] };
+    const staleStock = await call('POST', `${task}/pick-slips`, picker, { ...body, pickRevision: original });
+    assert.equal(staleStock.status, 409);
+    assert.equal(staleStock.body.code, 'TRANSFER_PICK_CHANGED');
+    const accepted = await call('POST', `${task}/pick-slips`, picker, { ...body, pickRevision: current });
+    assert.equal(accepted.status, 201);
+    const retry = await call('POST', `${task}/pick-slips`, picker, { ...body, pickRevision: current });
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.pickSlip.id, accepted.body.pickSlip.id);
+    const staleProgress = await call('POST', `${task}/pick-slips`, picker, { ...body, requestId: `slip-${unique()}`, pickRevision: current });
+    assert.equal(staleProgress.status, 409);
+    assert.equal(staleProgress.body.code, 'TRANSFER_PICK_CHANGED');
+    assert.equal((await call('GET', task, picker)).body.pickSlips.length, 1);
+  });
+});
+
 test('blocked, expired and empty lots are never picked, and a shelf that cannot cover the request says so', async () => {
   await withServer(async (call) => {
     const picker = tokenFor('picker@retail.local');
@@ -117,6 +153,7 @@ test('blocked, expired and empty lots are never picked, and a shelf that cannot 
     assert.deepEqual(blocked.body.allocations.map((row: { lotId: string }) => row.lotId), [lots.late.id, lots.none.id], 'the blocked lot is skipped');
 
     const empty = createItemRecord({ code: `EM-${unique()}`, name: 'Empty', unit: 'KG', pickMethod: 'ITEM_QTY_FIFO', allocationStrategy: 'FEFO', decimalQuantity: true });
+    registerItemCompany(empty.id, DEFAULT_COMPANY_ID);
     const emptyLot = ensureLotRecord(empty.id, `EL-${unique()}`, null);
     adjustStockLedger(empty.id, emptyLot.id, 'wh-1', 1);
     createTransferRecord({ id: `pk-${unique()}`, sourceLocationId: 'wh-1', destinationLocationId: 'loc-1', requestedBy: 'user-admin-1', role: 'ADMIN', status: 'REQUESTED', lines: [{ itemId: empty.id, lotId: emptyLot.id, quantity: 5 }], createdAt: new Date().toISOString() });
@@ -135,7 +172,9 @@ test('a piece pick still needs the right scan and refuses a blocked lot', async 
   await withServer(async (call) => {
     const picker = tokenFor('picker@retail.local');
     const tag = unique();
-    const item = createItemRecord({ code: `PC-${tag}`, name: 'Pieces', unit: 'PCS' });
+    const barcode = `890${tag}`;
+    const item = createItemRecord({ code: `PC-${tag}`, name: 'Pieces', unit: 'PCS', barcode });
+    registerItemCompany(item.id, DEFAULT_COMPANY_ID);
     const lot = item.lots[0];
     adjustStockLedger(item.id, lot.id, 'wh-1', 10);
     const id = `pk-${tag}`;
@@ -149,7 +188,7 @@ test('a piece pick still needs the right scan and refuses a blocked lot', async 
     assert.equal(blocked.status, 400);
     assert.match(blocked.body.error, /blocked, expired or has no stock/);
     updateLotStatus(lot.id, 'AVAILABLE');
-    assert.equal((await call('POST', `/picker/transfers/${id}/pick-slips`, picker, line(item.code))).status, 201);
+    assert.equal((await call('POST', `/picker/transfers/${id}/pick-slips`, picker, line(barcode))).status, 201);
     // Two lines for the same lot in one slip cannot together exceed what is asked for.
     const twice = await call('POST', `/picker/transfers/${id}/pick-slips`, picker, { lines: [line(item.code).lines[0], line(item.code).lines[0]] });
     assert.equal(twice.status, 400);

@@ -20,8 +20,8 @@ class DriftStore implements LocalStore {
     return DriftStore.native(file == null ? NativeDatabase.memory() : NativeDatabase.file(file));
   }
 
-  static Future<DriftStore> open() async {
-    return DriftStore.native(await NativeDatabase.openApp());
+  static Future<DriftStore> open({String? scope}) async {
+    return DriftStore.native(await NativeDatabase.openApp(scope: scope));
   }
 
   final NativeDatabase _db;
@@ -142,4 +142,10 @@ class DriftStore implements LocalStore {
 
   @override
   Future<void> clearReadModel(String scope) async => _db.clearReadModel(scope);
+
+  @override
+  Future<String?> loadMobilePolicy(String scope) async => _db.loadMobilePolicy(scope);
+
+  @override
+  Future<void> saveMobilePolicy(String scope, String? policy) async => _db.saveMobilePolicy(scope, policy);
 }

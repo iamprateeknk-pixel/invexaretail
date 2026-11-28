@@ -1,19 +1,16 @@
 import 'env.dart';
 
-/// The Control Plane (platform administration: companies, plans, users).
-const controlPanelOrigin = 'https://admin.invexaretail.com/';
+Set<String> workspaceWebOrigins(Uri workspace, InvexaEnvironment environment) => {
+  workspace.origin,
+  if (environment == InvexaEnvironment.production && workspace.origin == Uri.parse(workspaceOrigin).origin) ...{
+    'https://www.invexaretail.com', 'https://api.invexaretail.com',
+  },
+};
 
-/// Hosts the embedded workspace may navigate to; anything else opens in the default browser.
-const workspaceHosts = <String>{'invexaretail.com', 'www.invexaretail.com', 'api.invexaretail.com'};
-
-/// The Control Plane signs in on admin.invexaretail.com and then hands the locked company off to the
-/// web app (invexaretail.com/#/control?code=...), so it needs both.
-const controlPanelHosts = <String>{...workspaceHosts, 'admin.invexaretail.com'};
-
-/// Only https pages on one of [hosts] may load inside the app.
-bool isTrustedWebUri(Uri? uri, Set<String> hosts) {
-  if (uri == null || uri.scheme != 'https') return false;
-  return hosts.contains(uri.host.toLowerCase());
+/// Only validated origins for the active environment may load inside the app.
+bool isTrustedWebUri(Uri? uri, Set<String> origins) {
+  if (uri == null || !uri.hasAuthority || uri.userInfo.isNotEmpty || (uri.scheme != 'https' && uri.scheme != 'http')) return false;
+  return origins.contains(uri.origin);
 }
 
 /// Who sees the Control Panel entry. Same rule as the web app's `adminOnly` sections
@@ -26,11 +23,11 @@ bool canOpenControlPanel(String role) => role == 'ADMIN';
 /// Fails closed: returns null when no code could be obtained. Opening the plain workspace instead
 /// would let the embedded browser fall back to whatever session it last held - on a shared counter
 /// PC that is someone else's account and someone else's rights.
-Future<Uri?> signedInWorkspaceUri(Future<String> Function() fetchHandoffCode) async {
+Future<Uri?> signedInWorkspaceUri(Uri workspace, Future<String> Function() fetchHandoffCode) async {
   try {
     final code = await fetchHandoffCode();
     if (code.trim().isEmpty) return null;
-    return Uri.parse(workspaceOrigin).replace(fragment: '/handoff?code=${Uri.encodeQueryComponent(code)}');
+    return workspace.replace(fragment: '/handoff?code=${Uri.encodeQueryComponent(code)}');
   } catch (_) {
     return null;
   }

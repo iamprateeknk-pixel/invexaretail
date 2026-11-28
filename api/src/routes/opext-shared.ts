@@ -2,7 +2,6 @@
 // tenant context, location access and role gates used by nearly
 // every cluster. Extracted verbatim from operations-extension.ts.
 import { type Request, type Response } from 'express';
-import { createHash } from 'node:crypto';
 import { sendError } from '../lib/errors.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, ownerOfLocation, companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { type TenantContext } from '../lib/tenant-context.js';
@@ -49,10 +48,6 @@ export function requirePlatformOperator(req: Request, res: Response): boolean {
     return false;
   }
   return true;
-}
-
-export function expiryAlertId(itemId: string, lotId: string, locationId: string): string {
-  return `expiry-${createHash('sha1').update(`${itemId}|${lotId}|${locationId}`).digest('hex').slice(0, 24)}`;
 }
 
 export function requirePacker(req: Request, res: Response): boolean {

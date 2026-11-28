@@ -14,7 +14,7 @@ import {
   visibleNavigationGroups,
 } from '../lib/workspace';
 import { isCountManager } from '../lib/count-review';
-import { stockActionIsAvailable } from '../lib/stock-metadata';
+import { canViewSystemStockForRole, stockActionIsAvailable } from '../lib/stock-metadata';
 import { useMemo } from 'react';
 import {
   PackagePlus,
@@ -79,7 +79,7 @@ export function useWorkspaceDerived({
     [locationId, transfers],
   );
 
-  const canViewSystemStock = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
+  const canViewSystemStock = canViewSystemStockForRole(role);
   const canManageCounts = isCountManager(role);
 
   const searchTerm = globalSearch.trim().toLowerCase();

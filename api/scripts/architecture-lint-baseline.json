@@ -1,8 +1,38 @@
 [
   {
+    "rule": "direct-stock-write",
+    "file": "src/lib/repositories/stock-parity-harness.ts",
+    "line": 74,
+    "snippet": "prisma.stockLedger.create({ data: { companyId, itemId, lotId, locationId, ...buckets } });"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/repositories/transfer-repository.ts",
+    "line": 71,
+    "snippet": "const rows = await prisma.transfer.findMany({"
+  },
+  {
+    "rule": "unscoped-tenant-query",
+    "file": "src/lib/repositories/transfer-repository.ts",
+    "line": 99,
+    "snippet": "const owned = await prisma.transfer.findMany({"
+  },
+  {
     "rule": "runtime-ddl",
     "file": "src/lib/schema-version.ts",
     "line": 2,
     "snippet": "// Runtime DDL (CREATE/ALTER TABLE at boot) was retired in Week 2 - this is"
+  },
+  {
+    "rule": "float-money",
+    "file": "prisma/schema.prisma",
+    "line": 2274,
+    "snippet": "value     Float"
+  },
+  {
+    "rule": "float-money",
+    "file": "prisma/schema.prisma",
+    "line": 2410,
+    "snippet": "value     Float"
   }
 ]

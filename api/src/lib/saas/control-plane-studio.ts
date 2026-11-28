@@ -1,9 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { FormulaError, validateFormula } from '../formula.js';
 import { ACTION_REGISTRY, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
-import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane.js';
+import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane-values.js';
 import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, PageDefinition, ConfigurationVersion, WorkflowDefinition, RuleDefinition, ReportDefinition, AutomationDefinition, DraftEntryKind, MobilePolicy, TableKey, AuditEvent, ConfigStatus } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
+import { workflowApprovalPolicy } from './workflow-approval-policy.js';
+import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
+import { validateLiveAutomation } from './studio-automation-config.js';
+import { canViewStudioReports, studioReportDefinition } from './studio-report-config.js';
+
+function validateLiveApproval(workflow: WorkflowDefinition): void {
+  try {
+    workflowApprovalPolicy(workflow);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live approval workflow.', 'INVALID_WORKFLOW', 400);
+  }
+}
 
 /** Cross-calls the studio area needs from the facade (they stay on ControlPlane). */
 export interface ControlPlaneStudioHost {
@@ -15,27 +27,52 @@ export interface ControlPlaneStudioHost {
   isFeatureEnabled(companyId: string, featureKey: string): boolean;
 }
 
-const COMPARATOR_SUFFIXES = ['Gte', 'Lte', 'Gt', 'Lt'] as const;
-
-function ruleConditionMatches(condition: Record<string, unknown>, context: Record<string, unknown>): boolean {
-  return Object.entries(condition).every(([key, expected]) => {
-    const comparator = COMPARATOR_SUFFIXES.find((suffix) => key.endsWith(suffix));
-    if (!comparator) return context[key] === expected;
-    const field = key.slice(0, -comparator.length);
-    const actual = Number(context[field]);
-    const threshold = Number(expected);
-    if (Number.isNaN(actual) || Number.isNaN(threshold)) return false;
-    if (comparator === 'Gt') return actual > threshold;
-    if (comparator === 'Gte') return actual >= threshold;
-    if (comparator === 'Lt') return actual < threshold;
-    return actual <= threshold;
-  });
+function validateRuleForPublish(rule: RuleDefinition): void {
+  try {
+    validateLiveStudioRule(rule);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live rule.', 'INVALID_RULE', 400);
+  }
 }
+
+function validateAutomationForPublish(automation: AutomationDefinition): void {
+  try {
+    validateLiveAutomation(automation);
+  } catch (error) {
+    throw new ControlPlaneError(error instanceof Error ? error.message : 'Invalid live automation.', 'INVALID_AUTOMATION', 400);
+  }
+}
+
+function validateReport(report: ReportDefinition): void {
+  if (!report || typeof report.key !== 'string' || !/^[a-zA-Z0-9_.-]{1,100}$/.test(report.key)
+    || typeof report.name !== 'string' || !report.name.trim() || report.name.length > 160 || !studioReportDefinition(report)) {
+    throw new ControlPlaneError('Choose a supported report dataset, columns, typed filters and grouping.', 'INVALID_REPORT', 400);
+  }
+}
+
+export function validateStudioRelease(version: ConfigurationVersion): void {
+  for (const workflow of version.workflows ?? []) validateLiveApproval(workflow);
+  for (const rule of version.rules ?? []) validateRuleForPublish(rule);
+  for (const automation of version.automations ?? []) validateAutomationForPublish(automation);
+  for (const report of version.reports ?? []) validateReport(report);
+}
+
+export type StudioRollbackOptions = { targetVersionId?: string; reason?: string };
 
 function ruleOutcomeAction(outcome: Record<string, unknown>): string {
   if (typeof outcome.action === 'string') return outcome.action;
   const [first] = Object.values(outcome);
   return String(first ?? '');
+}
+
+function resolveStockPage(source: PageDefinition, role: string, mobile = false): PageDefinition {
+  const page = clonePage(source);
+  const visible = (column: ColumnDefinition) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role))
+    && (!mobile || column.mobileEnabled);
+  page.columns = page.columns.filter(visible);
+  for (const [key, columns] of Object.entries(page.tables ?? {})) page.tables![key] = columns.filter(visible);
+  page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
+  return page;
 }
 
 /** Draft configuration studio: columns, fields, formulas, layouts, publish/rollback (area S5 of the ControlPlane facade). */
@@ -50,7 +87,7 @@ export class ControlPlaneStudio {
     const existing = this.store.drafts.get(companyId);
     if (existing) return existing;
     const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, scope.actorId, 1, 'published');
-    const draft = {
+    const draft: ConfigurationVersion = {
       ...JSON.parse(JSON.stringify(published)) as ConfigurationVersion,
       id: randomUUID(),
       version: published.version + 1,
@@ -60,7 +97,15 @@ export class ControlPlaneStudio {
       publishedAt: null,
       createdAt: nowIso(),
     };
+    delete draft.editorIds;
+    delete draft.releaseReview;
+    delete draft.releaseSchedule;
     this.store.drafts.set(companyId, draft);
+    return draft;
+  }
+
+  private recordDraftEdit(draft: ConfigurationVersion, scope: ScopeContext): ConfigurationVersion {
+    draft.editorIds = [...new Set([...(draft.editorIds ?? []), scope.actorId])].sort();
     return draft;
   }
 
@@ -126,7 +171,7 @@ export class ControlPlaneStudio {
     const afterIndex = draft.page.columns.findIndex((entry) => entry.key === 'available');
     if (afterIndex >= 0) draft.page.columns.splice(afterIndex + 1, 0, column);
     else draft.page.columns.push(column);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   // Generic Field Builder (blueprint §16 "Field builder"): works across any
@@ -177,7 +222,7 @@ export class ControlPlaneStudio {
     };
     if (existing >= 0) draft.fields[existing] = { ...field, id: draft.fields[existing].id };
     else draft.fields.push(field);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   tableColumnsOf(draft: ConfigurationVersion, table: TableKey): ColumnDefinition[] {
@@ -240,7 +285,7 @@ export class ControlPlaneStudio {
       ordered.push(column);
     }
     this.setTableColumnsOf(draft, table, [...ordered, ...current.filter((column) => !seen.has(column.key))]);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /**
@@ -269,7 +314,7 @@ export class ControlPlaneStudio {
       if (!target) throw new ControlPlaneError('Unknown column', 'COLUMN_NOT_FOUND', 404);
       target.formula = formula;
       target.label = label;
-      return draft;
+      return this.recordDraftEdit(draft, scope);
     }
     if (requestedKey && !/^calc_[a-z0-9_]{1,30}$/.test(requestedKey)) {
       throw new ControlPlaneError('Only calculated columns can hold a formula', 'INVALID_COLUMN_KEY', 400);
@@ -280,7 +325,7 @@ export class ControlPlaneStudio {
       existing.label = label;
       existing.formula = formula;
       existing.type = type;
-      return draft;
+      return this.recordDraftEdit(draft, scope);
     }
     if (columns.filter((column) => column.source === 'formula').length >= 12) {
       throw new ControlPlaneError('A maximum of 12 calculated columns is allowed', 'TOO_MANY_FORMULAS', 400);
@@ -291,7 +336,7 @@ export class ControlPlaneStudio {
     columns.push({
       key, label, type, source: 'formula', formula, visible: true, exportEnabled: true, mobileEnabled: true,
     });
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /** Adds a table column that shows one of the company's item custom fields (by name). */
@@ -314,7 +359,7 @@ export class ControlPlaneStudio {
     let key = `field_${slug}`;
     for (let n = 2; columns.some((column) => column.key === key); n += 1) key = `field_${slug}_${n}`;
     columns.push({ key, label, type: 'text', source: 'itemField', itemField: fieldName, visible: true, exportEnabled: true, mobileEnabled: true });
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /** Removes a calculated / item-field column, or restores the standard formula of a built-in one. */
@@ -330,7 +375,7 @@ export class ControlPlaneStudio {
       delete column.formula;
       if (column.key === 'available') column.label = 'Available';
     } else throw new ControlPlaneError('This column has no formula', 'NO_FORMULA', 400);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   setActionEnabled(scope: ScopeContext, actionKey: string, enabled: boolean): ConfigurationVersion {
@@ -338,7 +383,7 @@ export class ControlPlaneStudio {
     const action = draft.page.actions.find((entry) => entry.key === actionKey);
     if (!action) throw new ControlPlaneError('Unknown action', 'ACTION_NOT_FOUND', 404);
     action.enabled = enabled;
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   moveTab(scope: ScopeContext, tabKey: string, order: number): ConfigurationVersion {
@@ -347,7 +392,7 @@ export class ControlPlaneStudio {
     if (!tab) throw new ControlPlaneError('Unknown tab', 'TAB_NOT_FOUND', 404);
     tab.order = order;
     draft.page.tabs.sort((left, right) => left.order - right.order);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   preview(scope: ScopeContext, input: { role: string; device: 'desktop' | 'tablet' | 'mobile' }): {
@@ -356,14 +401,11 @@ export class ControlPlaneStudio {
     page: PageDefinition;
     version: number;
   } {
-    const draft = this.ensureDraft(scope);
-    const page = clonePage(draft.page);
-    page.columns = page.columns.filter((column) => !column.visibleRoles || column.visibleRoles.includes(input.role));
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(input.role)));
-    if (input.device === 'mobile') {
-      page.columns = page.columns.filter((column) => column.mobileEnabled);
-    }
-    return { role: input.role, device: input.device, page, version: draft.version };
+    const companyId = this.requireLockedCompany(scope);
+    const draft = this.store.drafts.get(companyId);
+    const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, scope.actorId, 1, 'published');
+    const page = resolveStockPage((draft ?? published).page, input.role, input.device === 'mobile');
+    return { role: input.role, device: input.device, page, version: draft?.version ?? published.version + 1 };
   }
 
   diff(companyId: string): Array<{ op: '+' | '-' | '~'; path: string; from?: unknown; to?: unknown }> {
@@ -381,13 +423,47 @@ export class ControlPlaneStudio {
         changes.push({ op: action.enabled ? '+' : '-', path: `actions.${action.key}`, from: previous.enabled, to: action.enabled });
       }
     }
+    for (const kind of ['workflows', 'rules', 'automations'] as const) {
+      const previousEntries = new Map((published[kind] ?? []).map((entry) => [entry.key, entry] as const));
+      for (const entry of draft[kind] ?? []) {
+        const previous = previousEntries.get(entry.key);
+        if (JSON.stringify(previous) !== JSON.stringify(entry)) {
+          changes.push({ op: previous ? '~' : '+', path: `${kind}.${entry.key}`, from: previous, to: entry });
+        }
+        previousEntries.delete(entry.key);
+      }
+      for (const [key, entry] of previousEntries) changes.push({ op: '-', path: `${kind}.${key}`, from: entry });
+    }
     return changes;
   }
 
   publish(scope: ScopeContext): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
     this.host.assertBillingWritable(companyId);
-    const draft = this.ensureDraft(scope);
+    return this.publishDraft(scope, this.ensureDraft(scope));
+  }
+
+  activateScheduled(scope: ScopeContext, activation: { id: string; now: Date }): ConfigurationVersion {
+    const draft = scope.companyId ? this.store.drafts.get(scope.companyId) : undefined;
+    const schedule = draft?.releaseSchedule;
+    if (scope.actorType !== 'system' || !draft || !schedule || schedule.id !== activation.id
+      || schedule.requestedBy !== scope.actorId || schedule.status !== 'scheduled' || new Date(schedule.activateAt) > activation.now) {
+      throw new ControlPlaneError('The scheduled release changed or is not due.', 'STUDIO_SCHEDULE_CHANGED', 409);
+    }
+    this.host.assertBillingWritable(draft.companyId);
+    schedule.status = 'activated';
+    schedule.activatedAt = activation.now.toISOString();
+    return this.publishDraft(scope, draft);
+  }
+
+  private publishDraft(scope: ScopeContext, draft: ConfigurationVersion): ConfigurationVersion {
+    const { companyId } = draft;
+    const currentVersion = this.store.published.get(companyId)?.version ?? 1;
+    if (draft.parentVersion !== currentVersion || draft.version !== currentVersion + 1) {
+      throw new ControlPlaneError('This draft was based on an older published version. Review and reapply its changes to the current version.', 'STUDIO_CONFIG_CONFLICT', 409);
+    }
+    validateStudioRelease(draft);
+    const diff = this.diff(companyId);
     draft.status = 'published';
     draft.publishedAt = nowIso();
     this.store.published.set(companyId, JSON.parse(JSON.stringify(draft)) as ConfigurationVersion);
@@ -398,7 +474,7 @@ export class ControlPlaneStudio {
     this.store.outbox.push({ id: randomUUID(), event: 'config.published', payload: { companyId, version: draft.version }, createdAt: nowIso() });
     this.host.auditEvent({
       actorUserId: scope.actorId,
-      actorType: 'platform',
+      actorType: scope.actorType,
       tenantId: scope.tenantId,
       companyId,
       sessionId: scope.companySessionId,
@@ -406,16 +482,22 @@ export class ControlPlaneStudio {
       entityType: 'configuration',
       entityId: String(draft.version),
       before: { parent: draft.parentVersion },
-      after: { version: draft.version, diff: this.diff(companyId) },
+      after: { version: draft.version, diff, ...(draft.releaseReview && { review: draft.releaseReview }),
+        ...(draft.releaseSchedule && { schedule: draft.releaseSchedule }) },
     });
     return draft;
   }
 
-  rollback(scope: ScopeContext, version: number): ConfigurationVersion {
+  rollback(scope: ScopeContext, version: number, options: StudioRollbackOptions = {}): ConfigurationVersion {
     const companyId = this.requireLockedCompany(scope);
+    if (options.targetVersionId && options.targetVersionId === this.store.published.get(companyId)?.id) {
+      throw new ControlPlaneError('This version is already active.', 'INVALID_ROLLBACK', 400);
+    }
     const history = this.store.versions.get(companyId) ?? [];
-    const target = history.find((entry) => entry.version === version && entry.status === 'published');
+    const target = history.find((entry) => entry.version === version && entry.status === 'published'
+      && (!options.targetVersionId || options.targetVersionId === entry.id));
     if (!target) throw new ControlPlaneError('Version not found', 'VERSION_NOT_FOUND', 404);
+    validateStudioRelease(target);
     const restored = {
       ...JSON.parse(JSON.stringify(target)) as ConfigurationVersion,
       id: randomUUID(),
@@ -426,7 +508,15 @@ export class ControlPlaneStudio {
       createdAt: nowIso(),
       status: 'published' as const,
     };
+    delete restored.editorIds;
+    delete restored.releaseReview;
+    delete restored.releaseSchedule;
     this.store.published.set(companyId, restored);
+    const draft = this.store.drafts.get(companyId);
+    if (draft) {
+      draft.version = restored.version + 1;
+      draft.parentVersion = restored.version;
+    }
     history.push(restored);
     this.host.auditEvent({
       actorUserId: scope.actorId,
@@ -437,27 +527,25 @@ export class ControlPlaneStudio {
       action: 'CONFIG_ROLLBACK',
       entityType: 'configuration',
       entityId: String(restored.version),
-      before: { restoredFrom: version },
-      after: { version: restored.version },
+      before: { restoredFrom: version, restoredFromId: target.id },
+      after: { version: restored.version, versionId: restored.id },
+      reason: options.reason,
     });
     return restored;
   }
 
-  runtimeConfig(companyId: string, role = 'ADMIN'): {
+  runtimeConfig(companyId: string, role = 'ADMIN', configuration?: ConfigurationVersion | null): {
     companyId: string;
     version: number;
     page: PageDefinition;
     modules: Record<string, boolean>;
     killSwitches: Record<string, boolean>;
     mobilePolicy?: MobilePolicy;
+    reports: ReportDefinition[];
   } {
-    const published = this.store.published.get(companyId) ?? this.host.blankConfig(companyId, 'system', 1, 'published');
-    const page = clonePage(published.page);
-    page.columns = page.columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    for (const [key, columns] of Object.entries(page.tables ?? {})) {
-      page.tables![key] = columns.filter((column) => column.visible && (!column.visibleRoles || column.visibleRoles.includes(role)));
-    }
-    page.actions = page.actions.filter((action) => action.enabled && (!action.visibleRoles || action.visibleRoles.includes(role)));
+    const published = (configuration === undefined ? this.store.published.get(companyId) : configuration)
+      ?? this.host.blankConfig(companyId, 'system', 1, 'published');
+    const page = resolveStockPage(published.page, role);
     return {
       companyId,
       version: published.version,
@@ -466,7 +554,10 @@ export class ControlPlaneStudio {
         Object.keys(MODULE_REGISTRY).map((key) => [key, this.host.isFeatureEnabled(companyId, key)]),
       ),
       killSwitches: Object.fromEntries(this.store.safety.entries()),
-      mobilePolicy: published.mobilePolicies.find((policy) => policy.role === role),
+      mobilePolicy: published.mobilePolicies?.find((policy) => policy.role === role),
+      reports: canViewStudioReports(role)
+        ? structuredClone(published.reports ?? [])
+        : [],
     };
   }
 
@@ -488,25 +579,29 @@ export class ControlPlaneStudio {
     this.store.entitlements.set(companyId, entitlements);
     const draft = this.ensureDraft(scope);
     draft.modules[moduleKey] = enabled;
+    this.recordDraftEdit(draft, scope);
   }
 
   upsertWorkflow(scope: ScopeContext, workflow: WorkflowDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateLiveApproval(workflow);
     const index = draft.workflows.findIndex((entry) => entry.key === workflow.key);
     if (index >= 0) draft.workflows[index] = workflow;
     else draft.workflows.push(workflow);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
-  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }): { outcome: string; pinnedVersion: number } {
+  simulateWorkflow(companyId: string, workflowKey: string, context: { value: number }) {
     const published = this.store.published.get(companyId);
     const workflow = published?.workflows.find((entry) => entry.key === workflowKey);
     if (!workflow) throw new ControlPlaneError('Workflow not found', 'WORKFLOW_NOT_FOUND', 404);
     const thresholdNode = workflow.graph.nodes.find((node) => node.type === 'condition');
     const amount = Number(thresholdNode?.config.amount ?? 100000);
+    const reviewer = workflow.graph.nodes.find((node) => node.type === 'approval')?.config.role;
     return {
       outcome: context.value <= amount ? 'auto_approve' : 'manager_approval',
       pinnedVersion: workflow.version,
+      reviewerRole: typeof reviewer === 'string' ? reviewer : 'BRANCH_MANAGER',
     };
   }
 
@@ -531,26 +626,29 @@ export class ControlPlaneStudio {
 
   upsertRule(scope: ScopeContext, rule: RuleDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateRuleForPublish(rule);
     const index = draft.rules.findIndex((entry) => entry.key === rule.key);
     if (index >= 0) draft.rules[index] = rule;
     else draft.rules.push(rule);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertReport(scope: ScopeContext, report: ReportDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateReport(report);
     const index = draft.reports.findIndex((entry) => entry.key === report.key);
     if (index >= 0) draft.reports[index] = report;
     else draft.reports.push(report);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertAutomation(scope: ScopeContext, automation: AutomationDefinition): ConfigurationVersion {
     const draft = this.ensureDraft(scope);
+    validateAutomationForPublish(automation);
     const index = draft.automations.findIndex((entry) => entry.key === automation.key);
     if (index >= 0) draft.automations[index] = automation;
     else draft.automations.push(automation);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   upsertMobilePolicy(scope: ScopeContext, policy: MobilePolicy): ConfigurationVersion {
@@ -559,7 +657,7 @@ export class ControlPlaneStudio {
     const normalized: MobilePolicy = { ...policy, encryptedLocalStore: true };
     if (index >= 0) draft.mobilePolicies[index] = normalized;
     else draft.mobilePolicies.push(normalized);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
   /**
@@ -581,7 +679,7 @@ export class ControlPlaneStudio {
       (draft as unknown as Record<string, Array<{ key: string }>>)[kind] = (draft[kind] as Array<{ key: string }>).filter((entry) => entry.key !== key);
     }
     if (draft[kind].length === before) throw new ControlPlaneError('That entry was not found in the draft', 'DRAFT_ENTRY_NOT_FOUND', 404);
-    return draft;
+    return this.recordDraftEdit(draft, scope);
   }
 
 }

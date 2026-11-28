@@ -5,6 +5,9 @@ import type { Request } from 'express';
 import { controlPlane } from '../lib/saas/control-plane.js';
 import { LOCAL_STRIPE_SECRET, resetLocalStripeSessions, resetStripeTransport, setStripeTransport, signStripePayload } from '../lib/saas/billing-provider.js';
 import { controlRouter, studioRouter, syncRouter } from './control-plane.js';
+import coreRouter from './core.js';
+import { createEnhancedUser } from '../lib/enterprise-repository.js';
+import { generateJWT } from '../lib/otp-auth.js';
 
 async function withServer(run: (url: string) => Promise<void>): Promise<void> {
   controlPlane.reset();
@@ -17,6 +20,7 @@ async function withServer(run: (url: string) => Promise<void>): Promise<void> {
   app.use('/control/v1', controlRouter);
   app.use('/studio/v1', studioRouter);
   app.use('/sync/v1', syncRouter);
+  app.use('/api/v1', coreRouter);
   const server = app.listen(0);
   const address = server.address();
   if (!address || typeof address === 'string') {
@@ -41,6 +45,212 @@ async function json(url: string, path: string, options: RequestInit = {}) {
   const body = await response.json().catch(() => ({}));
   return { status: response.status, body };
 }
+
+test('HTTP: sync endpoints require a locked company session', async () => {
+  await withServer(async (url) => {
+    const requests: Array<[string, string, RequestInit?]> = [
+      ['GET', '/sync/v1/mutations'],
+      ['GET', '/sync/v1/status'],
+      ['POST', '/sync/v1/mutations', { body: JSON.stringify({ mutationId: 'anonymous-mut', actionType: 'TASK_COMPLETE' }) }],
+      ['POST', '/sync/v1/devices/register', { body: JSON.stringify({ companyId: 'default-company', userId: 'attacker' }) }],
+      ['POST', '/sync/v1/devices/device-1/revoke'],
+    ];
+    for (const [method, path, options] of requests) {
+      const result = await json(url, path, { ...options, method });
+      assert.equal(result.status, 401, `${method} ${path} must require authentication`);
+      assert.equal(result.body.code, 'UNAUTHENTICATED');
+    }
+  });
+});
+
+test('HTTP: draft stock preview resolves the requested role, device and company location without publishing', async () => {
+  await withServer(async (url) => {
+    const post = (path: string, payload: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(payload), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const locked = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const token = locked.body.token;
+    const scope = controlPlane.requireControlSession(token).scope;
+    const draft = controlPlane.ensureDraft(scope);
+    draft.page.columns.find((column) => column.key === 'company')!.visible = false;
+    draft.page.columns.find((column) => column.key === 'category')!.mobileEnabled = false;
+    controlPlane.setActionEnabled(scope, 'export', false);
+    const input = { role: 'STORE_USER', device: 'mobile', locationId: 'loc-2' };
+    const preview = (payload: unknown, auth = token) => post('/studio/v1/preview', payload, auth);
+    assert.equal((await preview(input, login.body.token)).status, 401);
+    assert.equal((await preview({ ...input, role: 'PLATFORM_SUPER_ADMIN' })).status, 400);
+    const response = await preview(input);
+    assert.equal(response.status, 200);
+    const result = response.body.preview;
+    assert.equal(result.location.id, 'loc-2');
+    assert.ok(result.locations.every((location: { id: string }) => location.id !== 'loc-jaipur-1'));
+    assert.equal(result.role, 'STORE_USER');
+    assert.equal(result.device, 'mobile');
+    assert.equal(result.version, draft.version);
+    assert.ok(result.page.columns.every((column: { key: string }) => !['company', 'category'].includes(column.key)));
+    assert.ok(!result.page.actions.some((action: { key: string }) => action.key === 'export'));
+    assert.ok(controlPlane.runtimeConfig('default-company').page.columns.some((column) => column.key === 'company'));
+    const foreign = await preview({ ...input, locationId: 'loc-jaipur-1' });
+    const unknown = await preview({ ...input, locationId: 'missing-branch' });
+    assert.deepEqual(foreign, unknown);
+    assert.equal(foreign.status, 404);
+
+    controlPlane.setActionEnabled(scope, 'scan', false);
+    const stale = await post('/studio/v1/publish', { draftRevision: result.draftRevision }, token);
+    assert.equal(stale.status, 409);
+    assert.equal(controlPlane.runtimeConfig('default-company').version, draft.version - 1);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_PUBLISHED').length, 0);
+    const refreshed = await preview(input);
+    const revision = refreshed.body.preview.draftRevision;
+    assert.notEqual(revision, result.draftRevision);
+    const release = await post('/studio/v1/publish', { draftRevision: revision }, token);
+    assert.equal(release.status, 200);
+    assert.equal(release.body.published.version, draft.version);
+    assert.equal((await post('/studio/v1/publish', { draftRevision: revision }, token)).status, 409);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_PUBLISHED').length, 1);
+  });
+});
+
+test('HTTP: Studio restores the selected saved version while retaining active and historical versions', async () => {
+  await withServer(async (url) => {
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const locked = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const token = locked.body.token;
+    const headers = { Authorization: `Bearer ${token}` };
+    const scope = controlPlane.requireControlSession(token).scope;
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Second release item' }]);
+    const second = controlPlane.publish(scope);
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Third release item' }]);
+    const third = controlPlane.publish(scope);
+    controlPlane.setStockColumnLayout(scope, [{ key: 'item_code', label: 'Unsaved draft item' }]);
+    const foreign = controlPlane.published.get('company-jaipur')!;
+    const history = () => json(url, '/studio/v1/versions', { headers });
+    assert.equal((await json(url, '/studio/v1/versions')).status, 401);
+    const listed = await history();
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.active.id, third.id);
+    const choices = listed.body.versions as Array<{ id: string; version: number }>;
+    assert.deepEqual(choices.map((entry) => entry.version), [3, 2, 1]);
+    assert.ok(choices.every((entry) => entry.id !== foreign.id));
+    assert.equal((await post('/studio/v1/rollback', { version: 3, targetVersionId: third.id, expectedActiveVersionId: third.id, reason: 'Duplicate' }, token)).status, 400);
+    const result = await json(url, `/studio/v1/versions/${second.id}/compare`, { headers });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.changes, ['Stock layout']);
+    const cross = await json(url, `/studio/v1/versions/${foreign.id}/compare`, { headers });
+    const missing = await json(url, '/studio/v1/versions/missing/compare', { headers });
+    assert.deepEqual(cross, missing);
+    assert.equal(cross.status, 404);
+    const reviewed = { version: second.version, targetVersionId: second.id, expectedActiveVersionId: third.id, reason: 'Restore the validated item label' };
+    assert.equal((await post('/studio/v1/rollback', { ...reviewed, expectedActiveVersionId: second.id }, token)).status, 409);
+    assert.equal((await post('/studio/v1/rollback', { ...reviewed, version: foreign.version, targetVersionId: foreign.id }, token)).status, 404);
+    const restored = await post('/studio/v1/rollback', reviewed, token);
+    assert.equal(restored.status, 200);
+    assert.equal(restored.body.published.version, 4);
+    assert.deepEqual(restored.body.published.page, second.page);
+    assert.equal(controlPlane.drafts.get('default-company')?.page.columns.find((entry) => entry.key === 'item_code')?.label, 'Unsaved draft item');
+    assert.deepEqual((await history()).body.versions.map((entry: { version: number }) => entry.version), [4, 3, 2, 1]);
+    assert.equal(controlPlane.audit.filter((entry) => entry.action === 'CONFIG_ROLLBACK').at(-1)?.reason, reviewed.reason);
+  });
+});
+
+test('HTTP: a requested Studio release requires an independent locked operator', async () => {
+  await withServer(async (url) => {
+    const checker = { ...controlPlane.platformUsers.get('platform-super-1')!, id: 'platform-checker', email: 'checker@invexa.local' };
+    controlPlane.platformUsers.set(checker.id, checker);
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const lock = async (email: string, companyId: string) => {
+      const login = await post('/control/v1/auth/login', { email, password: controlPlane.seedPassword });
+      assert.equal(login.status, 200);
+      const locked = await post('/control/v1/sessions/select-company', { companyId }, login.body.token);
+      assert.equal(locked.status, 200);
+      return locked.body.token;
+    };
+    const checkerToken = await lock(checker.email, 'default-company');
+    const opened = await json(url, '/studio/v1/draft', { headers: { Authorization: `Bearer ${checkerToken}` } });
+    assert.equal(opened.status, 200);
+    const makerToken = await lock('superadmin@invexa.local', 'default-company');
+    const edited = await post('/studio/v1/draft/stock/columns', { name: 'Review check', key: 'review_check', type: 'number' }, makerToken);
+    assert.equal(edited.status, 200);
+    const preview = await post('/studio/v1/preview', {}, makerToken);
+    assert.equal(preview.status, 200);
+    const draftRevision = preview.body.preview.draftRevision;
+    assert.equal((await post('/studio/v1/release-review', { draftRevision })).status, 401);
+    const initiated = await post('/studio/v1/release-review', { draftRevision }, makerToken);
+    assert.equal(initiated.status, 200);
+    const command = { draftRevision, reviewId: initiated.body.review.id };
+    const schedulePath = '/studio/v1/release-schedule';
+    const schedule = { ...command, activateAt: new Date(Date.now() + 60_000).toISOString() };
+    assert.equal((await post(schedulePath, schedule)).status, 401);
+    const badDate = await post(schedulePath, { ...schedule, activateAt: '2030-10-10T12:00' }, checkerToken);
+    assert.equal(badDate.body.code, 'INVALID_RELEASE_SCHEDULE');
+    const noWorker = await post(schedulePath, schedule, checkerToken);
+    assert.equal(noWorker.status, 503);
+    assert.equal(noWorker.body.code, 'STUDIO_SCHEDULE_UNAVAILABLE');
+    const absentSchedule = await json(url, `${schedulePath}/missing`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${checkerToken}` },
+    });
+    assert.equal(absentSchedule.status, 404);
+    const denied = await post('/studio/v1/publish', command, makerToken);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, 'STUDIO_REVIEW_NOT_INDEPENDENT');
+    const approved = await post('/studio/v1/publish', command, checkerToken);
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.published.releaseReview.approvedBy, checker.id);
+  });
+});
+
+test('HTTP: the named company admin can approve a draft without a platform session', async () => {
+  await withServer(async (url) => {
+    const makeAdmin = (id: string, companyId: string, email = `${id}@example.test`) => {
+      createEnhancedUser({ id, email, companyId, name: id, role: 'ADMIN', status: 'active',
+        passwordHash: 'unused', branchIds: [], locationIds: [] });
+      return generateJWT(id, companyId);
+    };
+    const reviewerId = 'assigned-studio-reviewer';
+    const reviewer = makeAdmin(reviewerId, 'default-company');
+    const unrelated = makeAdmin('unassigned-studio-reviewer', 'default-company');
+    const foreign = makeAdmin('foreign-studio-reviewer', 'company-jaipur');
+    makeAdmin('same-email-as-maker', 'default-company', 'superadmin@invexa.local');
+    const post = (path: string, body: unknown, token?: string) => json(url, path, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const login = await post('/control/v1/auth/login', { email: 'superadmin@invexa.local', password: controlPlane.seedPassword });
+    const { body: locked } = await post('/control/v1/sessions/select-company', { companyId: 'default-company' }, login.body.token);
+    const maker = locked.token;
+    await post('/studio/v1/draft/stock/columns', { name: 'Scoped review', key: 'scoped_review', type: 'number' }, maker);
+    const { body: { preview } } = await post('/studio/v1/preview', {}, maker);
+    const draftRevision = preview.draftRevision;
+    for (const forbiddenId of ['same-email-as-maker', 'foreign-studio-reviewer']) {
+      const refused = await post('/studio/v1/release-review', { draftRevision, reviewerId: forbiddenId }, maker);
+      assert.equal(refused.status, 403);
+    }
+    const requested = await post('/studio/v1/release-review', { draftRevision, reviewerId }, maker);
+    assert.equal(requested.status, 200);
+    const reviewId = requested.body.review.id;
+    const command = { draftRevision, reviewId };
+    assert.equal((await post('/studio/v1/publish', command, maker)).status, 403);
+    const path = '/api/v1/studio-release-review';
+    const get = (token: string) => json(url, path, { headers: { Authorization: `Bearer ${token}` } });
+    assert.deepEqual((await get(foreign)).body, { review: null });
+    assert.deepEqual((await get(unrelated)).body, { review: null });
+    assert.equal((await post(path, { reviewId, revision: draftRevision }, unrelated)).status, 404);
+    assert.equal((await post('/studio/v1/publish', command, reviewer)).status, 401);
+    const assigned = (await get(reviewer)).body.review;
+    assert.equal(assigned.id, reviewId);
+    assert.ok(assigned.changes.some((change: { area: string }) => change.area === 'Stock layout'));
+    const approved = await post(path, { reviewId, revision: draftRevision }, reviewer);
+    assert.equal(approved.status, 200);
+    const published = await post('/studio/v1/publish', command, maker);
+    assert.equal(published.status, 200);
+    assert.equal(published.body.published.releaseReview.approvedBy, reviewerId);
+  });
+});
 
 test('HTTP: platform login, company lock, studio publish and sync mutation', async () => {
   await withServer(async (url) => {
@@ -92,8 +302,9 @@ test('HTTP: platform login, company lock, studio publish and sync mutation', asy
         payload: { itemId: 'item-1', delta: -2 },
       }),
     });
-    assert.equal(mutation.status, 200);
-    assert.equal(mutation.body.mutation.status, 'synced');
+    assert.equal(mutation.status, 503);
+    assert.equal(mutation.body.code, 'CANONICAL_INVENTORY_REQUIRED');
+    assert.equal(controlPlane.stockOnHand('default-company', 'item-1'), 10);
 
     const cross = await json(url, '/sync/v1/mutations', {
       method: 'POST',
@@ -109,6 +320,34 @@ test('HTTP: platform login, company lock, studio publish and sync mutation', asy
     });
     assert.equal(cross.status, 403);
     assert.equal(cross.body.code, 'COMPANY_SCOPE_MISMATCH');
+
+    const crossRead = await json(url, '/sync/v1/mutations?companyId=company-jaipur', {
+      headers: auth,
+    });
+    assert.equal(crossRead.status, 403);
+    assert.equal(crossRead.body.code, 'COMPANY_SCOPE_MISMATCH');
+
+    const registered = await json(url, '/sync/v1/devices/register', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ companyId: 'company-jaipur', userId: 'attacker', appVersion: '2.0.0' }),
+    });
+    assert.equal(registered.status, 201);
+    const storedDevice = controlPlane.devices.get(registered.body.device.id);
+    assert.equal(storedDevice?.companyId, 'default-company');
+    assert.equal(storedDevice?.userId, (await controlPlane.requireControlSessionFresh(controlToken)).scope.actorId);
+
+    const jaipur = await json(url, '/control/v1/sessions/select-company', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${platformToken}` },
+      body: JSON.stringify({ companyId: 'company-jaipur' }),
+    });
+    const foreignRevoke = await json(url, `/sync/v1/devices/${registered.body.device.id}/revoke`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jaipur.body.token}` },
+    });
+    assert.equal(foreignRevoke.status, 404);
+    assert.equal(controlPlane.devices.get(registered.body.device.id)?.status, 'trusted');
   });
 });
 

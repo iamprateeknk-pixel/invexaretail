@@ -357,7 +357,8 @@ test('Workspace.jsx defers section pages to workspace page modules', () => {
   assert.match(dashboard, /Today.s operations, ready for action/);
   assert.match(stockUpdate, /Manual lot stock update/);
   assert.match(inventory, /Stock by item/);
-  assert.match(inventory, /stockActionIsAvailable/);
+  assert.match(inventory, /StockOverviewActions/);
+  assert.match(inventory, /StockItemsTable/);
   assert.match(inventory, /Studio v/);
   assert.match(transfers, /Transfer queue/);
   assert.match(jobs, /Create job \/ project/);

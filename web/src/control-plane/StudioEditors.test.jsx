@@ -3,7 +3,8 @@ import test from 'node:test';
 import 'global-jsdom/register';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
-import { MobilePolicyEditor, RulesEditor } from './StudioEditors.jsx';
+import { AutomationsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, WorkflowsEditor } from './StudioEditors.jsx';
+import { modelToWorkflow } from './studio-catalog.js';
 import { ModeSwitch, StudioModeProvider } from './studio-mode.jsx';
 
 test.afterEach(() => cleanup());
@@ -12,6 +13,23 @@ const draft = {
   rules: [{ key: 'high_value_adjustment', name: 'High value adjustment approval', condition: { branchCity: 'Jaipur', adjustmentValueGt: 10000 }, outcome: { requireApproval: 'BRANCH_MANAGER' } }],
   mobilePolicies: [{ role: 'STORE_USER', offlineMaxHours: 12, syncScope: ['stock', 'counts'], navigation: ['dashboard', 'stock', 'counts'], encryptedLocalStore: true }],
 };
+
+test('Studio saves a typed filter and grouped chart on a report draft', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  const report = { key: 'stock', name: 'Stock report', entity: 'inventory', columns: ['item_code', 'available'], filters: {} };
+  try {
+    mount(React.createElement(ReportsEditor, { controlToken: 't', draft: { reports: [report] } }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Group results by' }), { target: { value: 'category' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Display' }), { target: { value: 'bar' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add filter' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter field for Item code & name' }), { target: { value: 'available' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Match Available' }), { target: { value: '10.5' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.match(calls[0].url, /\/studio\/v1\/reports$/);
+    assert.deepEqual(calls[0].body, { ...report, groupBy: 'category', view: 'bar', filters: { available: 10.5 } });
+  } finally { restore(); }
+});
 
 function mount(element) {
   return render(React.createElement(StudioModeProvider, { initialAdvanced: false }, React.createElement(ModeSwitch), element));
@@ -57,6 +75,23 @@ test('editing a rule and saving sends only that rule, as an upsert', async () =>
   }
 });
 
+test('a rule stays in simulation until explicitly assigned to a live command', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  const rule = { ...draft.rules[0], condition: { adjustmentValueGt: 10000 } };
+  try {
+    mount(React.createElement(RulesEditor, { controlToken: 't', draft: { rules: [rule] } }));
+    const target = screen.getByRole('combobox', { name: 'Apply rule to' });
+    assert.equal(target.value, 'simulation');
+    fireEvent.change(target, { target: { value: 'STOCK_ADJUSTMENT' } });
+    assert.ok(screen.getByText(/Use stock adjustment value for each condition/));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(calls.map(({ body }) => body), [{ ...rule, liveFor: 'STOCK_ADJUSTMENT' }]);
+  } finally {
+    restore();
+  }
+});
+
 test('removing a role policy sends a delete for that role', async () => {
   const calls = [];
   const restore = stubFetch(calls);
@@ -69,4 +104,125 @@ test('removing a role policy sends a delete for that role', async () => {
   } finally {
     restore();
   }
+});
+
+test('a workflow stays in simulation until explicitly enabled', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  try {
+    const workflow = modelToWorkflow({ key: 'dispatch', name: 'Dispatch', target: 'transfer', threshold: '500', approverRole: 'ADMIN' });
+    mount(React.createElement(WorkflowsEditor, { controlToken: 't', draft: { workflows: [workflow] } }));
+    const toggle = screen.getByRole('checkbox', { name: 'Enforce on live commands after publishing' });
+    toggle.focus();
+    assert.equal(document.activeElement, toggle);
+    assert.equal(toggle.getAttribute('aria-checked'), 'false');
+    fireEvent.click(toggle);
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(calls.map((call) => call.body?.enforce), [true]);
+  } finally { restore(); }
+});
+
+test('count approval uses a variance value threshold and can be enabled for live review', async () => {
+  const calls = [];
+  const restore = stubFetch(calls);
+  try {
+    const workflow = modelToWorkflow({ key: 'count.approval', name: 'Count variance', target: 'count', threshold: '100', approverRole: 'ADMIN' });
+    mount(React.createElement(WorkflowsEditor, { controlToken: 't', draft: { workflows: [workflow] } }));
+    assert.equal(screen.getByLabelText('Variance value threshold (₹)').value, '100');
+    const toggle = screen.getByRole('checkbox', { name: 'Enforce on live commands after publishing' });
+    fireEvent.click(toggle);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.equal(calls[0].body.enforce, true);
+    assert.equal(calls[0].body.graph.nodes[0].config.event, 'count.created');
+  } finally { restore(); }
+});
+
+test('scheduled reminders require explicit activation and failed runs show their reason', async () => {
+  const previous = globalThis.fetch;
+  const saved = [];
+  globalThis.fetch = async (url, init) => {
+    assert.match(url, /\/studio\/v1\/automations/);
+    if (init.method === 'GET') return Response.json({ runs: [{
+      id: 'run-1', name: 'Daily reminder', occurrence: '2027-02-01', configVersion: 2, status: 'DEAD_LETTER', attempts: 5, failureCode: 'NO_ACTIVE_ADMINS',
+    }] });
+    saved.push(JSON.parse(init.body));
+    return Response.json({ success: true });
+  };
+  try {
+    const automation = { key: 'reminder', name: 'Daily reminder', trigger: 'schedule', expression: 'daily@09:00', actionKey: 'SEND_NOTIFICATION' };
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [automation] } }));
+    await screen.findByText('Failed after retries');
+    assert.ok(screen.getByText('No active company admins'));
+    const checkbox = screen.getByRole('checkbox', { name: 'Send after publishing, using the company timezone' });
+    assert.equal(checkbox.getAttribute('aria-checked'), 'false');
+    fireEvent.click(checkbox);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(saved, [{ ...automation, enforce: true }]);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('an event automation can be enabled with a supported action and a fresh opt-in', async () => {
+  const original = globalThis.fetch;
+  const saved = [];
+  globalThis.fetch = async (_url, init) => {
+    if (init.method === 'GET') return Response.json({ runs: [] });
+    saved.push(JSON.parse(init.body));
+    return Response.json({ success: true });
+  };
+  try {
+    const automation = { key: 'count', name: 'Count submitted', trigger: 'event', expression: 'count.submitted', actionKey: 'SEND_NOTIFICATION' };
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [automation] } }));
+    const toggle = screen.getByRole('checkbox', { name: 'Send for new events after publishing' });
+    fireEvent.click(toggle);
+    const action = screen.getByRole('combobox', { name: 'Then' });
+    fireEvent.change(action, { target: { value: 'SEND_EMAIL' } });
+    assert.ok(!screen.queryByRole('checkbox', { name: 'Send for new events after publishing' }));
+    fireEvent.change(action, { target: { value: 'CREATE_TASK' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'What happens' }), { target: { value: 'purchase-order.received' } });
+    assert.ok(screen.getByRole('option', { name: 'A purchase receipt is recorded' }).selected);
+    const taskToggle = screen.getByRole('checkbox', { name: 'Create tasks after publishing' });
+    assert.equal(taskToggle.getAttribute('aria-checked'), 'false');
+    fireEvent.click(taskToggle);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); });
+    assert.deepEqual(saved, [{ ...automation, expression: 'purchase-order.received', actionKey: 'CREATE_TASK', enforce: true }]);
+  } finally { globalThis.fetch = original; }
+});
+
+test('pending task runs explain that task creation is paused', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ runs: [
+    { id: 'task', name: 'Check stock', occurrence: '2027-02-01', configVersion: 2,
+      actionKey: 'CREATE_TASK', status: 'PENDING', attempts: 1, executionPaused: true },
+    { id: 'notice', name: 'Notify admins', occurrence: '2027-02-01', configVersion: 2,
+      actionKey: 'SEND_NOTIFICATION', status: 'PENDING', attempts: 1, executionPaused: false },
+  ] });
+  try {
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [] } }));
+    await screen.findByText('Task creation paused');
+    assert.ok(screen.getByText('Waiting to retry'));
+    assert.ok(screen.getByRole('button', { name: 'Refresh' }));
+  } finally { globalThis.fetch = original; }
+});
+
+test('a failed run can be retried using the failure shown in Studio', async () => {
+  const original = globalThis.fetch;
+  const requests = [];
+  const failure = { id: 'run-1', name: 'Count submitted', occurrence: 'count.submitted:count-1', configVersion: 2,
+    status: 'DEAD_LETTER', attempts: 5, finishedAt: '2027-02-01T10:30:00.000Z', failureCode: 'NO_ACTIVE_ADMINS' };
+  globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return Response.json({ runs: [requests.length ? { ...failure, status: 'PENDING', attempts: 0, failureCode: null } : failure] });
+    requests.push({ url, body: JSON.parse(init.body) });
+    return Response.json({ success: true });
+  };
+  try {
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [] } }));
+    const retry = await screen.findByRole('button', { name: 'Retry Count submitted' });
+    retry.focus();
+    assert.equal(document.activeElement, retry);
+    fireEvent.click(retry);
+    await screen.findByText('Retry queued.');
+    assert.match(requests[0].url, /\/automations\/runs\/run-1\/retry$/);
+    assert.deepEqual(requests[0].body, { finishedAt: failure.finishedAt });
+  } finally { globalThis.fetch = original; }
 });

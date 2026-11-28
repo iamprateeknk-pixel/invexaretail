@@ -39,19 +39,23 @@ import { emitTransferUpdated } from '../lib/webhook-dispatcher.js';
 import { getActiveWorkflow } from '../lib/industry-packs.js';
 import { recordAudit } from '../lib/audit.js';
 import { isOperationalItem } from '../lib/item-master.js';
-import { savedPickSlips } from '../lib/transfer-pick-slips.js';
-import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger, listTransfers } from '../lib/repository.js';
+import { matchesPickSlipRequest, pickSlipRequestFingerprint, pickSlipRequestReused, savedPickSlips, savePickSlip } from '../lib/transfer-pick-slips.js';
+import { enforceMobilePermit } from '../lib/saas/mobile-offline-permits.js';
+import { pickRevision, transferPickChanged } from '../lib/pick-revision.js';
+import type { ItemRecord, StockLedgerRecord } from '../lib/repository.js';
+import { adjustStockLedger, updateTransferReceiptProgress, adjustQuarantineLedger } from '../lib/repository.js';
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { isPooledPick, allocatePick, isPickableLot } from '../lib/kg-pick.js';
 import { validatePickInput, PICK_EXCEPTION_REASONS } from '../lib/warehouse-workflow.js';
-import { createExceptionCase, estimateValueAtRisk } from '../lib/exceptions.js';
+import { createExceptionCase, readValueAtRisk } from '../lib/exceptions.js';
 import { prisma } from '../lib/db.js';
 import { checkApprovalGate } from '../lib/approval-rules.js';
 import { persistConfirmedPickAllocations, databaseEnabled } from '../lib/persistence.js';
 import { DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
 import { canReceiveTransfer, type ReceiptLineInput, validateReceiptLines } from '../lib/receipt-validation.js';
-import { findReceiptByRequestId, beginReceiptRequest, persistTransferReceipt, rememberReceipt, endReceiptRequest } from '../lib/transfer-receipt.js';
+import { findReceiptByRequestId, beginReceiptRequest, persistTransferReceipt, rememberReceipt, endReceiptRequest, receiptRequestFingerprint, receiptRequestReused } from '../lib/transfer-receipt.js';
 import { isReceivableStatus } from '../lib/transfer-lifecycle.js';
+import { transferReceiveChanged } from '../lib/receive-revision.js';
 import { requireEvidenceForDamage } from '../lib/evidence-rules.js';
 import { assertReceiptQcComplete } from '../lib/qc-receive.js';
 import { type InspectionLike, quarantineFailedLines, verdictForLine } from '../lib/qc-gate.js';
@@ -380,23 +384,23 @@ router.get('/picker/transfers/:transferId', async (req: Request, res: Response) 
       lotAvailable: ledger.find((entry) => entry.itemId === line.itemId && entry.lotId === line.lotId)?.onHand ?? 0,
     };
   });
-  return res.json({ transfer: { ...transfer, lines }, pickSlips: slips.map((event) => event.metadata) });
+  const revision = pickRevision(transfer, itemsById, ledger, slips.map((event) => event.id));
+  return res.json({ transfer: { ...transfer, lines, pickRevision: revision },
+    pickSlips: slips.map((event) => event.metadata && { ...event.metadata, requestFingerprint: undefined }) });
 });
 
 // Blueprint v4 §15: what a KG pick would take, lot by lot, before it is confirmed.
-async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, itemId: string) {
-  const item = listItems().find((candidate) => candidate.id === itemId);
+function pooledPickState(transfer: TransferRecord, itemId: string, item: ItemRecord | undefined,
+  ledger: StockLedgerRecord[], priorSlips: Awaited<ReturnType<typeof savedPickSlips>>) {
   if (!item) throw new Error('Item was not found.');
   if (!isPooledPick(item)) throw new Error(`${item.code} is picked by scanning its lot, not by weight.`);
   const requestedTotal = transfer.lines.filter((line) => line.itemId === itemId).reduce((sum, line) => sum + line.quantity, 0);
   if (!(requestedTotal > 0)) throw new Error('This item is not part of the transfer.');
-  const priorSlips = await savedPickSlips(transfer.id);
   const pickedByLot = new Map<string, number>();
   for (const slip of priorSlips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     if (line.itemId === itemId) pickedByLot.set(line.lotId, (pickedByLot.get(line.lotId) ?? 0) + Number(line.quantity ?? 0));
   }
   const pickedTotal = [...pickedByLot.values()].reduce((sum, value) => sum + value, 0);
-  const ledger = await listStockForLocation(ctx, transfer.sourceLocationId);
   const lots = item.lots.map((lot) => ({
     lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
     available: Math.max(0, (ledger.find((entry) => entry.itemId === itemId && entry.lotId === lot.id)?.onHand ?? 0) - (pickedByLot.get(lot.id) ?? 0)),
@@ -405,7 +409,8 @@ async function pooledPickState(ctx: TenantContext, transfer: TransferRecord, ite
 }
 
 router.post('/picker/transfers/:transferId/allocation-preview', async (req: Request, res: Response) => {
-  const transfer = findTransferForCompany(firstParam(req.params.transferId), req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, firstParam(req.params.transferId));
   const context = accessContext(req.user!);
   if (!transfer || !['ADMIN', 'ADMIN_USER', 'WAREHOUSE_PICKER'].includes(context.role) || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
   if (context.role === 'WAREHOUSE_PICKER' && !pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
@@ -413,7 +418,11 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
   if (parseBody(req, res, allocationPreviewSchema) === null) return;
   try {
     const quantity = Number(req.body?.quantity);
-    const state = await pooledPickState(tenantContext(req), transfer, String(req.body?.itemId ?? ''));
+    const itemId = String(req.body?.itemId ?? '');
+    const [items, ledger, slips] = await Promise.all([
+      listItemsForCompany(ctx), listStockForLocation(ctx, transfer.sourceLocationId), savedPickSlips(transfer.id),
+    ]);
+    const state = pooledPickState(transfer, itemId, items.find((item) => item.id === itemId), ledger, slips);
     if (Number.isFinite(quantity) && quantity > state.remaining + 1e-8) throw new Error(`Only ${state.remaining} is still to be picked for this item.`);
     const { allocations, shortfall } = allocatePick({ requested: quantity, lots: state.lots, strategy: state.item.allocationStrategy ?? 'FEFO' });
     return res.json({ itemId: state.item.id, unit: state.item.unit ?? 'KG', requested: quantity, remaining: state.remaining, strategy: state.item.allocationStrategy ?? 'FEFO', allocations, shortfall });
@@ -424,25 +433,43 @@ router.post('/picker/transfers/:transferId/allocation-preview', async (req: Requ
 
 router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res: Response) => {
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   const context = accessContext(req.user!);
   if (!transfer || context.role !== 'WAREHOUSE_PICKER' || !canAccessLocation(context, transfer.sourceLocationId)) return sendError(res, 403, 'FORBIDDEN', 'Picker task is outside the assigned scope.');
   if (!pickerMayWork(transfer, req.user!.id)) return sendError(res, 403, 'FORBIDDEN', 'This transfer is assigned to another picker.');
   const prior = await savedPickSlips(transferId);
   // Retry-safe (blueprint §38): the same request id returns the slip it already saved.
-  const requestId = typeof req.body.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId.trim().slice(0, 191) : '';
+  const requestFingerprint = requestId ? pickSlipRequestFingerprint(req.body) : undefined;
   if (requestId) {
     const saved = prior.find((event) => event.metadata?.requestId === requestId && event.metadata?.pickerId === req.user!.id);
-    if (saved) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true, pickSlip: saved.metadata, transfer });
+    if (saved) {
+      if (!matchesPickSlipRequest(saved.metadata?.requestFingerprint, requestFingerprint)) {
+        const conflict = pickSlipRequestReused();
+        return sendError(res, 409, conflict.code, conflict.message);
+      }
+      return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true,
+        pickSlip: { ...saved.metadata, requestFingerprint: undefined }, transfer });
+    }
   }
-  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer cannot be picked while ${transfer.status}.`);
+  const stale = () => sendError(res, 409, 'TRANSFER_PICK_CHANGED', transferPickChanged().message);
+  if (!['PENDING_PICK', 'REQUESTED', 'PICKING', 'PARTIAL'].includes(transfer.status)) {
+    return req.body?.pickRevision ? stale() : sendError(res, 400, 'INVALID_TRANSITION', `Transfer cannot be picked while ${transfer.status}.`);
+  }
   // Shape validation runs here — after the scope/status guards above —
   // replacing the lines-or-exceptions presence check below.
-  if (parseBody(req, res, pickSlipSchema) === null) return;
+  const body = parseBody(req, res, pickSlipSchema);
+  if (body === null) return;
+  if (body.offlinePermit && (!requestId || !body.pickRevision)) {
+    return sendError(res, 400, 'VALIDATION_FAILED', 'An offline pick requires a request ID and task revision.');
+  }
   let lines: any[] = Array.isArray(req.body.lines) ? req.body.lines : [];
   const exceptions = Array.isArray(req.body.exceptions) ? req.body.exceptions : [];
-  const itemMap = new Map(listItems().map((item) => [item.id, item]));
-  const ledger = await listStockForLocation(tenantContext(req), transfer.sourceLocationId);
+  const [items, ledger] = await Promise.all([listItemsForCompany(ctx), listStockForLocation(ctx, transfer.sourceLocationId)]);
+  const itemMap = new Map(items.map((item) => [item.id, item]));
+  const revision = pickRevision(transfer, itemMap, ledger, prior.map((event) => event.id));
+  if (body.pickRevision && body.pickRevision !== revision) return stale();
   const priorPicked = new Map<string, number>();
   for (const slip of prior) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`; priorPicked.set(key, (priorPicked.get(key) ?? 0) + Number(line.quantity ?? 0));
@@ -453,7 +480,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     for (const line of lines) {
       const item = itemMap.get(line.itemId);
       if (item && isPooledPick(item) && !line.lotId) {
-        const state = await pooledPickState(tenantContext(req), transfer, line.itemId);
+        const state = pooledPickState(transfer, line.itemId, item, ledger, prior);
         const pending = expanded.filter((row) => row.itemId === line.itemId).reduce((sum, row) => sum + row.quantity, 0);
         const { allocations, shortfall } = allocatePick({
           requested: Number(line.quantity), strategy: item.allocationStrategy ?? 'FEFO',
@@ -478,7 +505,7 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       const pooled = Boolean(item && isPooledPick(item));
       if (!item || !lot || (!requested && !pooled)) throw new Error('Picked item/lot is not part of this transfer.');
       const quantity = Number(line.quantity);
-      validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, lotNo: lot.lotNo });
+      validatePickInput({ unit: item.unit, quantity, inputMethod: line.inputMethod, scanCode: line.scanCode, itemCode: item.code, itemBarcode: item.barcode, lotNo: lot.lotNo });
       const lotKey = `${line.itemId}|${line.lotId}`;
       const alreadyLot = runningLot.get(lotKey) ?? 0;
       if (pooled) {
@@ -502,7 +529,20 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
     }
     const slipId = `pick-${Math.random().toString(36).slice(2, 10)}`;
     const metadata = { id: slipId, requestId: requestId || undefined, pickerId: req.user!.id, startedAt: req.body.startedAt ?? new Date().toISOString(), completedAt: new Date().toISOString(), lines: lines.map((line: any) => ({ ...line, quantity: Number(line.quantity) })), exceptions: exceptions.map((entry: any) => ({ ...entry, quantity: Number(entry.quantity), recordedAt: new Date().toISOString() })) };
-    await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata }));
+    const storedMetadata = requestFingerprint ? { ...metadata, requestFingerprint } : metadata;
+    const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
+    let updated: TransferRecord;
+    if (databaseEnabled) {
+      const result = await savePickSlip(ctx, transfer.id, revision, nextStatus, storedMetadata, body.offlinePermit);
+      if (result.duplicate) return res.status(200).json({ message: 'This pick slip was already saved.', duplicate: true,
+        pickSlip: { ...result.metadata, requestFingerprint: undefined }, transfer: result.transfer });
+      updated = result.transfer;
+      if (findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
+    } else {
+      if (body.offlinePermit) await enforceMobilePermit(ctx, body.offlinePermit, 'picks');
+      updated = updateTransferStatus(transfer.id, nextStatus);
+      recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'PICK_SLIP_SAVED', entityType: 'Transfer', entityId: transfer.id, metadata: storedMetadata });
+    }
 
     // Blueprint WF-12 (Warehouse Exception): a picker-flagged No Stock,
     // Wrong Item or Damaged Item exception opens an owned Exception Inbox
@@ -525,16 +565,11 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
       });
     }
 
-    const nextStatus: TransferRecord['status'] = req.body.finished ? 'READY_FOR_ADMIN' : (lines.length ? 'PARTIAL' : 'PICKING');
-    const updated = updateTransferStatus(transfer.id, nextStatus);
-    await persistTransferStatus(updated, {
-      id: req.user!.id,
-      role: context.role,
-      companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
-    });
     void emitTransferUpdated(updated);
     return res.status(201).json({ message: `Pick slip ${slipId} saved.`, pickSlip: metadata, transfer: updated });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'DUPLICATE_REQUEST') return sendError(res, 409, error.code, error.message);
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to save pick slip.');
   }
 });
@@ -542,11 +577,13 @@ router.post('/picker/transfers/:transferId/pick-slips', async (req: Request, res
 router.post('/transfers/:transferId/confirm', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only admins can confirm transfer-out.');
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer was not found.');
   if (!['READY_FOR_ADMIN', 'PARTIAL'].includes(transfer.status)) return sendError(res, 400, 'INVALID_TRANSITION', `Transfer must be ready for admin review, not ${transfer.status}.`);
   const allocations = new Map<string, { itemId: string; lotId: string; locationId: string; quantity: number }>();
-  for (const slip of await savedPickSlips(transferId)) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
+  const slips = await savedPickSlips(transferId);
+  for (const slip of slips) for (const line of ((slip.metadata?.lines as any[]) ?? [])) {
     const key = `${line.itemId}|${line.lotId}`;
     const existing = allocations.get(key) ?? { itemId: line.itemId, lotId: line.lotId, locationId: transfer.sourceLocationId, quantity: 0 };
     existing.quantity += Number(line.quantity ?? 0); allocations.set(key, existing);
@@ -556,25 +593,30 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
   // Blueprint §16.2: "transfer > ₹1 lakh -> regional manager approval."
   // Gate before touching stock - a confirmed allocation's total value
   // decides whether a configured ApprovalRule blocks this attempt.
-  const totalValue = (await Promise.all(
-    [...allocations.values()].map((allocation) => estimateValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
-  )).reduce((sum, value) => sum + (value ?? 0), 0);
-  const sourceLocation = await prisma.location.findUnique({ where: { id: transfer.sourceLocationId }, select: { branchId: true } }).catch(() => null);
+  const acceptedPicks = [...allocations.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, pick]) => pick);
   const gate = await checkApprovalGate({
     triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: transfer.id,
-    branchId: sourceLocation?.branchId ?? null, value: totalValue, requestedById: req.user!.id,
+    locationId: transfer.sourceLocationId, requestedById: req.user!.id,
+    value: async () => (await Promise.all(
+      acceptedPicks.map((allocation) => readValueAtRisk(tenantContext(req), allocation.itemId, allocation.quantity)),
+    )).reduce((sum, value) => sum + (value ?? 0), 0),
+    intent: [transfer.destinationLocationId, acceptedPicks.map(({ itemId, lotId, quantity }) => [itemId, lotId, quantity])],
     companyId: req.companyId ?? DEFAULT_COMPANY_ID,
   });
   if (gate.blocked) return sendError(res, 409, 'CONFLICT', gate.reason, { approvalRequestId: gate.requestId, requiredApproverRole: gate.requiredApproverRole });
 
   try {
-    await persistConfirmedPickAllocations(transfer.id, [...allocations.values()], { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role });
+    await persistConfirmedPickAllocations(transfer.id, acceptedPicks, ctx, {
+      status: transfer.status, sourceLocationId: transfer.sourceLocationId,
+      destinationLocationId: transfer.destinationLocationId, slipIds: slips.map((slip) => slip.id),
+    });
     // Phase 5 step 14: in database mode the canonical posting inside
     // persistConfirmedPickAllocations is the stock write — the snapshot
     // mirror that used to follow it is retired. Memory mode (where the
     // persist call no-ops) still writes the snapshot directly.
     if (!databaseEnabled) for (const allocation of allocations.values()) adjustStockLedger(allocation.itemId, allocation.lotId, allocation.locationId, -allocation.quantity);
-    const updated = updateTransferStatus(transfer.id, 'CONFIRMED');
+    const updated: TransferRecord = { ...transfer, status: 'CONFIRMED' };
+    if (!databaseEnabled || findTransferForCompany(transfer.id, ctx.companyId)) updateTransferStatus(transfer.id, updated.status);
     // Stock has just physically left the source (decremented above); the
     // request-time reservation for this transfer's full original quantity
     // is no longer needed, picked-in-full or not.
@@ -585,6 +627,9 @@ router.post('/transfers/:transferId/confirm', async (req: Request, res: Response
     void emitTransferUpdated(updated);
     return res.json({ message: 'Transfer confirmed and lot-level stock deducted.', transfer: updated });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'TRANSFER_PICK_CHANGED') {
+      return sendError(res, 409, error.code, 'Pick progress changed. Refresh the transfer and review the current slips before confirming.');
+    }
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to confirm transfer.');
   }
 });
@@ -624,7 +669,8 @@ router.get('/transfers/:transferId/export.xls', async (req: Request, res: Respon
 router.post('/transfers/:transferId/receive', async (req: Request, res: Response) => {
   if (!canReceiveTransfer(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Only operational admins and destination store users can receive transfers.');
   const transferId = firstParam(req.params.transferId);
-  const transfer = findTransferForCompany(transferId, req.companyId ?? DEFAULT_COMPANY_ID);
+  const ctx = tenantContext(req);
+  const transfer = await findTransferFromDb(ctx, transferId);
   if (!transfer) return sendError(res, 404, 'NOT_FOUND', 'Transfer not found.');
   if (!canAccessLocation(accessContext(req.user!), transfer.destinationLocationId)) {
     return sendError(res, 403, 'FORBIDDEN', 'Receiving is limited to the assigned destination.');
@@ -636,24 +682,21 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   // A retry (client timeout, offline outbox) of a receipt that already went
   // through answers with the recorded result - before the status gate, because
   // that receipt may itself have completed the transfer.
-  const prior = await findReceiptByRequestId(requestId).catch(() => null);
-  if (prior) {
-    if (prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
-    return res.json({
+  const prior = await findReceiptByRequestId(ctx, requestId);
+  if (prior && prior.transferId !== transferId) return sendError(res, 409, 'DUPLICATE_REQUEST', 'This requestId was already used for a different transfer.');
+  const replay = (saved: NonNullable<typeof prior>) => res.json({
       success: true, duplicate: true, transfer,
-      receipt: { requestId, receiptId: prior.receiptId, transferId, receivedAt: prior.receivedAt, receivedBy: prior.receivedBy, receivedQty: prior.receivedQty, damagedQty: prior.damagedQty, shortageQty: prior.shortageQty, excessQty: prior.excessQty, status: prior.status, notes: prior.notes ?? '' },
-    });
-  }
-  if (!isReceivableStatus(transfer.status)) {
+      receipt: { requestId, receiptId: saved.receiptId, transferId, receivedAt: saved.receivedAt, receivedBy: saved.receivedBy, receivedQty: saved.receivedQty, damagedQty: saved.damagedQty, shortageQty: saved.shortageQty, excessQty: saved.excessQty, status: saved.status, notes: saved.notes ?? '' },
+  });
+  if (prior && !prior.requestFingerprint) return replay(prior);
+  if (!prior && !isReceivableStatus(transfer.status) && req.body.receiveRevision === undefined) {
     return sendError(res, 400, 'INVALID_TRANSITION', 'Only dispatched, in-transit or partially received transfers can be received.');
   }
   // Shape validation for the receipt lines runs here, after the
   // requestId/status guards above (the requestId check itself stays
   // where it was, ahead of the retry lookup).
-  if (parseBody(req, res, transferReceiveSchema) === null) return;
-  // The same request twice at once must not both post: the second waits for the client's next retry.
-  if (!beginReceiptRequest(requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt is already being processed. Retry in a moment.');
-  try {
+  const input = parseBody(req, res, transferReceiveSchema);
+  if (input === null) return;
   const notes = typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 4000) : '';
   let receiptLines: ReceiptLineInput[];
   if (Array.isArray(req.body.lines)) {
@@ -678,6 +721,26 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
   } else {
     return sendError(res, 400, 'VALIDATION_FAILED', 'Multi-lot transfers require a separate receipt line for every item and lot.');
   }
+  const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
+  const requestFingerprint = receiptRequestFingerprint({ notes, lines: receiptLines,
+    expectedRevision: input.receiveRevision, qcInspections: bodyInspections });
+  if (prior) {
+    if (prior.requestFingerprint !== requestFingerprint) {
+      const conflict = receiptRequestReused();
+      return sendError(res, 409, conflict.code, conflict.message);
+    }
+    return replay(prior);
+  }
+  if (input.offlinePermit && !input.receiveRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline receipt requires a transfer revision.');
+  if (input.receiveRevision) {
+    if (!databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Receive revisions require a connected database.');
+    if (!isReceivableStatus(transfer.status) || transfer.receiveRevision !== input.receiveRevision) {
+      const conflict = transferReceiveChanged();
+      return sendError(res, 409, conflict.code, conflict.message);
+    }
+  }
+  if (!beginReceiptRequest(ctx, requestId)) return sendError(res, 409, 'CONFLICT', 'This receipt request ID is unavailable.');
+  try {
 
   const damagedLines = receiptLines.filter((line) => line.damagedQty > 0);
   if (damagedLines.length > 0) {
@@ -699,7 +762,6 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const inspections = databaseEnabled
       ? await prisma.qcInspection.findMany({ where: { sourceDocument: transferId, inspectedBy: { companyId: req.companyId ?? DEFAULT_COMPANY_ID } } }).catch(() => listMemoryQcInspections())
       : listMemoryQcInspections().filter((row) => row.sourceDocument === transferId);
-    const bodyInspections = Array.isArray(req.body.qcInspections) ? req.body.qcInspections : [];
     const itemsById = new Map(listItems().map((item) => [item.id, item]));
     const qc = assertReceiptQcComplete(
       receiptLines.map((line) => ({
@@ -726,20 +788,30 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
     const persisted = await persistTransferReceipt({
       requestId, transferId, destinationLocationId: transfer.destinationLocationId,
       receivedById: req.user!.id, notes, lines: receiptLines,
-      tenant: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role },
+      tenant: ctx, expectedRevision: input.receiveRevision, requestFingerprint, offlinePermit: input.offlinePermit,
     });
 
     let status: TransferRecord['status'];
     let summary: { receivedQty: number; damagedQty: number; shortageQty: number; excessQty: number; complete?: boolean; hasDiscrepancy?: boolean };
     if (persisted) {
+      if (persisted.duplicate) {
+        const { receiptId, receivedAt, receivedQty, damagedQty, shortageQty, excessQty, status, notes } = persisted;
+        return res.json({
+          success: true, duplicate: true, transfer: await findTransferFromDb(ctx, transferId),
+          receipt: { requestId, transferId, receiptId, receivedAt, receivedBy: ctx.userId,
+            receivedQty, damagedQty, shortageQty, excessQty, status, notes },
+        });
+      }
       status = persisted.status;
       summary = persisted;
       // Mirror committed database state only after the transaction succeeds.
-      updateTransferStatus(transfer.id, status);
-      updateTransferReceiptProgress(transfer.id, persisted.lines.map((line) => ({
-        itemId: line.itemId, lotId: line.lotId, quantity: Number(line.requestedQty),
-        receivedQty: Number(line.receivedQty), damagedQty: Number(line.damagedQty), shortageQty: Number(line.shortageQty),
-      })));
+      if (findTransferForCompany(transfer.id, ctx.companyId)) {
+        updateTransferStatus(transfer.id, status);
+        updateTransferReceiptProgress(transfer.id, persisted.lines.map((line) => ({
+          itemId: line.itemId, lotId: line.lotId, quantity: line.requestedQty,
+          receivedQty: line.receivedQty, damagedQty: line.damagedQty, shortageQty: line.shortageQty, excessQty: line.excessQty,
+        })));
+      }
       // Phase 5 step 14: this branch runs only when the receipt was
       // persisted (database mode) — the canonical posting inside
       // persistTransferReceipt already moved the stock, so the snapshot
@@ -838,22 +910,26 @@ router.post('/transfers/:transferId/receive', async (req: Request, res: Response
       }
     }
 
-    const nextTransfer = listTransfers().find((record) => record.id === transferId);
+    const nextTransfer = await findTransferFromDb(ctx, transferId);
     if (nextTransfer) void emitTransferUpdated(nextTransfer);
-    rememberReceipt({
+    const receivedAt = persisted?.receivedAt ?? new Date().toISOString();
+    rememberReceipt(ctx, {
       requestId, transferId, receiptId: persisted?.receiptId, status: status as 'RECEIVED' | 'PARTIAL_RECEIVED', receivedBy: req.user!.id,
-      receivedAt: new Date().toISOString(), receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+      receivedAt, receivedQty: summary.receivedQty, damagedQty: summary.damagedQty, shortageQty: summary.shortageQty, excessQty: summary.excessQty, notes,
+      requestFingerprint,
     });
     return res.json({
       success: true, duplicate: persisted?.duplicate ?? false,
       transfer: nextTransfer,
-      receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt: new Date().toISOString(), receivedBy: req.user!.id, ...summary, status, notes },
+      receipt: { requestId, receiptId: persisted?.receiptId, transferId, receivedAt, receivedBy: req.user!.id, ...summary, status, notes },
     });
   } catch (error) {
+    if (isDomainError(error) && error.code === 'DUPLICATE_REQUEST') return sendError(res, 409, error.code, error.message);
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Unable to process receipt.');
   }
   } finally {
-    endReceiptRequest(requestId);
+    endReceiptRequest(ctx, requestId);
   }
 });
 

@@ -193,8 +193,8 @@ export const PRIMARY_NAV_BY_ROLE = {
   STORE_USER: ['dashboard', 'counts', 'inventory', 'item-search', 'transfers', 'expiry', 'exceptions', 'alerts'],
   WAREHOUSE_PICKER: ['dashboard', 'picking', 'putaway', 'transfers', 'counts', 'inventory', 'exceptions', 'alerts'],
   BRANCH_MANAGER: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'approvals', 'reports', 'exceptions'],
-  ADMIN: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'reports', 'exceptions'],
-  ADMIN_USER: ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'reports', 'exceptions'],
+  ADMIN: ['dashboard', 'command-center', 'inventory', 'counts', 'transfers', 'orders', 'reports', 'exceptions'],
+  ADMIN_USER: ['dashboard', 'command-center', 'inventory', 'counts', 'transfers', 'orders', 'reports', 'exceptions'],
   AUDITOR: ['dashboard', 'reports', 'inventory', 'exceptions', 'approvals', 'command-center', 'alerts'],
 };
 export const MAX_PRIMARY_NAV = 8;
@@ -308,21 +308,4 @@ export function normalizeTransfers(transfers, items, locations) {
     qty: transfer.lines.reduce((total, line) => total + line.quantity, 0),
     status: transfer.status,
   }));
-}
-
-// Plan U1 / P1-WEB-001: each role lands on the page that answers "what do I do now?", not on a
-// generic dashboard. The first entry the role is actually allowed to open wins (permissions are
-// still enforced by lib/permissions.js; this only chooses a starting point).
-export const ROLE_LANDING_PREFERENCES = {
-  STORE_USER: ['counts', 'dashboard'],
-  WAREHOUSE_PICKER: ['picking', 'dashboard'],
-  BRANCH_MANAGER: ['dashboard'],
-  ADMIN: ['dashboard'],
-  ADMIN_USER: ['dashboard'],
-  AUDITOR: ['reports', 'dashboard'],
-};
-
-export function defaultSectionForRole(role, { canAccess = () => true } = {}) {
-  const preferences = ROLE_LANDING_PREFERENCES[role] ?? ['dashboard'];
-  return preferences.find((section) => canAccess(section)) ?? 'dashboard';
 }

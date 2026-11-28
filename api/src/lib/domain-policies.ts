@@ -92,8 +92,8 @@ export async function transitionTransferStatus(input: {
   role: Role;
   actorId: string;
   reason?: string;
-}): Promise<void> {
-  const current = await prisma.transfer.findFirst({
+}, db: Prisma.TransactionClient = prisma): Promise<void> {
+  const current = await db.transfer.findFirst({
     where: { id: input.entityId, companyId: input.companyId },
     select: { status: true },
   });
@@ -109,7 +109,7 @@ export async function transitionTransferStatus(input: {
     actorRole: input.role,
     reason: input.reason,
   });
-  await prisma.transfer.update({
+  await db.transfer.update({
     where: { id: input.entityId, companyId: input.companyId, status: current.status },
     data: { status: to as never },
   });

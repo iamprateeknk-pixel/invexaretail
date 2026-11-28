@@ -71,19 +71,19 @@ test('issuing a code needs a signed-in session; garbage and unknown codes are re
 test('a code minted for the Control Plane cannot be redeemed as a web session, and vice versa', async () => {
   await withServer(async (url) => {
     const admin = findUserByEmail('admin@retail.local')!;
-    const controlCode = createHandoff({ controlToken: 'x' }, Date.now(), 'control').code;
+    const { code: controlCode } = await createHandoff({ controlToken: 'x' }, Date.now(), 'control');
     assert.equal((await post(url, '/web-handoff/exchange', { code: controlCode })).status, 401, 'wrong purpose');
 
-    const webCode = createHandoff({ userId: admin.id }, Date.now(), 'web').code;
+    const { code: webCode } = await createHandoff({ userId: admin.id }, Date.now(), 'web');
     const { redeemHandoff } = await import('../lib/saas/session-handoff.js');
-    assert.equal(redeemHandoff(webCode, Date.now(), 'control'), null, 'a web code is useless for the control exchange');
+    assert.equal(await redeemHandoff(webCode, Date.now(), 'control'), null, 'a web code is useless for the control exchange');
   });
 });
 
 test('a code for a user who has since been deactivated no longer opens a session', async () => {
   await withServer(async (url) => {
     const user = findUserByEmail('admin@retail.local')!;
-    const code = createHandoff({ userId: user.id }, Date.now(), 'web').code;
+    const { code } = await createHandoff({ userId: user.id }, Date.now(), 'web');
     const original = user.status;
     user.status = 'inactive';
     try {

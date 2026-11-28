@@ -8,7 +8,8 @@ import { canManageTransferDispatch } from '../lib/transfer-lifecycle.js';
 import { validateTransferStatusChange } from '../lib/inventory.js';
 import type { Role } from '../lib/inventory.js';
 import type { ExpectedPackLine } from '../lib/pack-verification.js';
-import { companyOwnsLocation, DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { companyOwnsLocation, DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from '../lib/saas/tenant-scope.js';
+import { findTransferForSealedPackage } from '../lib/repositories/transfer-repository.js';
 import {
   addTransferCarton, listItems, listLocations, listTransferCartons, listTransfers, setTransferCartonStatus, setTransferLogistics, updateTransferStatus,
   type TransferRecord,
@@ -252,14 +253,15 @@ router.get('/transfers/:transferId/tracking', ...guard, (req: Request, res: Resp
 
 // Blueprint §18: "Scan transfer/carton -> load expected lines". A carton's
 // package id (its label / QR) leads to its transfer, for the destination.
-router.get('/transfers/by-package/:packageId', ...guard, (req: Request, res: Response) => {
-  const wanted = String(req.params.packageId).trim().toLowerCase();
-  const carton = listTransferCartons().find((row) => row.status === 'SEALED' && row.packageId.toLowerCase() === wanted);
-  const transfer = carton && listTransfers().find((record) => record.id === carton.transferId);
-  if (!transfer || (!canAccess(req, transfer.destinationLocationId) && !canAccess(req, transfer.sourceLocationId))) {
+router.get('/transfers/by-package/:packageId', ...guard, async (req: Request, res: Response) => {
+  const result = await findTransferForSealedPackage({
+    companyId: req.companyId ?? req.user!.companyId ?? DEFAULT_COMPANY_ID,
+    tenantId: DEFAULT_TENANT_ID, userId: req.user!.id, role: req.user!.role as Role,
+  }, String(req.params.packageId).trim());
+  if (!result || (!canAccess(req, result.transfer.destinationLocationId) && !canAccess(req, result.transfer.sourceLocationId))) {
     return res.status(404).json({ message: 'No transfer carton matches that code.' });
   }
-  return res.json({ transfer, packageId: carton!.packageId });
+  return res.json(result);
 });
 
 export default router;

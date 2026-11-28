@@ -90,8 +90,6 @@ function ControlPlaneWorkspace() {
     setUserName,
     userRole,
     setUserRole,
-    previewRole,
-    setPreviewRole,
     newCompanyName,
     setNewCompanyName,
     newCompanyPlan,
@@ -302,7 +300,7 @@ function ControlPlaneWorkspace() {
   }
 
   return (
-    <div className="flex min-h-svh bg-muted/30">
+    <div className="flex min-h-svh flex-col bg-muted/30 md:flex-row">
       <Toaster richColors position="top-right" />
       <aside className="hidden w-64 shrink-0 border-r bg-sidebar md:flex md:flex-col">
         <div className="border-b px-4 py-4">
@@ -310,7 +308,7 @@ function ControlPlaneWorkspace() {
           <p className="mt-1 text-sm font-semibold">{session.user?.name}</p>
           <div className="mt-2">{lockBadge}</div>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-3">
+        <nav aria-label="Control Plane sections" className="flex flex-1 flex-col gap-1 p-3">
           {NAV.map((item) => {
             const Icon = item.icon;
             const active = section === item.id;
@@ -318,8 +316,9 @@ function ControlPlaneWorkspace() {
               <button
                 key={item.id}
                 type="button"
+                aria-current={active ? 'page' : undefined}
                 onClick={() => setSection(item.id)}
-                className={`flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
+                className={`flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
               >
                 <Icon className="size-4" />
                 {item.label}
@@ -332,7 +331,28 @@ function ControlPlaneWorkspace() {
           <Button variant="ghost" onClick={() => { clearControlSession(); setSession(null); }}><LogOut className="size-4" />Sign out</Button>
         </div>
       </aside>
-      <main className="flex-1 overflow-auto p-6">
+      <nav
+        aria-label="Mobile Control Plane sections"
+        className="flex gap-1 overflow-x-auto border-b bg-background px-3 py-2 md:hidden"
+      >
+        {NAV.map((item) => {
+          const Icon = item.icon;
+          const active = section === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-current={active ? 'page' : undefined}
+              onClick={() => setSection(item.id)}
+              className={`flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              <Icon className="size-4" />
+              {item.label}
+            </button>
+          );
+        })}
+      </nav>
+      <main className="min-w-0 flex-1 overflow-auto p-4 md:p-6">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold">{NAV.find((item) => item.id === section)?.label}</h1>

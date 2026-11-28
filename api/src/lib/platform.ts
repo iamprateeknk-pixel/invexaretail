@@ -1,5 +1,10 @@
 export const API_VERSION = '2026-09';
 
+export function runtimeReleaseId(env = process.env): string {
+  const gitRelease = env.GITHUB_SHA?.slice(0, 12);
+  return (env.INVEXA_ENV === 'staging' ? gitRelease : env.APP_VERSION || gitRelease) || 'unknown';
+}
+
 export const PLATFORM_CAPABILITIES = [
   'lot-stock',
   'daily-import',

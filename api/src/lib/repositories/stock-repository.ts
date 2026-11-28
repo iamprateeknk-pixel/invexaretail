@@ -29,9 +29,9 @@ import type { TenantContext } from '../tenant-context.js';
 import type { StockMovementType } from '@prisma/client';
 
 /** Every stock row at one of the company's locations, ordered by item then lot (the snapshot has no order contract; identity is the tuple). */
-export async function listStockForLocation(ctx: TenantContext, locationId: string): Promise<StockLedgerRecord[]> {
+export async function listStockForLocation(ctx: TenantContext, locationId: string, db: import('@prisma/client').Prisma.TransactionClient = prisma): Promise<StockLedgerRecord[]> {
   if (databaseEnabled) {
-    const rows = await prisma.stockLedger.findMany({
+    const rows = await db.stockLedger.findMany({
       where: { companyId: ctx.companyId, locationId },
       orderBy: [{ itemId: 'asc' }, { lotId: 'asc' }],
     });

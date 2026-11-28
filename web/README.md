@@ -33,7 +33,7 @@ src/
 ```bash
 npm ci
 npm run dev            # Vite dev server
-npm run build          # production build
+VITE_API_BASE=https://api.example.test npm run build
 npm run preview        # preview the production build
 npm run lint           # oxlint
 npm test               # unit tests (hooks, lib, control-plane)
@@ -45,8 +45,10 @@ npm run budget         # bundle-size budget check
 
 ## Configuration
 
-The app is configured at build time with Vite environment variables; the
-API base is `VITE_API_BASE` (the mobile app's default API base matches it).
+Set `VITE_API_BASE` to the target environment's public HTTPS API origin before
+building. For `npm run dev`, requests default to the local API on port 4000
+through the Vite proxy. An explicit `VITE_API_BASE` overrides that proxy target
+by making requests directly to the configured origin.
 Do not commit real secrets — see the repo's deployment docs.
 
 ## Deployment

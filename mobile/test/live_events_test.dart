@@ -41,7 +41,9 @@ void main() {
     expect(invalidationsForTopics(['count.changed']), {'counts', 'assignments', 'dashboard'});
     expect(invalidationsForTopics(['stock.changed']).contains('items'), isFalse);
     expect(invalidationsForTopics(['permission.changed']), {'full'});
+    expect(invalidationsForTopics(['config.changed']), {'full'});
     final all = invalidationsForTopics(['*']);
+    expect(all, contains('policy'));
     expect(all.contains('items') && !all.contains('full'), isTrue);
     expect(invalidationsForTopics(['something.else']), isEmpty);
   });

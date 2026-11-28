@@ -34,6 +34,11 @@ test('receipt rejects over-receipt and duplicate lot rows', () => {
     { lineId: 'a', itemId: 'xyz', lotId: '210', receivedQty: 0.5, damagedQty: 0, shortageQty: 0 },
   ]), /only once/);
 });
+test('receipt resolves line IDs and item-lot references before checking for duplicates', () => {
+  const line = { itemId: 'xyz', lotId: '210', receivedQty: 1, damagedQty: 0, shortageQty: 0 };
+  assert.throws(() => validateReceiptLines([{ id: 'a', itemId: 'xyz', lotId: '210', quantity: 1 }],
+    [{ ...line, lineId: 'a' }, line]), /only once/);
+});
 test('excess receipt is never absorbed into the requested cap and always flags a discrepancy', () => {
   const lines = [{ id: 'a', itemId: 'xyz', lotId: '210', quantity: 2 }];
   // Requesting more than the line's own quantity for received+damaged+shortage

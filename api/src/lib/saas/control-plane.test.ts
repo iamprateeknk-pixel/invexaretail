@@ -153,7 +153,10 @@ test('Rule Builder: a rule created through Studio fires the same generic engine 
     condition: { daysToExpiryLt: 30 },
     outcome: { action: 'CREATE_TASK:EXPIRY_ACTION' },
   });
+  const diff = plane.diff('default-company');
+  assert.equal(diff.find((change) => change.path === 'rules.expiry_task')?.op, '+');
   plane.publish(scope);
+  assert.deepEqual(plane.audit.at(-1)?.after, { version: 2, diff });
 
   assert.deepEqual(plane.evaluateRule('default-company', { daysToExpiry: 10 }), ['CREATE_TASK:EXPIRY_ACTION']);
   // Above threshold: the new rule should not fire, and the seeded high-value
@@ -294,6 +297,34 @@ test('P9-P10: offline stock mutations are idempotent and never last-write-wins',
     payload: { permissionRevoked: true },
   });
   assert.equal(revoked.status, 'rejected');
+});
+
+test('offline mutation idempotency keys cannot return another company mutation', () => {
+  const plane = new ControlPlane();
+  const original = plane.enqueueMutation({
+    mutationId: 'shared-idempotency-key',
+    tenantId: plane.tenantId,
+    companyId: 'default-company',
+    userId: 'user-a',
+    deviceId: 'device-a',
+    entityType: 'task',
+    actionType: 'TASK_COMPLETE',
+    payload: {},
+  });
+  assert.equal(original.status, 'synced');
+  assert.throws(
+    () => plane.enqueueMutation({
+      mutationId: 'shared-idempotency-key',
+      tenantId: plane.tenantId,
+      companyId: 'company-jaipur',
+      userId: 'user-b',
+      deviceId: 'device-b',
+      entityType: 'task',
+      actionType: 'TASK_COMPLETE',
+      payload: {},
+    }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'COMPANY_SCOPE_MISMATCH' && error.status === 403,
+  );
 });
 
 test('P11-P12: integrations, billing usage and health are company scoped', () => {

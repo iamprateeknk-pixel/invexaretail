@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword } from '../otp-auth.js';
 import { PLAN_PRICES } from './tenant-scope.js';
-import { ControlPlaneError, nowIso } from './control-plane.js';
+import { ControlPlaneError, nowIso } from './control-plane-values.js';
 import type { CompanyStatus, ScopeContext, PlanTemplate, CompanyRecord, BillingInvoice, AuditEvent, ConfigStatus, ConfigurationVersion } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 import { writeKillSwitchRow, writeSessionRows } from './control-plane-repository.js';

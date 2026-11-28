@@ -68,3 +68,8 @@ export function recordAudit(input: Omit<AuditEvent, 'id' | 'createdAt'>): AuditE
 export function listAuditEvents(): AuditEvent[] {
   return events.map((event) => ({ ...event, metadata: event.metadata ? { ...event.metadata } : undefined }));
 }
+
+/** Refreshes the read cache after the caller's transaction commits the audit row. */
+export function rememberPersistedAudit(event: AuditEvent): void {
+  events.unshift(event);
+}

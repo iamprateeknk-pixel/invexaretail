@@ -18,7 +18,7 @@ const STATUS_TONE = { OPEN: 'secondary', IN_PROGRESS: 'warning', PENDING_APPROVA
 const TYPE_LABEL = {
   DAMAGE: 'Damage', SHORT_RECEIPT: 'Short receipt', EXCESS_RECEIPT: 'Excess receipt', WRONG_ITEM: 'Wrong item',
   EXPIRED: 'Expired', MISSING_STOCK: 'Missing stock', QC_FAIL: 'QC failure', TRANSFER_DISCREPANCY: 'Transfer discrepancy',
-  COUNT_VARIANCE: 'Count variance', QUARANTINE: 'Quarantine',
+  COUNT_VARIANCE: 'Count variance', QUARANTINE: 'Quarantine', AUTOMATION_TASK: 'Studio task',
 };
 const DISPOSITIONS = ['RESTOCK', 'VENDOR_RETURN', 'MARKDOWN', 'DESTROY', 'REWORK', 'WRITE_OFF', 'ACCEPT', 'RECOUNT', 'ESCALATE', 'NONE'];
 
@@ -45,7 +45,7 @@ export function ExceptionsPage() {
   const [resolutionNotes, setResolutionNotes] = useState('');
   const isManager = ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER'].includes(role);
 
-  const view = useTableView(exceptionCases, (item) => [item.title, item.description, item.item?.code, item.item?.name, item.location?.name, item.owner?.name]);
+  const view = useTableView(exceptionCases, (item) => [item.title, item.description, TYPE_LABEL[item.type], item.item?.code, item.item?.name, item.location?.name, item.owner?.name]);
   const visibleCases = view.visible;
   const rowPadding = view.rowPadding;
 
@@ -56,7 +56,7 @@ export function ExceptionsPage() {
 
   function openResolve(exceptionCase) {
     setResolvingCase(exceptionCase);
-    setDisposition('');
+    setDisposition(exceptionCase.type === 'AUTOMATION_TASK' ? 'NONE' : '');
     setResolutionNotes('');
   }
 
@@ -116,7 +116,10 @@ export function ExceptionsPage() {
                     {' · '}Due {formatDateTime(item.dueAt)}
                     {item.owner ? ` · Owner ${item.owner.name}` : ' · Unassigned'}
                   </p>
-                  {item.disposition && <p className="mt-1 text-xs font-medium text-emerald-600">Closed as {item.disposition.replace(/_/g, ' ')}{item.resolutionNotes ? `: ${item.resolutionNotes}` : ''}</p>}
+                  {item.disposition && <p className="mt-1 text-xs font-medium text-emerald-600">
+                    {item.type === 'AUTOMATION_TASK' ? 'Completed' : `Closed as ${item.disposition.replace(/_/g, ' ')}`}
+                    {item.resolutionNotes ? ` · ${item.resolutionNotes}` : ''}
+                  </p>}
                 </div>
                 {!['CLOSED', 'REJECTED'].includes(item.status) && (
                   <div className="flex flex-wrap gap-2">
@@ -143,15 +146,15 @@ export function ExceptionsPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Resolve: {resolvingCase?.title}</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <Select value={disposition} onValueChange={setDisposition}>
+            {resolvingCase?.type !== 'AUTOMATION_TASK' && <Select value={disposition} onValueChange={setDisposition}>
               <SelectTrigger><SelectValue placeholder="Disposition" /></SelectTrigger>
               <SelectContent>{DISPOSITIONS.map((option) => <SelectItem key={option} value={option}>{option.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
-            </Select>
-            <Textarea value={resolutionNotes} onChange={(event) => setResolutionNotes(event.target.value)} placeholder="Resolution notes (what happened and why)" />
+            </Select>}
+            <Textarea aria-label="Resolution notes" value={resolutionNotes} onChange={(event) => setResolutionNotes(event.target.value)} placeholder="What happened and why" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResolvingCase(null)}>Cancel</Button>
-            <Button disabled={!disposition || submitLoading} onClick={submitResolution}>Close case</Button>
+            <Button disabled={!disposition || submitLoading} onClick={submitResolution}>{resolvingCase?.type === 'AUTOMATION_TASK' ? 'Complete task' : 'Close case'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -33,10 +33,10 @@ export async function drainImportCommitsOnce(chunkSize = 500): Promise<ImportWor
 
 let pollTimer: NodeJS.Timeout | null = null;
 
-export function startImportWorker(intervalMs = 2000): void {
+export function startImportWorker(intervalMs = 2000, onSuccess?: () => void): void {
   if (pollTimer) return;
   pollTimer = setInterval(() => {
-    drainImportCommitsOnce().catch((error) => console.error('[import-worker] drain failed', error));
+    drainImportCommitsOnce().then(() => onSuccess?.()).catch((error) => console.error('[import-worker] drain failed', error));
   }, intervalMs);
   pollTimer.unref?.();
 }

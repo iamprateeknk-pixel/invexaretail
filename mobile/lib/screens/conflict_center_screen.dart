@@ -28,6 +28,7 @@ class ConflictCenterScreen extends StatelessWidget {
           ...counts.where((row) => row.status == 'pending').map((row) => _Entry.count(row)),
           ...actions.where((row) => row.status == 'pending').map((row) => _Entry.action(row)),
         ];
+        final retryable = needsAttention.where((entry) => entry.canRetry).toList();
         return Scaffold(
           appBar: AppBar(
             title: const Text('Sync center'),
@@ -61,13 +62,13 @@ class ConflictCenterScreen extends StatelessWidget {
                   style: TextStyle(color: invexaMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 8),
-                if (needsAttention.length > 1)
+                if (retryable.length > 1)
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton.icon(
                       key: const ValueKey('retry-all'),
                       onPressed: () async {
-                        for (final entry in needsAttention) {
+                        for (final entry in retryable) {
                           if (entry.count != null) {
                             await controller.retryQueuedCount(entry.localId);
                           } else {
@@ -110,6 +111,7 @@ class _Entry {
   String? get lastError => count != null ? count!.lastError : action!.lastError;
   int get attempts => count != null ? count!.attempts : action!.attempts;
   String get createdAt => count != null ? count!.createdAt : action!.createdAt;
+  bool get canRetry => count?.requiresRecount != true && action?.requiresRescan != true;
 }
 
 /// What the status means in plain words, and what the user can do about it.
@@ -157,6 +159,7 @@ class _EntryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = entry.count;
+    final waitsForPermitSupport = (count?.lastErrorCode ?? entry.action?.lastErrorCode) == 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE';
     final title = count != null
         ? '${lookupItemName(controller.items, count.itemId)} · ${count.mode == 'weight' ? 'weight ' : 'qty '}${formatQty(count.physicalQuantity)}'
         : queuedActionLabel(entry.action!.type);
@@ -183,10 +186,29 @@ class _EntryCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(where, style: const TextStyle(color: invexaMuted, fontSize: 12)),
             const SizedBox(height: 8),
-            Text(syncReason(entry.status), style: const TextStyle(fontSize: 13)),
+            Text(
+              count?.requiresRecount == true
+                  ? 'Recount required. Open the count task again and enter a fresh quantity.'
+                  : entry.action?.requiresRescan == true
+                      ? switch (entry.action?.type) {
+                          'TRANSFER_RECEIVE' => 'Refresh the transfer and review the remaining quantities before receiving again.',
+                          'PICK' => 'Refresh the pick task and scan its items again.',
+                          _ => 'Refresh your putaway tasks and scan the destination bin again.',
+                        }
+                      : waitsForPermitSupport
+                          ? entry.lastError ?? syncReason(entry.status)
+                          : syncReason(entry.status),
+              style: const TextStyle(fontSize: 13),
+            ),
             if (entry.lastError != null && attention) ...[
               const SizedBox(height: 6),
-              Text('Server said: ${entry.lastError}', style: TextStyle(color: color, fontSize: 12)),
+              Text(
+                count?.lastErrorCode == 'LOCAL_OFFLINE_COUNT_UNAVAILABLE' ||
+                    entry.action?.lastErrorCode == 'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE'
+                    ? entry.lastError!
+                    : 'Server said: ${entry.lastError}',
+                style: TextStyle(color: color, fontSize: 12),
+              ),
             ],
             const SizedBox(height: 4),
             Text(
@@ -203,7 +225,7 @@ class _EntryCard extends StatelessWidget {
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Discard'),
                 ),
-                if (attention)
+                if (attention && entry.canRetry)
                   FilledButton.icon(
                     key: ValueKey('retry-${entry.localId}'),
                     onPressed: () => count != null ? controller.retryQueuedCount(entry.localId) : controller.retryQueuedAction(entry.localId),

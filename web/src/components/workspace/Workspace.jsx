@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { useWorkspace } from './WorkspaceContext';
-import { canAccessSection } from '../../lib/permissions';
+import { canAccessSection, getRoleHome } from '../../lib/permissions';
 import { DashboardPage } from './pages/DashboardPage';
 const StockUpdatePage = lazy(() => import('./pages/StockUpdatePage').then((module) => ({ default: module.StockUpdatePage })));
 const InventoryPage = lazy(() => import('./pages/InventoryPage').then((module) => ({ default: module.InventoryPage })));
@@ -64,9 +64,10 @@ const SECTION_PAGES = {
 };
 
 export function Workspace() {
-  const { activeSection, role, navigateTo, hiddenModules } = useWorkspace();
+  const { activeSection, role, navigateTo, hiddenModules, landingPending } = useWorkspace();
+  if (landingPending) return <LoadingState label="Loading your workspace…" />;
   if (!canAccessSection(activeSection, { role, hiddenModules })) {
-    return <PermissionDeniedState onReturn={() => navigateTo('dashboard')} />;
+    return <PermissionDeniedState returnLabel="Return to my workspace" onReturn={() => navigateTo(getRoleHome(role, { hiddenModules }))} />;
   }
   const Page = SECTION_PAGES[activeSection];
   if (!Page) {

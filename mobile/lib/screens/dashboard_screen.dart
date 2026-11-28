@@ -341,7 +341,9 @@ class _QueueTile extends StatelessWidget {
           '${item.lastError == null ? '' : '\n${item.lastError}'}',
         ),
         isThreeLine: item.lastError != null,
-        trailing: item.status == 'pending'
+        trailing: item.requiresRecount
+            ? null
+            : item.status == 'pending'
             ? IconButton(
                 tooltip: 'Remove from queue',
                 onPressed: () => controller.dismissQueued(item.localId),
@@ -385,7 +387,9 @@ class _QueuedActionTile extends StatelessWidget {
           ],
         ),
         subtitle: item.lastError == null ? null : Text(item.lastError!),
-        trailing: item.status == 'pending'
+        trailing: item.requiresRescan
+            ? null
+            : item.status == 'pending'
             ? IconButton(
                 tooltip: 'Remove from queue',
                 onPressed: () => controller.dismissQueuedAction(item.localId),

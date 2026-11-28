@@ -11,6 +11,10 @@ import { enhancedUsers } from './enterprise-repository.js';
 import type { Role } from './inventory.js';
 import { aggregateOpeningStock, type StockImportPreview } from './stock-import.js';
 import { countRowToRecord } from './count-record-mapper.js';
+import type { AppliedCountWorkflow } from './saas/workflow-approval-policy.js';
+import { lockStudioConfig } from './saas/control-plane-repository.js';
+import { enforceMobilePermit } from './saas/mobile-offline-permits.js';
+import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 import { itemRowToRecord } from './item-record-mapper.js';
 import { transferRowToRecord, transferCartonRowToRecord } from './transfer-record-mapper.js';
 import type { DailyMovementRecord, LotRecord, SyncCheckpointRecord } from './repository.js';
@@ -18,6 +22,9 @@ import { getIndustryPack, hydrateActiveWorkflow, setActiveWorkflow, workflowFrom
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID, adoptHydratedOwnership, itemsForCompany, locationsForCompany, registerItemCompany, registerLocationCompany, scopedImportKey } from './saas/tenant-scope.js';
 import { assertValidCountReviewTransition, transitionTransferStatus, type CountReviewStatus } from './domain-policies.js';
 import { DomainError } from './errors.js';
+import { transferPickChanged } from './pick-revision.js';
+import { reserveCountSubmission, type CountSubmissionGuard } from './count-submission-receipts.js';
+import { verifyCountStockRevision } from './count-stock-revision.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
 import { journalTypeForImport, syncJournalToBalances } from './import-journal-sync.js';
 import { replaceContents, pushAll } from './array-utils.js';
@@ -514,7 +521,7 @@ export async function loadTransferPickSlips(transferId: string): Promise<AuditEv
   }));
 }
 
-export async function persistItem(item: ItemRecord, companyId = 'default-company'): Promise<void> {
+export async function persistItem(item: ItemRecord, companyId = 'default-company', db: Prisma.TransactionClient = prisma): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   const operationalFields = {
@@ -543,13 +550,13 @@ export async function persistItem(item: ItemRecord, companyId = 'default-company
     createdById: item.createdById ?? null,
     updatedById: item.updatedById ?? null,
   };
-  await prisma.item.upsert({
+  await db.item.upsert({
     where: { id: item.id },
     update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields, ...masterFields } as any,
     create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields, ...masterFields } as any,
   });
   for (const lot of item.lots) {
-    await prisma.lot.upsert({
+    await db.lot.upsert({
       where: { id: lot.id },
       update: { lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes as Prisma.InputJsonValue },
       create: { id: lot.id, itemId: lot.itemId, lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes as Prisma.InputJsonValue },
@@ -891,30 +898,73 @@ export async function persistCountDeletion(id: string, companyId: string): Promi
   await prisma.stockCount.delete({ where: { id, companyId } }).catch(() => undefined);
 }
 
-export async function persistCount(count: CountRecord, companyId: string): Promise<void> {
+async function verifyCountSubmission(tx: Prisma.TransactionClient, companyId: string, counts: readonly CountRecord[],
+  guard: CountSubmissionGuard, lotId?: string): Promise<void> {
+  await reserveCountSubmission(tx, companyId, counts, guard.fingerprint);
+  const { itemId, locationId, submittedBy: userId, role } = counts[0];
+  if (guard.offlineCountPermit !== undefined) {
+    if (!guard.stockRevision) throw new DomainError('VALIDATION_FAILED', 'An offline count requires a stock revision.');
+    await lockStudioConfig(tx, companyId, 'shared');
+    const [actor] = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "User" WHERE id = ${userId} AND "companyId" = ${companyId}
+        AND role::text = ${role} AND status = 'ACTIVE' FOR SHARE
+    `;
+    if (!actor) throw new DomainError('OFFLINE_COUNT_POLICY_REJECTED', 'Your count permission changed. Refresh the task and count again.');
+    await enforceMobilePermit({ companyId, tenantId: DEFAULT_TENANT_ID, userId, role }, guard.offlineCountPermit, 'counts', tx);
+  }
+  if (guard.stockRevision) await verifyCountStockRevision(tx, { companyId, itemId, locationId, lotId }, counts, guard.stockRevision);
+}
+
+export async function persistCount(count: CountRecord, companyId: string, guard?: CountSubmissionGuard): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  await prisma.stockCount.upsert({
-    where: { id: count.id, companyId },
-    update: {
+  await prisma.$transaction(async (tx) => {
+    if (guard) await verifyCountSubmission(tx, companyId, [count], guard, count.lotId);
+    const existing = await tx.stockCount.findUnique({ where: { id: count.id, companyId }, select: { id: true } });
+    const fields = {
       physicalQty: count.physicalQuantity,
       bookQty: count.bookQty,
       mode: count.mode,
       parentCountId: count.parentCountId ?? null,
-    },
-    create: {
-      id: count.id,
-      itemId: count.itemId,
-      lotId: count.lotId,
-      locationId: count.locationId,
-      physicalQty: count.physicalQuantity,
-      bookQty: count.bookQty,
-      mode: count.mode,
-      submittedById: count.submittedBy,
-      parentCountId: count.parentCountId ?? null,
-      requestId: count.requestId ?? null,
-      companyId,
-    } as never,
+    };
+    await tx.stockCount.upsert({
+      where: { id: count.id, companyId },
+      update: fields,
+      create: {
+        ...fields,
+        id: count.id, itemId: count.itemId, lotId: count.lotId, locationId: count.locationId,
+        submittedById: count.submittedBy, requestId: count.requestId ?? null, companyId,
+      } as never,
+    });
+    if (!existing) await queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId, entityId: count.id });
+  });
+}
+
+/** Creates every lot row for a pooled weight count in one database transaction. */
+export async function persistCountBatch(countBatch: readonly CountRecord[], companyId: string, guard?: CountSubmissionGuard): Promise<void> {
+  if (!databaseEnabled || countBatch.length === 0) return;
+  requireDatabase();
+  await prisma.$transaction(async (tx) => {
+    if (guard) await verifyCountSubmission(tx, companyId, countBatch, guard);
+    await tx.stockCount.createMany({
+      data: countBatch.map((count) => ({
+        id: count.id,
+        itemId: count.itemId,
+        lotId: count.lotId,
+        locationId: count.locationId,
+        physicalQty: count.physicalQuantity,
+        bookQty: count.bookQty,
+        mode: count.mode,
+        submittedById: count.submittedBy,
+        parentCountId: count.parentCountId ?? null,
+        requestId: count.requestId ?? null,
+        countDate: new Date(count.createdAt),
+        reviewStatus: 'PENDING_REVIEW',
+        companyId,
+      })) as never,
+    });
+    // A pooled submission is one operator action even though it saves several lot counts.
+    await queueStudioBusinessEvent(tx, { event: 'count.submitted', companyId, entityId: countBatch[0].id });
   });
 }
 
@@ -941,7 +991,7 @@ export async function persistCountReconciliation(count: CountRecord, companyId: 
   });
 }
 
-export async function persistCountReview(count: CountRecord, companyId: string): Promise<void> {
+export async function persistCountReview(count: CountRecord, companyId: string, workflowPolicy?: AppliedCountWorkflow | null): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
 
@@ -993,7 +1043,7 @@ export async function persistCountReview(count: CountRecord, companyId: string):
         movementType: 'COUNT_VARIANCE', qtyDelta: ledger ? variance : count.physicalQuantity,
         idempotencyKey: `count-variance:${count.id}`,
         reason: count.reviewReason ?? 'Approved stock count variance', sourceDocument: count.id, sourceLineId: count.id, correlationId: count.id,
-        metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty },
+        metadata: { countId: count.id, physicalQuantity: count.physicalQuantity, bookQty: count.bookQty, ...(workflowPolicy ? { workflowPolicy } : {}) },
       });
     }
   });
@@ -1054,20 +1104,19 @@ export async function persistTransfer(transfer: TransferRecord, companyId: strin
   if (!databaseEnabled) return;
   requireDatabase();
   const status = transfer.status === 'SUBMITTED' ? 'REQUESTED' : transfer.status === 'PARTIALLY_RECEIVED' ? 'PARTIAL_RECEIVED' : transfer.status;
-  await prisma.transfer.upsert({
-    where: { id: transfer.id, companyId },
-    update: { status: status as any, notes: transfer.notes, cartonCount: transfer.cartonCount ?? null },
-    create: {
-      id: transfer.id,
-      sourceLocationId: transfer.sourceLocationId,
-      destinationLocationId: transfer.destinationLocationId,
-      requestedById: transfer.requestedBy,
-      status: status as any,
-      notes: transfer.notes,
-      cartonCount: transfer.cartonCount ?? null,
-      companyId,
-      lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
-    },
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.transfer.findUnique({ where: { id: transfer.id, companyId }, select: { id: true } });
+    const fields = { status: status as any, notes: transfer.notes, cartonCount: transfer.cartonCount ?? null };
+    await tx.transfer.upsert({
+      where: { id: transfer.id, companyId },
+      update: fields,
+      create: {
+        ...fields, id: transfer.id, sourceLocationId: transfer.sourceLocationId, destinationLocationId: transfer.destinationLocationId,
+        requestedById: transfer.requestedBy, companyId,
+        lines: { create: transfer.lines.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity })) },
+      },
+    });
+    if (!existing) await queueStudioBusinessEvent(tx, { event: 'transfer.created', companyId, entityId: transfer.id });
   });
 }
 
@@ -1226,12 +1275,25 @@ export async function persistConfirmedPickAllocations(
   transferId: string,
   allocations: Array<{ itemId: string; lotId: string; locationId: string; quantity: number }>,
   tenant: import('./tenant-context.js').TenantContext,
+  reviewed?: { status: string; sourceLocationId: string; destinationLocationId: string; slipIds: string[] },
 ): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${transferId} AND "companyId" = ${tenant.companyId} FOR UPDATE`;
     const transfer = await tx.transfer.findFirst({ where: { id: transferId, companyId: tenant.companyId } });
     if (!transfer) throw new Error('Transfer was not found.');
+    if (reviewed) {
+      const slips = await tx.auditLog.findMany({
+        where: { entityType: 'Transfer', entityId: transferId, action: 'PICK_SLIP_SAVED' }, select: { id: true },
+      });
+      const expected = new Set(reviewed.slipIds);
+      if (transfer.status !== reviewed.status || transfer.sourceLocationId !== reviewed.sourceLocationId
+        || transfer.destinationLocationId !== reviewed.destinationLocationId
+        || slips.length !== expected.size || slips.some((slip) => !expected.has(slip.id))) {
+        throw transferPickChanged();
+      }
+    }
     if (['CONFIRMED', 'DISPATCHED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED'].includes(String(transfer.status))) {
       throw new Error('Transfer is already confirmed and stock cannot be deducted twice.');
     }
@@ -1428,10 +1490,10 @@ export async function persistUserDelete(userId: string): Promise<void> {
   await prisma.user.delete({ where: { id: userId } });
 }
 
-export async function persistAudit(event: AuditEvent): Promise<void> {
+export async function persistAudit(event: AuditEvent, db: Prisma.TransactionClient = prisma): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  await prisma.auditLog.upsert({
+  await db.auditLog.upsert({
     where: { id: event.id },
     update: { action: event.action, metadata: event.metadata as Prisma.InputJsonValue },
     create: {

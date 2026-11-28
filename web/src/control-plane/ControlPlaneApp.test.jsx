@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import 'global-jsdom/register';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { ControlPlaneApp } from './ControlPlaneApp.jsx';
 import { clearControlSession, writeControlSession } from './control-api.js';
@@ -69,10 +69,35 @@ test('locked session renders the workspace nav and switches sections', async () 
       companies: [company],
     });
     render(React.createElement(ControlPlaneApp));
+    const desktopNav = screen.getByRole('navigation', { name: 'Control Plane sections' });
     for (const label of ['Company', 'Studio', 'Users', 'Approvals', 'Mobile & sync', 'Integrations', 'Billing', 'Health']) {
-      assert.ok(screen.getByRole('button', { name: label }), label);
+      assert.ok(within(desktopNav).getByRole('button', { name: label }), label);
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Billing' }));
+    assert.equal(within(desktopNav).getByRole('button', { name: 'Company' }).getAttribute('aria-current'), 'page');
+    fireEvent.click(within(desktopNav).getByRole('button', { name: 'Billing' }));
+    assert.ok(await screen.findByText('Usage vs limits'));
+  } finally {
+    restore();
+  }
+});
+
+test('locked session exposes every section through a mobile navigation landmark', async () => {
+  const restore = stubFetchOk();
+  try {
+    writeControlSession({
+      platformToken: 'platform-token',
+      controlToken: 'control-token',
+      user: { id: 'user-1', name: 'Root Admin' },
+      company,
+      companies: [company],
+    });
+    render(React.createElement(ControlPlaneApp));
+    const mobileNav = await screen.findByRole('navigation', { name: 'Mobile Control Plane sections' });
+    for (const label of ['Company', 'Studio', 'Users', 'Approvals', 'Mobile & sync', 'Integrations', 'Billing', 'Health']) {
+      assert.ok(within(mobileNav).getByRole('button', { name: label }), label);
+    }
+    assert.equal(within(mobileNav).getByRole('button', { name: 'Company' }).getAttribute('aria-current'), 'page');
+    fireEvent.click(within(mobileNav).getByRole('button', { name: 'Billing' }));
     assert.ok(await screen.findByText('Usage vs limits'));
   } finally {
     restore();

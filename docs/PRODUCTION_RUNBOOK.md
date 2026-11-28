@@ -16,9 +16,12 @@ team's own cloud host with Docker Compose behind Nginx.
 | Database | private | `postgres` (PostgreSQL 17) or an external `DATABASE_URL` | migrations only |
 | Mobile (Android, iOS, Windows) | - | `.github/workflows/{android-apk,ios,windows}.yml` | `--dart-define=INVEXA_ENV`, `INVEXA_API_BASE` (default `https://invexaretail.com`) |
 
-The host's public Nginx terminates TLS and must forward **both** `/api/` and
-`/control/` to the API (as `web/nginx.conf` does); `admin.invexaretail.com`
-proxies to port 18181. The `worker` service is required: staged import commits,
+The host's public Nginx terminates TLS. On the workspace domain it can forward
+all traffic to the Compose web service, which routes `/api/v1`, `/control/v1`,
+`/studio/v1` and `/sync/v1` to the API container. It also forwards `/health`,
+`/ready`, `/ready/worker` and `/meta`. If the host proxies API traffic directly, configure
+these routes there. The admin domain proxies to port 18181. Compose publishes
+service ports on the host's loopback interface. The `worker` service is required: staged import commits,
 outbox delivery and retention, the expiry sweep, stock reconciliation and alerts
 run only there.
 
@@ -48,21 +51,61 @@ API and worker (never commit values; set in the platform's secret store):
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | optional | Tracing; unset = off. |
 | `APP_VERSION` / `GITHUB_SHA` | set by CI | Reported by `/health` and `/meta`. |
 
-Web: `VITE_API_BASE` (public HTTPS API domain; build-time). Mobile: `INVEXA_ENV`
-(`production` default) and `INVEXA_API_BASE`; a production build refuses http and
-private hosts.
+Web uses `VITE_API_BASE` at build time. Native clients use `INVEXA_ENV`
+(`production` by default), `INVEXA_API_BASE`, and `INVEXA_WEB_APP_URL`.
+Staging requires both HTTPS origins explicitly. Production and staging
+reject private hosts. See the [native setup](../mobile/README.md#run-locally).
+
+For staging Compose, set `INVEXA_ENV=staging`, the full `GITHUB_SHA`, and a
+dedicated `DATABASE_URL`. Set `VITE_API_BASE` and `VITE_WEB_APP_URL` to the staging
+API and workspace HTTPS origins, and set `PUBLIC_CONTROL_URL` to the staging
+admin HTTPS origin. Include the workspace and admin origins in `ALLOWED_ORIGINS`.
+The API checks this configuration at boot. The staging admin issues the
+handoff code and the workspace redeems it once. Set
+`REQUIRE_STUDIO_RELEASE_REVIEW=true` to require independent review for publication.
+The worker accepts `ALERT_WEBHOOK_URL` from the environment when alerts are configured.
+CI exercises the Compose routing, sign-in and handoff with a temporary database
+and synthetic accounts.
+
+Set `ENABLE_STUDIO_AUTOMATION_TASKS=true` in the Compose environment after the
+staged task rollout is approved. Compose passes the flag to the worker and API.
+With the flag off, Studio shows pending task runs as paused. Their attempts are
+preserved, notifications continue, and existing tasks remain usable.
+Apply the handoff migration before rolling out API replicas. The handoff code
+expires after one minute, and any replica can redeem it once. PostgreSQL stores
+the code hash and encrypted payload. A replica from before this migration uses
+its own memory for newly issued codes. During a mixed-version rollout, retry
+sign-in if an in-flight handoff reaches a replica on the other version.
 
 ## 3. Release
+
+After the approval binding migration, existing approval rows remain available
+for history. For an operation that is still pending, the original requester
+resubmits the command to create an approval linked to its current details.
+Verify the new request before retrying any stock movement or purchase order.
+
+Studio approval workflows start in simulation. Once the new API is staged,
+enable and publish a workflow, then verify the exact threshold, an independent
+reviewer, and the required location assignment for a branch manager. Rehearse
+rollback before enabling live policies in production. Studio requests retain a
+rule reference so older images can read approval history. Stop approval writes
+and affected inventory commands during a rollback to an image that predates
+Studio enforcement, since it cannot enforce the published policies or reviewer location.
 
 1. CI green on the merge commit: API build/lint/tests, every real-Postgres suite,
    the migration matrix, web tests/build/E2E, audit gate, gitleaks.
 2. Staging first when one exists: migrate, then
    `API_URL=<staging> LOAD_PASSWORD=<...> npm run load:test -- --duration 30 --concurrency 20 --p95-budget-ms 500`.
-3. Production, on the cloud host: `git pull`, then
-   `docker compose build api worker web admin`,
-   `docker compose run --rm api npx prisma migrate deploy` (never `db push`),
-   then `docker compose up -d`.
-4. Check `GET /health`, `/ready`, `/meta` report the new release and a ready schema.
+3. On the cloud host, set `GITHUB_SHA` to the full approved release commit.
+   Build `api`, `worker`, `web`, and `admin` from that revision. Run
+   `docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'`
+   before `docker compose up -d`. The API image owns migrations. The worker
+   has no migration command and refuses to start on an incomplete schema.
+4. Check `GET /health`, `/ready`, and `/meta` report the new release and a ready schema.
+   Require `GET /ready/worker` to return HTTP 200 for the same release before
+   opening the rollout. It returns HTTP 503 until the dedicated worker has
+   reported a recent heartbeat and completed its import, outbox, automation,
+   and Studio release polls. A stopped worker becomes stale after three minutes.
 5. Confirm the web app's `/assets/index-*.js` hash changed and
    `https://admin.invexaretail.com/health` answers `{"ok":true,"panel":"control-plane"}`.
 6. Watch `GET /ops/metrics` for 30 minutes: `outbox.slo.breached`,
@@ -125,6 +168,7 @@ DATABASE_URL=postgresql://.../invexa_restore npx prisma migrate diff --from-conf
 |---|---|---|---|
 | API 5xx / latency | `/ops/metrics` `api`, platform | 5xx > 1 % for 5 min | Check the release in `/meta`; roll back if it started with a deploy. |
 | Outbox lag / poison | `/ops/metrics` `outbox.slo` | oldest pending > 15 min, or any POISON | Is the worker up? Inspect POISON rows; do not delete. |
+| Worker progress | `/ready/worker` and `/ops/metrics` `worker` | HTTP 503, or a critical worker poll has no recent success | Confirm the worker and API report the same release. Check the worker logs for the stalled poll. |
 | Snapshot freshness | `/ops/metrics` `reconciliation` | `stale: true` | Database reachable? Restart the API; the last good snapshot keeps serving. |
 | Stock reconciliation | `GET /ops/reconciliation` | `mismatches > 0` | See 6.1. |
 | Auth | audit log (`TWO_FACTOR_*`, `ACCOUNT_LOCKED` 429s) | spike of locks or refresh-reuse | Treat as credential stuffing; consider tightening the rate limit. |

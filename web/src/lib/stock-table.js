@@ -45,6 +45,8 @@ export const RIGHT_ALIGNED_STOCK_COLUMNS = new Set(['value']);
 
 /** Available = physical stock not held by reservations or quarantine. */
 export function availableQuantity(row) {
+  const ledgerAvailable = Number(row?.availableQuantity ?? NaN);
+  if (Number.isFinite(ledgerAvailable)) return Math.max(0, ledgerAvailable);
   return Math.max(0, Number(row?.physicalQuantity ?? 0) - Number(row?.reservedQuantity ?? 0) - Number(row?.quarantineQuantity ?? 0));
 }
 

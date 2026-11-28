@@ -396,6 +396,7 @@ test('COUNT_ENFORCE_RECOUNT refuses to approve an out-of-tolerance first count, 
   freshState();
   await withServer(async (call) => {
     const admin = tokenFor('admin@retail.local');
+    const manager = tokenFor('manager@retail.local');
     const stock = await call('GET', '/stock/loc-1', admin);
     const row = stock.body.items.find((entry: { physicalQuantity: number }) => entry.physicalQuantity >= 20);
     assert.ok(row, 'seed data has an item with stock');
@@ -405,10 +406,10 @@ test('COUNT_ENFORCE_RECOUNT refuses to approve an out-of-tolerance first count, 
     assert.ok(countId, JSON.stringify(first));
     process.env.COUNT_ENFORCE_RECOUNT = 'true';
     try {
-      const refused = await call('PATCH', `/stock-counts/${countId}/review`, admin, { status: 'APPROVED', reviewReason: 'Looks right' });
+      const refused = await call('PATCH', `/stock-counts/${countId}/review`, manager, { status: 'APPROVED', reviewReason: 'Looks right' });
       assert.equal(refused.status, 409, JSON.stringify(refused.body));
       assert.equal(refused.body.code, 'RECOUNT_REQUIRED');
-      assert.equal((await call('PATCH', `/stock-counts/${countId}/review`, admin, { status: 'RECOUNT', reviewReason: 'Recount please' })).status, 200);
+      assert.equal((await call('PATCH', `/stock-counts/${countId}/review`, manager, { status: 'RECOUNT', reviewReason: 'Recount please' })).status, 200);
     } finally {
       delete process.env.COUNT_ENFORCE_RECOUNT;
     }

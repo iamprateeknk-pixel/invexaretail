@@ -94,6 +94,7 @@ enum ExceptionType {
   TRANSFER_DISCREPANCY
   COUNT_VARIANCE
   QUARANTINE
+  AUTOMATION_TASK
 }
 
 enum ExceptionStatus {
@@ -669,10 +670,13 @@ model EvidenceRule {
 model ApprovalRequest {
   id             String    @id @default(cuid())
   ruleId         String
-  rule           ApprovalRule @relation(fields: [ruleId], references: [id])
+  rule           ApprovalRule @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  workflowPolicy Json?
   triggerType    String
   entityType     String
   entityId       String
+  // Older requests have no command binding and are retained for history.
+  intentFingerprint String? @db.VarChar(64)
   // Decimal migration pilot (docs/decimal-migration-plan.md): write-only in
   // application code (never used in arithmetic - checkApprovalGate compares
   // the plain-number `value` argument against ApprovalRule.valueThreshold,
@@ -689,6 +693,7 @@ model ApprovalRequest {
   updatedAt      DateTime  @updatedAt
 
   @@index([entityType, entityId, status])
+  @@index([intentFingerprint, status])
   @@index([status, triggerType])
 }
 
@@ -997,6 +1002,7 @@ model TransferReceipt {
   receivedById String
   status       String
   notes        String?  @db.Text
+  requestFingerprint String?
   createdAt    DateTime @default(now())
   lines        TransferReceiptLine[]
   tenantId    String   @default("tenant-invexa")
@@ -2202,7 +2208,7 @@ model ControlPlaneCompany {
   entitlements   Json
   limitOverrides Json
   billing        Json
-  updatedAt      DateTime @default(now()) @updatedAt
+  updatedAt      DateTime @updatedAt
 }
 
 model ControlPlanePlatformUser {
@@ -2211,7 +2217,7 @@ model ControlPlanePlatformUser {
   name         String
   passwordHash String
   status       String
-  updatedAt    DateTime @default(now()) @updatedAt
+  updatedAt    DateTime @updatedAt
 }
 
 model ControlPlaneCompanyUser {
@@ -2224,9 +2230,27 @@ model ControlPlaneCompanyUser {
   passwordHash   String
   isPrimaryAdmin Boolean
   createdAt      String
-  updatedAt      DateTime @default(now()) @updatedAt
+  updatedAt      DateTime @updatedAt
 
   @@index([companyId])
+}
+
+model WorkerHealth {
+  release           String    @id
+  heartbeatAt       DateTime
+  outboxAt          DateTime?
+  importsAt         DateTime?
+  automationsAt     DateTime?
+  studioReleasesAt  DateTime?
+}
+
+model SessionHandoff {
+  codeHash   String   @id
+  purpose    String
+  payload    Bytes
+  expiresAt  DateTime
+
+  @@index([expiresAt])
 }
 
 model ControlPlaneSession {
@@ -2237,7 +2261,7 @@ model ControlPlaneSession {
   status         String
   issuedAt       String
   expiresAt      String
-  updatedAt      DateTime @default(now()) @updatedAt
+  updatedAt      DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2251,7 +2275,7 @@ model ControlPlaneApiKey {
   scopes    Json
   status    String
   createdAt String
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2259,14 +2283,14 @@ model ControlPlaneApiKey {
 model ControlPlaneKillSwitch {
   featureKey String   @id
   enabled    Boolean
-  updatedAt  DateTime @default(now()) @updatedAt
+  updatedAt  DateTime @updatedAt
 }
 
 model ControlPlaneUsage {
   companyId String
   meter     String
   value     Float
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@id([companyId, meter])
 }
@@ -2280,7 +2304,7 @@ model ControlPlaneWebhook {
   status        String
   signingSecret String
   createdAt     String
-  updatedAt     DateTime @default(now()) @updatedAt
+  updatedAt     DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2290,7 +2314,7 @@ model ControlPlaneConnector {
   companyId String
   type      String
   status    String
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2301,7 +2325,7 @@ model ControlPlaneDevice {
   userId     String
   status     String
   appVersion String
-  updatedAt  DateTime @default(now()) @updatedAt
+  updatedAt  DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2315,7 +2339,7 @@ model ControlPlaneInvoice {
   issuedAt                String
   paidAt                  String?
   stripeCheckoutSessionId String?
-  updatedAt               DateTime @default(now()) @updatedAt
+  updatedAt               DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2327,10 +2351,32 @@ model ControlPlaneConfig {
   kind      String
   status    String
   payload   Json
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@id([versionId, kind])
   @@index([companyId, kind])
+}
+
+model StudioAutomationRun {
+  id            String   @id @default(cuid())
+  companyId     String
+  automationKey String
+  occurrence    String
+  expression    String
+  configVersion Int
+  versionId     String
+  name          String
+  actionKey     String   @default("SEND_NOTIFICATION")
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime
+  finishedAt    DateTime?
+  failureCode   String?
+  createdAt     DateTime @default(now())
+
+  @@unique([companyId, automationKey, occurrence])
+  @@index([status, nextAttemptAt])
+  @@index([companyId, createdAt])
 }
 
 model ControlPlaneAudit {
@@ -2366,7 +2412,7 @@ model ControlPlaneMutation {
   result      Json?
   createdAt   String
   serverAckAt String?
-  updatedAt   DateTime @default(now()) @updatedAt
+  updatedAt   DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -2374,19 +2420,19 @@ model ControlPlaneMutation {
 model ControlPlaneFieldValue {
   key       String   @id
   value     Json
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model ControlPlaneLedger {
   key       String   @id
   value     Float
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model ControlPlaneImportProfile {
   key       String   @id
   profile   Json
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model ControlPlaneOutbox {
@@ -2401,7 +2447,7 @@ model ControlPlaneOutbox {
 model ControlPlaneMeta {
   key       String   @id
   value     Json
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 // Blueprint P8: bin-granularity stock. Location ATP remains on StockLedger
@@ -2754,4 +2800,23 @@ model PasskeyCredential {
   lastUsedAt   DateTime?
 
   @@index([userId])
+}
+
+model StudioLowStockState {
+  companyId String
+  ruleId    String
+  episodeId String?
+
+  @@id([companyId, ruleId])
+}
+
+model CountSubmissionReceipt {
+  companyId   String
+  actorId     String
+  requestId   String
+  fingerprint String
+  countIds    String[]
+  createdAt   DateTime @default(now())
+
+  @@id([companyId, actorId, requestId])
 }

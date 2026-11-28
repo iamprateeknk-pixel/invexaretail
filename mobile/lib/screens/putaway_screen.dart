@@ -31,7 +31,11 @@ class _PutawayScreenState extends State<PutawayScreen> {
       type: 'PUTAWAY',
       method: 'POST',
       path: '/api/v1/putaway-tasks/${task['id']}/confirm',
-      body: {'scannedBinCode': scanned, 'requireScan': true},
+      body: {
+        'scannedBinCode': scanned,
+        'requireScan': true,
+        if (task['updatedAt'] is String) 'taskRevision': task['updatedAt'],
+      },
     );
   }
 

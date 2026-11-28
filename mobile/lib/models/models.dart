@@ -49,10 +49,11 @@ bool canSubmitAdHocCount(String role) =>
     role == 'ADMIN' || role == 'ADMIN_USER' || role == 'BRANCH_MANAGER' || role == 'AUDITOR';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode, this.retryAfterSeconds});
+  ApiException(this.message, {this.statusCode, this.retryAfterSeconds, this.code});
 
   final String message;
   final int? statusCode;
+  final String? code;
   // From a Retry-After header (seconds); the sync queue waits at least this long.
   final int? retryAfterSeconds;
 
@@ -210,12 +211,14 @@ class LotRecord {
     required this.lotNo,
     this.expiryDate,
     this.status,
+    this.stockRevision,
   });
 
   final String id;
   final String lotNo;
   final String? expiryDate;
   final String? status;
+  final String? stockRevision;
 
   factory LotRecord.fromJson(Map<String, dynamic> json) {
     return LotRecord(
@@ -223,6 +226,7 @@ class LotRecord {
       lotNo: asString(json['lotNo'], asString(json['id'])),
       expiryDate: json['expiryDate'] == null ? null : asString(json['expiryDate']),
       status: json['status'] == null ? null : asString(json['status']),
+      stockRevision: json['stockRevision'] as String?,
     );
   }
 }
@@ -430,6 +434,7 @@ class TransferRecord {
     required this.destinationLocationId,
     required this.status,
     this.cartonCount,
+    this.receiveRevision,
     this.lines = const [],
     this.createdAt,
     this.cartons = const [],
@@ -442,6 +447,7 @@ class TransferRecord {
   final String destinationLocationId;
   final String status;
   final int? cartonCount;
+  final String? receiveRevision;
   final List<TransferLine> lines;
   final String? createdAt;
   final List<TransferCarton> cartons;
@@ -466,6 +472,7 @@ class TransferRecord {
       destinationLocationId: asString(json['destinationLocationId']),
       status: asString(json['status']),
       cartonCount: json.containsKey('cartonCount') ? asInt(json['cartonCount']) : null,
+      receiveRevision: json['receiveRevision'] is String ? json['receiveRevision'] as String : null,
       lines: asList(json['lines']).map((row) => TransferLine.fromJson(asMap(row))).toList(),
       createdAt: json['createdAt'] == null ? null : asString(json['createdAt']),
       cartons: asList(json['cartons']).map((row) => TransferCarton.fromJson(asMap(row))).toList(),
@@ -535,6 +542,7 @@ class CountTask {
     required this.item,
     this.lots = const [],
     this.recount = false,
+    this.stockRevision,
   });
 
   final String assignmentId;
@@ -542,6 +550,7 @@ class CountTask {
   final CatalogItem item;
   final List<LotRecord> lots;
   final bool recount;
+  final String? stockRevision;
 
   factory CountTask.fromJson(Map<String, dynamic> json) {
     final item = CatalogItem.fromJson(asMap(json['item']));
@@ -551,6 +560,7 @@ class CountTask {
               id: asString(row['lotId']),
               lotNo: asString(row['lotNo']),
               expiryDate: row['expiryDate'] == null ? null : asString(row['expiryDate']),
+              stockRevision: row['stockRevision'] as String?,
             ))
         .toList();
     return CountTask(
@@ -559,11 +569,26 @@ class CountTask {
       item: item.withLots(lots),
       lots: lots,
       recount: json['recount'] == true,
+      stockRevision: json['stockRevision'] as String?,
     );
   }
 }
 
-class QueuedCount {
+sealed class QueuedOperation {
+  String get userId;
+  String get createdAt;
+  String? get nextAttemptAt;
+  set nextAttemptAt(String? value);
+  String get status;
+  set status(String value);
+  int get attempts;
+  set attempts(int value);
+  set lastError(String? value);
+  String? get lastErrorCode;
+  set lastErrorCode(String? value);
+}
+
+class QueuedCount extends QueuedOperation {
   QueuedCount({
     required this.localId,
     required this.itemId,
@@ -579,14 +604,19 @@ class QueuedCount {
     this.userId = '',
     this.deviceId = '',
     this.nextAttemptAt,
+    this.stockRevision,
+    this.offlineCountPermit,
+    this.lastErrorCode,
   }) : requestId = requestId ?? localId;
 
   final String localId;
   // Plan P0-SYNC-001: who queued this and on which device. A queued item is only ever shown
   // to, and replayed by, that same user; never by whoever signs in next on the phone.
+  @override
   final String userId;
   final String deviceId;
   // Earliest time the next automatic attempt may run (backoff after a transient failure).
+  @override
   String? nextAttemptAt;
   final String itemId;
   final String locationId;
@@ -598,12 +628,25 @@ class QueuedCount {
   // Idempotency key (blueprint v4 §38): sent with every attempt, so a retry
   // after a timeout or a reconnect can never record the count twice.
   final String requestId;
+  final String? stockRevision;
+  final String? offlineCountPermit;
+  @override
   final String createdAt;
+  @override
   int attempts;
+  @override
   String? lastError;
+  @override
+  String? lastErrorCode;
+  bool get requiresRecount => const {
+    'COUNT_STOCK_CHANGED',
+    'OFFLINE_COUNT_POLICY_REJECTED',
+    'LOCAL_OFFLINE_COUNT_UNAVAILABLE',
+  }.contains(lastErrorCode);
   // 'pending' auto-retries on the next flush; 'conflict'/'rejected' stop
   // auto-retrying and wait for the user to retry or discard (see
   // classifySyncFailure in sync_resolution.dart).
+  @override
   String status;
 
   factory QueuedCount.fromJson(Map<String, dynamic> json) {
@@ -622,6 +665,9 @@ class QueuedCount {
       userId: asString(json['userId']),
       deviceId: asString(json['deviceId']),
       nextAttemptAt: json['nextAttemptAt'] == null ? null : asString(json['nextAttemptAt']),
+      stockRevision: json['stockRevision'] as String?,
+      offlineCountPermit: json['offlineCountPermit'] as String?,
+      lastErrorCode: json['lastErrorCode'] as String?,
     );
   }
 
@@ -631,6 +677,9 @@ class QueuedCount {
         'deviceId': deviceId,
         'nextAttemptAt': nextAttemptAt,
         'requestId': requestId,
+        if (stockRevision != null) 'stockRevision': stockRevision,
+        if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
+        if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
         'itemId': itemId,
         'locationId': locationId,
         'physicalQuantity': physicalQuantity,
@@ -682,7 +731,7 @@ String encodeQueuedCounts(List<QueuedCount> items) {
   return jsonEncode(items.map((item) => item.toJson()).toList());
 }
 
-class QueuedAction {
+class QueuedAction extends QueuedOperation {
   QueuedAction({
     required this.localId,
     required this.type,
@@ -692,6 +741,7 @@ class QueuedAction {
     required this.createdAt,
     this.attempts = 0,
     this.lastError,
+    this.lastErrorCode,
     this.status = 'pending',
     this.companyId = '',
     this.userId = '',
@@ -704,18 +754,33 @@ class QueuedAction {
   // Plan P0-SYNC-001/003: identity binding and a stable idempotency key, created once when the
   // person acts and sent as X-Mutation-Id on every attempt (including after a restart).
   final String companyId;
+  @override
   final String userId;
   final String deviceId;
   final String mutationId;
+  @override
   String? nextAttemptAt;
   final String type;
   final String method;
   final String path;
   final Map<String, dynamic> body;
+  @override
   final String createdAt;
+  @override
   int attempts;
+  @override
   String? lastError;
+  @override
+  String? lastErrorCode;
+  bool get requiresRescan => const {
+    'PUTAWAY_TASK_CHANGED',
+    'TRANSFER_RECEIVE_CHANGED',
+    'TRANSFER_PICK_CHANGED',
+    'OFFLINE_WAREHOUSE_POLICY_REJECTED',
+    'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE',
+  }.contains(lastErrorCode);
   // See QueuedCount.status - same conflict/rejected/pending contract.
+  @override
   String status;
 
   factory QueuedAction.fromJson(Map<String, dynamic> json) {
@@ -728,6 +793,7 @@ class QueuedAction {
       createdAt: asString(json['createdAt']),
       attempts: asInt(json['attempts']),
       lastError: json['lastError'] == null ? null : asString(json['lastError']),
+      lastErrorCode: json['lastErrorCode'] == null ? null : asString(json['lastErrorCode']),
       status: asString(json['status'], 'pending'),
       companyId: asString(json['companyId']),
       userId: asString(json['userId']),
@@ -752,6 +818,7 @@ class QueuedAction {
         'attempts': attempts,
         'status': status,
         'lastError': lastError,
+        if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
       };
 }
 

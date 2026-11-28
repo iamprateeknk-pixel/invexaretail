@@ -12,6 +12,7 @@ import type { TenantContext } from '../lib/tenant-context.js';
 import { buildDashboardSummary, buildReportSummary } from '../lib/dashboard.js';
 import { buildExpiryDashboard } from '../lib/expiry.js';
 import { listAuditEvents } from '../lib/audit.js';
+import { canReadStudioTaskAudit } from '../lib/saas/studio-task-access.js';
 import { totalVariance } from '../lib/weight-allocation.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
 import { listSyncCheckpointsForCompany } from '../lib/repositories/sync-checkpoint-repository.js';
@@ -57,7 +58,10 @@ router.get('/audit', (req: Request, res: Response) => {
   }
   // Audit events carry no company of their own; they belong to the company of the user who acted.
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
-  const events = listAuditEvents().filter((event) => (enterpriseRepo.findUserById(event.actorId)?.companyId ?? DEFAULT_COMPANY_ID) === companyId);
+  const events = listAuditEvents().filter((event) => {
+    if (event.metadata?.studioTaskCompanyId !== undefined) return canReadStudioTaskAudit(event.metadata, companyId, req.user!.role);
+    return (enterpriseRepo.findUserById(event.actorId)?.companyId ?? DEFAULT_COMPANY_ID) === companyId;
+  });
   return res.json({ events });
 });
 

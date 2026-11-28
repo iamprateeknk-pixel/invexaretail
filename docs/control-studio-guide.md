@@ -72,14 +72,26 @@ the same way as Import columns: edit in place, **Add**, the bin icon to remove, 
 
 | Screen | What you set | Used by the app today? |
 |---|---|---|
-| Extra fields | Field name, what it is for (item, transfer, ...), kind of value, must be filled | Not yet - stored and published only |
+| Extra fields | Field name, record type, value type and whether it must be filled | Published item fields appear in Item Stock Detail. Fields the creator can see and edit also appear in Add item, where required fields must have a value. |
 | Rules | When *this* is more/less than *that* (several conditions = all must be true), then *do this*. **Try your rules** checks a made-up case. | Not yet - only the Try box runs them |
-| Reports | Name, what it is about, which columns | Not yet |
-| Automations | When something happens / on a schedule, then do something | Not yet |
+| Reports | Dataset, columns, exact filters and grouping | In the Reports workspace, choose a published report and location. Grouping counts matching records and can show a bar next to each total. Export downloads the displayed results. |
+| Automations | When something happens / on a schedule, then do something | Published, enabled rules can send an in-app notification to company admins. They can also create an Exception Inbox task when task delivery is enabled. |
 | Mobile app | Per role: screens, what is kept offline, how long it may stay offline | Not yet - the phone app shows its standard screens |
 | Approvals | For transfers / adjustments / ...: approve automatically up to Rs X, above that a branch manager or admin. **Try an amount** checks it. | Not yet - live approvals use the main app's approval rules |
 
 Each of these screens shows a yellow note while the app does not act on it yet, so nobody expects an effect.
+
+For purchase receiving, pick **A purchase receipt is recorded**, choose a notification or task, enable it, then save and publish. Each successful partial or final receipt can trigger the rule once. Retrying a receipt and rejecting a receipt do not trigger another run. Studio shows the configuration version used for each run.
+
+When an admin adds an item, the form loads the current published item fields. If another version goes live while the form is open, reload the item fields before saving. The code and name stay in the form. Recheck the company fields after reloading.
+
+Use exact match filters to limit a report. Text filters use the spelling and case shown in the report. Choose **Group results by** to show the number of matching records in each group. The workspace displays and exports up to 500 matching rows or groups. With PostgreSQL connected, the API filters and groups stock, count, transfer, sales and purchase order records at the selected location before limiting results.
+
+Stock availability uses on-hand stock less reservations. Quarantined stock stays in its own column. Transfer reports only show location names that the viewer can access.
+
+Add **Lot** and **Value** to see stock value by lot. Value is on-hand quantity multiplied by the first positive cost available, using landed unit cost before purchase rate. Values are rounded to two decimal places. A lot without a valid recorded unit cost has a blank value. An empty lot with a recorded cost shows zero. The database-free demo leaves value blank.
+
+Studio validates report settings on save and on publish. If a draft includes an older report with an unsupported column or filter, correct that report before publishing the draft.
 
 ## 5. Going live and undoing
 

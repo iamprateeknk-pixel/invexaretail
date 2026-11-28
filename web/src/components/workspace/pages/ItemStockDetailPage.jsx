@@ -5,6 +5,7 @@ import { ItemSearchPanel } from '@/components/inventory/ItemSearchPanel'
 import { StockDetailPanel } from '@/components/inventory/StockDetailPanel'
 import { AdjustmentWizard } from '@/components/inventory/AdjustmentWizard'
 import { BundlePanel } from '@/components/inventory/BundlePanel'
+import { StudioItemFieldsPanel } from '@/components/inventory/StudioItemFieldsPanel'
 import { useInventoryAdjustment } from '@/hooks/useInventoryAdjustment'
 import { useStockDetail } from '@/hooks/useStockDetail'
 import { EmptyState } from '@/components/ui/feedback-states'
@@ -44,6 +45,7 @@ export function ItemStockDetailPage() {
               reversing={submitting}
               onReverse={(movementId) => reverse(selectedItem.id, movementId, 'Manual reversal from stock detail')}
             />
+            <StudioItemFieldsPanel key={selectedItem.id} authToken={authToken} itemId={selectedItem.id} />
             <BundlePanel authToken={authToken} itemId={selectedItem.id} canEdit={canAdjust} />
             {canAdjust && detail && (
               <Card>

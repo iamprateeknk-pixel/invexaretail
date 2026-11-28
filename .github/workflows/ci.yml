@@ -15,19 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  api:
-    name: API build tests and startup smoke
+  api_build:
+    name: API build, migration and image smoke
     runs-on: ubuntu-latest
-    # Was 15 - the real-Postgres suite count has grown (37 *.postgres.test.ts files as of this
-    # change) and every one of them was, until this change, run TWICE: once by the find-based loop
-    # below (which discovers and runs every *.postgres.test.ts automatically) and again by a list
-    # of individually-named steps that had drifted into being a complete duplicate of that same
-    # loop. Removing the duplicate steps should bring this comfortably back under 15 minutes: this
-    # bump is headroom for continued suite growth, not a workaround for the duplication itself.
-    # Raised from 20 to 45: the suite is now 59 real-Postgres files, each its own process against a shared
-    # database (they cannot run in parallel), and the job hit the 20-minute limit and was cancelled on the
-    # commit that added the legacy-import journal tests. A fresh run takes roughly 22 minutes. If it keeps
-    # growing, split the loop into shards with one Postgres service container each rather than raising this again.
     timeout-minutes: 45
     services:
       postgres:
@@ -64,6 +54,26 @@ jobs:
       - name: Build API exactly as production does
         run: npm run build
 
+      - name: Test migration ownership and image verifier packaging
+        run: node --test scripts/deployment-config.test.cjs
+
+      - name: Validate the Compose deployment configuration
+        working-directory: .
+        env:
+          JWT_SECRET: invexa-ci-only-secret-1234567890-abcdefghijklmnopqrstuvwxyz
+          SEED_PASSWORD: InvexaCiOnly123
+          VITE_API_BASE: https://api.example.test
+          VITE_WEB_APP_URL: https://workspace.example.test
+        run: docker compose config --quiet
+
+      - name: Build the final API runtime image
+        run: docker build --tag invexa-api:ci .
+
+      - name: Migrate and verify Postgres from the final API image
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+        run: docker run --rm --network host --env DATABASE_URL invexa-api:ci sh -ec 'npm run db:migrate && npm run db:verify'
+
       - name: Check architecture rules (AGENTS.md / ADR-001..006)
         run: npm run lint:arch
 
@@ -81,11 +91,6 @@ jobs:
       - name: Typecheck the generated contract client compiles standalone (Week 8)
         run: npm run contract:typecheck
 
-      - name: Deploy migrations to real Postgres
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-
       - name: Migration matrix - fresh database and upgrade from the previous release (Plan Area J)
         run: node scripts/migration-matrix.mjs --admin-url postgresql://ci:ci@127.0.0.1:5432/postgres --behind 3
 
@@ -94,33 +99,6 @@ jobs:
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
           SEED_PASSWORD: InvexaCiOnly123
-
-      - name: Run Postgres integration coverage
-        run: npx tsx --test src/lib/postgres.integration.test.ts
-        env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-
-      # Every *.postgres.test.ts is discovered and run as its own process (they
-      # share database state, so they must not run together). New suites are
-      # picked up automatically - a fixed list drifted before: twelve suites
-      # (imports, reporting, outbox retention and the bare-id remediation
-      # slices) existed but were never run in CI.
-      - name: Run every real-Postgres suite (ADR-001..006, Weeks 5-11, tenant remediation)
-        run: |
-          failed=0
-          for file in $(find src -name '*.postgres.test.ts' | sort); do
-            echo "::group::$file"
-            if ! npx tsx --test "$file"; then
-              echo "::error file=$file::real-Postgres suite failed"
-              failed=1
-            fi
-            echo "::endgroup::"
-          done
-          exit $failed
-        env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
-          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
 
       - name: Test dependency-free startup diagnostics
         run: node --test startup.test.cjs
@@ -135,17 +113,23 @@ jobs:
         run: node --test ../scripts/verify.test.mjs
 
       - name: Test the migration matrix and dependency audit gate helpers (Plan Area J)
-        run: node --test scripts/migration-matrix.test.mjs ../scripts/audit-gate.test.mjs
+        run: node --test scripts/migration-matrix.test.mjs scripts/offline-rollback-rehearsal.test.mjs ../scripts/audit-gate.test.mjs
 
-      - name: Start API and verify health endpoint
+      - name: Start API from the final image and verify health endpoints
         env:
           DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+          JWT_SECRET: invexa-ci-only-secret-1234567890-abcdefghijklmnopqrstuvwxyz
           SEED_PASSWORD: InvexaCiOnly123
-          PORT: 4100
         run: |
-          npm start > /tmp/invexa-api.log 2>&1 &
-          api_pid=$!
-          trap 'kill $api_pid 2>/dev/null || true; cat /tmp/invexa-api.log' EXIT
+          docker run --detach --name invexa-api-image-ci --network host \
+            --env NODE_ENV=production \
+            --env REQUIRE_DATABASE=true \
+            --env DATABASE_URL \
+            --env JWT_SECRET \
+            --env SEED_PASSWORD \
+            --env PORT=4100 \
+            invexa-api:ci
+          trap 'docker rm --force invexa-api-image-ci >/dev/null 2>&1 || true' EXIT
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             if curl --fail --silent --show-error http://127.0.0.1:4100/health \
               && curl --fail --silent --show-error http://127.0.0.1:4100/ready \
@@ -154,6 +138,7 @@ jobs:
             fi
             sleep 1
           done
+          docker logs invexa-api-image-ci
           exit 1
 
       - name: Verify API entry file (app.js) boots without a database
@@ -172,6 +157,147 @@ jobs:
           done
           exit 1
 
+
+  api_postgres:
+    name: API PostgreSQL suites (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: invexa_ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U ci -d invexa_ci"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    defaults:
+      run:
+        working-directory: api
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+      TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/invexa_ci
+      SEED_PASSWORD: InvexaCiOnly123
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install API dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Generate Prisma client and prepare isolated database
+        run: |
+          npx prisma generate
+          npm run db:migrate
+          npm run db:seed
+      - name: Run assigned PostgreSQL suites sequentially
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mapfile -d '' suites < <(find src -name '*.postgres.test.ts' -print0 | LC_ALL=C sort -z)
+          test "${#suites[@]}" -gt 0
+          node --import tsx --test --test-concurrency=1 --test-shard="$SHARD" src/lib/postgres.integration.test.ts "${suites[@]}"
+
+  api:
+    name: API build tests and startup smoke
+    needs: [api_build, api_postgres, compose_smoke]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the API build and every PostgreSQL shard to pass
+        env:
+          BUILD_RESULT: ${{ needs.api_build.result }}
+          POSTGRES_RESULT: ${{ needs.api_postgres.result }}
+          COMPOSE_RESULT: ${{ needs.compose_smoke.result }}
+        run: |
+          printf 'API build and image checks: %s\nPostgreSQL suites: %s\n' "$BUILD_RESULT" "$POSTGRES_RESULT"
+          test "$BUILD_RESULT" = success
+          test "$POSTGRES_RESULT" = success
+          test "$COMPOSE_RESULT" = success
+
+  compose_smoke:
+    name: Self-hosted Compose routing smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      INVEXA_ENV: staging
+      JWT_SECRET: invexa-compose-ci-only-abcdefghijklmnopqrstuvwxyz
+      SEED_PASSWORD: InvexaComposeCiOnly123
+      VITE_API_BASE: https://api.example.test
+      VITE_WEB_APP_URL: https://workspace.example.test
+      PUBLIC_CONTROL_URL: https://control.example.test
+      ALLOWED_ORIGINS: https://workspace.example.test,https://control.example.test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install seed tooling
+        working-directory: api
+        run: npm ci --ignore-scripts --no-audit --no-fund && npm run db:generate
+      - name: Start and verify the Compose services
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker logs --tail=50 invexa-handoff-replica 2>/dev/null || true; docker stop invexa-handoff-replica >/dev/null 2>&1 || true; docker compose logs --tail=50; docker compose down' EXIT
+          docker compose up -d --wait postgres
+          docker compose build api worker web admin
+          docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'
+          DATABASE_URL=postgresql://retail:retail_password@127.0.0.1:5432/retail_inventory npm --prefix api run db:seed
+          docker compose up -d --no-build api web admin
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5173/ready | jq -e '.ok and .persistence == "database"' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5173/health | jq -e --arg release "${GITHUB_SHA:0:12}" '.release == $release'
+          curl --fail --silent http://127.0.0.1:18181/health | jq -e '.ok and .panel == "control-plane"'
+          status=$(curl --silent --show-error --output /tmp/invexa-worker.json --write-out '%{http_code}' http://127.0.0.1:5173/ready/worker)
+          test "$status" = 503
+          jq -e '.ok == false and .state == "missing"' /tmp/invexa-worker.json
+          docker compose up -d --no-build worker
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5173/ready/worker | jq -e --arg release "${GITHUB_SHA:0:12}" '.ok and .release == $release' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then exit 1; fi
+            sleep 2
+          done
+          for path in /api/v1/items /control/v1/companies /studio/v1/versions /sync/v1/status; do
+            status=$(curl --silent --show-error --output /tmp/invexa-route.json --write-out '%{http_code}' "http://127.0.0.1:5173$path")
+            test "$status" = 401
+            jq -e 'type == "object"' /tmp/invexa-route.json
+          done
+          for origin in "$VITE_WEB_APP_URL" "$PUBLIC_CONTROL_URL"; do
+            curl --fail --silent --dump-header - --output /dev/null -X OPTIONS -H "Origin: $origin" \
+              -H 'Access-Control-Request-Method: POST' http://127.0.0.1:5173/control/v1/auth/login \
+              | tr -d '\r' | grep -Fxi "Access-Control-Allow-Origin: $origin"
+          done
+          curl --silent --show-error --dump-header /tmp/invexa-origin.headers --output /dev/null -X OPTIONS \
+            -H 'Origin: https://invexaretail.com' -H 'Access-Control-Request-Method: POST' http://127.0.0.1:5173/control/v1/auth/login
+          if grep -qi '^Access-Control-Allow-Origin:' /tmp/invexa-origin.headers; then
+            echo 'Staging sent CORS permission to a production origin' >&2
+            exit 1
+          fi
+          docker compose run --rm --detach --no-deps --name invexa-handoff-replica --publish 127.0.0.1:4101:4000 api
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4101/ready | jq -e --arg release "${GITHUB_SHA:0:12}" '.ok and .release == $release' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            sleep 2
+          done
+          node scripts/compose-sign-in-smoke.mjs http://127.0.0.1:5173 http://127.0.0.1:4101
 
   web:
     name: Web lint and production build
@@ -202,6 +328,8 @@ jobs:
         run: npm run lint
 
       - name: Build web
+        env:
+          VITE_API_BASE: https://api.example.test
         run: npm run build
 
       - name: Bundle size budget
@@ -237,7 +365,8 @@ jobs:
 
       - name: Build Control Plane assets
         env:
-          VITE_API_BASE: https://invexaretail.com
+          VITE_API_BASE: https://api.example.test
+          VITE_WEB_APP_URL: https://workspace.example.test
         run: npm run build
 
       - name: Confirm login ships in dist and the Nginx image config
@@ -250,6 +379,8 @@ jobs:
     name: Mobile static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FLUTTER_VERSION: "3.47.2"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -258,11 +389,12 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install mobile dependencies
         working-directory: mobile
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze mobile app
         working-directory: mobile
@@ -271,3 +403,38 @@ jobs:
       - name: Test mobile app
         working-directory: mobile
         run: flutter test
+
+  mobile-native-platform-builds:
+    name: Mobile native target build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      FLUTTER_VERSION: "3.47.2"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            build-command: flutter build windows --release
+          - platform: ios-simulator
+            runner: macos-latest
+            build-command: flutter build ios --simulator --no-codesign
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build native target
+        working-directory: mobile
+        run: ${{ matrix.build-command }}

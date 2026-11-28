@@ -38,7 +38,7 @@ Set `DATABASE_URL`, `JWT_SECRET`, `SEED_PASSWORD` in your environment (see `api/
 
 ```bash
 cd web && npm ci && npm run dev            # workspace on the Vite dev server
-cd admin-panel && npm install && npm run build
+cd admin-panel && npm install && VITE_API_BASE=https://api.example.test VITE_WEB_APP_URL=https://workspace.example.test npm run build
 cd mobile && flutter pub get --enforce-lockfile && flutter run
 ```
 
@@ -70,6 +70,6 @@ CI: `.github/workflows/ci.yml` (build, tests, architecture lint, contract, Postg
 - `core.ts` and `operations-extension.ts` are still large routers being extracted slice by slice.
 - Evidence uploads validate magic bytes and size and are served through signed expiring links, but there is no malware scan or object storage yet (infrastructure).
 - Physical-device validation, load tests at agreed volume, failure drills and the canary/rollback rehearsal have not been run; they need a staging environment and people.
-- iOS: there is no iOS build or release path, so iOS is **not supported**. Whether it stays out of scope is an open owner decision (see guide-status).
+- iOS simulator and Windows release builds are checked in to CI. iOS device signing, store distribution, physical-device validation and Windows installer distribution remain unverified release work.
 
 The previous, much longer README described a pre-Postgres prototype and made "production ready" claims the code does not support; it is archived at [docs/archive/README-legacy-v1.md](docs/archive/README-legacy-v1.md).

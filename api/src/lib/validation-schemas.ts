@@ -109,7 +109,7 @@ export const allocationPreviewSchema = z.object({
   itemId: z.string({ error: 'Item was not found.' }).min(1, 'Item was not found.'),
 });
 
-const pickSlipLineSchema = z.object({
+export const pickSlipLineSchema = z.object({
   itemId: z.string().min(1),
   lotId: z.string().optional(),
   quantity: z.coerce.number({ error: 'Picked quantity must be greater than zero.' }).positive('Picked quantity must be greater than zero.'),
@@ -117,7 +117,7 @@ const pickSlipLineSchema = z.object({
   scanCode: z.string().optional(),
 });
 
-const pickExceptionSchema = z.object({
+export const pickExceptionSchema = z.object({
   reason: z.enum(PICK_EXCEPTION_REASONS, { error: 'Exception reason must be No Stock, Wrong Item or Damaged Item.' }),
   quantity: z.coerce.number({ error: 'Exception quantity must be greater than zero.' }).positive('Exception quantity must be greater than zero.'),
   itemId: z.string().optional(),
@@ -125,9 +125,13 @@ const pickExceptionSchema = z.object({
   note: z.string().optional(),
 });
 
+const warehouseOfflinePermitSchema = z.string().min(1).max(2_048).optional();
+
 /** POST /picker/transfers/:transferId/pick-slips */
 export const pickSlipSchema = z
   .object({
+    pickRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    offlinePermit: warehouseOfflinePermitSchema,
     lines: z.array(pickSlipLineSchema).optional(),
     exceptions: z.array(pickExceptionSchema).optional(),
   })
@@ -136,8 +140,8 @@ export const pickSlipSchema = z
     path: ['lines'],
   });
 
-// lineId pins a QC inspection to its transfer line; it was stripped before (see poReceiptLineSchema).
-const transferReceiptLineSchema = z.looseObject({
+// Keep receipt line extensions while validating fields used by stock posting.
+export const transferReceiptLineSchema = z.looseObject({
   lineId: z.string().optional(),
   itemId: z.string().min(1),
   lotId: z.string().min(1),
@@ -157,6 +161,8 @@ const transferReceiptLineSchema = z.looseObject({
  */
 export const transferReceiveSchema = z.object({
   requestId: z.string({ error: 'A valid requestId is required for retry-safe receiving.' }).trim().min(1, 'A valid requestId is required for retry-safe receiving.').max(191, 'A valid requestId is required for retry-safe receiving.'),
+  receiveRevision: z.string().regex(/^[a-f0-9]{64}$/, 'Receive revision is invalid.').optional(),
+  offlinePermit: warehouseOfflinePermitSchema,
   lines: z.preprocess(
     (value) => (Array.isArray(value) ? value : undefined),
     z.array(transferReceiptLineSchema).min(1).optional(),
@@ -175,6 +181,8 @@ const countRequestIdSchema = z
   .string({ error: 'requestId must be text of at most 191 characters.' })
   .max(191, 'requestId must be text of at most 191 characters.')
   .optional();
+const countStockRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/, 'Stock revision is invalid.').optional();
+const offlineCountPermitSchema = z.string().min(1).max(2_048).optional();
 
 /** POST /stock-counts (validateBlindCountSubmission's shape half; blind-role rules stay in the handler). */
 export const countSubmitSchema = z.object({
@@ -182,6 +190,8 @@ export const countSubmitSchema = z.object({
   locationId: z.string({ error: 'Item and location are required for a count submission.' }).min(1, 'Item and location are required for a count submission.'),
   physicalQuantity: z.number({ error: 'Physical quantity must be a non-negative number.' }).min(0, 'Physical quantity must be a non-negative number.'),
   requestId: countRequestIdSchema,
+  stockRevision: countStockRevisionSchema,
+  offlineCountPermit: offlineCountPermitSchema,
 });
 
 /** POST /stock-counts/weight */
@@ -190,6 +200,8 @@ export const weightCountSchema = z.object({
   locationId: z.string({ error: 'Item and location are required for a count submission.' }).min(1, 'Item and location are required for a count submission.'),
   totalQuantity: requiredNumber('Counted quantity must be a non-negative number.', 0),
   requestId: countRequestIdSchema,
+  stockRevision: countStockRevisionSchema,
+  offlineCountPermit: offlineCountPermitSchema,
 });
 
 /**
@@ -427,12 +439,9 @@ export const purchaseOrderCreateSchema = z.object({
   expectedAt: validDate('expectedAt must be a valid date.'),
 });
 
-// parseBody writes the parsed `lines` back over req.body.lines, so every field the handler reads
-// must be declared here or it is stripped: without lineId/lotNo/expiryDate every receipt failed
-// with "Purchase order line  was not found." and lot/expiry were silently dropped. Loose, so a
-// field added to the handler later is never lost the same way.
+// The parsed body replaces the original receipt. Preserve extension fields alongside the validated details.
 const poReceiptLineSchema = z.looseObject({
-  lineId: z.string().optional(),
+  lineId: z.string().trim().min(1).optional(),
   receivedQty: z.coerce.number().optional(),
   damagedQty: z.coerce.number().optional(),
   excessQty: z.coerce.number().optional(),

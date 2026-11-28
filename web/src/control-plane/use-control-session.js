@@ -51,7 +51,6 @@ export function useControlSession() {
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('STORE_USER');
-  const [previewRole, setPreviewRole] = useState('ADMIN');
   const [newCompanyName, setNewCompanyName] = useState('');
   const [newCompanyPlan, setNewCompanyPlan] = useState('starter');
   const [newAdminName, setNewAdminName] = useState('');
@@ -266,8 +265,6 @@ export function useControlSession() {
     setUserName,
     userRole,
     setUserRole,
-    previewRole,
-    setPreviewRole,
     newCompanyName,
     setNewCompanyName,
     newCompanyPlan,

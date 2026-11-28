@@ -74,6 +74,13 @@ test('unit cost prefers landed cost over purchase rate and is null when neither 
   assert.equal(lotUnitCost(null), null);
 });
 
+test('recorded costs accept positive decimal values and ignore malformed metadata', () => {
+  assert.equal(lotUnitCost({ landedUnitCost: true, purchaseRate: ' 2.5e0 ' }), 2.5);
+  assert.equal(lotUnitCost({ landedUnitCost: '1e+9999', purchaseRate: 4 }), 4);
+  assert.equal(lotUnitCost({ landedUnitCost: [7], purchaseRate: '0x10' }), null);
+  assert.equal(lotUnitCost({ landedUnitCost: -1, purchaseRate: 'Infinity' }), null);
+});
+
 test('with no sales data at all nothing is called dead - it is NO_DATA', () => {
   const health = buildInventoryHealth({ rows: [row({})], sales: new Map(), windowDays: 30, now });
   assert.equal(health.items[0].status, 'NO_DATA');

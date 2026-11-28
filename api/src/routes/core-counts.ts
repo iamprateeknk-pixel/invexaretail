@@ -4,20 +4,24 @@
 // at the cluster's original registration position.
 import { exceedsDefaultTolerance } from '../lib/count-tolerance.js';
 import { parseCountReasonCode } from '../lib/count-reason-codes.js';
-import { recordThenPersist } from '../lib/record-then-persist.js';
+import { persistBatchThenRecord } from '../lib/persist-batch-then-record.js';
 import { type Request, type Response, Router } from 'express';
-import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, ownerOfLocation } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, hidesZeroStockForRole, validateBlindCountSubmission, type BlindCountInput, type Role } from '../lib/inventory.js';
 import { assertCountLocationAccess, canManageCountWork, countsOnlyWhenAssigned, isCountWorkerRole, parseCountPriority, parseCountReviewReason, parseCountReviewStatus, parseOptionalDueDate } from '../lib/count-lifecycle.js';
 import { buildCycleCountPlan, cycleCountInstructions, selectEligibleCycleCountItems } from '../lib/abc-cycle-count.js';
 import { cadenceForCompany } from '../lib/cycle-count-cadence-context.js';
 import { signedSalesQty } from '../lib/sales-demand.js';
 import { submitStockCount } from '../lib/store.js';
-import { createCountAssignment, deleteCountAssignment, createCountRecord, removeCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment, users } from '../lib/repository.js';
+import { createCountAssignment, deleteCountAssignment, createCountRecord, createRecountAssignment, findAssignmentForCount, findActiveAssignment, findPendingCountForLot, findUserById, listCountAssignments, listCounts, findCountForCompany, counts as countsStore, listItems, listDailyMovements, listLocations, listTransfers, markAssignmentSubmitted, updateCountReview, updateCountAssignment } from '../lib/repository.js';
+import type { CountRecord } from '../lib/repository.js';
 import { findStockEntry, listRecentMovementItemIds, listRecentMovements, listStockForLocation } from '../lib/repositories/stock-repository.js';
 import type { TenantContext } from '../lib/tenant-context.js';
 import { emitWebhookEvent, maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { getCountRecommendation } from '../lib/count-tolerance.js';
+import { CountSubmissionAlreadyRecorded, countSubmissionFingerprint, findCountSubmission, type CountSubmissionGuard, type CountSubmissionIntent } from '../lib/count-submission-receipts.js';
+import { countStockChanged } from '../lib/count-stock-revision.js';
+import { enforceMobilePermit } from '../lib/saas/mobile-offline-permits.js';
 import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { parseBody } from '../lib/validate.js';
 import {
@@ -31,11 +35,12 @@ import {
   cycleCountAssignSchema,
 } from '../lib/validation-schemas.js';
 import { recordAudit } from '../lib/audit.js';
+import { enforcePublishedCountApproval } from '../lib/approval-rules.js';
 import { reconcileCampaignQuietly } from '../lib/campaign-service.js';
 import { allocateWeightCount, totalVariance } from '../lib/weight-allocation.js';
 import { publishEvent } from '../lib/event-bus.js';
 import { isOperationalItem } from '../lib/item-master.js';
-import { persistAssignmentSubmitted, persistAudit, persistCount, persistCountDeletion, persistCountAssignment, persistCountAssignmentDelete, persistCountAssignmentUpdate, persistCountReview, persistCountReconciliation } from '../lib/persistence.js';
+import { databaseEnabled, persistAssignmentSubmitted, persistAudit, persistCount, persistCountBatch, persistCountAssignment, persistCountAssignmentDelete, persistCountAssignmentUpdate, persistCountReview, persistCountReconciliation } from '../lib/persistence.js';
 import { loadMobileWork } from '../lib/mobile-work.js';
 import { listCountsForCompany } from '../lib/repositories/count-repository.js';
 import { listMyOpenAssignments, listOpenAssignmentsForCompany } from '../lib/repositories/count-assignment-repository.js';
@@ -117,14 +122,24 @@ function parseRequestId(value: unknown): string | undefined {
   return value.trim() || undefined;
 }
 
-/** True when the count was made against a task assigned to its submitter (a lot of a multi-lot task included). */
-function countWasAssignedWork(count: { itemId: string; locationId: string; submittedBy: string; createdAt: string }): boolean {
-  return listCountAssignments().some((assignment) => assignment.assignedToId === count.submittedBy
-    && assignment.itemId === count.itemId && assignment.locationId === count.locationId && assignment.createdAt <= count.createdAt);
-}
-
-function countsForRequest(userId: string, requestId: string) {
-  return listCounts().filter((count) => count.submittedBy === userId && count.requestId === requestId);
+async function replayCountSubmission(res: Response, ctx: TenantContext, intent?: CountSubmissionIntent): Promise<boolean> {
+  if (!intent) return false;
+  try {
+    const prior = databaseEnabled
+      ? await findCountSubmission(ctx, intent)
+      : listCounts().filter((count) => count.submittedBy === ctx.userId && count.requestId === intent.requestId &&
+        (count.companyId ?? ownerOfLocation(count.locationId) ?? DEFAULT_COMPANY_ID) === ctx.companyId);
+    if (!prior.length) return false;
+    const result = intent.kind === 'LOT' ? { count: countResponse(ctx.role, prior[0]) }
+      : hidesZeroStockForRole(ctx.role) ? { lots: prior.length }
+      : { counts: prior.map((count) => countResponse(ctx.role, count)) };
+    res.status(200).json({ success: true, duplicate: true, ...result });
+    return true;
+  } catch (error) {
+    if (!isDomainError(error)) throw error;
+    sendError(res, statusForErrorCode(error.code), error.code, error.message);
+    return true;
+  }
 }
 
 // A store user stays blind to book quantity and variance in every response.
@@ -145,6 +160,7 @@ type LotCountArgs = {
   physicalQuantity: number;
   mode: 'scan' | 'manual' | 'weight';
   requestId?: string;
+  guard?: CountSubmissionGuard;
   assignment?: ReturnType<typeof findActiveAssignment>;
   companyId?: string;
   // 'auto' closes the assignment once every lot with stock is counted (scan
@@ -172,26 +188,9 @@ async function commitLotCount(args: LotCountArgs) {
     submittedBy: args.userId,
     role: args.role,
   });
-  // Memory first, database second, and the memory copy is withdrawn if the database refuses.
-  await recordThenPersist(
-    () => createCountRecord({
-      id: saved.id,
-      itemId: saved.itemId,
-      lotId: saved.lotId,
-      locationId: saved.locationId,
-      physicalQuantity: saved.physicalQuantity,
-      bookQty,
-      mode: saved.mode,
-      submittedBy: saved.submittedBy,
-      role: saved.role,
-      createdAt: saved.createdAt,
-      parentCountId: assignment?.parentCountId,
-      requestId: args.requestId,
-      companyId: args.companyId,
-    }),
-    () => persistCount({ ...saved, bookQty, status: 'PENDING_REVIEW', parentCountId: assignment?.parentCountId, requestId: args.requestId }, args.companyId),
-    (record) => removeCountRecord(record.id),
-  );
+  const record = { ...saved, bookQty, parentCountId: assignment?.parentCountId, requestId: args.requestId, companyId: args.companyId };
+  if (databaseEnabled) await persistCount(record, args.ctx.companyId, args.guard);
+  createCountRecord(record);
   const followUps: Promise<unknown>[] = [
     persistAudit(recordAudit({ actorId: args.userId, actorRole: args.userRole, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: saved.id })),
   ];
@@ -218,7 +217,8 @@ async function commitLotCount(args: LotCountArgs) {
 
 router.post('/stock-counts', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  const input = req.body as BlindCountInput;
+  const ctx = tenantContext(req);
+  const input = req.body as BlindCountInput & { offlineCountPermit?: string };
 
   if (!canAccessLocation(context, input.locationId)) {
     return sendError(res, 403, 'FORBIDDEN', 'This user cannot submit a count for the selected location.');
@@ -228,13 +228,17 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
   // rules (no bookQuantity/variance) stay in validateBlindCountSubmission.
   if (parseBody(req, res, countSubmitSchema) === null) return;
 
+  let intent: CountSubmissionIntent | undefined;
   try {
     const validated = validateBlindCountSubmission(context.role, input);
     const requestId = parseRequestId(input.requestId);
-    if (requestId) {
-      const [prior] = countsForRequest(req.user!.id, requestId);
-      if (prior) return res.status(200).json({ success: true, duplicate: true, count: countResponse(context.role, prior) });
-    }
+    if (input.offlineCountPermit && !input.stockRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline count requires a stock revision.');
+    if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
+    if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
+    if (requestId) intent = { requestId, kind: 'LOT', itemId: validated.itemId, locationId: validated.locationId,
+      lotNo: validated.lotNo, mode: validated.mode ?? 'manual', quantity: validated.physicalQuantity, stockRevision: input.stockRevision };
+    if (intent && await replayCountSubmission(res, ctx, intent)) return;
+    if (input.offlineCountPermit) await enforceMobilePermit(ctx, input.offlineCountPermit, 'counts');
 
     const item = listItems().find((candidate) => candidate.id === validated.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
@@ -251,11 +255,12 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     // Blueprint v4 §7: operational users never act on a zero-stock lot.
-    if (hidesZeroStockForRole(context.role) && ((await findStockEntry(tenantContext(req), item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
+    if (!intent?.stockRevision && hidesZeroStockForRole(context.role) && ((await findStockEntry(ctx, item.id, lot.id, validated.locationId))?.onHand ?? 0) <= 0) {
       return sendError(res, 400, 'VALIDATION_FAILED', `Lot ${lot.lotNo} has no stock at this location and cannot be counted.`);
     }
 
     if (findPendingCountForLot(req.user!.id, item.id, lot.id, validated.locationId)) {
+      if (intent && await replayCountSubmission(res, ctx, intent)) return;
       return sendError(res, 409, 'CONFLICT', 'This lot is already submitted and waiting for review.');
     }
 
@@ -267,15 +272,18 @@ router.post('/stock-counts', async (req: Request, res: Response) => {
     }
 
     const { saved, bookQty } = await commitLotCount({
-      ctx: tenantContext(req),
+      ctx,
       userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId: validated.locationId,
       physicalQuantity: validated.physicalQuantity, mode: validated.mode ?? 'manual', requestId, assignment, closeAssignment: 'auto',
       companyId: req.companyId ?? DEFAULT_COMPANY_ID,
+      guard: intent && { fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision, offlineCountPermit: input.offlineCountPermit },
     });
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [validated.locationId] });
     return res.status(201).json({ success: true, count: countResponse(context.role, { ...saved, bookQty }) });
   } catch (error) {
+    if (error instanceof CountSubmissionAlreadyRecorded && await replayCountSubmission(res, ctx, intent)) return;
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid stock count payload');
   }
 });
@@ -289,7 +297,8 @@ const weightInFlight = new Set<string>();
 
 router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   const context = accessContext(req.user!);
-  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string };
+  const ctx = tenantContext(req);
+  const input = req.body as { itemId?: string; locationId?: string; totalQuantity?: number; requestId?: string; stockRevision?: string; offlineCountPermit?: string };
   // The presence check stays ahead of the location check, exactly as
   // before — a missing itemId/locationId is a 400 even for a location
   // this user cannot access.
@@ -301,18 +310,16 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
   // Shape validation runs here, after the location check — exactly where
   // the total-quantity check used to run.
   if (parseBody(req, res, weightCountSchema) === null) return;
+  let intent: CountSubmissionIntent | undefined;
   try {
     const total = Number(input.totalQuantity);
     const requestId = parseRequestId(input.requestId);
-    if (requestId) {
-      const prior = countsForRequest(req.user!.id, requestId);
-      if (prior.length) {
-        return res.status(200).json({
-          success: true, duplicate: true,
-          ...(context.role === 'STORE_USER' ? { lots: prior.length } : { counts: prior.map((count) => countResponse(context.role, count)) }),
-        });
-      }
-    }
+    if (input.offlineCountPermit && !input.stockRevision) return sendError(res, 400, 'VALIDATION_FAILED', 'An offline count requires a stock revision.');
+    if (input.stockRevision && !requestId) return sendError(res, 400, 'VALIDATION_FAILED', 'A stock revision requires a request ID.');
+    if (input.stockRevision && !databaseEnabled) return sendError(res, 501, 'NOT_SUPPORTED', 'Stock revisions require a connected database.');
+    if (requestId) intent = { requestId, kind: 'POOLED', itemId: input.itemId, locationId, mode: 'weight', quantity: total, stockRevision: input.stockRevision };
+    if (intent && await replayCountSubmission(res, ctx, intent)) return;
+    if (input.offlineCountPermit) await enforceMobilePermit(ctx, input.offlineCountPermit, 'counts');
 
     const item = listItems().find((candidate) => candidate.id === input.itemId);
     if (!item) return sendError(res, 400, 'VALIDATION_FAILED', 'Item was not found.');
@@ -321,10 +328,9 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       return sendError(res, 400, 'VALIDATION_FAILED', `Item ${item.code} is counted by scanning lots, not by weight.`);
     }
 
-    let assignment;
-    if (context.role === 'STORE_USER') {
-      assignment = findActiveAssignment(req.user!.id, item.id, locationId);
-      if (!assignment) return sendError(res, 403, 'FORBIDDEN', 'This item is not assigned to you for counting at this location.');
+    const assignment = isCountWorkerRole(context.role) ? findActiveAssignment(req.user!.id, item.id, locationId) : undefined;
+    if (!assignment && countsOnlyWhenAssigned(context.role)) {
+      return sendError(res, 403, 'FORBIDDEN', 'This item is not assigned to you for counting at this location.');
     }
 
     const weightLedger = await listStockForLocation(tenantContext(req), locationId);
@@ -332,36 +338,54 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       lotId: lot.id, lotNo: lot.lotNo, expiryDate: lot.expiryDate, status: lot.status,
       bookQty: weightLedger.find((row) => row.itemId === item.id && row.lotId === lot.id)?.onHand ?? 0,
     }));
+    if (intent?.stockRevision && !lots.some((lot) => (lot.status ?? 'AVAILABLE') === 'AVAILABLE' && lot.bookQty > 0)) throw countStockChanged();
     const allocation = allocateWeightCount(total, lots, item.allocationStrategy ?? 'FEFO');
     if (allocation.some((row) => findPendingCountForLot(req.user!.id, item.id, row.lotId, locationId))) {
+      if (intent && await replayCountSubmission(res, ctx, intent)) return;
       return sendError(res, 409, 'CONFLICT', 'This item is already submitted and waiting for review.');
     }
 
-    // A weight count is all-or-nothing: if one lot cannot be saved the others are withdrawn,
-    // so a retry never finds half a count and calls it done.
-    const flightKey = requestId ? `${req.user!.id}|${requestId}` : '';
+    // Submit all lot rows atomically before updating the in-memory mirror. A
+    // process stop during the request cannot leave a partial multi-lot count.
+    const flightKey = !databaseEnabled && requestId ? `${ctx.companyId}|${req.user!.id}|${requestId}` : '';
     if (flightKey && weightInFlight.has(flightKey)) return sendError(res, 409, 'CONFLICT', 'This count is already being saved. Retry in a moment.');
     if (flightKey) weightInFlight.add(flightKey);
-    const saved: Array<Awaited<ReturnType<typeof commitLotCount>>> = [];
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    let countBatch: CountRecord[] = [];
     try {
-      for (const row of allocation) {
+      countBatch = allocation.map((row) => {
         const lot = item.lots.find((candidate) => candidate.id === row.lotId)!;
-        saved.push(await commitLotCount({
-          ctx: tenantContext(req),
-          userId: req.user!.id, userRole: req.user!.role, role: context.role, item, lot, locationId,
-          physicalQuantity: row.physicalQty, mode: 'weight', requestId, assignment, closeAssignment: 'never',
-          companyId: req.companyId ?? DEFAULT_COMPANY_ID,
-        }));
+        const submitted = submitStockCount({
+          itemId: item.id,
+          lotId: lot.id,
+          locationId,
+          physicalQuantity: row.physicalQty,
+          mode: 'weight',
+          submittedBy: req.user!.id,
+          role: context.role,
+        });
+        return {
+          ...submitted,
+          bookQty: row.bookQty,
+          parentCountId: assignment?.parentCountId,
+          requestId,
+          companyId,
+        };
+      });
+      await persistBatchThenRecord(
+        countBatch,
+        (records) => persistCountBatch(records, companyId, intent && {
+          fingerprint: countSubmissionFingerprint(intent), stockRevision: intent.stockRevision, offlineCountPermit: input.offlineCountPermit,
+        }),
+        (record) => createCountRecord(record),
+      );
+      for (const count of countBatch) {
+        await persistAudit(recordAudit({ actorId: req.user!.id, actorRole: req.user!.role, action: 'STOCK_COUNT_SUBMITTED', entityType: 'StockCount', entityId: count.id }));
       }
-    } catch (error) {
-      for (const row of saved) {
-        removeCountRecord(row.saved.id);
-        await persistCountDeletion(row.saved.id, req.companyId ?? DEFAULT_COMPANY_ID).catch(() => undefined);
-      }
-      throw error;
     } finally {
       if (flightKey) weightInFlight.delete(flightKey);
     }
+    const saved = countBatch.map((count) => ({ saved: count, bookQty: count.bookQty }));
     // The whole item was counted in one entry, so the task is complete now.
     if (assignment) {
       markAssignmentSubmitted(assignment.id, saved[0].saved.id);
@@ -370,7 +394,7 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
 
     publishEvent({ topic: 'count.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [locationId] });
     if (assignment) publishEvent({ topic: 'assignment.changed', companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationIds: [locationId] });
-    if (context.role === 'STORE_USER') return res.status(201).json({ success: true, lots: saved.length });
+    if (hidesZeroStockForRole(context.role)) return res.status(201).json({ success: true, lots: saved.length });
     return res.status(201).json({
       success: true,
       counts: saved.map((row) => countResponse(context.role, { ...row.saved, bookQty: row.bookQty })),
@@ -378,6 +402,8 @@ router.post('/stock-counts/weight', async (req: Request, res: Response) => {
       totalVariance: totalVariance(allocation),
     });
   } catch (error) {
+    if (error instanceof CountSubmissionAlreadyRecorded && await replayCountSubmission(res, ctx, intent)) return;
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
     return sendError(res, 400, 'VALIDATION_FAILED', error instanceof Error ? error.message : 'Invalid weight count payload');
   }
 });
@@ -400,10 +426,10 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
     const current = findCountForCompany(countId, req.companyId ?? DEFAULT_COMPANY_ID);
     if (!current) return sendError(res, 404, 'NOT_FOUND', 'Stock count was not found.');
     if (current.status !== 'PENDING_REVIEW') return sendError(res, 409, 'INVALID_TRANSITION', `Count is already ${current.status} and cannot be reviewed again.`);
-    // Branch managers can be assigned count work too: whoever was handed the count cannot also approve it.
-    // (An admin's own ad hoc count has no assignment behind it and stays reviewable as before.)
-    if (current.submittedBy === req.user!.id && countWasAssignedWork(current)) {
-      return sendError(res, 403, 'SELF_REVIEW', 'You cannot review a count you were assigned and submitted yourself.');
+    // Approval is independent of how the count was created. Ad hoc work has
+    // no assignment record, but still must never be approved by its creator.
+    if (current.submittedBy === req.user!.id) {
+      return sendError(res, 403, 'SELF_REVIEW', 'You cannot review a count you submitted yourself.');
     }
     try {
       assertCountLocationAccess(accessContext(req.user!), current.locationId);
@@ -423,10 +449,14 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
         return sendError(res, 409, 'RECOUNT_NOT_INDEPENDENT', 'A recount must be done by a different person than the first count.');
       }
     }
+    const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
+    const workflowPolicy = status === 'APPROVED' ? await enforcePublishedCountApproval({
+      companyId, itemId: current.itemId, variance: current.physicalQuantity - current.bookQty, reviewerRole: req.user!.role,
+    }) : null;
     const reviewedAt = new Date().toISOString();
     // Claim and post the variance in the database before mutating the in-memory mirror.
     // The conditional database update makes concurrent/retried approvals exactly-once.
-    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, req.companyId ?? DEFAULT_COMPANY_ID);
+    await persistCountReview({ ...current, status, reviewedBy: req.user!.id, reviewedAt, reviewReason, reasonCode }, companyId, workflowPolicy);
     const updated = updateCountReview(countId, status, req.user!.id, reviewReason, reasonCode);
     const variance = updated.physicalQuantity - updated.bookQty;
     const reviewedCampaignId = findAssignmentForCount(countId)?.campaignId;
@@ -446,6 +476,7 @@ router.patch('/stock-counts/:countId/review', async (req: Request, res: Response
       metadata: {
         reviewReason,
         reasonCode,
+        ...(workflowPolicy ? { workflowPolicy } : {}),
         ...(status === 'APPROVED' ? { bookQty: updated.bookQty, physicalQuantity: updated.physicalQuantity, variance, movementId: updated.varianceMovementId } : {}),
         ...(status === 'RECOUNT' ? { recountAssignmentId: recountAssignment?.id } : {}),
       },

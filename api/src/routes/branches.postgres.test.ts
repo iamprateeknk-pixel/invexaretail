@@ -86,9 +86,9 @@ integration('creating a branch, then a duplicate code, then updating and archivi
 });
 
 integration('a branch with a location holding on-hand stock cannot be archived - the StockLedger fix made while porting from foundation.ts', async () => {
-  // The branch must belong to the admin's own company: archiveBranch is tenant-scoped, so a branch
-  // in any other company resolves 404 before its stock blockers are ever looked at (asserted below).
-  const companyId = findUserByEmail('admin@retail.local')!.companyId!;
+  // The stock fixture must belong to the authenticated admin's company.
+  const companyId = findUserByEmail('admin@retail.local')?.companyId;
+  assert.ok(companyId, 'the seeded admin has a company session for this route fixture');
   await prisma.companyProfile.upsert({ where: { id: companyId }, update: {}, create: { id: companyId, name: companyId } });
   const branchCode = `BR-${randomUUID().slice(0, 6)}`.toUpperCase();
   const branch = await prisma.branch.create({ data: { code: branchCode, name: 'Stocked Branch', type: 'WAREHOUSE', companyId } });

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { ControlPlaneError, nowIso } from './control-plane.js';
+import { ControlPlaneError, nowIso } from './control-plane-values.js';
 import type { MutationStatus, SyncMutation } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 
@@ -22,7 +22,12 @@ export class ControlPlaneSync {
       this.host.assertFeature(input.companyId, 'INVENTORY');
     }
     const existing = this.store.mutations.get(input.mutationId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.tenantId !== input.tenantId || existing.companyId !== input.companyId) {
+        throw new ControlPlaneError('Mutation ID is already owned by another company', 'COMPANY_SCOPE_MISMATCH', 403);
+      }
+      return existing;
+    }
     const mutation: SyncMutation = {
       ...input,
       status: input.status ?? 'pending_sync',

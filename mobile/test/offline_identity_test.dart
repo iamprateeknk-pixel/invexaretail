@@ -200,6 +200,8 @@ void main() {
       expect(classifySyncFailure(isOffline: true), SyncOutcome.retry);
       expect(classifySyncFailure(isOffline: false, statusCode: 401), SyncOutcome.retry);
       expect(classifySyncFailure(isOffline: false, statusCode: 409), SyncOutcome.conflict);
+      expect(classifySyncFailure(isOffline: false, statusCode: 409, code: 'MUTATION_IN_PROGRESS'), SyncOutcome.retry);
+      expect(classifySyncFailure(isOffline: false, statusCode: 409, code: 'PUTAWAY_TASK_CHANGED'), SyncOutcome.conflict);
       for (final status in [400, 403, 404, 422]) {
         expect(classifySyncFailure(isOffline: false, statusCode: status), SyncOutcome.rejected, reason: '$status');
       }

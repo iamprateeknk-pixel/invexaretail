@@ -51,6 +51,12 @@ function endpoints(router: Router, prefix = ''): string[] {
   return out;
 }
 
+test('route inventory descends into mounted child routers', () => {
+  const child = { stack: [{ route: { path: '/items', methods: { get: true } } }] };
+  const parent = { stack: [{ handle: child, path: '' }] };
+  assert.deepEqual(endpoints(parent as unknown as Router), ['GET /items']);
+});
+
 const root = process.cwd();
 const spec = JSON.parse(readFileSync(join(root, 'contracts/openapi.json'), 'utf8')) as { paths: Record<string, Record<string, unknown>> };
 const documented = new Set<string>();

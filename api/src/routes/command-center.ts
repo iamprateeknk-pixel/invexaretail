@@ -21,8 +21,11 @@ import { databaseEnabled } from '../lib/persistence.js';
 import { buildCommandCenter } from '../lib/command-center.js';
 import { metricsSnapshot } from '../lib/request-metrics.js';
 import { outboxHealthSnapshot } from '../lib/event-bus.js';
+import { runtimeReleaseId } from '../lib/platform.js';
+import { readWorkerHealth } from '../lib/worker-health.js';
 import { stuckTransfers } from '../lib/command-center.js';
 import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type AccuracyGroup } from '../lib/report-builders.js';
+import { canReadStudioTaskAudit, visibleStudioTaskFilter } from '../lib/saas/studio-task-access.js';
 
 // Blueprint v4 §29 Command Center and §30 Reports. Read-only.
 const router = Router();
@@ -50,9 +53,10 @@ function tenantContextFor(req: Request): TenantContext {
 
 // The audit list carries no company id, so a company sees the actions of its own users
 // (plus system/connector actions, which belong to no user) and never another company's.
-function companyAudit(companyId: string) {
+function companyAudit(companyId: string, role: string) {
   const own = new Set(listUsersByCompany(companyId).map((user) => user.id));
-  return listAuditEvents().filter((event) => own.has(event.actorId) || ['system', 'connector', 'SYSTEM'].includes(event.actorId));
+  return listAuditEvents().filter((event) => canReadStudioTaskAudit(event.metadata, companyId, role)
+    && (own.has(event.actorId) || ['system', 'connector', 'SYSTEM'].includes(event.actorId)));
 }
 
 function deny(res: Response) {
@@ -60,14 +64,15 @@ function deny(res: Response) {
 }
 
 // The parts only the database holds; a failure here never takes the dashboard down.
-async function databaseExtras(companyId: string) {
+async function databaseExtras(companyId: string, role: string) {
   if (!databaseEnabled) return undefined;
   try {
     const open = ['OPEN', 'IN_PROGRESS', 'PENDING_APPROVAL'] as never[];
+    const exceptions = { companyId, ...visibleStudioTaskFilter(role), status: { in: open } };
     const [openCount, critical, overdue, pending] = await Promise.all([
-      prisma.exceptionCase.count({ where: { companyId, status: { in: open } } }),
-      prisma.exceptionCase.count({ where: { companyId, status: { in: open }, priority: 'CRITICAL' } }),
-      prisma.exceptionCase.count({ where: { companyId, status: { in: open }, dueAt: { lt: new Date() } } }),
+      prisma.exceptionCase.count({ where: exceptions }),
+      prisma.exceptionCase.count({ where: { ...exceptions, priority: 'CRITICAL' } }),
+      prisma.exceptionCase.count({ where: { ...exceptions, dueAt: { lt: new Date() } } }),
       prisma.approvalRequest.count({ where: { status: 'PENDING', requestedBy: { companyId } } }),
     ]);
     return { exceptions: { open: openCount, critical, overdue }, approvals: { pending } };
@@ -101,10 +106,10 @@ router.get('/command-center', ...guard, async (req: Request, res: Response) => {
     assignments: companyAssignments.filter((row) => locationIds.has(row.locationId)),
     transfers: companyTransfers.filter((transfer) => locationIds.has(transfer.sourceLocationId) || locationIds.has(transfer.destinationLocationId)),
     checkpoints: companyCheckpoints.filter((row) => locationIds.has(row.locationId)),
-    audit: companyAudit(companyId),
+    audit: companyAudit(companyId, req.user!.role),
     userNames: users,
     live: { clients: subscriberCount(), lastEventId: latestEventId() },
-    extras: await databaseExtras(companyId),
+    extras: await databaseExtras(companyId, req.user!.role),
   });
   return res.json({ commandCenter: center });
 });
@@ -129,7 +134,7 @@ router.get('/reports/transfer-cycle', ...guard, async (req: Request, res: Respon
   const transfers = (await listTransfersForCompany(tenantContextFor(req))).filter((transfer) => allowed(transfer.sourceLocationId) || allowed(transfer.destinationLocationId));
   const range = rangeOf(req, res);
   if (!range) return;
-  return res.json({ timezone: range.timezone, report: transferCycleReport(transfers, companyAudit(companyId), { from: range.from, to: range.to }) });
+  return res.json({ timezone: range.timezone, report: transferCycleReport(transfers, companyAudit(companyId, req.user!.role), { from: range.from, to: range.to }) });
 });
 
 router.get('/reports/count-accuracy', ...guard, async (req: Request, res: Response) => {
@@ -164,7 +169,7 @@ router.get('/reports/audit-export', ...guard, (req: Request, res: Response) => {
   const text = (key: string) => (typeof req.query[key] === 'string' && req.query[key] ? String(req.query[key]) : undefined);
   const range = rangeOf(req, res);
   if (!range) return;
-  const events = filterAudit(companyAudit(companyId), {
+  const events = filterAudit(companyAudit(companyId, req.user!.role), {
     actorId: text('actorId'), action: text('action'), entityType: text('entityType'), entityId: text('entityId'), from: range.from, to: range.to,
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50_000);
   const names = new Map(listUsersByCompany(companyId).map((user) => [user.id, user.name]));
@@ -201,6 +206,7 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     warehouse: { stuckTransfers: stuckTransfers(await listTransfersForCompany(tenantContextFor(req)), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
     database: { connected: databaseEnabled, ...database },
+    worker: databaseEnabled ? await readWorkerHealth(runtimeReleaseId()).catch(() => ({ state: 'unavailable' })) : null,
     // Plan P1-PERF-002: how fresh the in-memory snapshot is. `stale` (3 failed refreshes in a row,
     // or no success for 3 intervals) is the signal to alert on.
     reconciliation: activeReconcilerHealth(),

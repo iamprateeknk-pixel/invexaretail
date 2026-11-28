@@ -44,6 +44,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   String? _role;
+  String? _navigationSignature;
   // Plan Area H WP2: tabs the person has opened stay alive (scroll position, half-typed forms, an
   // in-progress count) instead of being rebuilt from scratch on every switch. Unvisited tabs are not
   // built at all, so opening the app does not fire every screen's requests at once.
@@ -53,9 +54,14 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final role = controller.user?.role ?? '';
-    final home = PlatformCaps.hasDesktopWebView ? desktopHomeForRole(role) : mobileHomeForRole(role);
-    if (_role != controller.user?.role) {
-      _role = controller.user?.role;
+    final navigation = controller.mobileNavigation;
+    final home = PlatformCaps.hasDesktopWebView
+        ? desktopHomeForRole(role, navigation: navigation)
+        : mobileHomeForRole(role, navigation: navigation);
+    final navigationSignature = home.destinations.map((destination) => destination.id).join('|');
+    if (_role != role || _navigationSignature != navigationSignature) {
+      _role = role;
+      _navigationSignature = navigationSignature;
       final defaultIndex = home.destinations.indexWhere((row) => row.id == home.defaultDestination);
       _index = defaultIndex < 0 ? 0 : defaultIndex;
       _visited.clear();
@@ -102,7 +108,7 @@ class _HomeShellState extends State<HomeShell> {
       body: LayoutBuilder(builder: (context, constraints) {
         final content = Column(
         children: [
-          if (controller.snapshotFetchedAt != null)
+          if (controller.snapshotFetchedAt != null || controller.offlineReadsUnavailable)
             Semantics(
               liveRegion: true,
               child: Container(
@@ -111,7 +117,10 @@ class _HomeShellState extends State<HomeShell> {
                 color: Colors.amber.shade100,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Text(
-                  'Offline - showing data saved ${snapshotAge(controller.snapshotFetchedAt!)}. Changes you make are queued.',
+                  controller.snapshotFetchedAt == null
+                      ? 'Offline. Connect to load data unavailable under your mobile settings.'
+                      : 'Offline. Showing data saved ${snapshotAge(controller.snapshotFetchedAt!)}.'
+                        '${controller.offlineReadsUnavailable ? ' Some data needs a connection.' : ''}',
                   style: const TextStyle(fontSize: 12),
                 ),
               ),
@@ -178,10 +187,11 @@ class _HomeShellState extends State<HomeShell> {
       );
       return;
     }
-    final opened = await launchUrl(Uri.parse(workspaceOrigin), mode: LaunchMode.externalApplication);
+    final workspace = workspaceFromEnvironment();
+    final opened = await launchUrl(workspace, mode: LaunchMode.externalApplication);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open the browser. Visit invexaretail.com to use the full workspace.')),
+        SnackBar(content: Text('Could not open the browser. Visit ${workspace.host} to use the full workspace.')),
       );
     }
   }
@@ -233,24 +243,30 @@ class _HomeShellState extends State<HomeShell> {
     final sessionKey = '${controller.companyId}|${controller.user?.id ?? ''}';
     switch (id) {
       case 'workspace':
+        final workspace = workspaceFromEnvironment();
         return DesktopWebView(
           key: ValueKey('workspace-$sessionKey'),
           sessionKey: sessionKey,
-          trustedHosts: workspaceHosts,
-          resolveTarget: () => signedInWorkspaceUri(controller.api.webHandoffCode),
+          trustedOrigins: workspaceWebOrigins(workspace, environmentFromDefines()),
+          resolveTarget: () => signedInWorkspaceUri(workspace, controller.api.webHandoffCode),
           unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
         );
       case 'control':
+        final controlPanel = controlPanelFromEnvironment();
         return DesktopWebView(
           key: ValueKey('control-$sessionKey'),
           sessionKey: sessionKey,
-          trustedHosts: controlPanelHosts,
-          resolveTarget: () async => Uri.parse(controlPanelOrigin),
+          trustedOrigins: {
+            ...workspaceWebOrigins(workspaceFromEnvironment(), environmentFromDefines()),
+            if (controlPanel != null) controlPanel.origin,
+          },
+          resolveTarget: () async => controlPanel,
+          unavailableMessage: 'The Control Panel is unavailable for this build.',
         );
       case 'work':
         return WorkScreen(
           controller: controller,
-          tabs: controller.user?.role == 'WAREHOUSE_PICKER' ? const ['pick', 'putaway'] : const ['count', 'receive'],
+          tabs: _workTabs(controller),
         );
       case 'stock':
         return StockScreen(controller: controller);
@@ -271,6 +287,27 @@ class _HomeShellState extends State<HomeShell> {
       default:
         return DashboardScreen(controller: controller);
     }
+  }
+
+  List<String> _workTabs(SessionController controller) {
+    final role = controller.user?.role ?? '';
+    final navigation = controller.mobileNavigation;
+    if (navigation == null) {
+      return role == 'WAREHOUSE_PICKER' ? const ['pick', 'putaway'] : const ['count', 'receive'];
+    }
+    if (role == 'WAREHOUSE_PICKER') {
+      return [
+        if (navigation.contains('picks')) 'pick',
+        if (navigation.contains('putaway')) 'putaway',
+      ];
+    }
+    if (role == 'STORE_USER') {
+      return [
+        if (navigation.contains('counts')) 'count',
+        if (navigation.contains('receiving')) 'receive',
+      ];
+    }
+    return const ['count', 'receive'];
   }
 }
 

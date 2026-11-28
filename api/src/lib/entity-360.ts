@@ -1,6 +1,7 @@
 import { prisma } from './db.js';
 import { listAuditEvents } from './audit.js';
 import { listUsersByCompany } from './enterprise-repository.js';
+import { visibleStudioTaskFilter } from './saas/studio-task-access.js';
 
 // Release checklist (Web UX): "Item/Lot/Location/Transfer/Count/User 360 patterns and activity timelines".
 // One read model for investigations: what the thing is, what it is connected to, and what happened to it,
@@ -165,7 +166,7 @@ async function user360(caller: Entity360Caller, id: string): Promise<Entity360 |
   const user = await prisma.user.findFirst({ where: { id, companyId: caller.companyId }, select: { id: true, name: true, email: true, role: true, status: true, lastLoginAt: true } });
   if (!user) return null;
   const [owned, assignments] = await Promise.all([
-    prisma.exceptionCase.findMany({ where: { ownerId: id, companyId: caller.companyId, status: { in: OPEN_EXCEPTION } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+    prisma.exceptionCase.findMany({ where: { ownerId: id, companyId: caller.companyId, ...visibleStudioTaskFilter(caller.role), status: { in: OPEN_EXCEPTION } }, orderBy: { createdAt: 'desc' }, take: 20 }),
     prisma.countAssignment.findMany({ where: { assignedToId: id, status: 'ASSIGNED', location: { companyId: caller.companyId } }, take: 20, include: { item: { select: { code: true } }, location: { select: { name: true } } } }),
   ]);
   return {

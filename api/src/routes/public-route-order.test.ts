@@ -22,3 +22,18 @@ test('signature-authenticated routers are mounted before every bearer-authentica
     }
   }
 });
+
+test('operational sync commands enter before path-based middleware', () => {
+  const source = readFileSync(join(process.cwd(), 'src/index.ts'), 'utf8');
+  const adapter = source.indexOf("app.use('/api/v1', offlineCommandsRouter)");
+  assert.ok(adapter >= 0, 'the offline command adapter must be mounted');
+  for (const route of [
+    "app.use('/api/v1', extractToken, enforceOperationalCompanyScope)",
+    "app.use('/api/v1', enforceOperationalKillSwitches)",
+    "app.use('/api/v1', enforcePlanEntitlements)",
+    "app.use('/api/v1', mutationIdempotency())",
+    "app.use('/api/v1', publishMutationEvents)",
+  ]) {
+    assert.ok(source.indexOf(route) > adapter, `${route} must see the canonical workflow path`);
+  }
+});

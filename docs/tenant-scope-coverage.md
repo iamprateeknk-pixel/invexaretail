@@ -8,6 +8,13 @@ whether the count has grown.
 
 ## Catalog (Item) - lint-checked
 
+The transfer repository's `listTransfersForCompany`, `findTransferForCompany`
+and `listTransferCartonsForTransfers` queries are scoped through the shared
+`companyTransferScope(ctx)` helper, which includes the tenant's `companyId`
+and its owned locations. The regex lint window cannot see that helper body;
+these calls remain in the tracked baseline until the rule can follow helper
+calls safely.
+
 | File:line | Call | Status |
 |---|---|---|
 | `lib/repositories/item-repository.ts` (all functions) | `findItemById`, `requireItemById`, `listItems`, `assertItemOwnedByTenant` | **Scoped** - requires `TenantContext`, filters/verifies by `companyId` |

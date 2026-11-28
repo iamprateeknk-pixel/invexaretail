@@ -124,6 +124,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/studio-create-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the published fields the company admin can fill on the item creation form */
+        get: operations["getItemStudioCreateFields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/studio-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read visible published Studio fields and saved values for an item */
+        get: operations["getItemStudioFields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/items/{itemId}/studio-fields/{fieldKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save a value for an editable published Studio item field */
+        put: operations["putItemStudioField"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{itemId}/adjust": {
         parameters: {
             query?: never;
@@ -133,7 +184,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Guided manual adjustment. Posts through InventoryPostingService with a required client-supplied idempotency key - a retried request returns the original result (200, duplicate: true) instead of posting twice. */
+        /** Guided manual stock adjustment. A published policy can require approval or stop a new adjustment. Use the same idempotency key and payload after approval. An already posted adjustment returns its original result (200, duplicate: true). */
         post: operations["adjustItemStock"];
         delete?: never;
         options?: never;
@@ -254,6 +305,94 @@ export interface paths {
         put?: never;
         /** Reverses every committed row's movement (equal-and-opposite post via InventoryPostingService). Safe to call twice - an already-reversed row is tolerated, not double-reversed. */
         post: operations["reverseImportBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run a published stock report at the selected location
+         * @description The lot column identifies the stock lot. Value is on-hand quantity times landed unit cost or purchase rate, rounded to two decimal places. Unpriced lots return a blank value.
+         */
+        get: operations["getStudioInventoryReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published stock-count report at the selected location */
+        get: operations["getStudioCountReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published transfer report at the selected location */
+        get: operations["getStudioTransferReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published sales order report at the selected location */
+        get: operations["getStudioSalesOrderReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/purchase-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published purchase order report at the selected location */
+        get: operations["getStudioPurchaseOrderReport"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -646,7 +785,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve or reject a pending request. */
+        /** Approve or reject a pending request as an independent reviewer. */
         post: operations["decideApprovalRequest"];
         delete?: never;
         options?: never;
@@ -1170,7 +1309,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The caller's company exception cases, highest priority first (max 300), with their item, lot, location, owner and reporter. Closed and rejected cases are hidden unless status asks for them. Managers and auditors see all locations; others only their assigned ones; mine=true limits to cases they own. */
+        /** Company exception cases, highest priority first (max 300). Closed and rejected cases are hidden unless requested. Managers and auditors can see all locations, and mine=true limits results to cases the caller owns. Company admins also see unlocated Studio tasks when a location is selected. */
         get: operations["getExceptions"];
         put?: never;
         /** Open an exception case. Any item, lot or owner named must belong to the caller's company (404 otherwise). Priority and the value at risk are derived; the due time defaults to 24 hours. */
@@ -1188,7 +1327,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lots at a location that hold stock and have an expiry date, soonest first, computed live from the ledger. Requires access to the location. */
+        /** Lots at an accessible location that hold stock and have an expiry date. Filter by source=studio to list open and acknowledged expiry tasks created by Studio. */
         get: operations["getExpiryAlerts"];
         put?: never;
         post?: never;
@@ -1361,7 +1500,7 @@ export interface paths {
         /** The caller's company item master with lots. Operational users only see ACTIVE items; admins may ask for ARCHIVED or all. */
         get: operations["getItems"];
         put?: never;
-        /** Create an item. The code, barcode and aliases must be unique within the caller's company; a conflict names the company's own item, never another company's. Admin and Admin user. */
+        /** Create an item and save its published Studio form values in the same transaction. Codes, barcodes and aliases are company-scoped. Admin and Admin user. */
         post: operations["postItems"];
         delete?: never;
         options?: never;
@@ -1637,7 +1776,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Operational metrics for admins: request RED metrics, live sync clients, stuck transfers, process, database, reconciliation freshness and the outbox SLO. */
+        /** Operational metrics for admins: request metrics, live sync clients, stuck transfers, database, worker progress, reconciliation freshness and the outbox SLO. */
         get: operations["getOpsMetrics"];
         put?: never;
         post?: never;
@@ -2092,6 +2231,41 @@ export interface paths {
         get: operations["getReportsLocationId"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sync/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay a permitted count, pick, receipt or putaway through its operational workflow. */
+        post: operations["postOperationalOfflineCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/studio-release-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the Studio draft assigned to the signed-in company administrator. */
+        get: operations["getAssignedStudioReleaseReview"];
+        put?: never;
+        /** Approve the exact assigned Studio draft in the company workspace. */
+        post: operations["approveAssignedStudioReleaseReview"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2678,7 +2852,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Approve, reject or request a recount. Approval posts the variance to the ledger exactly once. Optional enforcement requires a recount when variance is out of tolerance and that a recount is done by a different person. Admin, Admin user and Branch manager. */
+        /** Approve, reject or request a recount. Approval requires an independent reviewer and posts the variance exactly once. Published count workflows can require a higher reviewer role based on the variance value. Optional recount enforcement applies independently. */
         patch: operations["patchStockCountsCountIdReview"];
         trace?: never;
     };
@@ -3320,7 +3494,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save what the picker picked (and any exceptions). Retry-safe by requestId. */
+        /** Save what the picker picked (and any exceptions). A matching retry can recover the saved slip by requestId. */
         post: operations["postPickerTransfersTransferIdPickSlips"];
         delete?: never;
         options?: never;
@@ -3371,7 +3545,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm where goods were put away. A Warehouse picker (or requireScan) must scan the bin; a bin other than the suggested one needs an override. Moves the stock from the staging bin into the chosen bin. */
+        /** Confirm the destination bin and move stock from staging in one transaction. Warehouse pickers must scan the bin. A different bin needs a supervisor override. A retry by the same operator for the same bin can return the saved confirmation. */
         post: operations["postPutawayTasksIdConfirm"];
         delete?: never;
         options?: never;
@@ -3541,7 +3715,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A repeat requestId returns the original (200, duplicate true). Whole units unless the item is weight/decimal. */
+        /** Submit a lot count. Store users and Warehouse pickers may only count what is assigned to them and get back a blind view (no book quantity or variance). A matching requestId replays the committed count (200, duplicate true). Whole units unless the item is weight/decimal. */
         post: operations["postStockCounts"];
         delete?: never;
         options?: never;
@@ -3558,7 +3732,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit one decimal total for a weight-counted item; the server spreads it over the item's lots in FEFO/FIFO order and creates a count per lot, all or nothing. Store users get only the number of lots, never the split. */
+        /** Submit one decimal total for a weight-counted item. The server allocates it over the lots in FEFO/FIFO order and saves the counts together. Store users and Warehouse pickers get the number of lots. A matching requestId replays the committed counts. */
         post: operations["postStockCountsWeight"];
         delete?: never;
         options?: never;
@@ -3694,7 +3868,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Receive a dispatched transfer at its destination (Admin or destination store user). Retry-safe by requestId. */
+        /** Receive a dispatched transfer at its destination. Matching retries recover the original receipt. An optional receive revision verifies that the expected quantities are current. */
         post: operations["postTransfersTransferIdReceive"];
         delete?: never;
         options?: never;
@@ -4029,6 +4203,108 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        StudioOrderReportResult: components["schemas"]["StudioReportResult"];
+        StudioReportResult: {
+            /** @description Published configuration version used for the report. */
+            version: number;
+            columns: {
+                key: string;
+                label: string;
+            }[];
+            groupBy: string | null;
+            chart: boolean;
+            /** @description Number of matching records or groups before the output limit. */
+            total: number;
+            truncated: boolean;
+            rows: {
+                [key: string]: string | number;
+            }[];
+        };
+        PublishedStudioReport: {
+            key: string;
+            name: string;
+            entity: string;
+            columns: string[];
+            /** @description Exact match values for allowlisted columns. Filter values must match their column type. */
+            filters?: {
+                [key: string]: string | number;
+            };
+            /** @description Supported category to count matching records by. */
+            groupBy?: string;
+            /** @enum {string} */
+            view?: "table" | "bar";
+        };
+        StudioItemFields: {
+            versionId: string | null;
+            configVersion: number | null;
+            fields: {
+                key: string;
+                label: string;
+                /** @enum {string} */
+                type: "text" | "number" | "date" | "boolean";
+                required: boolean;
+                editable: boolean;
+                value: string | number | boolean | null;
+            }[];
+        };
+        LotCountReplay: {
+            success?: boolean;
+            duplicate?: boolean;
+            count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
+        };
+        LotCountSubmission: {
+            success?: boolean;
+            count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
+        };
+        PooledCountReplay: {
+            success?: boolean;
+            duplicate?: boolean;
+            lots?: number;
+            counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
+        };
+        PooledCountSubmission: {
+            success?: boolean;
+            /** @description Store users only. */
+            lots?: number;
+            counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
+            allocation?: {
+                lotId?: string;
+                lotNo?: string;
+                bookQty?: number;
+                physicalQuantity?: number;
+            }[];
+            totalVariance?: number;
+        };
+        PickSlipReplay: {
+            message?: string;
+            /** @constant */
+            duplicate: true;
+            pickSlip: components["schemas"]["PickSlip"];
+            transfer?: components["schemas"]["TransferRecord"];
+        };
+        PickSlipSubmission: {
+            message?: string;
+            pickSlip: components["schemas"]["PickSlip"];
+            transfer: components["schemas"]["TransferRecord"];
+        };
+        TransferReceiptResponse: {
+            success: boolean;
+            duplicate?: boolean;
+            transfer: components["schemas"]["TransferRecord"];
+            receipt: components["schemas"]["ReceiptSummary"];
+        };
+        PutawayConfirmationResponse: {
+            task?: components["schemas"]["PutawayTask"];
+            bin?: {
+                id?: string;
+                code?: string;
+            };
+        };
+        OfflineActionPermit: {
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+        } | null;
         /** @description The stable error shape (ADR-006 / lib/errors.ts's DomainError) that new and extracted code returns. Not yet the shape of every endpoint in the full API - see AGENTS.md's Error catalog row. */
         ErrorEnvelope: {
             /** @description Human-readable message. May change wording without notice - do not branch on it. */
@@ -4037,13 +4313,19 @@ export interface components {
              * @description Stable, SCREAMING_SNAKE_CASE. Clients branch on this.
              * @enum {string}
              */
-            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED";
+            code: "INSUFFICIENT_STOCK" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE_CONFLICT" | "COUNT_STOCK_CHANGED" | "OFFLINE_COUNT_POLICY_REJECTED" | "OFFLINE_COUNT_POLICY_UNAVAILABLE" | "OFFLINE_WAREHOUSE_POLICY_REJECTED" | "OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE" | "TRANSFER_RECEIVE_CHANGED" | "TRANSFER_PICK_CHANGED" | "DUPLICATE_REQUEST" | "NOT_FOUND" | "VALIDATION_FAILED" | "CONFLICT" | "STUDIO_RULE_BLOCKED" | "APPROVAL_UNAVAILABLE" | "FORBIDDEN" | "SELF_REVIEW";
             /** @description Correlates this rejection to server logs and the audit trail. */
             traceId: string;
         };
         /** @description The older, pre-Week-7 error shape most of these endpoints still use for validation/role failures (see each operation's 4xx responses for which shape applies). */
         LegacyErrorMessage: {
             message: string;
+        };
+        StockAdjustmentConflict: components["schemas"]["ErrorEnvelope"] & {
+            /** @description Present when this adjustment is awaiting review. */
+            approvalRequestId?: string;
+            /** @description The role required to review this adjustment. */
+            requiredApproverRole?: string;
         };
         TransferLine: {
             itemId: string;
@@ -4419,6 +4701,7 @@ export interface components {
         };
         ApprovalRequest: {
             id?: string;
+            /** @description Operational rule ID or an inactive snapshot rule for a Studio request. */
             ruleId?: string;
             triggerType?: string;
             entityType?: string;
@@ -4429,6 +4712,13 @@ export interface components {
             status?: "PENDING" | "APPROVED" | "REJECTED";
             requestedById?: string;
             decidedById?: string | null;
+            /** @description Pinned Studio approval workflow details when the request uses a published policy. */
+            workflowPolicy?: {
+                workflowKey?: string;
+                label?: string;
+                requiredApproverRole?: string;
+                configVersion?: number;
+            } | null;
         };
         Entity360: {
             /** @enum {string} */
@@ -4773,7 +5063,7 @@ export interface components {
         ExceptionCase: {
             id: string;
             /** @enum {string} */
-            type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+            type: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE" | "AUTOMATION_TASK";
             /** @enum {string} */
             status: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
             /**
@@ -4855,7 +5145,7 @@ export interface components {
             companyId: string;
         };
         LiveExpiryAlert: {
-            /** @description Stable hash of item, lot and location; not a stored row. */
+            /** @description Stable hash of item, lot and location. Studio tasks use this ID for their stored alert. */
             id: string;
             itemId: string;
             lotId: string;
@@ -5055,6 +5345,8 @@ export interface components {
             updatedAt?: string;
         };
         TransferRecord: {
+            /** @description Opaque revision supplied on receivable transfers in database mode. */
+            receiveRevision?: string;
             id: string;
             sourceLocationId: string;
             destinationLocationId: string;
@@ -5679,6 +5971,8 @@ export interface components {
     };
     responses: never;
     parameters: {
+        StudioReportKey: string;
+        StudioReportLocation: string;
         /** @description Client-supplied idempotency key. Mutating endpoints that accept one return the original result on replay instead of double-posting (ADR-006). Most endpoints in this contract take it as a body field, not a query parameter - see each operation. */
         IdempotencyKey: string;
         /** @description Exactly-once replay key, created once when the person acts and reused on every retry (including after a restart). 8-128 characters of letters, digits and . _ : -. A retry with the same id and the same request returns the original 2xx response with `Idempotent-Replay: true` and does not run again; a concurrent duplicate gets 409 MUTATION_IN_PROGRESS with Retry-After; the same id for a different request is 422 MUTATION_ID_REUSED. */
@@ -6028,6 +6322,160 @@ export interface operations {
             };
         };
     };
+    getItemStudioCreateFields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Editable fields and defaults for the current role, with the form version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioItemFields"];
+                };
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Company scope or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getItemStudioFields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fields for the current role and published version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioItemFields"];
+                };
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Company scope or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putItemStudioField: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+                fieldKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    versionId: string;
+                    value: string | number | boolean | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Field saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        key: string;
+                        value: string | number | boolean | null;
+                        versionId: string;
+                        configVersion: number;
+                    };
+                };
+            };
+            /** @description Missing version ID or value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field editing or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item or visible field not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published version changed. Reload the field definitions. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Value does not satisfy the published field definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     adjustItemStock: {
         parameters: {
             query?: never;
@@ -6086,6 +6534,15 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
+            /** @description Awaiting approval or stopped by a published rule. The approval response includes the review request ID. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockAdjustmentConflict"];
+                };
+            };
             /** @description Negative-stock policy blocked the adjustment. */
             422: {
                 headers: {
@@ -6097,6 +6554,15 @@ export interface operations {
                         /** @constant */
                         code?: "INSUFFICIENT_STOCK";
                     };
+                };
+            };
+            /** @description The API could not verify the approval policy. No stock change was posted. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -6392,6 +6858,331 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getStudioInventoryReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, stock permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published stock report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioCountReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, count permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published stock-count report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioTransferReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. Counterparty locations outside the viewer's scope have no name in the result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, transfer permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Location or published transfer report not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioSalesOrderReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioOrderReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The location or published sales order report was not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioPurchaseOrderReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioOrderReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, purchase permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The location or published purchase order report was not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -7311,19 +8102,39 @@ export interface operations {
                     };
                 };
             };
-            /** @description The caller's role is below the rule's required approver role. */
-            403: {
+            /** @description Invalid decision or notes. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Not found (also for another company's id) or already decided. */
+            /** @description The caller submitted this request or does not meet the required approver role. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not found, already decided, or changed during review. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The approval decision could not be saved. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
         };
     };
@@ -9445,7 +10256,7 @@ export interface operations {
             query?: {
                 locationId?: string;
                 status?: "OPEN" | "IN_PROGRESS" | "PENDING_APPROVAL" | "RESOLVED" | "CLOSED" | "REJECTED";
-                type?: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE";
+                type?: "DAMAGE" | "SHORT_RECEIPT" | "EXCESS_RECEIPT" | "WRONG_ITEM" | "EXPIRED" | "MISSING_STOCK" | "QC_FAIL" | "TRANSFER_DISCREPANCY" | "COUNT_VARIANCE" | "QUARANTINE" | "AUTOMATION_TASK";
                 mine?: "true" | "false";
             };
             header?: never;
@@ -9568,6 +10379,7 @@ export interface operations {
         parameters: {
             query: {
                 locationId: string;
+                source?: "studio";
             };
             header?: never;
             path?: never;
@@ -10046,6 +10858,12 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    studioFields?: {
+                        versionId: string | null;
+                        values: {
+                            [key: string]: string | number | boolean | null;
+                        };
+                    };
                     code: string;
                     name: string;
                     category?: string;
@@ -10093,22 +10911,31 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Only admins can create items. */
+            /** @description Only admins can create items or submit fields editable by their role. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["LegacyErrorMessage"] | components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description The code, barcode or alias is already used by another of the company's items. */
+            /** @description The code, barcode or alias already exists, or the item form version changed. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["LegacyErrorMessage"] | components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The published form has a missing, invalid or malformed field value. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -11130,6 +11957,8 @@ export interface operations {
                             instructions?: string | null;
                             campaignId?: string | null;
                             recount?: boolean;
+                            /** @description Opaque revision to include when submitting an assigned pooled count. */
+                            stockRevision?: string;
                             item?: {
                                 id?: string;
                                 code?: string;
@@ -11142,6 +11971,8 @@ export interface operations {
                             lots?: {
                                 lotId?: string;
                                 lotNo?: string;
+                                /** @description Opaque revision to include when submitting this assigned lot count. */
+                                stockRevision?: string;
                                 expiryDate?: string | null;
                             }[];
                         }[];
@@ -11255,6 +12086,23 @@ export interface operations {
                         reconciliation?: {
                             [key: string]: unknown;
                         };
+                        /** @description Dedicated worker progress for the API release. Null in memory mode. */
+                        worker?: {
+                            /** @enum {string} */
+                            state: "ready" | "degraded" | "stale" | "missing" | "unidentified" | "unavailable";
+                            /** Format: date-time */
+                            heartbeatAt?: string | null;
+                            lastSuccess?: {
+                                /** Format: date-time */
+                                outbox: string | null;
+                                /** Format: date-time */
+                                imports: string | null;
+                                /** Format: date-time */
+                                automations: string | null;
+                                /** Format: date-time */
+                                studioReleases: string | null;
+                            };
+                        } | null;
                         stockReconciliation?: null | {
                             [key: string]: unknown;
                         };
@@ -11992,6 +12840,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         transfer: components["schemas"]["TransferRecord"] & {
+                            /** @description Revision of the task, saved slips and source stock. Retain it for offline replay. */
+                            pickRevision: string;
                             lines?: components["schemas"]["PickerTransferLine"][];
                         };
                         pickSlips: components["schemas"]["PickSlip"][];
@@ -12030,6 +12880,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string;
+                /** @description Limit results to one authorized location. */
+                locationId?: string;
             };
             header?: never;
             path?: never;
@@ -12051,6 +12903,20 @@ export interface operations {
             };
             /** @description No or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller lacks access to the selected location. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected location was not found in the company. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13126,6 +13992,257 @@ export interface operations {
             };
         };
     };
+    postOperationalOfflineCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "COUNT_SUBMIT";
+                    entityId: string;
+                    /** @description The lot revision from mobile work when the operator began the count. Requires requestId. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        locationId: string;
+                        physicalQuantity: number;
+                        /** @description Defaults to the item's first lot. */
+                        lotNo?: string;
+                        /** @enum {string} */
+                        mode: "scan" | "manual";
+                    } | {
+                        locationId: string;
+                        totalQuantity: number;
+                        /** @enum {string} */
+                        mode: "weight";
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "PICK_CONFIRM";
+                    entityId: string;
+                    /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        lines?: {
+                            itemId: string;
+                            lotId?: string;
+                            quantity: number;
+                            inputMethod?: string;
+                        }[];
+                        exceptions?: {
+                            itemId?: string;
+                            lotId?: string;
+                            reason?: string;
+                            quantity?: number;
+                            note?: string;
+                        }[];
+                        /** @description true moves the transfer to READY_FOR_ADMIN. */
+                        finished?: boolean;
+                        /** Format: date-time */
+                        startedAt?: string;
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "RECEIVE_CONFIRM";
+                    entityId: string;
+                    /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        lines: {
+                            lineId?: string;
+                            itemId: string;
+                            lotId: string;
+                            receivedQty: number;
+                            damagedQty?: number;
+                            shortageQty?: number;
+                            excessQty?: number;
+                        }[];
+                        notes?: string;
+                        qcInspections?: {
+                            itemId?: string;
+                            lineId?: string;
+                            results?: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                    };
+                } | {
+                    /** @constant */
+                    contractVersion: 2;
+                    commandId: string;
+                    /** @constant */
+                    type: "PUTAWAY_CONFIRM";
+                    entityId: string;
+                    /**
+                     * Format: date-time
+                     * @description The task's updatedAt value from the last task list, preserved while offline.
+                     */
+                    revision: string;
+                    permit: string;
+                    payload: {
+                        scannedBinCode: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The canonical workflow receipt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotCountReplay"] | components["schemas"]["PooledCountReplay"] | components["schemas"]["PickSlipReplay"] | components["schemas"]["TransferReceiptResponse"] | components["schemas"]["PutawayConfirmationResponse"];
+                };
+            };
+            /** @description The canonical workflow receipt. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotCountSubmission"] | components["schemas"]["PooledCountSubmission"] | components["schemas"]["PickSlipSubmission"];
+                };
+            };
+            /** @description The canonical workflow error or command validation failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"] | components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+        };
+    };
+    getAssignedStudioReleaseReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assigned review, or null when there is no current assignment for the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        review: {
+                            id: string;
+                            revision: string;
+                            version: number;
+                            /** Format: date-time */
+                            approvedAt: string | null;
+                            changes: {
+                                area: string;
+                                before: unknown;
+                                after: unknown;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description No active session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A company administrator's interactive session is required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approveAssignedStudioReleaseReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reviewId: string;
+                    revision: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Approval saved. A Studio operator can publish the approved revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        approvedAt: string;
+                    };
+                };
+            };
+            /** @description Invalid review ID or revision. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A company administrator's interactive session is required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The review is unavailable for the current administrator. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The reviewed draft changed before approval. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getRuntimeConfig: {
         parameters: {
             query?: never;
@@ -13144,6 +14261,23 @@ export interface operations {
                     "application/json": {
                         success?: boolean;
                         runtime?: {
+                            /** @description Published reports available to the caller's role. */
+                            reports?: components["schemas"]["PublishedStudioReport"][];
+                            /** @constant */
+                            offlineCommandVersion?: 2;
+                            /** @description Account-bound permit for offline counts. Null if the published role policy does not permit them. */
+                            offlineCountPermit?: {
+                                token: string;
+                                /** Format: date-time */
+                                expiresAt: string;
+                            } | null;
+                            /** @description Account-bound permits by workflow. Null means the published role policy does not permit that workflow. */
+                            offlineWarehousePermits?: {
+                                picks?: components["schemas"]["OfflineActionPermit"];
+                                receiving?: components["schemas"]["OfflineActionPermit"];
+                                putaway?: components["schemas"]["OfflineActionPermit"];
+                            };
+                        } & {
                             [key: string]: unknown;
                         };
                     };
@@ -14482,6 +15616,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
+            /** @description The alert was resolved or changed concurrently. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     patchJobsIdStatus: {
@@ -14899,6 +16040,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     patchQcTemplatesId: {
@@ -15150,13 +16300,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Role or location not allowed. */
+            /** @description Role or location not allowed, self-review, or the published count workflow requires a higher reviewer role. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Count not found (also for another company's count). */
@@ -15175,6 +16325,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The published approval policy could not be verified. The count was not approved. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -17494,8 +18653,12 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Retry key: the same id from the same picker returns the saved slip. */
+                    /** @description Retry key: send the same id and the original pick submission to recover its saved slip. */
                     requestId?: string;
+                    /** @description Signed offline pick permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
+                    /** @description Revision from the opened picker task. Native offline saves send it unchanged. */
+                    pickRevision?: string;
                     /** Format: date-time */
                     startedAt?: string;
                     /** @description true moves the transfer to READY_FOR_ADMIN. */
@@ -17523,13 +18686,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
-                        /** @constant */
-                        duplicate: true;
-                        pickSlip: components["schemas"]["PickSlip"];
-                        transfer?: components["schemas"]["TransferRecord"];
-                    };
+                    "application/json": components["schemas"]["PickSlipReplay"];
                 };
             };
             /** @description Pick slip saved. */
@@ -17538,11 +18695,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
-                        pickSlip: components["schemas"]["PickSlip"];
-                        transfer: components["schemas"]["TransferRecord"];
-                    };
+                    "application/json": components["schemas"]["PickSlipSubmission"];
                 };
             };
             /** @description Nothing picked, a line over the requested quantity, or the transfer is not in a pickable status. */
@@ -17561,13 +18714,31 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. */
+            /** @description Transfer not found for the caller, role is not Warehouse Picker, or no access to the source location. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The request ID was used for a different pick submission, or the pick task or source stock changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -17759,6 +18930,13 @@ export interface operations {
                     binId?: string;
                     binCode?: string;
                     requireScan?: boolean;
+                    /** @description Signed offline putaway permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
+                    /**
+                     * Format: date-time
+                     * @description The task's updatedAt value from the last task list, preserved while offline.
+                     */
+                    taskRevision?: string;
                     allowOverride?: boolean;
                 };
             };
@@ -17770,13 +18948,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        task?: components["schemas"]["PutawayTask"];
-                        bin?: {
-                            id?: string;
-                            code?: string;
-                        };
-                    };
+                    "application/json": components["schemas"]["PutawayConfirmationResponse"];
                 };
             };
             /** @description A bin must be selected, the scan does not match, the bin is not at this location, or an override is required (code WRONG_BIN). */
@@ -17788,13 +18960,13 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Location access denied. */
+            /** @description Location access denied. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"] | components["schemas"]["LegacyErrorMessage"];
                 };
             };
             /** @description Putaway task not found (also for another company's task). */
@@ -17806,13 +18978,22 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description This putaway task is already resolved. */
+            /** @description The task was resolved by a different action, the task revision changed, or staging stock is insufficient. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -18447,6 +19628,15 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     postStockCounts: {
@@ -18466,6 +19656,10 @@ export interface operations {
                     physicalQuantity: number;
                     /** @enum {string} */
                     mode?: "scan" | "manual" | "weight";
+                    /** @description The lot revision from mobile work when the operator began the count. Requires requestId. */
+                    stockRevision?: string;
+                    /** @description Permit from runtime config for a saved offline count. Requires requestId and stockRevision. */
+                    offlineCountPermit?: string;
                     requestId?: string;
                 };
             };
@@ -18477,11 +19671,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        duplicate?: boolean;
-                        count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
-                    };
+                    "application/json": components["schemas"]["LotCountReplay"];
                 };
             };
             /** @description Recorded. */
@@ -18490,10 +19680,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        count?: components["schemas"]["StockCount"] | components["schemas"]["BlindCount"];
-                    };
+                    "application/json": components["schemas"]["LotCountSubmission"];
                 };
             };
             /** @description Invalid payload, unknown or inactive item or lot, fractional quantity for a whole-unit item, or no stock to count. */
@@ -18505,22 +19692,31 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description No access to the location, or the item is not assigned to this user. */
+            /** @description No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED). */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description This lot is already submitted and waiting for review. */
+            /** @description The lot has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -18538,6 +19734,10 @@ export interface operations {
                     itemId: string;
                     locationId: string;
                     totalQuantity: number;
+                    /** @description The pooled revision from mobile work when the operator began the count. Requires requestId. */
+                    stockRevision?: string;
+                    /** @description Permit from runtime config for a saved offline count. Requires requestId and stockRevision. */
+                    offlineCountPermit?: string;
                     requestId?: string;
                 };
             };
@@ -18549,12 +19749,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        duplicate?: boolean;
-                        lots?: number;
-                        counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
-                    };
+                    "application/json": components["schemas"]["PooledCountReplay"];
                 };
             };
             /** @description Recorded. */
@@ -18563,19 +19758,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success?: boolean;
-                        /** @description Store users only. */
-                        lots?: number;
-                        counts?: (components["schemas"]["StockCount"] | components["schemas"]["BlindCount"])[];
-                        allocation?: {
-                            lotId?: string;
-                            lotNo?: string;
-                            bookQty?: number;
-                            physicalQuantity?: number;
-                        }[];
-                        totalVariance?: number;
-                    };
+                    "application/json": components["schemas"]["PooledCountSubmission"];
                 };
             };
             /** @description Invalid quantity, or the item is not counted by weight. */
@@ -18587,22 +19770,31 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description No access to the location, or the item is not assigned to this user. */
+            /** @description No access to the location, or the item is not assigned to this user. A supplied offline permit was invalid, expired, or revoked (OFFLINE_COUNT_POLICY_REJECTED). */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Already submitted, or already being saved. */
+            /** @description The item has a count awaiting review, the request ID belongs to a different submission, or stock changed since the supplied revision. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline count policy could not be verified (OFFLINE_COUNT_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -19044,17 +20236,25 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Blocked pending approval. */
+            /** @description Blocked pending approval, or pick progress changed before confirmation and must be reviewed again. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        message?: string;
+                    "application/json": components["schemas"]["ErrorEnvelope"] & {
                         approvalRequestId?: string;
                         requiredApproverRole?: string;
                     };
+                };
+            };
+            /** @description Approval could not be verified. Retry when the service is available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -19071,8 +20271,12 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Retry key; a repeat returns the recorded receipt with duplicate=true. */
+                    /** @description Retry key; send the original receipt details to recover the recorded result with duplicate=true. */
                     requestId: string;
+                    /** @description Signed offline receiving permit from runtime configuration. Preserve the original permit and revision on retry. */
+                    offlinePermit?: string;
+                    /** @description The revision of the transfer opened for receiving. Preserve it on queued retries. */
+                    receiveRevision?: string;
                     notes?: string;
                     lines?: {
                         lineId?: string;
@@ -19105,12 +20309,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        success: boolean;
-                        duplicate?: boolean;
-                        transfer: components["schemas"]["TransferRecord"];
-                        receipt: components["schemas"]["ReceiptSummary"];
-                    };
+                    "application/json": components["schemas"]["TransferReceiptResponse"];
                 };
             };
             /** @description Missing requestId, wrong status, a multi-lot transfer without per-line receipts, a QC gate (code QC_REQUIRED), or a quantity problem. */
@@ -19129,13 +20328,13 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Role cannot receive, or not the destination. */
+            /** @description Role cannot receive, or not the destination. Invalid, expired or revoked permits return OFFLINE_WAREHOUSE_POLICY_REJECTED. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Transfer not found (also for another company's). */
@@ -19147,13 +20346,22 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description requestId belongs to another transfer, or this receipt is still being processed. */
+            /** @description The receive revision changed, the request ID is unavailable, or the same ID was submitted with changed receipt details. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The current offline permission could not be verified (OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE). Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

@@ -5,13 +5,14 @@ import {
   writePersistedSession,
 } from './session.js';
 
-export const API_BASE = import.meta.env?.VITE_API_BASE || 'https://invexaretail.com';
+export const API_BASE = import.meta.env?.VITE_API_BASE ?? '';
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, code) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -84,7 +85,7 @@ export async function apiRequest(path, options = {}, attempt = 0) {
         }
       }
       const errorBody = await response.json().catch(() => ({}));
-      throw new ApiError(errorBody.message ?? errorBody.error ?? `Request failed with ${response.status}`, response.status);
+      throw new ApiError(errorBody.message ?? errorBody.error ?? `Request failed with ${response.status}`, response.status, errorBody.code);
     }
 
     return response.json();

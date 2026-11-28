@@ -22,9 +22,10 @@ test('sign-in page has no serious or critical accessibility violations', async (
   await scan(page, 'sign-in');
 });
 
-const SECTIONS = ['dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'exceptions', 'reports'];
+const SECTIONS = ['command-center', 'dashboard', 'inventory', 'counts', 'transfers', 'purchase-orders', 'orders', 'exceptions', 'reports'];
 
 test('the main operational pages have no serious or critical accessibility violations (Admin)', async ({ page }) => {
+  test.setTimeout(75_000);
   await signIn(page, 'ADMIN');
   for (const section of SECTIONS) {
     await page.evaluate((target) => { window.location.hash = `#/${target}`; }, section);

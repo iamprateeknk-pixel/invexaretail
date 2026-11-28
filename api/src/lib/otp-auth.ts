@@ -202,6 +202,33 @@ export function verifyTwoFactorChallenge(token: string): { userId: string; compa
   return verifyJWT(token, 'twofactor');
 }
 
+export type OfflinePermitScope = 'counts' | 'picks' | 'receiving' | 'putaway';
+const offlineTokenType = (scope: OfflinePermitScope) => scope === 'counts' ? 'offline-count' : `offline-${scope}`;
+
+export function issueOfflinePermit(userId: string, companyId: string, role: string, lifetimeSeconds: number, scope: OfflinePermitScope) {
+  const issuedAt = Math.floor(Date.now() / 1_000);
+  const expiresAt = new Date((issuedAt + lifetimeSeconds) * 1_000).toISOString();
+  const token = jwt.sign({ userId, companyId, role, tokenType: offlineTokenType(scope), iat: issuedAt }, getJwtSecret(), {
+    algorithm: 'HS256', expiresIn: lifetimeSeconds,
+  });
+  return { token, expiresAt };
+}
+
+export const issueOfflineCountPermit = (userId: string, companyId: string, role: string, lifetimeSeconds: number) =>
+  issueOfflinePermit(userId, companyId, role, lifetimeSeconds, 'counts');
+
+export function verifyOfflinePermit(token: string, caller: { userId: string; companyId: string; role: string }, scope: OfflinePermitScope) {
+  try {
+    const permit = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
+    if (typeof permit === 'string' || permit.tokenType !== offlineTokenType(scope) ||
+        permit.userId !== caller.userId || permit.companyId !== caller.companyId || permit.role !== caller.role ||
+        typeof permit.iat !== 'number' || !Number.isInteger(permit.iat) || !Number.isInteger(permit.exp)) return null;
+    return permit.iat;
+  } catch {
+    return null;
+  }
+}
+
 // Validation utilities
 export function validateEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

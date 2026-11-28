@@ -15,13 +15,13 @@ import '../config/web_surfaces.dart';
 /// (web/src/lib/permissions.js) and the API re-checks every request, so the app adds nothing and
 /// takes nothing away. What this view adds is isolation on a shared PC: the first web view opened
 /// for a signed-in person clears the PC's cookies, every view wipes its own stored web session
-/// before its first page script runs, and only [trustedHosts] load inside the app.
+/// before its first page script runs, and only [trustedOrigins] load inside the app.
 class DesktopWebView extends StatefulWidget {
   const DesktopWebView({
     super.key,
     required this.sessionKey,
     required this.resolveTarget,
-    required this.trustedHosts,
+    required this.trustedOrigins,
     this.unavailableMessage = 'The page could not be opened.',
   });
 
@@ -30,7 +30,7 @@ class DesktopWebView extends StatefulWidget {
 
   /// Where to start. Null means "do not open" (for the workspace: no sign-in code could be fetched).
   final Future<Uri?> Function() resolveTarget;
-  final Set<String> trustedHosts;
+  final Set<String> trustedOrigins;
   final String unavailableMessage;
 
   /// The signed-in person whose cookies the shared WebView2 profile currently holds.
@@ -90,7 +90,7 @@ class _DesktopWebViewState extends State<DesktopWebView> {
   Future<void> _startClean() async {
     final target = await widget.resolveTarget();
     if (!mounted) return;
-    if (target == null || !isTrustedWebUri(target, widget.trustedHosts)) {
+    if (target == null || !isTrustedWebUri(target, widget.trustedOrigins)) {
       _fail(widget.unavailableMessage);
       return;
     }
@@ -117,7 +117,7 @@ class _DesktopWebViewState extends State<DesktopWebView> {
 
   void _onUrl(String value) {
     final uri = Uri.tryParse(value);
-    if (isTrustedWebUri(uri, widget.trustedHosts)) {
+    if (isTrustedWebUri(uri, widget.trustedOrigins)) {
       _seenTrustedPage = true;
       return;
     }
@@ -215,7 +215,7 @@ class _DesktopWebViewState extends State<DesktopWebView> {
 
   /// Only the camera (for barcode scanning in the web app) may be granted, and only to our pages.
   Future<WebviewPermissionDecision> _onPermission(String url, WebviewPermissionKind kind, bool isUserInitiated) async {
-    final trusted = isTrustedWebUri(Uri.tryParse(url), widget.trustedHosts);
+    final trusted = isTrustedWebUri(Uri.tryParse(url), widget.trustedOrigins);
     return trusted && kind == WebviewPermissionKind.camera ? WebviewPermissionDecision.allow : WebviewPermissionDecision.deny;
   }
 }

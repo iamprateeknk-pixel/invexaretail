@@ -30,9 +30,10 @@ const _transientStatuses = {408, 425, 429};
 
 bool isTransientServerStatus(int statusCode) => _transientStatuses.contains(statusCode) || statusCode >= 500;
 
-SyncOutcome classifySyncFailure({required bool isOffline, int? statusCode, int attempts = 0}) {
+SyncOutcome classifySyncFailure({required bool isOffline, int? statusCode, String? code, int attempts = 0}) {
   if (isOffline || statusCode == 401) return SyncOutcome.retry;
-  if (statusCode == 409) return SyncOutcome.conflict;
+  if (statusCode == 409 && code != 'MUTATION_IN_PROGRESS') return SyncOutcome.conflict;
+  if (statusCode == 409) return attempts >= maxTransientServerAttempts ? SyncOutcome.rejected : SyncOutcome.retry;
   if (statusCode != null && isTransientServerStatus(statusCode)) {
     return attempts >= maxTransientServerAttempts ? SyncOutcome.rejected : SyncOutcome.retry;
   }

@@ -475,11 +475,8 @@ async function hasAnyRows(): Promise<boolean> {
   return Boolean(company ?? session ?? key ?? killSwitch);
 }
 
-type TxOp = Promise<unknown>;
-
-async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows): Promise<{ written: number; deleted: number }> {
-  const prisma = await getPrisma();
-  const ops: TxOp[] = [];
+function buildDiffOperations(prisma: Prisma.TransactionClient, diff: SnapshotDiff, nextRows: ControlPlaneRows) {
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
   let written = 0;
   let deleted = 0;
 
@@ -683,8 +680,74 @@ async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlane
     written += 1;
   }
 
-  if (ops.length > 0) await prisma.$transaction(ops as unknown as Prisma.PrismaPromise<unknown>[]);
-  return { written, deleted };
+  return { ops, written, deleted };
+}
+
+export class StudioConfigConflict extends Error {
+  readonly code = 'STUDIO_CONFIG_CONFLICT';
+  constructor() { super('Studio configuration changed in another session. Refresh the company configuration before trying again.'); }
+}
+
+type StudioReleaseEvent = { companyId: string; actorId: string; versionId: string; reviewerId?: string; scheduled?: boolean };
+
+/** Coordinate live policy reads with publication of a company configuration. */
+export async function lockStudioConfig(tx: Prisma.TransactionClient, companyId: string, mode: 'shared' | 'exclusive'): Promise<void> {
+  if (mode === 'shared') {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock_shared(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+  } else {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('invexa-studio-config'), hashtext(${companyId}))::text`;
+  }
+}
+
+async function applyDiffInTransaction(diff: SnapshotDiff, nextRows: ControlPlaneRows, previous?: ControlPlaneRows, release?: StudioReleaseEvent) {
+  const prisma = await getPrisma();
+  const changedKeys = new Set([...diff.configs.upserts, ...diff.configs.deletes]);
+  if (previous?.configs.some((row) => row.kind === 'history' && changedKeys.has(`${row.versionId}|history`))) {
+    throw new StudioConfigConflict();
+  }
+  const companyIds = previous && changedKeys.size ? [...new Set([...previous.configs, ...nextRows.configs]
+    .filter((row) => changedKeys.has(`${row.versionId}|${row.kind}`)).map((row) => row.companyId))].sort() : [];
+  if (!companyIds.length || !previous) {
+    if (release) throw new StudioConfigConflict();
+    const { ops, written, deleted } = buildDiffOperations(prisma, diff, nextRows);
+    if (ops.length) await prisma.$transaction(ops);
+    return { written, deleted };
+  }
+  return prisma.$transaction(async (tx) => {
+    for (const companyId of companyIds) {
+      await lockStudioConfig(tx, companyId, 'exclusive');
+      const current = await tx.controlPlaneConfig.findMany({ where: { companyId },
+        select: { companyId: true, versionId: true, version: true, kind: true, status: true, payload: true } });
+      const expected = previous.configs.filter((row) => row.companyId === companyId);
+      const comparable = (rows: readonly unknown[]) => rows.map(stableStringify).sort();
+      if (stableStringify(comparable(current)) !== stableStringify(comparable(expected))) throw new StudioConfigConflict();
+    }
+    if (release?.reviewerId) {
+      const [reviewer] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "User" WHERE id = ${release.reviewerId} AND "companyId" = ${release.companyId}
+          AND role = 'ADMIN' AND status = 'ACTIVE' FOR SHARE
+      `;
+      if (!reviewer) throw new StudioConfigConflict();
+    }
+    if (release?.scheduled) {
+      const [actor] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "ControlPlanePlatformUser" WHERE id = ${release.actorId} AND status = 'active' FOR SHARE
+      `;
+      const [company] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "ControlPlaneCompany" WHERE id = ${release.companyId} AND status = 'active'
+          AND (billing->>'subscription') IS DISTINCT FROM 'past_due' FOR SHARE
+      `;
+      if (!actor || !company) throw new StudioConfigConflict();
+    }
+    const { ops, written, deleted } = buildDiffOperations(tx, diff, nextRows);
+    for (const op of ops) await op;
+    if (release) {
+      const { recordOutboxEventInTransaction } = await import('../event-bus.js');
+      await recordOutboxEventInTransaction(tx, { topic: 'config.changed', companyId: release.companyId,
+        actorId: release.actorId, requestId: release.versionId });
+    }
+    return { written, deleted };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 25_000 });
 }
 
 // Last-persisted snapshot per plane instance (WeakMap: fresh instances in
@@ -703,10 +766,12 @@ function setLastPersisted(plane: ControlPlane, snapshot: ControlPlaneSnapshot): 
 export async function persistControlPlaneRows(
   plane: ControlPlane,
   snapshot: ControlPlaneSnapshot = serializeControlPlane(plane),
+  release?: StudioReleaseEvent,
 ): Promise<{ written: number; deleted: number }> {
   if (!controlPlaneDbEnabled()) return { written: 0, deleted: 0 };
   const prev = lastPersistedByPlane.get(plane);
   if (!prev) {
+    if (release) throw new StudioConfigConflict();
     // First persist for this instance (no hydrate/refresh ran first):
     // upsert-only. Without a baseline we cannot tell a key this instance
     // deleted from a key another replica created, and deleting the latter
@@ -720,7 +785,7 @@ export async function persistControlPlaneRows(
     return result;
   }
   const diff = diffSnapshots(prev, snapshot);
-  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot));
+  const result = await applyDiffInTransaction(diff, rowsFromSnapshot(snapshot), rowsFromSnapshot(prev), release);
   setLastPersisted(plane, snapshot);
   return result;
 }

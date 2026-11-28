@@ -117,6 +117,14 @@ succeeded; the new release then read those rows back correctly as numbers (`tota
 `price 19.99`). So "roll the application back first, do not run a down-migration" holds for this change set.
 A staged production rollback (Railway previous deployment + Worker previous version) is **not done**.
 
+#### Offline receiving rollback rehearsal
+
+The candidate API built from `def5cc1` and the permit-aware rollback API built from `f863b6e` ran in separate processes against one freshly migrated and seeded local PostgreSQL 17 database. The candidate posted five units through the shared sync endpoint. The rollback API recovered that receipt through the receiving endpoint and accepted three more units using the original queued permit and revision. After Studio revoked offline receiving, a new command returned HTTP 403 on both builds. The restored candidate still recovered the three-unit receipt. The fixture ended with two receipts, two journal movements, eight units in destination stock and 58 unchanged migration records.
+
+To reproduce, build both API checkouts with `npm run build`. In the candidate `api/` directory, point `DATABASE_URL` at a new local PostgreSQL database named `invexa_rollback_<run>`. Use fixture-only `SEED_PASSWORD` and `JWT_SECRET` values. Run `npm run db:migrate` and `npm run db:seed`. Set `ROLLBACK_API_DIR` to the other checkout's built `api/` directory and run `node scripts/offline-rollback-rehearsal.mjs`. The runner uses an unused seeded transfer, restarts the builds in order, and checks that the migration records stay unchanged. Use a fresh database for each run.
+
+Managed staging backup and restore, deployed API and worker image rollback, and the physical-device receiving journey remain release gates.
+
 ### Open-risk list
 
 | Risk | Owner | Date | Note |

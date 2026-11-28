@@ -90,6 +90,27 @@ export function mutationIdempotency(now: () => number = Date.now) {
     if (!ID_PATTERN.test(mutationId)) {
       return res.status(400).json({ message: 'X-Mutation-Id must be 8-128 characters of letters, digits and . _ : -', code: 'MUTATION_ID_INVALID' });
     }
+    // PostgreSQL count submissions commit their own receipt and render it under
+    // the current role. Use that path when the header and body identify the
+    // same count, including retries after an operator's role changes.
+    if (databaseEnabled && req.method === 'POST' && req.body?.requestId === mutationId &&
+      /^\/api\/v1\/stock-counts(?:\/weight)?\/?$/i.test(req.originalUrl.split('?')[0])) {
+      return next();
+    }
+    // A native retry may add its captured offline permit after an interrupted
+    // online send. The warehouse receipts match the business input and enforce
+    // current access, so a changed transport permit must reach those receipts.
+    if (databaseEnabled && req.method === 'POST' && req.body?.requestId === mutationId &&
+      typeof req.body?.offlinePermit === 'string' &&
+      /^\/api\/v1\/(?:picker\/transfers\/[^/]+\/pick-slips|transfers\/[^/]+\/receive)\/?$/i.test(req.originalUrl.split('?')[0])) {
+      return next();
+    }
+    // Versioned putaway uses the committed bin movement as its receipt, after
+    // rechecking the operator's access and the scanned destination.
+    if (databaseEnabled && req.method === 'POST' && typeof req.body?.taskRevision === 'string' &&
+      /^\/api\/v1\/putaway-tasks\/[^/]+\/confirm\/?$/i.test(req.originalUrl.split('?')[0])) {
+      return next();
+    }
     const userId = req.userId;
     const companyId = req.companyId;
     if (!userId || !companyId) return next(); // unauthenticated: the auth layer rejects it, nothing to remember

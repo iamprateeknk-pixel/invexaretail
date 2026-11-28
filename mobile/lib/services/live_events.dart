@@ -72,7 +72,7 @@ Set<String> invalidationsForTopics(Iterable<String> topics) {
   for (final topic in topics) {
     switch (topic) {
       case '*':
-        out.addAll(['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'putaway']);
+        out.addAll(['counts', 'assignments', 'stock', 'items', 'transfers', 'dashboard', 'putaway', 'policy']);
       case 'permission.changed' || 'config.changed':
         out.add('full');
       case 'count.changed' || 'assignment.changed' || 'campaign.changed':

@@ -56,6 +56,8 @@ abstract class LocalStore {
   Future<void> putReadModel(String scope, String path, String body);
   Future<CachedRead?> getReadModel(String scope, String path);
   Future<void> clearReadModel(String scope);
+  Future<String?> loadMobilePolicy(String scope);
+  Future<void> saveMobilePolicy(String scope, String? policy);
 }
 
 /// A cached read-only response and when it was fetched.
@@ -67,6 +69,19 @@ class CachedRead {
 
 class MemoryStore implements LocalStore {
   final Map<String, CachedRead> readModel = {};
+  final Map<String, String> _mobilePolicies = {};
+
+  @override
+  Future<String?> loadMobilePolicy(String scope) async => _mobilePolicies[scope];
+
+  @override
+  Future<void> saveMobilePolicy(String scope, String? policy) async {
+    if (policy == null) {
+      _mobilePolicies.remove(scope);
+    } else {
+      _mobilePolicies[scope] = policy;
+    }
+  }
 
   @override
   Future<void> putReadModel(String scope, String path, String body) async {

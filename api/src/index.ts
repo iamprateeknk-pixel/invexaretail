@@ -18,6 +18,7 @@ import enterpriseAuthRouter from './routes/enterprise-auth.js';
 import enterpriseManagementRouter from './routes/enterprise-management.js';
 import enterpriseAnalyticsRouter from './routes/enterprise-analytics.js';
 import coreRouter from './routes/core.js';
+import offlineCommandsRouter from './routes/offline-commands.js';
 import locationOrderRouter from './routes/location-order.js';
 import transfersRouter from './routes/transfers.js';
 import branchesRouter from './routes/branches.js';
@@ -41,7 +42,8 @@ import evidenceAccessRouter from './routes/evidence-access.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
-import { buildPlatformMeta } from './lib/platform.js';
+import { buildPlatformMeta, runtimeReleaseId } from './lib/platform.js';
+import { readWorkerHealth } from './lib/worker-health.js';
 import { extractToken } from './routes/enterprise-auth.js';
 import { controlPlane } from './lib/saas/control-plane.js';
 import { DEFAULT_TENANT_ID, enforceOperationalCompanyScope } from './lib/saas/tenant-scope.js';
@@ -61,7 +63,7 @@ assertProductionSecrets();
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const startedAt = Date.now();
-const release = process.env.APP_VERSION ?? process.env.GITHUB_SHA?.slice(0, 12) ?? 'unknown';
+const release = runtimeReleaseId();
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
@@ -71,8 +73,7 @@ let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
 // hop only, so a spoofed X-Forwarded-For cannot pose as another client.
 app.set('trust proxy', 1);
 
-// Security: CORS with origin validation. Production website origins are always
-// included so a Hostinger ALLOWED_ORIGINS typo cannot block login.
+// Validate staging origins at startup before serving any browser request.
 const allowedOrigins = resolveAllowedOrigins(process.env.ALLOWED_ORIGINS);
 const corsOptions = {
   origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
@@ -166,6 +167,13 @@ app.get('/meta', (_req: Request, res: Response) => {
   res.json(buildPlatformMeta(release));
 });
 
+app.get('/ready/worker', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }), async (_req: Request, res: Response) => {
+  const health = await readWorkerHealth(release).catch(() => ({ state: 'unavailable' as const }));
+  const ok = health.state === 'ready';
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(ok ? 200 : 503).json({ ok, release, state: health.state });
+});
+
 // Reports how many users startup actually loaded. SELECT 1 alone succeeds
 // even when the schema is wrong, so it cannot distinguish a healthy database
 // from one carrying the older lowercase tables — and that difference is the
@@ -251,6 +259,7 @@ app.use('/api/v1', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+app.use('/api/v1', offlineCommandsRouter);
 app.use('/api/v1', extractToken, (req: Request, res: Response, next: NextFunction) => {
   if (!req.companyId) return next();
   const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};

@@ -174,10 +174,10 @@ export async function requeuePoisonEvent(id: bigint): Promise<void> {
 let pollTimer: NodeJS.Timeout | null = null;
 
 /** Starts a background poll loop. Call `stopOutboxWorker()` to stop it (used in tests and graceful shutdown). */
-export function startOutboxWorker(handler: DeliveryHandler, intervalMs = 2000): void {
+export function startOutboxWorker(handler: DeliveryHandler, intervalMs = 2000, onSuccess?: () => void): void {
   if (pollTimer) return;
   pollTimer = setInterval(() => {
-    drainOutboxOnce(handler).catch((error) => console.error('[outbox-worker] drain failed', error));
+    drainOutboxOnce(handler).then(() => onSuccess?.()).catch((error) => console.error('[outbox-worker] drain failed', error));
   }, intervalMs);
   pollTimer.unref?.();
 }

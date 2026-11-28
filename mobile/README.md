@@ -2,6 +2,11 @@
 
 Native Flutter operations client for floor counts, stock, and transfers. The
 full web workspace remains available as an in-app browser for admin modules.
+Android, iOS and Windows native project scaffolds are checked in. Android has
+the signed release workflow; Windows opens the trusted workspace in the system
+browser and supports USB scanner/manual entry. Windows release and iOS simulator
+builds run in CI; Apple signing, store submission and physical-device validation
+remain release work.
 
 ## What it talks to
 
@@ -27,11 +32,26 @@ cd mobile
 flutter pub get
 flutter analyze
 flutter test
-flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
+flutter run --dart-define=INVEXA_ENV=development
 ```
 
-If `INVEXA_API_BASE` is empty, the app uses `https://invexaretail.com`,
-matching web `VITE_API_BASE`.
+Development uses the local API on port 4000 and web workspace on port 5173.
+Set `INVEXA_API_BASE` and `INVEXA_WEB_APP_URL` with `--dart-define` to override
+those origins when running on a device that cannot reach the host's loopback.
+Use a device reachable HTTPS workspace to exercise the embedded browser on
+Android and iOS, where platform rules can block local HTTP pages.
+Production uses the existing public endpoints by default. For a staging build,
+set `INVEXA_ENV=staging` and supply both staging HTTPS origins explicitly:
+
+```bash
+flutter run --dart-define=INVEXA_ENV=staging --dart-define=INVEXA_API_BASE=https://api.example.test --dart-define=INVEXA_WEB_APP_URL=https://workspace.example.test
+```
+
+Use the same defines with each native build command and replace the example
+origins with the actual staging endpoints. Register the staging workspace
+origin with that API before testing the sign-in handoff.
+Sessions, offline queues, and cached reads are stored separately for each API
+target. Existing installs on the default production endpoint retain their store.
 
 Live API checks (optional):
 
@@ -46,8 +66,16 @@ device and replayed on the next successful refresh.
 
 ## Full workspace
 
-Home → browser icon opens `https://invexaretail.com/` in a trusted-host
-WebView (invexaretail.com and api.invexaretail.com only).
+Home → browser icon opens the configured workspace origin in a WebView or
+the default browser on Windows.
+
+## Published offline settings
+
+Refresh once online after upgrading to download the policy and snapshots for
+the current role. Studio controls which downloaded feeds can be read offline
+and how long those snapshots can be used. A zero-hour limit disables snapshot
+use. Scope or time changes take effect when the app refreshes the published
+policy. The durable queue for unsent work is separate from downloaded reads.
 
 ## Android APK
 

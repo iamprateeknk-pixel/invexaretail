@@ -1,6 +1,7 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
-import { ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
-import { scheduleControlPlanePersist, syncOperationalCompanies } from '../lib/saas/persistence.js';
+import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
+import { commitStudioRelease, finishStudioSchedule, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, scheduleStudioRelease, studioCompanyReviewers, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
+import { refreshControlPlaneFromDb, StudioConfigConflict, writeSessionRows } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
@@ -9,8 +10,18 @@ import { validateEmail } from '../lib/otp-auth.js';
 import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
 import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
+import { isAllowedOrigin, normalizeOrigin } from '../lib/cors-origins.js';
+import { listStudioAutomationRuns, retryStudioAutomationRun } from '../lib/saas/studio-automation-worker.js';
+import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
+import { getIndustryPack } from '../lib/industry-packs.js';
+import { findCompanyProfile } from '../lib/repository.js';
+import { compareStudioVersions, describeStudioVersion, readStudioVersions } from '../lib/saas/studio-versions.js';
 
 function sendError(res: Response, error: unknown): void {
+  if (error instanceof StudioConfigConflict) {
+    res.status(409).json({ error: error.message, code: error.code });
+    return;
+  }
   if (error instanceof ControlPlaneError) {
     res.status(error.status).json({ error: error.message, code: error.code });
     return;
@@ -83,7 +94,7 @@ export const syncRouter = Router();
 
 function persistOnSuccess(req: Request, res: Response, next: NextFunction): void {
   res.on('finish', () => {
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && res.statusCode < 400) {
+    if (!res.locals.studioPersisted && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && res.statusCode < 400) {
       scheduleControlPlanePersist();
     }
   });
@@ -93,6 +104,7 @@ function persistOnSuccess(req: Request, res: Response, next: NextFunction): void
 controlRouter.use(persistOnSuccess);
 studioRouter.use(persistOnSuccess);
 syncRouter.use(persistOnSuccess);
+syncRouter.use(requireLockedCompany);
 
 controlRouter.post('/auth/login', async (req: Request, res: Response) => {
   try {
@@ -156,10 +168,11 @@ controlRouter.post('/companies', requirePlatform, async (req: Request, res: Resp
   }
 });
 
-controlRouter.post('/sessions/select-company', requirePlatform, (req: Request, res: Response) => {
+controlRouter.post('/sessions/select-company', requirePlatform, async (req: Request, res: Response) => {
   try {
     const companyId = String(req.body?.companyId ?? '');
     const result = controlPlane.selectCompany(requireScope(req).actorId, companyId);
+    await writeSessionRows([result.session]);
     res.json({
       success: true,
       session: result.session,
@@ -173,34 +186,49 @@ controlRouter.post('/sessions/select-company', requirePlatform, (req: Request, r
 
 // One-time handoff of a locked-company session from the admin panel to the Control Plane UI
 // (different origins). Only a short code travels in the URL; see lib/saas/session-handoff.ts.
-controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res: Response) => {
+function requireHandoffOrigin(req: Request, stageOrigin: 'PUBLIC_CONTROL_URL' | 'PUBLIC_WEB_URL'): void {
+  const origin = req.headers.origin;
+  if (!isAllowedOrigin(origin) || (origin && process.env.INVEXA_ENV === 'staging'
+    && normalizeOrigin(origin) !== normalizeOrigin(process.env[stageOrigin] ?? ''))) {
+    throw new ControlPlaneError('Cross-site request rejected', 'CSRF_ORIGIN_MISMATCH', 403);
+  }
+}
+
+controlRouter.post('/sessions/handoff', requireLockedCompany, async (req: Request, res: Response) => {
   try {
+    requireHandoffOrigin(req, 'PUBLIC_CONTROL_URL');
     const session = req.body?.session;
     // The caller can only hand off the session it is itself authenticated with.
     if (!session || typeof session !== 'object' || (session as { controlToken?: unknown }).controlToken !== bearer(req)) {
       throw new ControlPlaneError("Handoff must carry the caller's own control session", 'INVALID_HANDOFF', 400);
     }
-    res.status(201).json({ success: true, ...createHandoff(session) });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(201).json({ success: true, ...await createHandoff(session) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) => {
-  const session = redeemHandoff(String(req.body?.code ?? ''));
-  if (!session) {
-    res.status(401).json({ error: 'Handoff code is invalid or expired', code: 'HANDOFF_INVALID' });
-    return;
+controlRouter.post('/sessions/handoff/exchange', async (req: Request, res: Response) => {
+  try {
+    requireHandoffOrigin(req, 'PUBLIC_WEB_URL');
+    const session = await redeemHandoff(String(req.body?.code ?? '')) as { controlToken?: unknown } | null;
+    if (!session || typeof session.controlToken !== 'string') {
+      throw new ControlPlaneError('Handoff code is invalid or expired', 'HANDOFF_INVALID', 401);
+    }
+    await controlPlane.requireControlSessionFresh(session.controlToken);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, session });
+  } catch (error) {
+    sendError(res, error);
   }
-  res.setHeader('Cache-Control', 'no-store');
-  res.json({ success: true, session });
 });
 
-controlRouter.post('/sessions/exit', requireLockedCompany, (req: Request, res: Response) => {
+controlRouter.post('/sessions/exit', requireLockedCompany, async (req: Request, res: Response) => {
   try {
     const scope = requireScope(req);
     const sessionId = scope.companySessionId!;
-    controlPlane.exitSession(sessionId, scope.actorId);
+    await controlPlane.exitSession(sessionId, scope.actorId);
     res.json({ success: true });
   } catch (error) {
     sendError(res, error);
@@ -488,6 +516,13 @@ controlRouter.post('/integrations/connectors', requireLockedCompany, (req: Reque
 });
 
 studioRouter.use(requireLockedCompany);
+const releasingCompanies = new Set<string>();
+studioRouter.use((req, res, next) => {
+  if (releasingCompanies.has(scopedCompany(req))) {
+    return sendError(res, new ControlPlaneError('This company is publishing a configuration. Try again shortly.', 'STUDIO_CONFIG_CONFLICT', 409));
+  }
+  next();
+});
 
 // Which table a column edit applies to: `stock` (default) or `lots`.
 export function tableOf(value: unknown): TableKey {
@@ -692,33 +727,166 @@ studioRouter.post('/draft/tabs/:tabKey', (req: Request, res: Response) => {
   }
 });
 
-studioRouter.post('/preview', (req: Request, res: Response) => {
+studioRouter.post('/preview', async (req: Request, res: Response) => {
   try {
-    res.json({
-      success: true,
-      preview: controlPlane.preview(requireScope(req), {
-        role: String(req.body?.role ?? 'ADMIN'),
-        device: req.body?.device === 'mobile' || req.body?.device === 'tablet' ? req.body.device : 'desktop',
-      }),
-    });
+    const scope = requireScope(req);
+    const companyId = scopedCompany(req);
+    const currentDraft = controlPlane.drafts.get(companyId);
+    if (currentDraft?.releaseReview || currentDraft?.releaseSchedule) await refreshControlPlaneFromDb(controlPlane);
+    const role = COLUMN_ROLES.find((candidate) => candidate === (req.body?.role ?? 'ADMIN'));
+    if (!role) throw new ControlPlaneError('Choose an operational role for the preview', 'INVALID_ROLE', 400);
+    const requested = req.body?.locationId;
+    if (requested !== undefined && (typeof requested !== 'string' || !requested.trim())) {
+      throw new ControlPlaneError('Choose a valid preview location', 'INVALID_LOCATION', 400);
+    }
+    const device = req.body?.device ?? 'desktop';
+    if (device !== 'desktop' && device !== 'tablet' && device !== 'mobile') {
+      throw new ControlPlaneError('Choose a valid preview device', 'INVALID_DEVICE', 400);
+    }
+    const locations = await listLocationsForCompany({ companyId, tenantId: scope.tenantId, userId: scope.actorId, role });
+    const location = requested === undefined ? locations[0] : locations.find((entry) => entry.id === requested);
+    if (requested !== undefined && !location) throw new ControlPlaneError('Preview location was not found', 'LOCATION_NOT_FOUND', 404);
+    const preview = controlPlane.preview(scope, { role, device });
+    const company = findCompanyProfile(companyId);
+    const pack = getIndustryPack(company?.industryKey ?? company?.industry);
+    const draft = controlPlane.drafts.get(companyId);
+    const releaseReview = studioReviewStatus(draft, scope.actorId);
+    res.locals.studioPersisted = true; // Preview reads the draft without persisting changes.
+    res.json({ success: true, preview: { ...preview, locations, location: location ?? null,
+      draftRevision: studioDraftRevision(draft),
+      releaseSchedule: draft?.releaseSchedule ?? null,
+      releaseReview: { ...releaseReview, reviewers: releaseReview.required && draft
+        ? studioCompanyReviewers(controlPlane, draft, scope.actorId) : [] },
+      variantFields: pack.variantFields ?? [], stockEnabled: controlPlane.isFeatureEnabled(companyId, 'INVENTORY') && !pack.hide.includes('inventory'),
+    } });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-studioRouter.post('/publish', (req: Request, res: Response) => {
+async function releaseStudioVersion(req: Request, res: Response, command: StudioReleaseCommand) {
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
   try {
-    const published = controlPlane.publish(requireScope(req));
-    res.json({ success: true, published, runtime: controlPlane.runtimeConfig(scopedCompany(req)) });
+    await flushControlPlanePersist();
+    if (command.reviewId || (command.expectedActiveVersionId && command.expectedActiveVersionId !== controlPlane.published.get(companyId)?.id)) {
+      await refreshControlPlaneFromDb(controlPlane);
+    }
+    const published = await commitStudioRelease(controlPlane, requireScope(req), command);
+    res.locals.studioPersisted = true;
+    res.json({ success: true, published, runtime: controlPlane.runtimeConfig(companyId) });
+  } catch (error) {
+    if (error instanceof StudioConfigConflict) await refreshControlPlaneFromDb(controlPlane).catch(() => false);
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+}
+
+studioRouter.post('/publish', async (req: Request, res: Response) => {
+  const { draftRevision, reviewId } = req.body ?? {};
+  if (draftRevision !== undefined && (typeof draftRevision !== 'string' || !/^[a-f0-9]{64}$/.test(draftRevision))) {
+    return sendError(res, new ControlPlaneError('Invalid draft revision', 'INVALID_DRAFT_REVISION', 400));
+  }
+  if (reviewId !== undefined && (typeof reviewId !== 'string' || !reviewId || reviewId.length > 191)) {
+    return sendError(res, new ControlPlaneError('Invalid release review', 'INVALID_RELEASE_REVIEW', 400));
+  }
+  await releaseStudioVersion(req, res, { draftRevision, reviewId });
+});
+
+studioRouter.post('/release-review', async (req, res) => {
+  const revision = req.body?.draftRevision;
+  const reviewerId = req.body?.reviewerId;
+  if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)) {
+    return sendError(res, new ControlPlaneError('Preview the draft before requesting approval.', 'INVALID_DRAFT_REVISION', 400));
+  }
+  if (reviewerId !== undefined && (typeof reviewerId !== 'string' || !reviewerId || reviewerId.length > 191)) {
+    return sendError(res, new ControlPlaneError('Choose a valid company reviewer.', 'INVALID_RELEASE_REVIEWER', 400));
+  }
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    const review = await requestStudioReview(controlPlane, requireScope(req), revision, reviewerId);
+    res.locals.studioPersisted = true;
+    res.json({ success: true, review });
+  } catch (error) {
+    if (error instanceof StudioConfigConflict) await refreshControlPlaneFromDb(controlPlane).catch(() => false);
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+});
+
+studioRouter.post('/release-schedule', async (req, res) => {
+  const { draftRevision, reviewId, activateAt } = req.body ?? {};
+  if (typeof draftRevision !== 'string' || !/^[a-f0-9]{64}$/.test(draftRevision)
+    || typeof reviewId !== 'string' || !reviewId || reviewId.length > 191
+    || typeof activateAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(activateAt)) {
+    return sendError(res, new ControlPlaneError('Choose an activation time for the reviewed draft.', 'INVALID_RELEASE_SCHEDULE', 400));
+  }
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    await refreshControlPlaneFromDb(controlPlane);
+    const schedule = await scheduleStudioRelease(controlPlane, requireScope(req), { draftRevision, reviewId, activateAt: new Date(activateAt) });
+    res.locals.studioPersisted = true;
+    res.status(201).json({ success: true, schedule });
+  } catch (error) {
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+});
+
+studioRouter.delete('/release-schedule/:scheduleId', async (req, res) => {
+  const companyId = scopedCompany(req);
+  releasingCompanies.add(companyId);
+  try {
+    await flushControlPlanePersist();
+    await refreshControlPlaneFromDb(controlPlane);
+    if (!await finishStudioSchedule(controlPlane, companyId, param(req, 'scheduleId'))) {
+      throw new ControlPlaneError('Release schedule not found', 'RELEASE_SCHEDULE_NOT_FOUND', 404);
+    }
+    res.locals.studioPersisted = true;
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error);
+  } finally {
+    releasingCompanies.delete(companyId);
+  }
+});
+
+studioRouter.post('/rollback', async (req: Request, res: Response) => {
+  const { version: submittedVersion, targetVersionId, expectedActiveVersionId, reason } = req.body ?? {};
+  const version = typeof submittedVersion === 'string' && /^\d+$/.test(submittedVersion) ? Number(submittedVersion) : submittedVersion;
+  const reviewed = targetVersionId !== undefined || expectedActiveVersionId !== undefined || reason !== undefined;
+  if (!Number.isSafeInteger(version) || version < 1 || (reviewed && (
+    typeof targetVersionId !== 'string' || !targetVersionId || targetVersionId.length > 191
+    || typeof expectedActiveVersionId !== 'string' || !expectedActiveVersionId || expectedActiveVersionId.length > 191
+    || typeof reason !== 'string' || !reason.trim() || reason.length > 500
+  ))) return sendError(res, new ControlPlaneError('Select a saved version, compare it with the active version and enter a reason.', 'INVALID_ROLLBACK', 400));
+  await releaseStudioVersion(req, res, { rollbackVersion: version, targetVersionId, expectedActiveVersionId, reason: reason?.trim() });
+});
+
+studioRouter.get('/versions', async (req, res) => {
+  try {
+    const { active, versions } = await readStudioVersions(controlPlane, scopedCompany(req));
+    res.json({ success: true, active: active ? describeStudioVersion(controlPlane, active, active.id) : null,
+      versions: versions.map((version) => describeStudioVersion(controlPlane, version, active?.id)) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-studioRouter.post('/rollback', (req: Request, res: Response) => {
+studioRouter.get('/versions/:versionId/compare', async (req, res) => {
   try {
-    const published = controlPlane.rollback(requireScope(req), Number(req.body?.version));
-    res.json({ success: true, published });
+    const { active, versions } = await readStudioVersions(controlPlane, scopedCompany(req));
+    const target = versions.find((version) => version.id === param(req, 'versionId'));
+    if (!active || !target) throw new ControlPlaneError('Version not found', 'VERSION_NOT_FOUND', 404);
+    res.json({ success: true, active: describeStudioVersion(controlPlane, active, active.id),
+      target: describeStudioVersion(controlPlane, target, active.id), changes: compareStudioVersions(active, target) });
   } catch (error) {
     sendError(res, error);
   }
@@ -793,6 +961,34 @@ studioRouter.post('/automations', (req: Request, res: Response) => {
   }
 });
 
+studioRouter.get('/automations/runs', async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, runs: await listStudioAutomationRuns(scopedCompany(req)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+studioRouter.post('/automations/runs/:runId/retry', async (req: Request, res: Response) => {
+  try {
+    const value: unknown = req.body?.finishedAt;
+    const finishedAt = new Date(typeof value === 'string' ? value : '');
+    if (!Number.isFinite(finishedAt.getTime()) || value !== finishedAt.toISOString()) {
+      throw new ControlPlaneError('Select a failed run from the current history.', 'INVALID_AUTOMATION_RETRY', 400);
+    }
+    const result = await retryStudioAutomationRun(requireScope(req), param(req, 'runId'), finishedAt);
+    if (result === 'forbidden') throw new ControlPlaneError('A company control session is required.', 'FORBIDDEN', 403);
+    if (result === 'unavailable') throw new ControlPlaneError('Automation history is unavailable.', 'AUTOMATION_UNAVAILABLE', 503);
+    if (result === 'missing') throw new ControlPlaneError('Automation run not found.', 'AUTOMATION_RUN_NOT_FOUND', 404);
+    if (result === 'changed') throw new ControlPlaneError('This run has changed. Refresh the history before retrying.', 'AUTOMATION_RUN_CHANGED', 409);
+    if (result === 'disabled') throw new ControlPlaneError('Enable and publish this automation before retrying.', 'AUTOMATION_DISABLED', 409);
+    res.locals.studioPersisted = true;
+    res.status(202).json({ success: true });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 studioRouter.get('/mobile-policy', (req: Request, res: Response) => {
   res.json({ success: true, policies: controlPlane.ensureDraft(requireScope(req)).mobilePolicies });
 });
@@ -828,20 +1024,27 @@ studioRouter.delete('/:kind/:key', (req: Request, res: Response, next: NextFunct
 
 syncRouter.post('/mutations', async (req: Request, res: Response) => {
   try {
-    const auth = req.headers.authorization?.startsWith('Bearer ') ? await controlPlane.requireControlSessionFresh(req.headers.authorization.slice(7)) : null;
+    const companyId = scopedCompany(req);
     const requestedCompanyId = String(req.body?.companyId ?? '');
-    const companyId = auth?.scope.companyId || requestedCompanyId;
-    if (auth?.scope.companyId && requestedCompanyId) {
-      controlPlane.assertCompanyScope(auth.scope, requestedCompanyId);
+    if (requestedCompanyId) {
+      controlPlane.assertCompanyScope(requireScope(req), requestedCompanyId);
+    }
+    const actionType = String(req.body?.actionType ?? 'STOCK_ADJUST');
+    if (actionType === 'STOCK_ADJUST' || actionType === 'POST_STOCK_ADJUSTMENT') {
+      throw new ControlPlaneError(
+        'Stock sync is unavailable until mutations are posted through the canonical inventory service.',
+        'CANONICAL_INVENTORY_REQUIRED',
+        503,
+      );
     }
     const mutation = controlPlane.enqueueMutation({
       mutationId: String(req.body?.mutationId ?? ''),
       tenantId: controlPlane.tenantId,
       companyId,
-      userId: String(req.body?.userId ?? auth?.scope.actorId ?? ''),
+      userId: requireScope(req).actorId,
       deviceId: String(req.body?.deviceId ?? ''),
       entityType: String(req.body?.entityType ?? 'inventory'),
-      actionType: String(req.body?.actionType ?? 'STOCK_ADJUST'),
+      actionType,
       payload: req.body?.payload ?? {},
     });
     res.json({ success: true, mutation });
@@ -851,30 +1054,59 @@ syncRouter.post('/mutations', async (req: Request, res: Response) => {
 });
 
 syncRouter.get('/mutations', (req: Request, res: Response) => {
-  const companyId = String(req.query.companyId ?? '');
-  const mutations = [...controlPlane.mutations.values()].filter((mutation) => !companyId || mutation.companyId === companyId);
-  res.json({ success: true, mutations });
+  try {
+    const companyId = scopedCompany(req);
+    const requestedCompanyId = String(req.query.companyId ?? '');
+    if (requestedCompanyId) controlPlane.assertCompanyScope(requireScope(req), requestedCompanyId);
+    const mutations = [...controlPlane.mutations.values()].filter((mutation) => mutation.companyId === companyId);
+    res.json({ success: true, mutations });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 syncRouter.post('/devices/register', (req: Request, res: Response) => {
-  const device = controlPlane.registerDevice({
-    companyId: String(req.body?.companyId ?? ''),
-    userId: String(req.body?.userId ?? ''),
-    appVersion: String(req.body?.appVersion ?? '2.0.0'),
-  });
-  res.status(201).json({ success: true, device });
+  try {
+    const device = controlPlane.registerDevice({
+      companyId: scopedCompany(req),
+      userId: requireScope(req).actorId,
+      appVersion: String(req.body?.appVersion ?? '2.0.0'),
+    });
+    res.status(201).json({ success: true, device });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 syncRouter.post('/devices/:deviceId/revoke', (req: Request, res: Response) => {
-  controlPlane.revokeDevice(param(req, 'deviceId'));
-  res.json({ success: true });
+  try {
+    const companyId = scopedCompany(req);
+    const deviceId = param(req, 'deviceId');
+    const device = controlPlane.devices.get(deviceId);
+    if (!device || device.companyId !== companyId) {
+      throw new ControlPlaneError('Device not found', 'DEVICE_NOT_FOUND', 404);
+    }
+    const scope = requireScope(req);
+    const isCompanyAdmin = scope.role === 'ADMIN' || scope.role === 'PLATFORM_SUPER_ADMIN';
+    if (device.userId !== scope.actorId && !isCompanyAdmin) {
+      throw new ControlPlaneError('Only the device owner or a company admin can revoke this device', 'FORBIDDEN', 403);
+    }
+    controlPlane.revokeDevice(deviceId);
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
-syncRouter.get('/status', (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    health: controlPlane.health(),
-    pending: [...controlPlane.mutations.values()].filter((mutation) => mutation.status !== 'synced'),
-  });
+syncRouter.get('/status', (req: Request, res: Response) => {
+  try {
+    const companyId = scopedCompany(req);
+    res.json({
+      success: true,
+      pending: [...controlPlane.mutations.values()].filter((mutation) => mutation.companyId === companyId && mutation.status !== 'synced'),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 

@@ -33,3 +33,36 @@ test('normalizes Hostinger env values and browser origins', () => {
   assert.equal(isAllowedOrigin('https://evil.example', origins), false);
   assert.equal(isAllowedOrigin(undefined, origins), true);
 });
+
+test('opaque and malformed origins never become allowed configuration values', () => {
+  for (const invalid of ['null', 'file:///tmp/test', 'data:text/plain,opaque', 'bad-host' + '/'.repeat(8192)]) {
+    assert.equal(normalizeOrigin(invalid), null);
+    assert.equal(isAllowedOrigin(invalid, resolveAllowedOrigins(invalid)), false);
+  }
+});
+
+const staging = {
+  INVEXA_ENV: 'staging',
+  PUBLIC_API_URL: 'https://api.staging.example.test',
+  PUBLIC_WEB_URL: 'https://app.staging.example.test',
+  PUBLIC_CONTROL_URL: 'https://control.staging.example.test',
+};
+
+test('staging permits only its configured HTTPS browser origins and supports native requests', () => {
+  const origins = resolveAllowedOrigins(' https://APP.staging.example.test/, https://control.staging.example.test ', staging);
+  assert.deepEqual(origins, [staging.PUBLIC_WEB_URL, staging.PUBLIC_CONTROL_URL]);
+  for (const origin of REQUIRED_WEB_ORIGINS) assert.equal(isAllowedOrigin(origin, origins), false, origin);
+  assert.equal(isAllowedOrigin(undefined, origins), true);
+});
+
+test('staging rejects missing, mixed, and non-origin deployment values', () => {
+  const valid = `${staging.PUBLIC_WEB_URL},${staging.PUBLIC_CONTROL_URL}`;
+  assert.throws(() => resolveAllowedOrigins(undefined, staging), /ALLOWED_ORIGINS/);
+  assert.throws(() => resolveAllowedOrigins(staging.PUBLIC_WEB_URL, staging), /PUBLIC_CONTROL_URL/);
+  for (const origin of ['https://invexaretail.com.:443', 'https://api.invexaretail.com', 'https://127.0.0.1',
+    'http://preview.example.test', 'https://preview.example.test/path/..', 'https://user@preview.example.test']) {
+    assert.throws(() => resolveAllowedOrigins(`${valid},${origin}`, staging), /ALLOWED_ORIGINS/);
+  }
+  assert.throws(() => resolveAllowedOrigins(valid, { ...staging, PUBLIC_API_URL: 'https://invexaretail.com' }), /PUBLIC_API_URL/);
+  assert.throws(() => resolveAllowedOrigins(valid, { ...staging, INVEXA_ENV: 'stagin' }), /INVEXA_ENV/);
+});

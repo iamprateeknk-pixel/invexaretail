@@ -3,10 +3,11 @@
 Point the app at an API with:
 
 ```bash
-flutter run --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
+flutter run --dart-define=INVEXA_ENV=development --dart-define=INVEXA_API_BASE=http://127.0.0.1:4000
 ```
 
-Empty `INVEXA_API_BASE` uses `https://invexaretail.com`.
+See [the mobile README](README.md#run-locally) for workspace configuration and
+the defines required by staging builds.
 
 Seed/demo logins are created by the API seed (`api/prisma/seed.ts`, or the
 API's in-memory seed mode when `DATABASE_URL` is unset). Their password is
@@ -59,3 +60,8 @@ Panel use the Microsoft Edge WebView2 Runtime, preinstalled on Windows 11 and
 current Windows 10; on a PC without it the app shows a message asking to install it. CI needs no secrets. Optional code
 signing (removes the SmartScreen "Unknown publisher" warning): set
 `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`.
+
+A Windows staging build uses the configured staging workspace origin for
+sign-in. Set `INVEXA_CONTROL_PANEL_URL` to the staging Control Panel HTTPS
+origin to enable that surface in the build. It stays unavailable when that
+define is omitted.

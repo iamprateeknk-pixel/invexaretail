@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+import { approvalIntentFingerprint, assertApprovalReviewer, checkApprovalGate, roleMeetsRequirement, findTriggeredRule } from './approval-rules.js';
+
+test('approval fingerprints distinguish different command details at the same value', () => {
+  const first = approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-1', 3]]]);
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-1', 3]]]));
+  assert.notEqual(first, approvalIntentFingerprint(['transfer-1', 100, [['item-1', 'lot-2', 3]]]));
+});
+
+test('an approval decision requires a qualified reviewer other than the requester', () => {
+  assert.throws(() => assertApprovalReviewer('requester', 'ADMIN', 'requester', 'BRANCH_MANAGER'), { code: 'SELF_REVIEW' });
+  assert.throws(() => assertApprovalReviewer('reviewer', 'STORE_USER', 'requester', 'BRANCH_MANAGER'), { code: 'FORBIDDEN' });
+  assert.doesNotThrow(() => assertApprovalReviewer('reviewer', 'ADMIN', 'requester', 'BRANCH_MANAGER'));
+});
+
+test('a configured but unavailable policy source cannot authorize a command', async () => {
+  const previous = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = 'unavailable-approval-test';
+  try {
+    await assert.rejects(checkApprovalGate({
+      triggerType: 'TRANSFER_CONFIRM', entityType: 'Transfer', entityId: 'test-transfer',
+      branchId: null, value: 1000, intent: [], requestedById: 'test-user', companyId: 'test-company',
+    }), { code: 'APPROVAL_UNAVAILABLE' });
+  } finally {
+    if (previous === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previous;
+  }
+});
 
 test('roleMeetsRequirement lets a higher-ranked role satisfy a lower requirement', () => {
   assert.equal(roleMeetsRequirement('ADMIN', 'BRANCH_MANAGER'), true);

@@ -85,6 +85,8 @@ async function assertAllMigrationsRecorded(databaseUrl, label) {
 async function seedLegacyData(databaseUrl) {
   await query(databaseUrl, `INSERT INTO "CompanyProfile"(id, name, "updatedAt") VALUES ('mx-co', 'Matrix Co', now())`);
   await query(databaseUrl, `INSERT INTO "Location"(id, code, name, type, "companyId", "updatedAt") VALUES ('mx-loc', 'MXL', 'Matrix Loc', 'warehouse', 'mx-co', now())`);
+  await query(databaseUrl, `INSERT INTO "TransferReceipt"(id, "requestId", "transferId", "receivedById", status, notes)
+    VALUES ('mx-receipt', 'mx-receive-request', 'mx-transfer', 'mx-user', 'RECEIVED', 'Legacy delivery')`);
   for (let i = 1; i <= 25; i += 1) {
     await query(databaseUrl, `INSERT INTO "Item"(id, code, name, "companyId", "updatedAt") VALUES ($1, $2, $3, 'mx-co', now())`, [`mx-item-${i}`, `MX${i}`, `Matrix item ${i}`]);
     await query(databaseUrl, `INSERT INTO "Lot"(id, "lotNo", "itemId", "updatedAt") VALUES ($1, $2, $3, now())`, [`mx-lot-${i}`, `L${i}`, `mx-item-${i}`]);
@@ -140,10 +142,14 @@ async function main() {
     await assertAllMigrationsRecorded(url, 'upgrade');
     assertNoDrift(url, 'upgrade');
     const after = await rowCounts(url);
-    for (const table of ['CompanyProfile', 'Location', 'Item', 'Lot', 'StockLedger']) {
+    for (const table of ['CompanyProfile', 'Location', 'Item', 'Lot', 'StockLedger', 'TransferReceipt']) {
       if (after[table] !== before[table]) throw new Error(`upgrade changed ${table}: ${before[table]} -> ${after[table]}`);
     }
-    return `${behind} migrations applied over live data; ${before.Item} items and ${before.StockLedger} ledger rows intact, no drift`;
+    const legacy = await query(url, `SELECT notes, "requestFingerprint" FROM "TransferReceipt" WHERE "requestId" = 'mx-receive-request'`);
+    if (legacy.rows[0]?.notes !== 'Legacy delivery' || legacy.rows[0].requestFingerprint !== null) {
+      throw new Error('upgrade changed the historical transfer receipt');
+    }
+    return `${behind} migrations applied over live data; ${before.Item} items, ${before.StockLedger} ledger rows and the historical receipt intact, no drift`;
   });
 
   if (dockerContainer) {

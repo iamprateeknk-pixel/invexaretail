@@ -46,7 +46,7 @@ test('approval workflows round-trip through the plain model', () => {
   const model = workflowToModel(seeded);
   assert.deepEqual(model, { key: 'transfer.approval', name: 'Transfer approval', version: 1, target: 'transfer', threshold: '100000', approverRole: 'BRANCH_MANAGER' });
   assert.deepEqual(modelToWorkflow(model), seeded);
-  assert.match(describeWorkflow(model), /^Transfers up to ₹1,00,000 are approved automatically; above that a branch manager must approve\.$/);
+  assert.match(describeWorkflow(model), /^Transfers above ₹1,00,000 require review by a branch manager\.$/);
 });
 
 test('automations read as a sentence', () => {

@@ -138,23 +138,52 @@ class _CountScreenState extends State<CountScreen> {
     });
   }
 
-  String? get _draftKey => _itemId == null || _locationId == null ? null : '$_itemId|$_locationId';
+  ({String itemId, String locationId, String? lotNo})? get _draftKey {
+    final itemId = _itemId;
+    final locationId = _locationId ?? widget.controller.selectedLocationId;
+    if (itemId == null || locationId == null) return null;
+    return (itemId: itemId, locationId: locationId, lotNo: _lotNo);
+  }
 
   void _saveDraft() {
     final key = _draftKey;
     if (key == null) return;
-    if (_qty.text.trim().isEmpty) {
-      widget.controller.countDrafts.remove(key);
-    } else {
-      widget.controller.countDrafts[key] = _qty.text;
+    final controller = widget.controller;
+    final quantity = _qty.text;
+    if (quantity.trim().isEmpty) {
+      controller.countDrafts.remove(key);
+      return;
     }
+    final previous = controller.countDrafts[key];
+    String? stockRevision;
+    if (previous != null) {
+      stockRevision = previous.stockRevision;
+    } else {
+      final task = controller.taskFor(key.itemId, key.locationId);
+      if (task?.item.isWeightCounted == true) {
+        stockRevision = task?.stockRevision;
+      } else if (task != null) {
+        for (final lot in task.lots) {
+          if (lot.lotNo == key.lotNo) stockRevision = lot.stockRevision;
+        }
+      }
+    }
+    controller.countDrafts[key] = (quantity: quantity, stockRevision: stockRevision);
   }
 
   /// Switches the item being counted, restoring a draft typed earlier.
   void _pickItem(String? itemId, {String? lotNo}) {
     _itemId = itemId;
-    _lotNo = lotNo;
-    _qty.text = _draftKey == null ? '' : (widget.controller.countDrafts[_draftKey!] ?? '');
+    final item = _find(_countableItems, itemId);
+    _lotNo = item == null || item.isWeightCounted ? null : effectiveCountLot(item.lots, lotNo);
+    _qty.text = widget.controller.countDrafts[_draftKey]?.quantity ?? '';
+  }
+
+  bool _refreshChangedLot(String itemId, String? currentLot) {
+    if (currentLot == _lotNo) return false;
+    setState(() => _pickItem(itemId, lotNo: currentLot));
+    widget.controller.setError('The selected lot changed. Verify the lot and its quantity before saving.');
+    return true;
   }
 
   // Blueprint v4 §13: pieces are whole numbers; a KG / decimal item takes one
@@ -192,19 +221,25 @@ class _CountScreenState extends State<CountScreen> {
     }
     final isWeightItem = item != null && item.isWeightCounted;
     final submittedLotNo = isWeightItem ? null : effectiveCountLot(item?.lots ?? const [], _lotNo);
+    if (_refreshChangedLot(itemId, submittedLotNo)) {
+      await ScanFeedback.rejected();
+      return;
+    }
+    final draftKey = (itemId: itemId, locationId: locationId, lotNo: submittedLotNo);
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
       physicalQuantity: qty,
       lotNo: submittedLotNo,
       weight: isWeightItem,
+      stockRevision: widget.controller.countDrafts[draftKey]?.stockRevision,
     );
     if (!ok || !mounted) {
       if (!ok) await ScanFeedback.rejected();
       return;
     }
     await ScanFeedback.saved();
-    widget.controller.countDrafts.remove(_draftKey);
+    widget.controller.countDrafts.remove(draftKey);
     if (submittedLotNo != null) {
       _submittedLots.putIfAbsent(itemId, () => {}).add(submittedLotNo);
     }
@@ -229,10 +264,6 @@ class _CountScreenState extends State<CountScreen> {
         // Save & Next: go straight to the next item still open in this batch.
         final remaining = _selectedBatchRows.where((row) => row.itemId != itemId).toList();
         _pickItem(remaining.isEmpty ? null : remaining.first.itemId);
-        if (remaining.isNotEmpty) {
-          final next = _find(_countableItems, _itemId);
-          _lotNo = next == null || next.lots.isEmpty ? null : next.lots.first.lotNo;
-        }
       }
     });
   }
@@ -274,10 +305,16 @@ class _CountScreenState extends State<CountScreen> {
   Future<void> _scanToIncrement(CatalogItem item) async {
     final code = await showBarcodeScanner(context, title: 'Scan ${item.name} to add +1');
     if (code == null || !mounted) return;
+    if (_itemId != item.id) return;
+    final current = _find(_countableItems, item.id);
+    final selectedLot = effectiveCountLot(current?.lots ?? const [], _lotNo);
+    if (_refreshChangedLot(item.id, selectedLot)) {
+      await ScanFeedback.rejected();
+      return;
+    }
     final normalized = code.trim().toLowerCase();
     final matchesItem = normalized == item.code.trim().toLowerCase() || normalized == (item.barcode ?? '').trim().toLowerCase();
-    final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
-    final selectedLot = effectiveCountLot(item.lots, _lotNo);
+    final matchesLot = current?.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized) ?? false;
     if (matchesLot && !matchesItem && selectedLot != null && selectedLot.trim().toLowerCase() != normalized) {
       // Another lot's label: adding it to the selected lot's count would book it against the wrong lot.
       await ScanFeedback.rejected();
@@ -290,8 +327,8 @@ class _CountScreenState extends State<CountScreen> {
       return;
     }
     await ScanFeedback.accepted();
-    final current = int.tryParse(_qty.text.trim()) ?? 0;
-    setState(() => _qty.text = (current + 1).toString());
+    final quantity = int.tryParse(_qty.text.trim()) ?? 0;
+    setState(() => _qty.text = (quantity + 1).toString());
     _saveDraft();
   }
 
@@ -359,7 +396,10 @@ class _CountScreenState extends State<CountScreen> {
                   for (final location in controller.locations)
                     DropdownMenuItem(value: location.id, child: Text(location.name)),
                 ],
-                onChanged: (value) => setState(() => _locationId = value),
+                onChanged: (value) => setState(() {
+                  _locationId = value;
+                  _pickItem(_itemId, lotNo: _lotNo);
+                }),
               ),
             const SizedBox(height: 12),
             Row(
@@ -398,7 +438,7 @@ class _CountScreenState extends State<CountScreen> {
                   for (final lot in lots)
                     DropdownMenuItem(value: lot.lotNo, child: Text(lot.lotNo)),
                 ],
-                onChanged: (value) => setState(() => _lotNo = value),
+                onChanged: (value) => setState(() => _pickItem(_itemId, lotNo: value)),
               ),
             const SizedBox(height: 12),
             Row(

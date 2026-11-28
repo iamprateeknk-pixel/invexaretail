@@ -61,17 +61,25 @@ export async function estimateValueAtRisk(
   itemId: string | null | undefined,
   quantity: number | null | undefined,
 ): Promise<number | null> {
-  if (!itemId || !quantity) return null;
   try {
-    const line = await prisma.purchaseOrderLine.findFirst({
-      where: { itemId, unitCost: { gt: 0 }, purchaseOrder: { companyId: tenant.companyId } },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!line) return null;
-    return Number(line.unitCost) * Number(quantity);
+    return await readValueAtRisk(tenant, itemId, quantity);
   } catch {
     return null;
   }
+}
+
+/** Approval decisions distinguish missing cost history from an unavailable lookup. */
+export async function readValueAtRisk(
+  tenant: Pick<TenantContext, 'companyId'>,
+  itemId: string | null | undefined,
+  quantity: number | null | undefined,
+): Promise<number | null> {
+  if (!itemId || !quantity) return null;
+  const line = await prisma.purchaseOrderLine.findFirst({
+    where: { itemId, unitCost: { gt: 0 }, purchaseOrder: { companyId: tenant.companyId } },
+    orderBy: { createdAt: 'desc' },
+  });
+  return line ? Number(line.unitCost) * quantity : null;
 }
 
 /**

@@ -10,6 +10,16 @@ test('outside production nothing is enforced (local development keeps its fallba
   assert.equal(checkProductionSecrets({}).ok, true);
 });
 
+test('staging requires database mode and the exact Git release SHA', () => {
+  const stage = { NODE_ENV: 'production', INVEXA_ENV: 'staging', JWT_SECRET: STRONG, DATABASE_URL: DB };
+  const invalid = checkProductionSecrets({ ...stage, GITHUB_SHA: 'unknown', REQUIRE_DATABASE: 'false' });
+  assert.match(invalid.errors.join('\n'), /REQUIRE_DATABASE/);
+  assert.match(invalid.errors.join('\n'), /GITHUB_SHA/);
+  assert.match(checkProductionSecrets({ ...stage, NODE_ENV: 'development' }).errors.join('\n'), /NODE_ENV/);
+  assert.match(checkProductionSecrets({ ...stage, DATABASE_URL: 'mysql://staging.example.test' }).errors.join('\n'), /DATABASE_URL/);
+  assert.equal(checkProductionSecrets({ ...stage, REQUIRE_DATABASE: 'true', GITHUB_SHA: '1'.repeat(40) }).ok, true);
+});
+
 test('production requires a JWT secret', () => {
   const result = checkProductionSecrets({ NODE_ENV: 'production', DATABASE_URL: DB });
   assert.equal(result.ok, false);

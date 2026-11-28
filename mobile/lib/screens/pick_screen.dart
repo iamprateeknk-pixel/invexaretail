@@ -238,6 +238,7 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     await ScanFeedback.saved();
     _requestId = newRequestId();
     session.clearPending();
+    _message = _controller.notice ?? '';
     _previews.clear();
     for (final field in _weights.values) {
       field.clear();

@@ -17,6 +17,13 @@ export const ERROR_CODES = [
   'INSUFFICIENT_STOCK',
   'INVALID_TRANSITION',
   'CONCURRENT_UPDATE_CONFLICT',
+  'COUNT_STOCK_CHANGED',
+  'OFFLINE_COUNT_POLICY_REJECTED',
+  'OFFLINE_COUNT_POLICY_UNAVAILABLE',
+  'OFFLINE_WAREHOUSE_POLICY_REJECTED',
+  'OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE',
+  'TRANSFER_RECEIVE_CHANGED',
+  'TRANSFER_PICK_CHANGED',
   'DUPLICATE_REQUEST',
   'NOT_FOUND',
   'VALIDATION_FAILED',
@@ -27,6 +34,8 @@ export const ERROR_CODES = [
   'INTERNAL_ERROR',
   'NOT_SUPPORTED',
   'UPSTREAM_ERROR',
+  'APPROVAL_UNAVAILABLE',
+  'STUDIO_RULE_BLOCKED',
   // Codes already sent ad hoc inside error bodies before P3, now named here.
   'QC_REQUIRED',
   'SELF_REVIEW',
@@ -130,6 +139,9 @@ export function statusForErrorCode(code: ErrorCode): number {
     case 'VALIDATION_FAILED':
       return 422;
     case 'CONCURRENT_UPDATE_CONFLICT':
+    case 'COUNT_STOCK_CHANGED':
+    case 'TRANSFER_RECEIVE_CHANGED':
+    case 'TRANSFER_PICK_CHANGED':
       return 409;
     case 'DUPLICATE_REQUEST':
       return 200;
@@ -144,8 +156,11 @@ export function statusForErrorCode(code: ErrorCode): number {
     // envelope with 400") — the two paths are deliberately different.
     case 'FORBIDDEN':
     case 'SELF_REVIEW':
+    case 'OFFLINE_COUNT_POLICY_REJECTED':
+    case 'OFFLINE_WAREHOUSE_POLICY_REJECTED':
       return 403;
     case 'CONFLICT':
+    case 'STUDIO_RULE_BLOCKED':
     case 'RECOUNT_REQUIRED':
     case 'RECOUNT_NOT_INDEPENDENT':
       return 409;
@@ -157,6 +172,10 @@ export function statusForErrorCode(code: ErrorCode): number {
       return 501;
     case 'UPSTREAM_ERROR':
       return 502;
+    case 'APPROVAL_UNAVAILABLE':
+    case 'OFFLINE_COUNT_POLICY_UNAVAILABLE':
+    case 'OFFLINE_WAREHOUSE_POLICY_UNAVAILABLE':
+      return 503;
     default:
       return 400;
   }

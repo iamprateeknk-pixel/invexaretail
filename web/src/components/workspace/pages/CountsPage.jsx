@@ -233,10 +233,14 @@ export function CountsPage() {
                   <p className="text-sm font-medium">{request.entityType} {request.entityId.slice(-6)} · ₹{Number(request.valueAtStake).toLocaleString('en-IN')}</p>
                   <p className="text-xs text-muted-foreground">{request.rule?.label} · requires {request.rule?.requiredApproverRole} · requested by {request.requestedBy?.name} · {formatDateTime(request.createdAt)}</p>
                 </div>
-                <div className="flex gap-2">
-                  <Button size="sm" disabled={submitLoading} onClick={() => decideApprovalRequest(request.id, 'APPROVED')}>Approve</Button>
-                  <Button size="sm" variant="outline" disabled={submitLoading} onClick={() => decideApprovalRequest(request.id, 'REJECTED')}>Reject</Button>
-                </div>
+                {session?.user?.id && (request.requestedBy?.id ?? request.requestedById) === session.user.id ? (
+                  <p className="text-sm text-muted-foreground">Waiting for another reviewer</p>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button size="sm" disabled={submitLoading} onClick={() => decideApprovalRequest(request.id, 'APPROVED')}>Approve</Button>
+                    <Button size="sm" variant="outline" disabled={submitLoading} onClick={() => decideApprovalRequest(request.id, 'REJECTED')}>Reject</Button>
+                  </div>
+                )}
               </div>
             )) : <p className="text-sm text-muted-foreground">No value approvals are waiting.</p>}
           </CardContent>

@@ -29,7 +29,14 @@ async function insertPendingEvent(companyId = `outbox-test-${randomUUID()}`): Pr
     `SELECT id FROM "DomainEventOutbox" WHERE "companyId" = $1 ORDER BY id DESC LIMIT 1`,
     companyId,
   );
+  await makeClaimable(row.id);
   return row.id;
+}
+
+async function makeClaimable(id: bigint): Promise<void> {
+  // availableAt has millisecond precision. Storing now() can round it into the future
+  // relative to an immediate claim. Simulate an elapsed deadline explicitly.
+  await executeRaw(prisma, `UPDATE "DomainEventOutbox" SET "availableAt" = now() - interval '1 second' WHERE id = ? AND status = 'PENDING'`, id);
 }
 
 integration('an event written in the same transaction as business state is durably PENDING until delivered', async () => {
@@ -74,7 +81,7 @@ integration('a handler that always fails is retried with backoff and eventually 
   let attempts = 0;
   for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i += 1) {
     // Force availability immediately so the test does not wait out real backoff delays.
-    await executeRaw(prisma, `UPDATE "DomainEventOutbox" SET "availableAt" = now() WHERE id = ? AND status = 'PENDING'`, id);
+    await makeClaimable(id);
     const result = await drainOutboxOnce(async (event) => {
       if (BigInt(event.id) !== id) return;
       attempts += 1;
@@ -105,14 +112,19 @@ integration('one poison event does not block delivery of other pending events in
   const poisonId = await insertPendingEvent();
   const goodId = await insertPendingEvent();
   const delivered: bigint[] = [];
+  let poisonAttempts = 0;
   for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i += 1) {
-    await executeRaw(prisma, `UPDATE "DomainEventOutbox" SET "availableAt" = now() WHERE id = ? AND status = 'PENDING'`, poisonId);
+    await makeClaimable(poisonId);
     await drainOutboxOnce(async (event) => {
-      if (BigInt(event.id) === poisonId) throw new Error('always fails');
+      if (BigInt(event.id) === poisonId) {
+        poisonAttempts += 1;
+        throw new Error('always fails');
+      }
       delivered.push(BigInt(event.id));
     });
+    assert.equal(poisonAttempts, i + 1, 'the failed event must be attempted when its retry deadline has elapsed');
   }
-  assert.ok(delivered.includes(goodId), 'the healthy event must still be delivered despite the poison event failing repeatedly');
+  assert.equal(delivered.filter((id) => id === goodId).length, 1, 'the healthy event must still be delivered once');
   const [poisonRow] = await prisma.$queryRawUnsafe<Array<{ status: string }>>(`SELECT status FROM "DomainEventOutbox" WHERE id = $1`, poisonId);
   assert.equal(poisonRow.status, 'POISON');
 });

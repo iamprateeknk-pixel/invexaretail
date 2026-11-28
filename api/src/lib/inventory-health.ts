@@ -3,6 +3,8 @@
 // is dead, how old is it. Deterministic and read-only: every number is a plain aggregate over the
 // ledger rows and the sales movements passed in.
 
+export { lotUnitCost } from './lot-cost.js';
+
 export type HealthStockRow = {
   itemId: string;
   code: string;
@@ -133,15 +135,6 @@ export function buildInventoryHealth(input: { rows: HealthStockRow[]; sales: Map
     deadStock: sum('DEAD'),
     slowStock: sum('SLOW'),
   };
-}
-
-/** Unit cost from lot attributes: landed cost first, then the purchase rate; null when neither is recorded. */
-export function lotUnitCost(attributes: Record<string, unknown> | null | undefined): number | null {
-  for (const key of ['landedUnitCost', 'purchaseRate']) {
-    const value = Number(attributes?.[key]);
-    if (Number.isFinite(value) && value > 0) return value;
-  }
-  return null;
 }
 
 /**

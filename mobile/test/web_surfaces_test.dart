@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:invexaretail_mobile/config/env.dart';
 import 'package:invexaretail_mobile/config/role_home.dart';
 import 'package:invexaretail_mobile/config/web_surfaces.dart';
 import 'package:invexaretail_mobile/models/models.dart';
@@ -33,10 +34,13 @@ void main() {
   });
 
   test('only https pages on the listed hosts load inside the app', () {
+    final workspaceHosts = workspaceWebOrigins(Uri.parse(workspaceOrigin), InvexaEnvironment.production);
+    final controlPanelHosts = {...workspaceHosts, Uri.parse(controlPanelOrigin).origin};
     expect(isTrustedWebUri(Uri.parse('https://invexaretail.com/#/stock'), workspaceHosts), isTrue);
     expect(isTrustedWebUri(Uri.parse('https://INVEXARETAIL.com/'), workspaceHosts), isTrue);
     expect(isTrustedWebUri(Uri.parse('http://invexaretail.com/'), workspaceHosts), isFalse, reason: 'plain http');
     expect(isTrustedWebUri(Uri.parse('https://invexaretail.com.evil.test/'), workspaceHosts), isFalse);
+    expect(isTrustedWebUri(Uri.parse('https://invexaretail.com:444/'), workspaceHosts), isFalse);
     expect(isTrustedWebUri(Uri.parse('https://admin.invexaretail.com/'), workspaceHosts), isFalse,
         reason: 'the workspace view does not open the Control Panel');
     expect(isTrustedWebUri(Uri.parse('https://admin.invexaretail.com/'), controlPanelHosts), isTrue);
@@ -46,12 +50,27 @@ void main() {
   });
 
   test('the embedded workspace opens signed in as the app user, and not at all without a sign-in code', () async {
-    final signedIn = await signedInWorkspaceUri(() async => 'one-time-code_123456789');
+    final workspace = Uri.parse(workspaceOrigin);
+    final signedIn = await signedInWorkspaceUri(workspace, () async => 'one-time-code_123456789');
     expect(signedIn.toString(), 'https://invexaretail.com/#/handoff?code=one-time-code_123456789');
 
-    expect(await signedInWorkspaceUri(() async => throw ApiException('offline')), isNull,
+    expect(await signedInWorkspaceUri(workspace, () async => throw ApiException('offline')), isNull,
         reason: 'falling back to the plain workspace would reuse whatever session the PC last held');
-    expect(await signedInWorkspaceUri(() async => '  '), isNull);
+    expect(await signedInWorkspaceUri(workspace, () async => '  '), isNull);
+  });
+
+  test('staging uses its own workspace and Control Panel origins', () async {
+    const environment = InvexaEnvironment.staging;
+    final workspace = resolveWorkspaceOrigin(fromDefine: 'https://workspace.example.test', environment: environment);
+    final control = resolveControlPanelOrigin(fromDefine: 'https://control.example.test', environment: environment);
+    final allowed = {...workspaceWebOrigins(workspace, environment), control!.origin};
+    final signedIn = await signedInWorkspaceUri(workspace, () async => 'one-time-code');
+    expect(signedIn.toString(), 'https://workspace.example.test/#/handoff?code=one-time-code');
+    expect(isTrustedWebUri(signedIn, allowed), isTrue);
+    expect(isTrustedWebUri(Uri.parse(workspaceOrigin), allowed), isFalse);
+    expect(isTrustedWebUri(Uri.parse(controlPanelOrigin), allowed), isFalse);
+    expect(resolveControlPanelOrigin(environment: environment), isNull);
+    expect(() => resolveControlPanelOrigin(fromDefine: controlPanelOrigin, environment: environment), throwsStateError);
   });
 
   test('the clean-start script clears both web storages and cannot throw into the page', () {
@@ -79,6 +98,12 @@ void main() {
       expect(ids, contains('workspace'), reason: role);
       expect(ids, isNot(contains('control')), reason: role);
     }
+  });
+
+  test('Windows preserves the published native navigation along with the workspace', () {
+    final desktop = desktopHomeForRole('BRANCH_MANAGER', navigation: const ['dashboard', 'counts']);
+    expect(desktop.destinations.map((destination) => destination.id), ['home', 'count', 'workspace']);
+    expect(desktop.defaultDestination, 'home');
   });
 
   test('cookies are cleared once per signed-in person, so opening a second tab keeps the first signed in', () {

@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 
 import '../config/env.dart';
 import '../models/models.dart';
+import 'mobile_offline_policy.dart';
+import 'operational_offline_command.dart';
 
 /// The server accepted the first factor but wants an authenticator or backup
 /// code before it will issue a session. Not an error to show the user.
@@ -22,12 +24,15 @@ class InvexaApi {
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 25),
     this.onTokensUpdated,
+    DateTime Function()? now,
   })  : baseUrl = stripTrailingSlash(baseUrl ?? apiBaseFromEnvironment()),
+        _now = now ?? DateTime.now,
         httpClient = httpClient ?? http.Client();
 
   final String baseUrl;
   final http.Client httpClient;
   final Duration timeout;
+  final DateTime Function() _now;
   Future<void> Function(String token, String? refreshToken)? onTokensUpdated;
 
   /// Offline read model (see local_store.dart). When set together with [cacheScope], successful reads
@@ -36,7 +41,9 @@ class InvexaApi {
   Future<void> Function(String scope, String path, String body)? cachePut;
   Future<({String body, DateTime fetchedAt})?> Function(String scope, String path)? cacheGet;
   String? cacheScope;
+  MobileOfflinePolicy? offlinePolicy;
   DateTime? servedFromCacheAt;
+  void Function(Duration remaining)? onCachedSnapshot;
 
   static const _cacheablePrefixes = [
     '/api/v1/locations', '/api/v1/items', '/api/v1/dashboard', '/api/v1/counts', '/api/v1/transfers',
@@ -46,11 +53,15 @@ class InvexaApi {
   static bool isCacheable(String method, String path) {
     if (method != 'GET') return false;
     final clean = path.split('?').first;
-    return _cacheablePrefixes.any((prefix) => clean == prefix || clean.startsWith(prefix.endsWith('/') ? prefix : '$prefix/') || clean.startsWith(prefix));
+    return _cacheablePrefixes.any((prefix) => clean == prefix || clean.startsWith(prefix.endsWith('/') ? prefix : '$prefix/'));
   }
+
+  bool _canCache(String method, String path) => method == 'GET' && (offlinePolicy?.allows(path) ?? isCacheable(method, path));
 
   String? token;
   String? refreshToken;
+  int _sessionGeneration = 0;
+  int get sessionGeneration => _sessionGeneration;
   // Plan P1-AUTH-001: every request that hits a 401 at the same time awaits this ONE refresh,
   // instead of the second one seeing a boolean lock and giving up.
   Future<bool>? _refreshInFlight;
@@ -73,7 +84,16 @@ class InvexaApi {
     bool auth = true,
     int attempt = 0,
     String? mutationId,
+    Duration? requestTimeout,
   }) async {
+    final scope = cacheScope;
+    final generation = _sessionGeneration;
+    void checkSession() {
+      if (auth && generation != _sessionGeneration) {
+        throw ApiException('The signed-in account changed.', statusCode: 401);
+      }
+    }
+
     try {
       final uri = _uri(path);
       // X-Mutation-Id (plan P0-SYNC-003): created once when the person acts and reused on every
@@ -83,7 +103,7 @@ class InvexaApi {
       late http.Response response;
       switch (method) {
         case 'GET':
-          response = await httpClient.get(uri, headers: headers).timeout(timeout);
+          response = await httpClient.get(uri, headers: headers).timeout(requestTimeout ?? timeout);
         case 'POST':
           response = await httpClient.post(uri, headers: headers, body: encoded).timeout(timeout);
         case 'PATCH':
@@ -92,6 +112,7 @@ class InvexaApi {
           throw ApiException('Unsupported method $method');
       }
 
+      checkSession();
       Map<String, dynamic> payload = {};
       if (response.body.isNotEmpty) {
         final decoded = jsonDecode(response.body);
@@ -103,18 +124,19 @@ class InvexaApi {
       }
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        final scope = cacheScope;
-        if (scope != null && cachePut != null && isCacheable(method, path)) {
-          servedFromCacheAt = null;
-          await cachePut!(scope, path, response.body);
+        if (scope != null && scope == cacheScope && cachePut != null && _canCache(method, path)) {
+          final offlinePayload = offlinePolicy?.cachePayload(path, payload);
+          await cachePut!(scope, path, offlinePayload == null ? response.body : jsonEncode(offlinePayload));
         }
+        checkSession();
         return payload;
       }
 
       if (response.statusCode == 401 && auth && attempt == 0) {
         final refreshed = await refreshAccessToken();
+        checkSession();
         if (refreshed) {
-          return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId);
+          return await _send(method, path, body: body, auth: true, attempt: 1, mutationId: mutationId, requestTimeout: requestTimeout);
         }
       }
 
@@ -125,29 +147,40 @@ class InvexaApi {
       throw ApiException(
         message,
         statusCode: response.statusCode,
+        code: payload['code'] is String ? payload['code'] as String : null,
         retryAfterSeconds: int.tryParse(response.headers['retry-after'] ?? ''),
       );
     } on ApiException {
       rethrow;
     } on TimeoutException {
-      return await _offlineFallback(method, path);
+      checkSession();
+      return await _offlineFallback(method, path, scope);
     } on SocketException {
-      return await _offlineFallback(method, path);
+      checkSession();
+      return await _offlineFallback(method, path, scope);
     } on http.ClientException {
-      return await _offlineFallback(method, path);
+      checkSession();
+      return await _offlineFallback(method, path, scope);
     }
   }
 
   /// Unreachable network: serve the last good copy of a cacheable read, otherwise fail as before.
-  Future<Map<String, dynamic>> _offlineFallback(String method, String path) async {
-    final scope = cacheScope;
-    if (scope != null && cacheGet != null && isCacheable(method, path)) {
+  Future<Map<String, dynamic>> _offlineFallback(String method, String path, String? scope) async {
+    if (scope != null && scope == cacheScope && cacheGet != null && _canCache(method, path)) {
       final cached = await cacheGet!(scope, path);
-      if (cached != null) {
+      final policy = offlinePolicy;
+      if (cached != null && scope == cacheScope && _canCache(method, path) &&
+          (policy?.isFresh(cached.fetchedAt, _now()) ?? true)) {
         final decoded = jsonDecode(cached.body);
         if (decoded is Map) {
-          servedFromCacheAt = cached.fetchedAt;
-          return Map<String, dynamic>.from(decoded);
+          if (servedFromCacheAt == null || cached.fetchedAt.isBefore(servedFromCacheAt!)) {
+            servedFromCacheAt = cached.fetchedAt;
+          }
+          if (policy != null) {
+            onCachedSnapshot?.call(policy.maxAge - _now().difference(servedFromCacheAt!));
+          }
+          final payload = Map<String, dynamic>.from(decoded);
+          return policy?.cachePayload(path, payload) ?? payload;
         }
       }
     }
@@ -163,8 +196,7 @@ class InvexaApi {
     );
     _throwIfTwoFactor(payload);
     final result = LoginResult.fromJson(payload);
-    token = result.token;
-    refreshToken = result.refreshToken;
+    _startSession(result);
     return result;
   }
 
@@ -188,6 +220,11 @@ class InvexaApi {
     return code;
   }
 
+  /// Published, role-resolved runtime settings. These are presentation hints;
+  /// operational authorization is still enforced by each server endpoint.
+  Future<Map<String, dynamic>> runtimeConfig() =>
+      _send('GET', '/api/v1/runtime/config', requestTimeout: const Duration(seconds: 4));
+
   Future<LoginResult> loginWithOtp(String email, String otpCode) async {
     final payload = await _send(
       'POST',
@@ -197,8 +234,7 @@ class InvexaApi {
     );
     _throwIfTwoFactor(payload);
     final result = LoginResult.fromJson(payload);
-    token = result.token;
-    refreshToken = result.refreshToken;
+    _startSession(result);
     return result;
   }
 
@@ -217,21 +253,29 @@ class InvexaApi {
       auth: false,
     );
     final result = LoginResult.fromJson(payload);
+    _startSession(result);
+    return result;
+  }
+
+  void _startSession(LoginResult result) {
+    clearToken();
     token = result.token;
     refreshToken = result.refreshToken;
-    return result;
   }
 
   /// Refreshes the access token. Concurrent callers share one network call and one result.
   Future<bool> refreshAccessToken() {
     final running = _refreshInFlight;
     if (running != null) return running;
-    final next = _refreshOnce().whenComplete(() => _refreshInFlight = null);
+    final generation = _sessionGeneration;
+    final next = _refreshOnce(generation).whenComplete(() {
+      if (generation == _sessionGeneration) _refreshInFlight = null;
+    });
     _refreshInFlight = next;
     return next;
   }
 
-  Future<bool> _refreshOnce() async {
+  Future<bool> _refreshOnce(int generation) async {
     final currentRefresh = refreshToken;
     if (currentRefresh == null || currentRefresh.isEmpty) return false;
     try {
@@ -242,12 +286,12 @@ class InvexaApi {
         auth: false,
       );
       final nextToken = asString(payload['token']);
-      if (nextToken.isEmpty) return false;
+      if (nextToken.isEmpty || generation != _sessionGeneration) return false;
       token = nextToken;
       final nextRefresh = payload['refreshToken'] == null ? currentRefresh : asString(payload['refreshToken']);
       refreshToken = nextRefresh.isEmpty ? currentRefresh : nextRefresh;
       await onTokensUpdated?.call(token!, refreshToken);
-      return true;
+      return generation == _sessionGeneration;
     } on ApiException {
       return false;
     }
@@ -255,6 +299,7 @@ class InvexaApi {
 
   Future<void> logout() async {
     final currentRefresh = refreshToken;
+    clearToken();
     if (currentRefresh != null && currentRefresh.isNotEmpty) {
       try {
         await _send(
@@ -267,7 +312,6 @@ class InvexaApi {
         // Local sign-out still proceeds.
       }
     }
-    clearToken();
   }
 
   Future<DashboardSummary> dashboard() async {
@@ -301,6 +345,8 @@ class InvexaApi {
     String? lotNo,
     String mode = 'manual',
     String? requestId,
+    String? stockRevision,
+    String? offlineCountPermit,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts', body: {
       'itemId': itemId,
@@ -309,6 +355,8 @@ class InvexaApi {
       'mode': mode,
       if (lotNo != null && lotNo.isNotEmpty) 'lotNo': lotNo,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+      if (stockRevision != null) 'stockRevision': stockRevision,
+      if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
     }, mutationId: requestId);
     return CountRecord.fromJson(asMap(payload['count']));
   }
@@ -320,12 +368,16 @@ class InvexaApi {
     required String locationId,
     required double totalQuantity,
     String? requestId,
+    String? stockRevision,
+    String? offlineCountPermit,
   }) async {
     final payload = await _send('POST', '/api/v1/stock-counts/weight', body: {
       'itemId': itemId,
       'locationId': locationId,
       'totalQuantity': totalQuantity,
       if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+      if (stockRevision != null) 'stockRevision': stockRevision,
+      if (offlineCountPermit != null) 'offlineCountPermit': offlineCountPermit,
     }, mutationId: requestId);
     return asList(payload['counts']).map((row) => CountRecord.fromJson(asMap(row))).toList();
   }
@@ -367,6 +419,9 @@ class InvexaApi {
   Future<Map<String, dynamic>> sendRaw(String method, String path, {Object? body, String? mutationId}) {
     return _send(method, path, body: body, mutationId: mutationId);
   }
+
+  Future<Map<String, dynamic>> replayOfflineCommand(OperationalOfflineCommand command) =>
+      _send('POST', '/api/v1/sync/commands', body: command.toJson(), mutationId: command.commandId);
 
   Future<Map<String, dynamic>> mobileHome() async {
     return _send('GET', '/api/v1/mobile/home');
@@ -460,6 +515,8 @@ class InvexaApi {
   }
 
   void clearToken() {
+    _sessionGeneration += 1;
+    _refreshInFlight = null;
     token = null;
     refreshToken = null;
   }

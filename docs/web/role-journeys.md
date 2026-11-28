@@ -12,8 +12,8 @@ navigation" scope item has a source to design against.
 - **Top tasks**: configure company/locations/users, review the full
   operational picture, approve exceptions, manage integrations and SaaS
   entitlements.
-- **Home destination**: Dashboard (`getRoleHome` in `lib/permissions.js` -
-  same for every role today; see "What's deliberately not done" below).
+- **Home destination**: Command Center. Its first actions link to ERP imports,
+  approvals and exceptions where the company and role permit them.
 - **Daily queue**: `command-center` (what needs attention now across
   branches), `approvals` (pending count reviews), `exceptions`
   (damage/shortage/pick disposition), `alerts`.
@@ -32,7 +32,7 @@ navigation" scope item has a source to design against.
 
 - **Top tasks**: run day-to-day store/branch operations - stock counts,
   transfers, QC, reviewing reports for their branch.
-- **Home destination**: Dashboard.
+- **Home destination**: Stock counts, with approvals and transfers as fallbacks.
 - **Daily queue**: `counts` (assign/review blind counts), `transfers`
   (requests awaiting dispatch/receipt), `command-center`, `approvals`,
   `reports`.
@@ -46,7 +46,7 @@ navigation" scope item has a source to design against.
 
 - **Top tasks**: request transfers into their store, run stock counts,
   keep local inventory records current within their assigned location(s).
-- **Home destination**: Dashboard.
+- **Home destination**: Assigned stock counts, with transfers and item search as fallbacks.
 - **Daily queue**: `counts` (their assigned tasks - `count-assignments/mine`
   server-side), `transfers` (their store's requests), `inventory`.
 - **Exception paths**: `exceptions` inbox (visible to every role per
@@ -68,7 +68,7 @@ navigation" scope item has a source to design against.
 
 - **Top tasks**: pick and receive transfers, manage bins/putaway, action
   pick-wave assignments.
-- **Home destination**: Dashboard.
+- **Home destination**: Picking & receiving, with bins & putaway and transfers as fallbacks.
 - **Daily queue**: `picking` (pick tasks and destination receiving),
   `putaway` (received stock awaiting shelving), `transfers` (visibility
   into what's inbound/outbound).
@@ -83,7 +83,7 @@ navigation" scope item has a source to design against.
 
 - **Top tasks**: read-only oversight - review command center, approvals
   history, reports, without operational write access to counts/transfers.
-- **Home destination**: Dashboard.
+- **Home destination**: Reports, with Command Center as a fallback.
 - **Daily queue**: `command-center`, `approvals`, `reports`,
   `intelligence`.
 - **Exception paths**: views `exceptions` inbox for audit trail purposes;
@@ -109,19 +109,23 @@ inside retail operations is a bridge *from* retail ops *into* a
 tenant-provisioning view, not the control plane itself, and stays
 ADMIN-only.
 
-## What's deliberately not done this week
+## Starting a session
 
-- **Per-role home destinations.** Every role currently lands on the shared
-  `dashboard`. A picker landing on `picking` or a store user landing on
-  `counts` is a real, plausible improvement, but changing the landing
-  section is a product decision ("first thing a Warehouse Picker should
-  see") that belongs with the page-rebuild phase's wireframe approval, not
-  bundled into this foundation week. `lib/permissions.js`'s `getRoleHome`
-  is written to make this a one-function change when that's decided.
-- **Page-level (not route-level) entitlement checks** - e.g., whether a
+The workspace loads the company's navigation profile independently of stock,
+catalogue and count data. Automatic landing selects the first available queue
+using the route permission check. The shared Dashboard is the fallback when the
+navigation profile is unavailable. Explicit links retain their destination and
+its permission check. Signing out clears an automatically chosen route that is
+still open so the next account can start from its own queue.
+
+## Remaining work
+
+- **Page-level entitlement checks** - e.g., whether a
   Store User can see the "create PO" button in `purchase-orders` versus
   only view it. This week's fix is at the route/module boundary
   (`Workspace.jsx`); in-page action-level permission gates are numerous and
   page-specific, and are the page-rebuild phase's job per the guide's own
   "keep existing business screens operational... do not redesign pages
   independently" instruction.
+- Director, Purchaser and Warehouse Manager still need separate operational
+  roles and authorization. These landings use the six existing API roles.

@@ -3,17 +3,19 @@
 // mounts this router at the cluster's original registration position.
 import { decimalsToNumbers } from '../lib/decimal-json.js';
 import { Router } from 'express';
-import { createHash } from 'node:crypto';
 import { prisma } from '../lib/db.js';
 import { recordAudit } from '../lib/audit.js';
 import { daysUntilExpiry, expirySeverity, recommendedExpiryAction } from '../lib/expiry-alerts.js';
+import { daysUntilExpiryDate } from '../lib/expiry-date.js';
+import { companyTimezone } from '../lib/timezone-context.js';
 import { buildExpiryBoard, emptyExpiryBoard } from '../lib/expiry-board.js';
-import { ExpiryWriteOffError, buildLocationExpiryBoard, listLocationExpiryAlerts, writeOffExpiryLot } from '../lib/expiry-lifecycle.js';
+import { ExpiryWriteOffError, buildLocationExpiryBoard, expiryAlertId, listLocationExpiryAlerts, writeOffExpiryLot } from '../lib/expiry-lifecycle.js';
 import { databaseEnabled, persistAudit } from '../lib/persistence.js';
 import { maybeEmitStockLow } from '../lib/webhook-dispatcher.js';
 import { DEFAULT_COMPANY_ID } from '../lib/saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from '../lib/inventory-posting-service.js';
-import { tenantContextOf, canAccessLocation, expiryAlertId } from './opext-shared.js';
+import { STUDIO_EXPIRY_SOURCE } from '../lib/studio-expiry-sweep.js';
+import { tenantContextOf, canAccessLocation } from './opext-shared.js';
 
 const router = Router();
 
@@ -21,11 +23,37 @@ router.get('/expiry-alerts', async (req, res) => {
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : '';
   if (!locationId) return res.status(400).json({ message: 'locationId is required.' });
   if (!canAccessLocation(req, locationId)) return res.status(403).json({ message: 'Location access denied.' });
+  const { companyId } = tenantContextOf(req);
+  if (req.query.source === 'studio') {
+    if (!databaseEnabled) return res.json({ alerts: [] });
+    const alerts = await prisma.expiryAlert.findMany({
+      where: {
+        companyId, locationId, status: { in: ['ACTIVE', 'ACKNOWLEDGED'] },
+        metadata: { path: ['source'], equals: STUDIO_EXPIRY_SOURCE },
+        lot: { expiryDate: { not: null }, stock: { some: { companyId, locationId, onHand: { gt: 0 } } } },
+      },
+      select: {
+        id: true, itemId: true, lotId: true, locationId: true, status: true,
+        item: { select: { code: true, name: true } },
+        lot: { select: { lotNo: true, status: true, expiryDate: true, stock: {
+          where: { companyId, locationId, onHand: { gt: 0 } }, select: { onHand: true },
+        } } },
+      },
+      orderBy: [{ expiryDate: 'asc' }, { id: 'asc' }],
+    });
+    const now = new Date();
+    const timezone = companyTimezone(companyId);
+    return res.json({ alerts: alerts.flatMap(({ lot: { stock, expiryDate, ...lot }, ...alert }) => {
+      const days = daysUntilExpiryDate(expiryDate, now, timezone);
+      if (days === null || !stock.length) return [];
+      return [{ ...alert, lot, expiryDate, quantity: Number(stock[0].onHand), daysUntilExpiry: days, severity: expirySeverity(days), recommendedAction: recommendedExpiryAction(days) }];
+    }).sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry) });
+  }
   if (!databaseEnabled) {
     return res.json({ alerts: await listLocationExpiryAlerts(tenantContextOf(req), locationId) });
   }
   const ledger = await prisma.stockLedger.findMany({
-    where: { companyId: req.companyId ?? DEFAULT_COMPANY_ID, locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
+    where: { companyId, locationId, onHand: { gt: 0 }, lot: { expiryDate: { not: null } } },
     include: {
       lot: { select: { lotNo: true, status: true, expiryDate: true } },
       item: { select: { code: true, name: true } },
@@ -37,7 +65,7 @@ router.get('/expiry-alerts', async (req, res) => {
     .map((row) => {
       const days = daysUntilExpiry(row.lot.expiryDate!);
       return {
-        id: `expiry-${createHash('sha1').update(`${row.itemId}|${row.lotId}|${row.locationId}`).digest('hex').slice(0, 24)}`,
+        id: expiryAlertId(row.itemId, row.lotId, row.locationId),
         itemId: row.itemId,
         lotId: row.lotId,
         locationId: row.locationId,
@@ -186,19 +214,23 @@ router.patch('/expiry-alerts/:id/status', async (req, res) => {
   const current = await prisma.expiryAlert.findFirst({ where: { id: req.params.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID } });
   if (!current) return res.status(404).json({ message: 'Expiry alert not found.' });
   if (!canAccessLocation(req, current.locationId)) return res.status(403).json({ message: 'Location access denied.' });
-  const alert = await prisma.expiryAlert.update({
-    where: { id: current.id, companyId: req.companyId ?? DEFAULT_COMPANY_ID },
-    data: {
-      status: status as any,
-      acknowledgedAt: status === 'ACKNOWLEDGED' ? new Date() : current.acknowledgedAt,
-      resolvedAt: status === 'RESOLVED' ? new Date() : null,
-      metadata: { ...(current.metadata && typeof current.metadata === 'object' ? current.metadata as object : {}), statusReason: reason || undefined, statusActorId: req.user!.id },
-    },
+  const alert = await prisma.$transaction(async (tx) => {
+    const [updated] = await tx.expiryAlert.updateManyAndReturn({
+      where: { id: current.id, companyId: current.companyId, status: { equals: current.status, in: ['ACTIVE', 'ACKNOWLEDGED'] } },
+      data: {
+        status: status as 'ACKNOWLEDGED' | 'RESOLVED',
+        acknowledgedAt: status === 'ACKNOWLEDGED' ? new Date() : current.acknowledgedAt,
+        resolvedAt: status === 'RESOLVED' ? new Date() : null,
+        metadata: { ...(current.metadata && typeof current.metadata === 'object' ? current.metadata as object : {}), statusReason: reason || undefined, statusActorId: req.user!.id },
+      },
+    });
+    if (updated) await tx.auditLog.create({ data: {
+      actorId: req.user!.id, actorRole: req.user!.role, action: `EXPIRY_ALERT_${status}`,
+      entityType: 'ExpiryAlert', entityId: updated.id, metadata: { reason, locationId: updated.locationId },
+    } });
+    return updated;
   });
-  await prisma.auditLog.create({ data: {
-    actorId: req.user!.id, actorRole: req.user!.role, action: `EXPIRY_ALERT_${status}`,
-    entityType: 'ExpiryAlert', entityId: alert.id, metadata: { reason, locationId: alert.locationId },
-  } });
+  if (!alert) return res.status(409).json({ message: 'The expiry alert has already changed or been resolved. Refresh and try again.' });
   return res.json({ alert: decimalsToNumbers(alert) });
 });
 

@@ -21,6 +21,14 @@ import { ABC_CLASSES, classifyAbcItems, type AbcClass } from '../lib/abc-cycle-c
 import { DEFAULT_TOLERANCE } from '../lib/count-tolerance.js';
 import { buildInventoryHealth, lotUnitCost, summarizeServiceLevel, type HealthSales } from '../lib/inventory-health.js';
 import { resolvePrice, type PriceCandidate } from '../lib/price-resolution.js';
+import { sendError } from '../lib/errors.js';
+import { canAccessLocation } from '../lib/inventory.js';
+import { accessContext } from './core-shared.js';
+import { canAccessLocation as canAccessOrderLocation } from './opext-shared.js';
+import { controlPlane } from '../lib/saas/control-plane.js';
+import { readStudioRuntime } from '../lib/saas/studio-versions.js';
+import { canViewStudioReports, STUDIO_REPORT_SOURCES, studioReportDefinition } from '../lib/saas/studio-report-config.js';
+import { runStudioReport } from '../lib/repositories/studio-report-repository.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -46,6 +54,35 @@ function requireDatabaseForReport(res: Response): boolean {
   if (databaseEnabled) return true;
   res.status(501).json({ message: 'This report requires a connected database.' });
   return false;
+}
+
+for (const [path, dataset] of STUDIO_REPORT_SOURCES) {
+  router.get(`/reports/studio/${path}`, async (req, res) => {
+    if (req.apiKey || !canViewStudioReports(req.user!.role)) {
+      return sendError(res, 403, 'FORBIDDEN', 'This role cannot run published Studio reports.');
+    }
+    if (!requireDatabaseForReport(res)) return;
+    const { reportKey, locationId } = req.query;
+    if (typeof reportKey !== 'string' || !/^[a-zA-Z0-9_.-]{1,100}$/.test(reportKey)
+      || typeof locationId !== 'string' || !locationId || locationId.length > 191) {
+      return sendError(res, 400, 'VALIDATION_FAILED', 'Choose a published report and a location.');
+    }
+    const ctx = tenantContextFor(req);
+    const location = await prisma.location.findFirst({ where: { id: locationId, companyId: ctx.companyId }, select: { id: true } });
+    if (!location) return sendError(res, 404, 'NOT_FOUND', 'Location not found.');
+    const { role, assignedLocationIds } = accessContext(req.user!);
+    const canAccess = dataset === 'orders' ? canAccessOrderLocation(req, locationId)
+      : canAccessLocation({ role, assignedLocationIds }, locationId);
+    if (!canAccess) return sendError(res, 403, 'FORBIDDEN', 'Location access denied.');
+    const runtime = await readStudioRuntime(controlPlane, ctx.companyId, ctx.role);
+    const report = runtime.reports.find(({ key, entity }) => key === reportKey && entity === dataset);
+    if (!report) return sendError(res, 404, 'NOT_FOUND', 'Published report not found.');
+    const definition = studioReportDefinition(report);
+    if (!definition) return sendError(res, 422, 'VALIDATION_FAILED', 'Update this report in Studio before running it.');
+    const result = await runStudioReport(ctx, locationId, dataset, definition, assignedLocationIds);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ version: runtime.version, ...result });
+  });
 }
 
 router.get('/reports/dashboard', async (req: Request, res: Response) => {

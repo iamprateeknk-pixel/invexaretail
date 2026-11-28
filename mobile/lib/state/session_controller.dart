@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,8 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../services/live_events.dart';
 import '../services/local_store.dart';
+import '../services/mobile_offline_policy.dart';
+import '../services/operational_offline_command.dart';
 import '../services/sync_resolution.dart';
 
 /// A key that is unique per user action and stays the same across retries.
@@ -27,11 +30,24 @@ class SessionController extends ChangeNotifier {
       final cached = await store.getReadModel(scope, path);
       return cached == null ? null : (body: cached.body, fetchedAt: cached.fetchedAt);
     };
+    api.onCachedSnapshot = _scheduleSnapshotExpiry;
   }
 
   /// The offline read model is only ever read or written for the signed-in identity.
-  String get _cacheScope => '$companyId|$_userId';
-  void _bindReadModel() => api.cacheScope = user == null ? null : _cacheScope;
+  String get _legacyCacheScope => '$companyId|$_userId';
+  String get _cacheScope => '$_legacyCacheScope|${user?.role ?? ''}';
+  void _bindReadModel() {
+    api.cacheScope = user == null ? null : _cacheScope;
+    if (_mobilePolicyIdentity != api.cacheScope) {
+      api.offlinePolicy = null;
+      mobileNavigation = null;
+      _countPermitsRequired = false;
+      _offlineCountPermit = null;
+      _offlineWarehousePermits = null;
+      _verifiedPermitTransport = false;
+      _offlineCommandVersion = null;
+    }
+  }
 
   /// When non-null, what is on screen is the last saved copy from this time (no network at start-up).
   DateTime? get snapshotFetchedAt => api.servedFromCacheAt;
@@ -52,15 +68,51 @@ class SessionController extends ChangeNotifier {
   List<CountRecord> counts = [];
   List<TransferRecord> transfers = [];
   List<CountAssignment> assignments = [];
-  // Half-typed quantities, keyed itemId|locationId. Switching tabs rebuilds the
-  // count screen, so a number typed before a phone call is not lost.
-  final Map<String, String> countDrafts = {};
+  // Drafts keep the stock revision from when the quantity was first entered,
+  // even when live updates refresh the work feed or switching tabs rebuilds the form.
+  final Map<({String itemId, String locationId, String? lotNo}), ({String quantity, String? stockRevision})> countDrafts = {};
   // Actionable count tasks from /mobile/work (store users). Empty on an older server.
   List<CountTask> countTasks = [];
   List<QueuedCount> queuedCounts = [];
   List<QueuedAction> queuedActions = [];
+  ({int generation, Future<void> completion})? _queueReplay;
   List<Map<String, dynamic>> putawayTasks = [];
   String? selectedLocationId;
+  /// Published screens for this role. Null uses the built-in role home when
+  /// the service has no policy or cannot be reached.
+  List<String>? mobileNavigation;
+  String? _mobilePolicyIdentity;
+  int _mobilePolicyRequest = 0;
+  bool _countPermitsRequired = false;
+  OfflinePermit? _offlineCountPermit;
+  Map<String, OfflinePermit?>? _offlineWarehousePermits;
+  bool _verifiedPermitTransport = false;
+  int? _offlineCommandVersion;
+  String _countPermitScope(String identity) => 'offline-count|$identity';
+  String _warehousePermitScope(String identity) => 'offline-warehouse|$identity';
+  Timer? _snapshotExpiry;
+  bool offlineReadsUnavailable = false;
+
+  void _scheduleSnapshotExpiry(Duration remaining) {
+    _snapshotExpiry?.cancel();
+    final scope = api.cacheScope;
+    _snapshotExpiry = Timer(remaining, () {
+      if (api.cacheScope != scope || api.servedFromCacheAt == null) return;
+      api.servedFromCacheAt = null;
+      offlineReadsUnavailable = true;
+      dashboard = null;
+      locations = [];
+      items = [];
+      stock = [];
+      counts = [];
+      assignments = [];
+      countTasks = [];
+      transfers = [];
+      putawayTasks = [];
+      selectedLocationId = null;
+      notifyListeners();
+    });
+  }
   // Set when sign-in needs a second factor; the login screen then asks for the code.
   String? twoFactorChallenge;
   // Set by the quick-scan sheet; the Count screen consumes it when it opens.
@@ -95,8 +147,14 @@ class SessionController extends ChangeNotifier {
   /// Loads this user's own queued work (plan P0-SYNC-001). Anything queued by another
   /// user or company on this phone is neither shown nor replayed.
   Future<void> _loadQueues() async {
-    queuedCounts = await store.loadQueuedCounts(companyId, _userId);
-    queuedActions = await store.loadQueuedActions(companyId, _userId);
+    final generation = api.sessionGeneration;
+    final company = companyId;
+    final actor = _userId;
+    final storedCounts = await store.loadQueuedCounts(company, actor);
+    final storedActions = await store.loadQueuedActions(company, actor);
+    if (generation != api.sessionGeneration) return;
+    queuedCounts = storedCounts;
+    queuedActions = storedActions;
   }
 
   @visibleForTesting
@@ -303,13 +361,28 @@ class SessionController extends ChangeNotifier {
 
   Future<void> logout({bool notify = true}) async {
     stopLive();
+    final scope = user == null ? null : _cacheScope;
+    final legacyScope = _legacyCacheScope;
+    _mobilePolicyIdentity = null;
+    _mobilePolicyRequest += 1;
+    _countPermitsRequired = false;
+    _offlineCountPermit = null;
+    _offlineWarehousePermits = null;
+    _verifiedPermitTransport = false;
+    _offlineCommandVersion = null;
+    api.cacheScope = null;
+    api.offlinePolicy = null;
     try {
       await api.logout();
     } catch (_) {}
-    final scope = user == null ? null : _cacheScope;
-    api.cacheScope = null;
     api.servedFromCacheAt = null;
-    if (scope != null) await store.clearReadModel(scope); // a signed-out phone keeps no stock data
+    if (scope != null) {
+      await store.clearReadModel(scope);
+      await store.clearReadModel(legacyScope);
+      await store.saveMobilePolicy(scope, null);
+      await store.saveMobilePolicy(_countPermitScope(scope), null);
+      await store.saveMobilePolicy(_warehousePermitScope(scope), null);
+    }
     user = null;
     dashboard = null;
     locations = [];
@@ -323,7 +396,8 @@ class SessionController extends ChangeNotifier {
     queuedCounts = [];
     queuedActions = [];
     selectedLocationId = null;
-    api.clearToken();
+    mobileNavigation = null;
+    offlineReadsUnavailable = false;
     await store.clearSession();
     if (notify) notifyListeners();
   }
@@ -359,6 +433,16 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> _reconnectSync() async {
+    await _refreshMobilePolicy();
+    if (!isSignedIn) return;
+    if (api.offlinePolicy != null || api.servedFromCacheAt != null) {
+      try {
+        await refreshAll(refreshPolicy: false);
+      } on ApiException {
+        // Connection changes during a resume are retried on the next refresh.
+      }
+      return;
+    }
     await flushQueue();
     await _refreshSlices({'assignments', 'counts', 'stock'});
   }
@@ -367,6 +451,7 @@ class SessionController extends ChangeNotifier {
     _live?.stop();
     _live = null;
     _liveDebounce?.cancel();
+    _snapshotExpiry?.cancel();
     _pendingSlices.clear();
     liveStatus = LiveStatus.connecting;
   }
@@ -392,24 +477,29 @@ class SessionController extends ChangeNotifier {
         await refreshAll();
         return;
       }
+      if (slices.contains('policy')) {
+        final generation = api.sessionGeneration;
+        await _refreshMobilePolicy();
+        if (!isSignedIn || api.sessionGeneration != generation) return;
+      }
       final locationId = selectedLocationId;
       final jobs = <Future<void>>[
-        if (slices.contains('items')) api.items().then((value) => items = value),
-        if (slices.contains('counts')) api.counts().then((value) => counts = value),
+        if (slices.contains('items')) _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),
+        if (slices.contains('counts')) _policyRead(api.counts(), <CountRecord>[]).then((value) => counts = value),
         if (slices.contains('assignments') && isCountWorker)
-          api.myAssignments().then((value) => assignments = value),
+          _policyRead(api.myAssignments(), <CountAssignment>[]).then((value) => assignments = value),
         if ((slices.contains('assignments') || slices.contains('stock')) && isCountWorker)
           _loadCountTasks(),
         if (slices.contains('stock') && locationId != null)
-          api.stock(locationId).then((value) {
+          _policyRead(api.stock(locationId), <StockRow>[]).then((value) {
             if (selectedLocationId == locationId) stock = value;
           }),
         if (slices.contains('putaway') && locationId != null)
-          api.putawayTasks(locationId).then((value) {
+          _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]).then((value) {
             if (selectedLocationId == locationId) putawayTasks = value;
           }),
-        if (slices.contains('transfers')) api.transfers().then((value) => transfers = value),
-        if (slices.contains('dashboard')) api.dashboard().then((value) => dashboard = value),
+        if (slices.contains('transfers')) _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
+        if (slices.contains('dashboard')) _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
       ];
       await Future.wait(jobs);
       notifyListeners();
@@ -435,12 +525,15 @@ class SessionController extends ChangeNotifier {
 
   /// Loads everything the home screens need. Independent reads run in parallel;
   /// only stock and putaway wait for the location list (they need a location).
-  Future<void> refreshAll() async {
+  Future<void> refreshAll({bool refreshPolicy = true}) async {
     error = null;
+    _snapshotExpiry?.cancel();
+    offlineReadsUnavailable = false;
     api.servedFromCacheAt = null;
+    if (refreshPolicy) await _refreshMobilePolicy();
     final countWorker = isCountWorker;
     await Future.wait<void>([
-      api.locations().then((value) async {
+      _policyRead(api.locations(), <LocationRecord>[]).then((value) async {
         locations = value;
         final selected = selectedLocationId;
         // A location the user can no longer access (re-assigned, deactivated) is not kept selected.
@@ -449,12 +542,12 @@ class SessionController extends ChangeNotifier {
         }
         await Future.wait<void>([refreshStock(notify: false), refreshPutaway(notify: false)]);
       }),
-      api.items().then((value) => items = value),
-      api.dashboard().then((value) => dashboard = value),
-      api.counts().then((value) => counts = value),
-      api.transfers().then((value) => transfers = value),
+      _policyRead(api.items(), <CatalogItem>[]).then((value) => items = value),
+      _policyRead<DashboardSummary?>(api.dashboard(), null).then((value) => dashboard = value),
+      _policyRead(api.counts(), <CountRecord>[]).then((value) => counts = value),
+      _policyRead(api.transfers(), <TransferRecord>[]).then((value) => transfers = value),
       if (countWorker)
-        api.myAssignments().then((value) => assignments = value).catchError(
+        _policyRead(api.myAssignments(), <CountAssignment>[]).then((value) => assignments = value).catchError(
               (Object _) => assignments = <CountAssignment>[],
               test: (err) => err is ApiException,
             ),
@@ -468,9 +561,106 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<T> _policyRead<T>(Future<T> request, T unavailable) async {
+    try {
+      return await request;
+    } on ApiException catch (error) {
+      if (!error.isOffline || api.offlinePolicy == null) rethrow;
+      offlineReadsUnavailable = true;
+      return unavailable;
+    }
+  }
+
+  void _applyMobilePolicy(Map<String, dynamic>? policy) {
+    final navigation = policy?['navigation'];
+    mobileNavigation = navigation is List ? navigation.whereType<String>().toList(growable: false) : null;
+    api.offlinePolicy = policy == null ? null : MobileOfflinePolicy.fromJson(policy);
+  }
+
+  Map<String, OfflinePermit?> _decodeWarehousePermits(Object? raw) {
+    final permits = asMap(raw);
+    return {
+      for (final scope in ['picks', 'receiving', 'putaway'])
+        scope: OfflinePermit.fromJson(permits[scope]),
+    };
+  }
+
+  Future<void> _refreshMobilePolicy() async {
+    final identity = api.cacheScope;
+    if (identity == null || !isSignedIn) return;
+    final attempt = ++_mobilePolicyRequest;
+    bool current() => identity == api.cacheScope && attempt == _mobilePolicyRequest && isSignedIn;
+    try {
+      final saved = await store.loadMobilePolicy(identity);
+      if (!current()) return;
+      if (_mobilePolicyIdentity != identity) {
+        final savedPermit = await store.loadMobilePolicy(_countPermitScope(identity));
+        final savedWarehouse = await store.loadMobilePolicy(_warehousePermitScope(identity));
+        if (!current()) return;
+        _countPermitsRequired = savedPermit != null;
+        _offlineCountPermit = null;
+        if (savedPermit != null) {
+          try {
+            _offlineCountPermit = OfflinePermit.fromJson(jsonDecode(savedPermit));
+          } on FormatException {
+            // A damaged grant cannot authorize newly captured work.
+          }
+        }
+        _offlineWarehousePermits = null;
+        if (savedWarehouse != null) {
+          try {
+            _offlineWarehousePermits = _decodeWarehousePermits(jsonDecode(savedWarehouse));
+          } on FormatException {
+            _offlineWarehousePermits = {};
+          }
+        }
+        _mobilePolicyIdentity = identity;
+        if (saved == null) {
+          _applyMobilePolicy(null);
+        } else {
+          try {
+            _applyMobilePolicy(asMap(jsonDecode(saved)));
+          } on FormatException {
+            _applyMobilePolicy({});
+          }
+        }
+      }
+      final response = await api.runtimeConfig();
+      final runtime = response['runtime'];
+      if (!current() || runtime is! Map) return;
+      final policy = runtime['mobilePolicy'] is Map ? asMap(runtime['mobilePolicy']) : null;
+      final encoded = policy == null ? null : jsonEncode(policy);
+      _applyMobilePolicy(policy);
+      _countPermitsRequired = runtime.containsKey('offlineCountPermit');
+      final rawPermit = runtime['offlineCountPermit'];
+      _offlineCountPermit = OfflinePermit.fromJson(rawPermit);
+      final rawWarehouse = runtime['offlineWarehousePermits'];
+      final warehousePermitsRequired = runtime.containsKey('offlineWarehousePermits');
+      _offlineWarehousePermits = warehousePermitsRequired ? _decodeWarehousePermits(rawWarehouse) : null;
+      final version = runtime['offlineCommandVersion'];
+      _offlineCommandVersion = version is int ? version : null;
+      _verifiedPermitTransport = true;
+      await Future.wait([
+        store.saveMobilePolicy(_countPermitScope(identity), _countPermitsRequired ? jsonEncode(rawPermit) : null),
+        store.saveMobilePolicy(_warehousePermitScope(identity), warehousePermitsRequired ? jsonEncode(rawWarehouse) : null),
+      ]);
+      if (!current()) return;
+      if (encoded != saved) {
+        await store.saveMobilePolicy(identity, encoded);
+        if (current()) await store.clearReadModel(identity);
+      }
+      if (!current()) return;
+      notifyListeners();
+    } on ApiException {
+      // Keep the last known policy when Studio is unavailable.
+    } catch (_) {
+      // A runtime presentation setting must not block sign-in or operational work.
+    }
+  }
+
   Future<void> _loadCountTasks() async {
     try {
-      countTasks = await api.countTasks();
+      countTasks = await _policyRead(api.countTasks(), <CountTask>[]);
     } on ApiException {
       // Older server (no /mobile/work) or offline: the count screen falls back
       // to the catalog + stock list it already had.
@@ -494,7 +684,7 @@ class SessionController extends ChangeNotifier {
       stock = [];
       return;
     }
-    final rows = await api.stock(locationId);
+    final rows = await _policyRead(api.stock(locationId), <StockRow>[]);
     if (selectedLocationId != locationId) return;
     stock = rows;
     if (notify) notifyListeners();
@@ -508,7 +698,7 @@ class SessionController extends ChangeNotifier {
     }
     List<Map<String, dynamic>> tasks;
     try {
-      tasks = await api.putawayTasks(locationId);
+      tasks = await _policyRead(api.putawayTasks(locationId), <Map<String, dynamic>>[]);
     } on ApiException {
       tasks = [];
     }
@@ -523,8 +713,12 @@ class SessionController extends ChangeNotifier {
     required String path,
     required Map<String, dynamic> body,
     String? mutationId,
+    bool requiresRescan = false,
   }) async {
-    final localId = 'act-${DateTime.now().microsecondsSinceEpoch}';
+    final generation = api.sessionGeneration;
+    final deviceId = await _device();
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
+    final localId = newRequestId();
     queuedActions = [
       ...queuedActions,
       QueuedAction(
@@ -534,17 +728,24 @@ class SessionController extends ChangeNotifier {
         mutationId: mutationId ?? localId,
         companyId: companyId,
         userId: _userId,
-        deviceId: await _device(),
+        deviceId: deviceId,
         type: type,
         method: method,
         path: path,
-        body: body,
+        body: Map.of(body),
+        status: requiresRescan ? 'rejected' : 'pending',
+        lastErrorCode: requiresRescan ? 'LOCAL_OFFLINE_WAREHOUSE_UNAVAILABLE' : null,
+        lastError: requiresRescan ? 'Offline permission or a current task revision was unavailable.' : null,
         createdAt: DateTime.now().toIso8601String(),
       ),
     ];
     await _saveActions();
-    notice = 'Offline. $type queued and will sync when the API is reachable.';
-    notifyListeners();
+    if (generation == api.sessionGeneration) {
+      notice = requiresRescan
+          ? 'Action saved in Sync Center. Reconnect and refresh the task before trying again.'
+          : 'Offline. $type queued and will sync when the API is reachable.';
+      notifyListeners();
+    }
     return true;
   }
 
@@ -556,16 +757,45 @@ class SessionController extends ChangeNotifier {
   }) async {
     error = null;
     notice = null;
+    if (type == 'PICK' && queuedActions.any((action) => action.path == path && action.status == 'pending')) {
+      error = 'Sync the saved pick for this transfer before saving another.';
+      notifyListeners();
+      return false;
+    }
     busy = true;
     notifyListeners();
     // One idempotency key per user action: the body's own requestId when it has one (pick, receive),
     // otherwise a fresh one. It is reused by the offline queue and every later retry.
     final mutationId = body['requestId']?.toString().isNotEmpty == true ? body['requestId'].toString() : newRequestId();
+    final generation = api.sessionGeneration;
+    final warehousePermits = _offlineWarehousePermits;
+    final workflow = switch (type) {
+      'PICK' => (scope: 'picks', revision: 'pickRevision'),
+      'TRANSFER_RECEIVE' => (scope: 'receiving', revision: 'receiveRevision'),
+      'PUTAWAY' => (scope: 'putaway', revision: 'taskRevision'),
+      _ => null,
+    };
+    // Keep the authority that was available when the action began. The
+    // server can replay a committed receipt even if the permit now expired.
+    final capturedPermit = workflow == null ? null : warehousePermits?[workflow.scope]?.currentToken;
     try {
       await api.sendRaw(method, path, body: body, mutationId: mutationId);
     } on ApiException catch (err) {
+      if (generation != api.sessionGeneration || !isSignedIn) return false;
       busy = false;
       if (err.isOffline) {
+        if (warehousePermits != null && workflow != null) {
+          final hasRevision = asString(body[workflow.revision]).isNotEmpty;
+          final hasRequestId = type == 'PUTAWAY' || asString(body['requestId']).isNotEmpty;
+          final canReplay = capturedPermit != null && hasRevision && hasRequestId;
+          return enqueueAction(type: type, method: method, path: path, mutationId: mutationId,
+            body: {...body, if (canReplay) 'offlinePermit': capturedPermit},
+            requiresRescan: !canReplay);
+        }
+        if (type == 'PICK' && asString(body['pickRevision']).isEmpty) {
+          error = 'Connect and refresh this pick task before saving it offline.';
+          return false;
+        }
         return enqueueAction(type: type, method: method, path: path, body: body, mutationId: mutationId);
       }
       error = err.message;
@@ -574,6 +804,7 @@ class SessionController extends ChangeNotifier {
     }
     // The server has the change. A failed re-read afterwards must not report the save as failed:
     // the person would tap again and, with a fresh idempotency key, post it a second time.
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
     notice = '$type saved.';
     try {
       await refreshAll();
@@ -595,15 +826,20 @@ class SessionController extends ChangeNotifier {
     required double physicalQuantity,
     String? lotNo,
     bool weight = false,
+    String? stockRevision,
   }) async {
     error = null;
     notice = null;
     busy = true;
     notifyListeners();
     final requestId = newRequestId();
+    final generation = api.sessionGeneration;
+    final offlinePermit = _offlineCountPermit?.currentToken;
+    final permitsRequired = _countPermitsRequired;
     try {
       if (weight) {
-        final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity, requestId: requestId);
+        final created = await api.submitWeightCount(itemId: itemId, locationId: locationId, totalQuantity: physicalQuantity,
+          requestId: requestId, stockRevision: stockRevision);
         counts = [...created, ...counts];
       } else {
         final created = await api.submitCount(
@@ -612,6 +848,7 @@ class SessionController extends ChangeNotifier {
           physicalQuantity: physicalQuantity,
           lotNo: lotNo,
           requestId: requestId,
+          stockRevision: stockRevision,
         );
         counts = [created, ...counts];
       }
@@ -634,19 +871,29 @@ class SessionController extends ChangeNotifier {
       unawaited(_refreshDashboardQuietly());
       return true;
     } on ApiException catch (err) {
+      if (generation != api.sessionGeneration || !isSignedIn) return false;
       if (err.isOffline) {
-        await enqueueCount(
+        final requiresRecount = permitsRequired && (offlinePermit == null || stockRevision == null);
+        final queued = await enqueueCount(
           itemId: itemId,
           locationId: locationId,
           physicalQuantity: physicalQuantity,
           lotNo: lotNo,
           mode: weight ? 'weight' : 'manual',
           requestId: requestId,
+          stockRevision: stockRevision,
+          offlineCountPermit: requiresRecount ? null : offlinePermit,
+          requiresRecount: requiresRecount,
         );
-        notice = 'Offline. Count queued and will sync when the API is reachable.';
-        return true;
+        if (queued && generation == api.sessionGeneration && isSignedIn) {
+          notice = requiresRecount
+              ? 'Count saved in Sync Center. Reconnect and refresh the task to count again.'
+              : 'Offline. Count queued and will sync when the API is reachable.';
+        }
+        return queued;
       }
       error = err.message;
+      if (err.code == 'COUNT_STOCK_CHANGED' && isCountWorker) await _loadCountTasks();
       return false;
     } finally {
       busy = false;
@@ -667,22 +914,33 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> enqueueCount({
+  Future<bool> enqueueCount({
     required String itemId,
     required String locationId,
     required double physicalQuantity,
     String? lotNo,
     String mode = 'manual',
     String? requestId,
+    String? stockRevision,
+    String? offlineCountPermit,
+    bool requiresRecount = false,
   }) async {
-    final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
+    final generation = api.sessionGeneration;
+    final deviceId = await _device();
+    if (generation != api.sessionGeneration || !isSignedIn) return false;
+    final localId = newRequestId();
     queuedCounts = [
       ...queuedCounts,
       QueuedCount(
         localId: localId,
         userId: _userId,
-        deviceId: await _device(),
+        deviceId: deviceId,
         requestId: requestId ?? localId,
+        stockRevision: stockRevision,
+        offlineCountPermit: offlineCountPermit,
+        status: requiresRecount ? 'rejected' : 'pending',
+        lastErrorCode: requiresRecount ? 'LOCAL_OFFLINE_COUNT_UNAVAILABLE' : null,
+        lastError: requiresRecount ? 'Offline count permission or a current task revision was unavailable.' : null,
         itemId: itemId,
         locationId: locationId,
         physicalQuantity: physicalQuantity,
@@ -692,7 +950,8 @@ class SessionController extends ChangeNotifier {
       ),
     ];
     await _saveCounts();
-    notifyListeners();
+    if (generation == api.sessionGeneration) notifyListeners();
+    return true;
   }
 
   Future<void> dismissQueued(String localId) async {
@@ -713,8 +972,10 @@ class SessionController extends ChangeNotifier {
   Future<void> retryQueuedCount(String localId) async {
     for (final item in queuedCounts) {
       if (item.localId == localId) {
+        if (item.requiresRecount) return;
         item.status = 'pending';
         item.lastError = null;
+        item.lastErrorCode = null;
         item.nextAttemptAt = null;
       }
     }
@@ -726,8 +987,10 @@ class SessionController extends ChangeNotifier {
   Future<void> retryQueuedAction(String localId) async {
     for (final item in queuedActions) {
       if (item.localId == localId) {
+        if (item.requiresRescan) return;
         item.status = 'pending';
         item.lastError = null;
+        item.lastErrorCode = null;
         item.nextAttemptAt = null;
       }
     }
@@ -736,171 +999,150 @@ class SessionController extends ChangeNotifier {
     await flushQueue();
   }
 
-  Future<void>? _flushing;
-  bool _flushRequested = false;
-
-  /// Replays queued work. Only one flush runs at a time: a call that arrives
-  /// while one is running (app resume + pull-to-refresh, a manual retry) is
-  /// folded into one more pass after it, so nothing is sent twice in parallel
-  /// and a retried item is never skipped.
   Future<void> flushQueue({DateTime? now, Random? random}) {
-    final running = _flushing;
-    if (running != null) {
-      _flushRequested = true;
-      return running;
-    }
-    final future = _flushLoop(now: now, random: random);
-    _flushing = future;
-    return future.whenComplete(() {
-      if (identical(_flushing, future)) _flushing = null;
+    if (!isSignedIn) return Future.value();
+    final generation = api.sessionGeneration;
+    final running = _queueReplay;
+    if (running?.generation == generation) return running!.completion;
+    if (queuedCounts.isEmpty && queuedActions.isEmpty) return Future.value();
+    final owner = user;
+    final completion = _replayQueue(
+      clock: now ?? DateTime.now(),
+      random: random,
+      active: () => api.sessionGeneration == generation && identical(user, owner) && isSignedIn,
+    ).whenComplete(() {
+      if (_queueReplay?.generation == generation) _queueReplay = null;
     });
+    _queueReplay = (generation: generation, completion: completion);
+    return completion;
   }
 
-  Future<void> _flushLoop({DateTime? now, Random? random}) async {
-    do {
-      _flushRequested = false;
-      await _flushQueueOnce(now: now, random: random);
-    } while (_flushRequested && isSignedIn);
-  }
-
-  /// Rebuilds a queue after a flush pass without losing concurrent edits: an item
-  /// queued while the pass was awaiting the network is kept, and an item the
-  /// user discarded meanwhile is not brought back.
-  static List<T> mergeQueueAfterFlush<T>({
-    required List<T> snapshot,
-    required List<T> remaining,
-    required List<T> current,
-    required String Function(T item) idOf,
-  }) {
-    final snapshotIds = snapshot.map(idOf).toSet();
-    final currentIds = current.map(idOf).toSet();
-    return [
-      ...remaining.where((item) => currentIds.contains(idOf(item))),
-      ...current.where((item) => !snapshotIds.contains(idOf(item))),
-    ];
-  }
-
-  Future<void> _flushQueueOnce({DateTime? now, Random? random}) async {
-    if (!isSignedIn) return;
-    if (queuedCounts.isEmpty && queuedActions.isEmpty) return;
-    final clock = now ?? DateTime.now();
+  Future<void> _replayQueue({required DateTime clock, required bool Function() active, Random? random}) async {
+    final company = companyId;
     final me = _userId;
-    final meCompany = companyId;
+    final queue = <QueuedOperation>[...queuedCounts, ...queuedActions]
+        .indexed
+        .map((entry) => (
+              index: entry.$1,
+              item: entry.$2,
+              capturedAt: DateTime.tryParse(entry.$2.createdAt)?.microsecondsSinceEpoch ?? 0,
+            ))
+        .toList()
+      ..sort((a, b) {
+        final order = a.capturedAt.compareTo(b.capturedAt);
+        return order == 0 ? a.index.compareTo(b.index) : order;
+      });
     var sent = 0;
-    // Signed out or switched user mid-flush: never write this pass's lists into someone else's queue.
-    bool sameIdentity() => isSignedIn && _userId == me && companyId == meCompany;
-    final countSnapshot = List<QueuedCount>.of(queuedCounts);
+    bool stillQueued(QueuedOperation item) => switch (item) {
+      QueuedCount() => queuedCounts.contains(item),
+      QueuedAction() => queuedActions.contains(item),
+    };
 
-    // Never replay under a different identity (plan P0-SYNC-001): the lists are loaded per
-    // user, and this guard keeps that true even if something stale is ever in memory.
-    bool mine(String itemUser) => itemUser.isEmpty || itemUser == me;
+    Future<void> persist(QueuedOperation item) =>
+        item is QueuedCount ? _saveCounts() : _saveActions();
 
-    final remainingCounts = <QueuedCount>[];
-    var stopCounts = false;
-    for (final item in countSnapshot) {
-      // A conflict/rejected item waits for the user's explicit retry (retryQueuedCount) - never
-      // resubmitted silently. A backed-off item waits for its time. Anything after a transient
-      // failure waits too, so the order the person worked in is preserved.
-      if (item.status != 'pending' || !mine(item.userId)) {
-        remainingCounts.add(item);
-        continue;
-      }
-      // A pending item that is backing off holds back everything queued after it.
-      if (stopCounts || !isDueForAttempt(item.nextAttemptAt, clock)) {
-        stopCounts = true;
-        remainingCounts.add(item);
-        continue;
+    bool permitTransportUnavailable(QueuedOperation item) => switch (item) {
+      QueuedCount() => item.offlineCountPermit != null && (!_verifiedPermitTransport || !_countPermitsRequired),
+      QueuedAction() => item.body['offlinePermit'] is String && (!_verifiedPermitTransport || _offlineWarehousePermits == null),
+    };
+    if (queue.any((entry) => entry.item.status == 'pending' && permitTransportUnavailable(entry.item))) {
+      await _refreshMobilePolicy();
+    }
+
+    for (final entry in queue) {
+      if (!active()) return;
+      final item = entry.item;
+      if (!stillQueued(item) || item.status != 'pending') continue;
+      if (item.userId.isNotEmpty && item.userId != me) continue;
+      if (item is QueuedAction && item.companyId != company) continue;
+      // A transient failure holds later pending work across both workflows.
+      // Conflicts remain in Sync Center for the operator to resolve.
+      if (!isDueForAttempt(item.nextAttemptAt, clock)) break;
+      if (permitTransportUnavailable(item)) {
+        if (item.lastErrorCode != 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE') {
+          item.lastErrorCode = 'LOCAL_OFFLINE_TRANSPORT_UNAVAILABLE';
+          item.lastError = 'Saved work is waiting for a server that can verify offline permission.';
+          await persist(item);
+        }
+        break;
       }
       try {
-        if (item.mode == 'weight') {
-          await api.submitWeightCount(
-            itemId: item.itemId,
-            locationId: item.locationId,
-            totalQuantity: item.physicalQuantity,
-            requestId: item.requestId,
-          );
+        final command = _offlineCommandVersion == OperationalOfflineCommand.version
+            ? OperationalOfflineCommand.fromQueue(item) : null;
+        if (command != null) {
+          await api.replayOfflineCommand(command);
         } else {
-          await api.submitCount(
-            itemId: item.itemId,
-            locationId: item.locationId,
-            physicalQuantity: item.physicalQuantity,
-            lotNo: item.lotNo,
-            mode: item.mode,
-            requestId: item.requestId,
-          );
+          switch (item) {
+            case QueuedCount():
+              await _sendQueuedCount(item);
+            case QueuedAction():
+              await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
+          }
         }
-        sent += 1;
       } on ApiException catch (err) {
+        if (!active()) return;
+        if (!stillQueued(item)) continue;
         item.attempts += 1;
         item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
+        item.lastErrorCode = err.code;
+        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, code: err.code, attempts: item.attempts);
         if (outcome == SyncOutcome.retry) {
           item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
-          stopCounts = true;
         } else {
           item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
         }
-        remainingCounts.add(item);
-      }
-    }
-    if (!sameIdentity()) return;
-    queuedCounts = mergeQueueAfterFlush(
-      snapshot: countSnapshot,
-      remaining: remainingCounts,
-      current: queuedCounts,
-      idOf: (item) => item.localId,
-    );
-    await _saveCounts();
-
-    final actionSnapshot = List<QueuedAction>.of(queuedActions);
-    final remainingActions = <QueuedAction>[];
-    var stopActions = false;
-    for (final item in actionSnapshot) {
-      if (item.status != 'pending' || !mine(item.userId)) {
-        remainingActions.add(item);
+        await persist(item);
+        if (outcome == SyncOutcome.retry) break;
         continue;
       }
-      if (stopActions || !isDueForAttempt(item.nextAttemptAt, clock)) {
-        stopActions = true;
-        remainingActions.add(item);
-        continue;
+      if (!active()) return;
+      switch (item) {
+        case QueuedCount():
+          queuedCounts = queuedCounts.where((queued) => !identical(queued, item)).toList();
+        case QueuedAction():
+          queuedActions = queuedActions.where((queued) => !identical(queued, item)).toList();
       }
-      try {
-        await api.sendRaw(item.method, item.path, body: item.body, mutationId: item.mutationId);
-        sent += 1;
-      } on ApiException catch (err) {
-        item.attempts += 1;
-        item.lastError = err.message;
-        final outcome = classifySyncFailure(isOffline: err.isOffline, statusCode: err.statusCode, attempts: item.attempts);
-        if (outcome == SyncOutcome.retry) {
-          item.nextAttemptAt = clock.add(retryDelay(attempts: item.attempts, retryAfterSeconds: err.retryAfterSeconds, random: random)).toIso8601String();
-          stopActions = true;
-        } else {
-          item.status = outcome == SyncOutcome.conflict ? 'conflict' : 'rejected';
-        }
-        remainingActions.add(item);
-      }
+      await persist(item);
+      sent += 1;
     }
-    if (!sameIdentity()) return;
-    queuedActions = mergeQueueAfterFlush(
-      snapshot: actionSnapshot,
-      remaining: remainingActions,
-      current: queuedActions,
-      idOf: (item) => item.localId,
-    );
-    await _saveActions();
+    if (!active()) return;
     if (sent > 0) {
       notice = sent == 1 ? 'Synced 1 queued action.' : 'Synced $sent queued actions.';
-      // Best-effort: the work is already saved server-side, so a failed re-read must not
-      // surface as a sync failure (or abort the refresh that called this flush).
       try {
-        final results = await Future.wait([api.counts(), api.dashboard()]);
-        counts = results[0] as List<CountRecord>;
-        dashboard = results[1] as DashboardSummary;
+        final updatedCounts = await api.counts();
+        if (!active()) return;
+        final updatedDashboard = await api.dashboard();
+        if (!active()) return;
+        counts = updatedCounts;
+        dashboard = updatedDashboard;
       } on ApiException {
-        // The next refresh or live event catches up.
+        // The sends are already recorded. The next refresh can update the dashboard.
       }
     }
-    notifyListeners();
+    if (active()) notifyListeners();
   }
+  Future<void> _sendQueuedCount(QueuedCount item) async {
+    if (item.mode == 'weight') {
+      await api.submitWeightCount(
+        itemId: item.itemId,
+        locationId: item.locationId,
+        totalQuantity: item.physicalQuantity,
+        requestId: item.requestId,
+        stockRevision: item.stockRevision,
+        offlineCountPermit: item.offlineCountPermit,
+      );
+      return;
+    }
+    await api.submitCount(
+      itemId: item.itemId,
+      locationId: item.locationId,
+      physicalQuantity: item.physicalQuantity,
+      lotNo: item.lotNo,
+      mode: item.mode,
+      requestId: item.requestId,
+      stockRevision: item.stockRevision,
+      offlineCountPermit: item.offlineCountPermit,
+    );
+  }
+
 }

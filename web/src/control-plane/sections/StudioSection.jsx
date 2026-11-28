@@ -2,8 +2,6 @@ import { controlRequest } from '../control-api';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FormulaBuilder } from '../FormulaBuilder';
@@ -11,10 +9,24 @@ import { ImportColumnsEditor } from '../ImportColumnsEditor';
 import { StockColumnsLayoutEditor } from '../StockColumnsLayoutEditor';
 import { Advanced } from '../studio-mode';
 import { AutomationsEditor, FieldsEditor, MobilePolicyEditor, ReportsEditor, RulesEditor, StockExtraColumnCard } from '../StudioEditors';
-import { labelOf, ROLE_OPTIONS } from '../studio-catalog';
+import { DraftStockPreview } from '../DraftStockPreview';
+import { StudioVersionHistory } from '../StudioVersionHistory';
 
 export function StudioSection(props) {
-  const { error, setError, draft, runtime, previewRole, setPreviewRole, controlToken, refreshLocked } = props;
+  const { setError, company, draft, runtime, controlToken, refreshLocked } = props;
+  async function submitRelease(path, body, confirmation, method = 'POST') {
+    setError('');
+    try {
+      await controlRequest(path, { token: controlToken, method, body });
+      toast.success(confirmation);
+      await refreshLocked().catch((caught) => setError(caught.message));
+    } catch (caught) {
+      if (caught?.code === 'STUDIO_CONFIG_CONFLICT') await refreshLocked().catch(() => undefined);
+      const message = caught instanceof Error ? caught.message : 'Publish failed';
+      setError(message);
+      toast.error(message);
+    }
+  }
   return (
     <Tabs defaultValue="columns">
       <TabsList className="h-auto flex-wrap justify-start">
@@ -76,32 +88,12 @@ export function StudioSection(props) {
         <MobilePolicyEditor controlToken={controlToken} draft={draft} onSaved={refreshLocked} />
       </TabsContent>
       <TabsContent value="preview" className="grid gap-4">
-        <div className="flex flex-wrap gap-2">
-          <Select value={previewRole} onValueChange={setPreviewRole}>
-            <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {['ADMIN', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR'].map((role) => (
-                <SelectItem key={role} value={role}>{labelOf(ROLE_OPTIONS, role)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" onClick={async () => {
-            const preview = await controlRequest('/studio/v1/preview', { token: controlToken, method: 'POST', body: { role: previewRole, device: 'desktop' } });
-            toast.success(`${labelOf(ROLE_OPTIONS, previewRole)} would see ${preview.preview.page.columns.length} stock columns`);
-          }}>See what this role gets</Button>
-          <Button onClick={async () => {
-            try {
-              await controlRequest('/studio/v1/publish', { token: controlToken, method: 'POST' });
-              await refreshLocked().catch((caught) => setError(caught.message));
-              setError('');
-              toast.success('Published');
-            } catch (caught) {
-              const message = caught instanceof Error ? caught.message : 'Publish failed';
-              setError(message);
-              toast.error(message);
-            }
-          }}>Publish</Button>
-        </div>
+        <DraftStockPreview key={company?.id} draft={draft} controlToken={controlToken}
+          onPublish={(draftRevision, reviewId) => submitRelease('/studio/v1/publish', { draftRevision, reviewId }, 'Published')}
+          onRequestReview={(draftRevision, reviewerId) => submitRelease('/studio/v1/release-review', { draftRevision, reviewerId }, 'Approval requested')}
+          onSchedule={(draftRevision, reviewId, activateAt) => submitRelease('/studio/v1/release-schedule', { draftRevision, reviewId, activateAt }, 'Release scheduled')}
+          onCancelSchedule={(id) => submitRelease(`/studio/v1/release-schedule/${encodeURIComponent(id)}`, undefined, 'Schedule cancelled', 'DELETE')}
+          onRefreshRelease={() => refreshLocked().catch((caught) => setError(caught.message))} />
         <Card>
           <CardHeader><CardTitle className="text-base">What is live now</CardTitle></CardHeader>
           <CardContent className="text-sm text-muted-foreground">
@@ -109,15 +101,8 @@ export function StudioSection(props) {
             <p className="mt-2">Items & stock in the grocery workspace uses this published page: custom columns and enabled header actions.</p>
           </CardContent>
         </Card>
-        <Advanced label="Advanced: undo">
-          <div>
-            <Button variant="outline" onClick={async () => {
-            await controlRequest('/studio/v1/rollback', { token: controlToken, method: 'POST', body: { version: 1 } });
-            await refreshLocked();
-            toast.message('Rolled back to version 1');
-          }}>Go back to version 1</Button>
-          </div>
-        </Advanced>
+        <StudioVersionHistory key={company?.id} controlToken={controlToken} activeVersion={runtime?.version}
+          onRestored={() => refreshLocked().catch((caught) => setError(caught.message))} />
       </TabsContent>
     </Tabs>
   );

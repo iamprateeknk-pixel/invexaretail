@@ -160,6 +160,10 @@ integration('P0-SEC-003 comments: unknown entity types are rejected, and a comme
   const stray = await prisma.contextComment.create({ data: { entityType: 'item', entityId: a.itemId, authorId: b.userId, authorName: 'B', body: 'legacy row owned by B', companyId: b.companyId } });
   await withServer(async (call) => {
     assert.equal((await call('GET', `/comments/secrets/${a.itemId}`, a.token)).status, 400, 'only allowlisted entity types');
+    for (const unsupported of ['toString', 'constructor']) {
+      assert.equal((await call('GET', `/comments/${unsupported}/${a.itemId}`, a.token)).status, 400);
+      assert.equal((await call('POST', `/comments/${unsupported}/${a.itemId}`, a.token, { body: 'Unsupported target' })).status, 400);
+    }
     const own = (await call('GET', `/comments/item/${a.itemId}`, a.token)).body.comments.map((c: { id: string }) => c.id);
     assert.ok(!own.includes(stray.id), 'a row owned by another company never appears, even on the same entity id');
   });

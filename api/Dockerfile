@@ -19,6 +19,7 @@ COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
+COPY scripts/verify-production-db.cjs ./scripts/verify-production-db.cjs
 RUN mkdir -p /app/uploads
 EXPOSE 4000
 CMD ["node", "dist/index.js"]

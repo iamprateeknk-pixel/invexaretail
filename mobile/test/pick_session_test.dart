@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,7 @@ import 'package:invexaretail_mobile/state/session_controller.dart';
 Map<String, dynamic> _payload() => {
       'transfer': {
         'id': 'tr-9',
+        'pickRevision': 'current-pick-revision',
         'lines': [
           {'itemId': 'pen', 'itemCode': 'PEN', 'itemBarcode': '8901234567890', 'itemName': 'Pen', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 3, 'lotId': 'l1', 'lotNo': 'LOT-1', 'lotAvailable': 10, 'lotStatus': 'AVAILABLE'},
           {'itemId': 'pen', 'itemCode': 'PEN', 'itemName': 'Pen', 'unit': 'PCS', 'pickMethod': 'LOT_SCAN', 'remainingQty': 2, 'lotId': 'l2', 'lotNo': 'LOT-2', 'lotAvailable': 0, 'lotStatus': 'AVAILABLE'},
@@ -70,6 +72,7 @@ void main() {
     session.report('rice', 'NO_STOCK', 3.25);
     final body = session.slipBody(requestId: 'req-1', finished: false);
     expect(body['requestId'], 'req-1');
+    expect(body['pickRevision'], 'current-pick-revision');
     expect(body['finished'], isFalse);
     expect(body['lines'], [
       {'itemId': 'pen', 'lotId': 'l1', 'quantity': 1.0, 'inputMethod': 'SCAN', 'scanCode': 'pen'},
@@ -78,6 +81,40 @@ void main() {
     expect((body['exceptions'] as List).single, {'itemId': 'rice', 'reason': 'NO_STOCK', 'quantity': 3.25});
     session.clearPending();
     expect(session.hasPending, isFalse);
+  });
+
+  test('an offline pick keeps the original revision and blocks replay after a conflict', () async {
+    final sent = <Map<String, dynamic>>[];
+    var offline = true;
+    final controller = SessionController(
+      api: InvexaApi(baseUrl: 'http://api.test', httpClient: MockClient((request) async {
+        sent.add(jsonDecode(request.body) as Map<String, dynamic>);
+        if (offline) throw const SocketException('offline');
+        return http.Response(jsonEncode({'code': 'TRANSFER_PICK_CHANGED', 'error': 'Refresh the pick task.'}), 409,
+          headers: {'content-type': 'application/json'});
+      })),
+      store: MemoryStore(),
+    )
+      ..restoring = false
+      ..user = const AuthUser(id: 'p1', name: 'Picker', email: 'p@x', role: 'WAREHOUSE_PICKER');
+    addTearDown(controller.dispose);
+    controller.api.token = 'jwt';
+    final session = PickSession.fromServer(_payload());
+    expect(session.scan('PEN').accepted, isTrue);
+    Future<bool> save(String id) => controller.runOrQueue(type: 'PICK', method: 'POST',
+      path: '/api/v1/picker/transfers/tr-9/pick-slips', body: session.slipBody(requestId: id, finished: false));
+    expect(await save('first'), isTrue);
+    expect(await save('second'), isFalse);
+    expect(sent, hasLength(1));
+
+    offline = false;
+    await controller.flushQueue();
+    final stale = controller.queuedActions.single;
+    expect(stale.requiresRescan, isTrue);
+    expect(stale.body['pickRevision'], 'current-pick-revision');
+    await controller.retryQueuedAction(stale.localId);
+    expect(sent, hasLength(2));
+    expect(sent.last, sent.first);
   });
 
   testWidgets('a pick saves progress with one request id that survives a failed attempt', (tester) async {

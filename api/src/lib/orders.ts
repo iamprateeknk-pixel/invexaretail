@@ -14,6 +14,7 @@ import {
 } from './domain-policies.js';
 import { DEFAULT_COMPANY_ID, DEFAULT_TENANT_ID } from './saas/tenant-scope.js';
 import { postInventoryMovementInTransaction } from './inventory-posting-service.js';
+import { queueStudioBusinessEvent } from './saas/studio-business-events.js';
 
 // Blueprint Module G / section 13.3 (OMS & Allocation) - minimal starter:
 // "Available-to-Promise (ATP) should prevent the same unit being promised
@@ -385,28 +386,32 @@ async function createOrderInner(input: {
   const fulfillmentLocationRecord = await prisma.location.findUnique({ where: { id: fulfillmentLocationId! }, select: { deliverySlaHours: true } });
   const promise = estimateDispatchAndDelivery({ reservedAt, deliverySlaHours: fulfillmentLocationRecord?.deliverySlaHours, channel: input.channel });
   try {
-    const order = await prisma.order.create({
-      data: {
-        companyId,
-        channel: input.channel,
-        externalReference: input.externalReference ?? null,
-        status,
-        fulfillmentLocationId: fulfillmentLocationId!,
-        customerName: input.customerName ?? null,
-        notes: input.notes ?? null,
-        createdById: input.createdById,
-        reservedAt,
-        reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000),
-        estimatedDispatchAt: new Date(promise.estimatedDispatchAt),
-        estimatedDeliveryAt: promise.estimatedDeliveryAt ? new Date(promise.estimatedDeliveryAt) : null,
-        lines: {
-          create: [
-            ...resolved.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity, fulfillmentLocationId: line.locationId })),
-            ...backordered.map((line) => ({ itemId: line.itemId, lotId: null, requestedQty: line.quantity, fulfillmentLocationId })),
-          ],
+    const order = await prisma.$transaction(async (tx) => {
+      const saved = await tx.order.create({
+        data: {
+          companyId,
+          channel: input.channel,
+          externalReference: input.externalReference ?? null,
+          status,
+          fulfillmentLocationId: fulfillmentLocationId!,
+          customerName: input.customerName ?? null,
+          notes: input.notes ?? null,
+          createdById: input.createdById,
+          reservedAt,
+          reservationExpiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000),
+          estimatedDispatchAt: new Date(promise.estimatedDispatchAt),
+          estimatedDeliveryAt: promise.estimatedDeliveryAt ? new Date(promise.estimatedDeliveryAt) : null,
+          lines: {
+            create: [
+              ...resolved.map((line) => ({ itemId: line.itemId, lotId: line.lotId, requestedQty: line.quantity, fulfillmentLocationId: line.locationId })),
+              ...backordered.map((line) => ({ itemId: line.itemId, lotId: null, requestedQty: line.quantity, fulfillmentLocationId })),
+            ],
+          },
         },
-      },
-      include: ORDER_INCLUDE,
+        include: ORDER_INCLUDE,
+      });
+      await queueStudioBusinessEvent(tx, { event: 'order.created', companyId, entityId: saved.id });
+      return saved;
     });
     await persistAudit(recordAudit({
       actorId: input.createdById, actorRole: 'SYSTEM', action: status === 'BACKORDERED' ? 'ORDER_BACKORDERED' : 'ORDER_RESERVED',
