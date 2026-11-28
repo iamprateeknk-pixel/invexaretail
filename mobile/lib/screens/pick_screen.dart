@@ -91,7 +91,20 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     super.dispose();
   }
 
+  /// A pick slip for this task saved offline and not yet synced. The server does not know about it,
+  /// so re-reading the task would offer the same pieces again and the picker would pick them twice.
+  bool get _hasUnsyncedSlip => _controller.queuedActions.any((action) => action.path == _slipPath);
+
+  String get _slipPath => '/api/v1/picker/transfers/${widget.transferId}/pick-slips';
+
   Future<void> _load() async {
+    if (_hasUnsyncedSlip) {
+      setState(() {
+        _session = null;
+        _error = 'A pick for this task was saved offline and has not synced yet. Sync first, then open the task again.';
+      });
+      return;
+    }
     try {
       final payload = await _controller.api.pickerTransfer(widget.transferId);
       if (!mounted) return;
@@ -155,12 +168,10 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
       ),
     );
     if (reason == null || !mounted) return;
-    final left = _session!.leftFor(line.itemId);
-    if (left <= 0) return;
-    setState(() {
-      _session!.report(line.itemId, reason, left);
-      _message = '${line.itemName}: reported as ${pickReasons[reason]!.toLowerCase()}.';
-    });
+    final open = _session!.unreportedFor(line.itemId);
+    if (open <= 0) return;
+    final result = _session!.report(line.itemId, reason, open);
+    setState(() => _message = result.accepted ? '${line.itemName}: ${formatQty(open)} reported as ${pickReasons[reason]!.toLowerCase()}.' : result.message);
   }
 
   /// Verify-before-finish (audit: picker flow "advance to industry level"): shows exactly what is
@@ -172,10 +183,9 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     if (session == null) return;
     final shortLines = <String>[];
     for (final line in session.lines) {
-      final left = session.leftFor(line.itemId);
-      final exceptionQty = session.exceptions.where((row) => row['itemId'] == line.itemId).fold<num>(0, (sum, row) => sum + (row['quantity'] as num));
-      if (left - exceptionQty > 0.0005) {
-        shortLines.add('${line.itemName}: ${formatQty(left - exceptionQty)} left with no reason reported');
+      final open = session.unreportedFor(line.itemId);
+      if (open > 0.0005) {
+        shortLines.add('${line.itemName}: ${formatQty(open)} left with no reason reported');
       }
     }
     final confirmed = await showDialog<bool>(
@@ -216,7 +226,7 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     final ok = await _controller.runOrQueue(
       type: 'PICK',
       method: 'POST',
-      path: '/api/v1/picker/transfers/${widget.transferId}/pick-slips',
+      path: _slipPath,
       body: session.slipBody(requestId: _requestId, finished: finished),
     );
     if (!mounted) return;
@@ -233,7 +243,8 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
     for (final field in _weights.values) {
       field.clear();
     }
-    if (finished && mounted) {
+    // Queued offline: the task on screen is now stale, so leave it rather than offer it again.
+    if ((finished || _hasUnsyncedSlip) && mounted) {
       Navigator.of(context).pop();
       return;
     }
@@ -335,7 +346,7 @@ class _PickDetailScreenState extends State<PickDetailScreen> {
               ),
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton(onPressed: left > 0 ? () => _report(line) : null, child: const Text('Report a problem')),
+              child: TextButton(onPressed: session.unreportedFor(line.itemId) > 0 ? () => _report(line) : null, child: const Text('Report a problem')),
             ),
           ],
         ),

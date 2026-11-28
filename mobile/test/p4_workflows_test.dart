@@ -585,4 +585,49 @@ void main() {
     expect(payloads.single['stockRevision'], 'revision-while-counting');
     expect(controller.queuedCounts.single.stockRevision, 'revision-while-counting');
   });
+
+  testWidgets('a removed lot cannot reuse its draft quantity or revision on another lot', (tester) async {
+    final payloads = <Map<String, dynamic>>[];
+    final controller = _controller((request) async {
+      if (request.url.path.endsWith('/stock-counts')) {
+        payloads.add(jsonDecode(request.body) as Map<String, dynamic>);
+        throw const SocketException('offline');
+      }
+      return _json({});
+    });
+    CountTask task(String lot) => CountTask.fromJson({
+      'assignmentId': 'a1', 'locationId': 'loc-1',
+      'item': {'id': 'i1', 'code': 'PEN', 'name': 'Pen', 'countMethod': 'LOT_SCAN'},
+      'lots': [{'lotId': lot, 'lotNo': lot, 'stockRevision': 'revision-$lot'}],
+    });
+    controller
+      ..locations = const [LocationRecord(id: 'loc-1', name: 'Store', type: 'store')]
+      ..assignments = const [CountAssignment(id: 'a1', itemId: 'i1', locationId: 'loc-1', itemName: 'Pen')]
+      ..countTasks = [task('LOT-1')]
+      ..pendingCountItemId = 'i1';
+    await tester.binding.setSurfaceSize(const Size(900, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ListenableBuilder(
+      listenable: controller,
+      builder: (_, _) => CountScreen(controller: controller),
+    ))));
+    await tester.pumpAndSettle();
+    final quantity = find.byKey(const ValueKey('count-qty'));
+    final submit = find.widgetWithText(FilledButton, 'Submit count');
+    await tester.ensureVisible(quantity);
+    await tester.enterText(quantity, '4');
+    controller.countTasks = [task('LOT-2')];
+    controller.setNotice('Work refreshed.');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(payloads, isEmpty);
+    expect(tester.widget<TextField>(quantity).controller!.text, isEmpty);
+    await tester.enterText(quantity, '6');
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(payloads.single['lotNo'], 'LOT-2');
+    expect(payloads.single['stockRevision'], 'revision-LOT-2');
+  });
 }

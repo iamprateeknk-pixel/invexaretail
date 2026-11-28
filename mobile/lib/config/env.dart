@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 const productionApiBase = 'https://invexaretail.com';
 const _retiredProductionApiHost = 'invexaretail-api-production.up.railway.app';
 const workspaceOrigin = 'https://invexaretail.com/';
+const controlPanelOrigin = 'https://admin.invexaretail.com/';
 
 /// Which build this is (plan Area H WP4). Set with `--dart-define=INVEXA_ENV=...`.
 /// Release builds default to `production`, which refuses any endpoint that is not an
@@ -71,6 +72,7 @@ String? _originProblem(String value, InvexaEnvironment environment, String name)
 final _productionHosts = {
   Uri.parse(productionApiBase).host,
   Uri.parse(workspaceOrigin).host,
+  Uri.parse(controlPanelOrigin).host,
   _retiredProductionApiHost,
   'api.invexaretail.com',
   'www.invexaretail.com',
@@ -110,6 +112,17 @@ String apiBaseFromEnvironment() {
 
 Uri workspaceFromEnvironment() => resolveWorkspaceOrigin(
   fromDefine: const String.fromEnvironment('INVEXA_WEB_APP_URL'),
+  environment: environmentFromDefines(),
+);
+
+Uri? resolveControlPanelOrigin({String fromDefine = '', InvexaEnvironment environment = InvexaEnvironment.production}) {
+  if (environment == InvexaEnvironment.staging && fromDefine.trim().isEmpty) return null;
+  final origin = _resolveOrigin(fromDefine, environment, 'INVEXA_CONTROL_PANEL_URL', controlPanelOrigin, 'http://127.0.0.1:18181');
+  return Uri.parse('$origin/');
+}
+
+Uri? controlPanelFromEnvironment() => resolveControlPanelOrigin(
+  fromDefine: const String.fromEnvironment('INVEXA_CONTROL_PANEL_URL'),
   environment: environmentFromDefines(),
 );
 

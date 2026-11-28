@@ -22,6 +22,7 @@ Future<void> main() async {
   try {
     apiBase = apiBaseFromEnvironment();
     workspaceFromEnvironment();
+    controlPanelFromEnvironment();
   } on StateError catch (error) {
     runApp(MaterialApp(
       home: Scaffold(

@@ -18,6 +18,7 @@ class _ScanScreenState extends State<ScanScreen> {
   final _bin = TextEditingController();
   int _index = 0;
   String? _walkHint;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -40,19 +41,27 @@ class _ScanScreenState extends State<ScanScreen> {
       widget.controller.setError('Scan the next bin in the guided walk.');
       return;
     }
+    // One scan at a time: a double tap would send the same bin twice at the same position.
+    if (_busy) return;
+    setState(() => _busy = true);
     try {
       final result = await widget.controller.api.scanPickWave(
         waveId: waveId,
         scannedBinCode: scanned,
         scannedIndex: _index,
       );
+      if (!mounted) return;
       setState(() {
         _index = (result['scannedIndex'] as num?)?.toInt() ?? _index + 1;
         _walkHint = result['nextBin'] == null ? 'Walk complete.' : 'Next bin ${result['nextBin']}';
+        // Ready for the next bin: pressing Confirm again must not resend this one.
+        _bin.clear();
       });
       widget.controller.setNotice('Bin accepted.');
     } catch (err) {
       widget.controller.setError(err.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -66,13 +75,22 @@ class _ScanScreenState extends State<ScanScreen> {
           style: TextStyle(color: invexaMuted),
         ),
         const SizedBox(height: 16),
-        TextField(controller: _waveId, decoration: const InputDecoration(labelText: 'Pick wave id')),
+        TextField(
+          key: const ValueKey('scan-wave'),
+          controller: _waveId,
+          decoration: const InputDecoration(labelText: 'Pick wave id'),
+          // A different wave starts its own walk at the first bin.
+          onChanged: (_) => setState(() {
+            _index = 0;
+            _walkHint = null;
+          }),
+        ),
         const SizedBox(height: 12),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: TextField(controller: _bin, decoration: const InputDecoration(labelText: 'Scan next bin')),
+              child: TextField(key: const ValueKey('scan-bin'), controller: _bin, decoration: const InputDecoration(labelText: 'Scan next bin')),
             ),
             const SizedBox(width: 8),
             IconButton.filledTonal(
@@ -83,7 +101,7 @@ class _ScanScreenState extends State<ScanScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        FilledButton(onPressed: _scan, child: const Text('Confirm scan')),
+        FilledButton(key: const ValueKey('scan-confirm'), onPressed: _busy ? null : _scan, child: const Text('Confirm scan')),
         if (_walkHint != null) ...[
           const SizedBox(height: 12),
           Text(_walkHint!, style: const TextStyle(color: invexaEmerald, fontWeight: FontWeight.w600)),

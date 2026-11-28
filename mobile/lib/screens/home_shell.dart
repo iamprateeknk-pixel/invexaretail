@@ -8,6 +8,7 @@ import '../config/env.dart';
 import '../config/platform_caps.dart';
 import '../config/role_home.dart';
 import '../config/theme.dart';
+import '../config/web_surfaces.dart';
 import '../services/live_events.dart';
 import '../services/label_pdf.dart';
 import '../services/quick_lookup.dart';
@@ -28,6 +29,7 @@ import 'scan_screen.dart';
 import 'stock_screen.dart';
 import 'transfers_screen.dart';
 import 'work_screen.dart';
+import 'desktop_web_screen.dart';
 import 'workspace_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -52,7 +54,10 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final role = controller.user?.role ?? '';
-    final home = mobileHomeForRole(role, navigation: controller.mobileNavigation);
+    final navigation = controller.mobileNavigation;
+    final home = PlatformCaps.hasDesktopWebView
+        ? desktopHomeForRole(role, navigation: navigation)
+        : mobileHomeForRole(role, navigation: navigation);
     final navigationSignature = home.destinations.map((destination) => destination.id).join('|');
     if (_role != role || _navigationSignature != navigationSignature) {
       _role = role;
@@ -85,11 +90,14 @@ class _HomeShellState extends State<HomeShell> {
                 child: const Icon(Icons.sync_problem_outlined),
               ),
             ),
-          IconButton(
-            tooltip: 'Full workspace',
-            onPressed: () => _openWorkspace(controller),
-            icon: const Icon(Icons.open_in_browser_outlined),
-          ),
+          // On Windows the workspace and Control Panel are side-menu tabs instead.
+          if (!PlatformCaps.hasDesktopWebView)
+            IconButton(
+              key: const ValueKey('open-workspace'),
+              tooltip: 'Full workspace',
+              onPressed: () => _openWorkspace(controller),
+              icon: const Icon(Icons.open_in_browser_outlined),
+            ),
           IconButton(
             tooltip: 'Sign out',
             onPressed: controller.logout,
@@ -120,14 +128,17 @@ class _HomeShellState extends State<HomeShell> {
           Expanded(child: IndexedStack(index: safeIndex, children: pages)),
         ],
       );
-        if (constraints.maxWidth < wideLayoutBreakpoint) return content;
+        // Windows always gets the side menu (it carries more destinations than a bottom bar holds).
+        if (constraints.maxWidth < wideLayoutBreakpoint && !PlatformCaps.hasDesktopWebView) return content;
+        final extended = constraints.maxWidth >= 1200;
         // Wide window (Windows, iPad, tablet landscape): destinations move to a side rail so
         // every screen keeps its full height and the main action is one click away.
         return Row(children: [
           NavigationRail(
             selectedIndex: safeIndex,
             onDestinationSelected: (value) => setState(() => _index = value),
-            labelType: NavigationRailLabelType.all,
+            extended: extended,
+            labelType: extended ? NavigationRailLabelType.none : NavigationRailLabelType.all,
             destinations: [
               for (final dest in home.destinations)
                 NavigationRailDestination(
@@ -148,7 +159,7 @@ class _HomeShellState extends State<HomeShell> {
         icon: const Icon(Icons.qr_code_scanner),
         label: const Text('Scan'),
       ),
-      bottomNavigationBar: MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint
+      bottomNavigationBar: MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint || PlatformCaps.hasDesktopWebView
           ? null
           : NavigationBar(
         selectedIndex: safeIndex,
@@ -229,7 +240,29 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Widget _pageFor(String id, SessionController controller) {
+    final sessionKey = '${controller.companyId}|${controller.user?.id ?? ''}';
     switch (id) {
+      case 'workspace':
+        final workspace = workspaceFromEnvironment();
+        return DesktopWebView(
+          key: ValueKey('workspace-$sessionKey'),
+          sessionKey: sessionKey,
+          trustedOrigins: workspaceWebOrigins(workspace, environmentFromDefines()),
+          resolveTarget: () => signedInWorkspaceUri(workspace, controller.api.webHandoffCode),
+          unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
+        );
+      case 'control':
+        final controlPanel = controlPanelFromEnvironment();
+        return DesktopWebView(
+          key: ValueKey('control-$sessionKey'),
+          sessionKey: sessionKey,
+          trustedOrigins: {
+            ...workspaceWebOrigins(workspaceFromEnvironment(), environmentFromDefines()),
+            if (controlPanel != null) controlPanel.origin,
+          },
+          resolveTarget: () async => controlPanel,
+          unavailableMessage: 'The Control Panel is unavailable for this build.',
+        );
       case 'work':
         return WorkScreen(
           controller: controller,

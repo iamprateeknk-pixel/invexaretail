@@ -175,8 +175,15 @@ class _CountScreenState extends State<CountScreen> {
   void _pickItem(String? itemId, {String? lotNo}) {
     _itemId = itemId;
     final item = _find(_countableItems, itemId);
-    _lotNo = item == null || item.isWeightCounted || item.lots.isEmpty ? null : lotNo ?? item.lots.first.lotNo;
+    _lotNo = item == null || item.isWeightCounted ? null : effectiveCountLot(item.lots, lotNo);
     _qty.text = widget.controller.countDrafts[_draftKey]?.quantity ?? '';
+  }
+
+  bool _refreshChangedLot(String itemId, String? currentLot) {
+    if (currentLot == _lotNo) return false;
+    setState(() => _pickItem(itemId, lotNo: currentLot));
+    widget.controller.setError('The selected lot changed. Verify the lot and its quantity before saving.');
+    return true;
   }
 
   // Blueprint v4 §13: pieces are whole numbers; a KG / decimal item takes one
@@ -213,8 +220,12 @@ class _CountScreenState extends State<CountScreen> {
       return;
     }
     final isWeightItem = item != null && item.isWeightCounted;
-    final submittedLotNo = isWeightItem ? null : _lotNo;
-    final draftKey = _draftKey;
+    final submittedLotNo = isWeightItem ? null : effectiveCountLot(item?.lots ?? const [], _lotNo);
+    if (_refreshChangedLot(itemId, submittedLotNo)) {
+      await ScanFeedback.rejected();
+      return;
+    }
+    final draftKey = (itemId: itemId, locationId: locationId, lotNo: submittedLotNo);
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
@@ -294,17 +305,30 @@ class _CountScreenState extends State<CountScreen> {
   Future<void> _scanToIncrement(CatalogItem item) async {
     final code = await showBarcodeScanner(context, title: 'Scan ${item.name} to add +1');
     if (code == null || !mounted) return;
+    if (_itemId != item.id) return;
+    final current = _find(_countableItems, item.id);
+    final selectedLot = effectiveCountLot(current?.lots ?? const [], _lotNo);
+    if (_refreshChangedLot(item.id, selectedLot)) {
+      await ScanFeedback.rejected();
+      return;
+    }
     final normalized = code.trim().toLowerCase();
     final matchesItem = normalized == item.code.trim().toLowerCase() || normalized == (item.barcode ?? '').trim().toLowerCase();
-    final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
+    final matchesLot = current?.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized) ?? false;
+    if (matchesLot && !matchesItem && selectedLot != null && selectedLot.trim().toLowerCase() != normalized) {
+      // Another lot's label: adding it to the selected lot's count would book it against the wrong lot.
+      await ScanFeedback.rejected();
+      widget.controller.setError('That is lot "$code", not lot $selectedLot. Choose that lot first.');
+      return;
+    }
     if (!matchesItem && !matchesLot) {
       await ScanFeedback.rejected();
       widget.controller.setError('Scanned barcode does not match ${item.name}.');
       return;
     }
     await ScanFeedback.accepted();
-    final current = int.tryParse(_qty.text.trim()) ?? 0;
-    setState(() => _qty.text = (current + 1).toString());
+    final quantity = int.tryParse(_qty.text.trim()) ?? 0;
+    setState(() => _qty.text = (quantity + 1).toString());
     _saveDraft();
   }
 
@@ -520,4 +544,12 @@ class _BatchCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The lot a count is booked against: the one chosen, or - when none is chosen or the choice is no
+/// longer one of the item's lots - the first lot, which is exactly what the lot picker shows. Without
+/// this the picker displayed a lot while the count went to the server with no lot at all.
+String? effectiveCountLot(List<LotRecord> lots, String? chosen) {
+  if (lots.isEmpty) return null;
+  return lots.any((lot) => lot.lotNo == chosen) ? chosen : lots.first.lotNo;
 }

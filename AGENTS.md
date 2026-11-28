@@ -15,8 +15,9 @@ read those first if a rule below seems arbitrary.
 - `admin-panel/`, `mobile/` - separate deployables, own package.json each.
   `mobile/` is one Flutter codebase shipped as three apps: Android
   (`android-apk.yml`), iOS (`ios.yml`) and Windows (`windows.yml`). Platform
-  differences (no camera scanner or embedded web view on Windows) are decided
-  only in `mobile/lib/config/platform_caps.dart`.
+  differences (no camera scanner on Windows; WebView2 instead of
+  `webview_flutter` there) are decided only in
+  `mobile/lib/config/platform_caps.dart`.
 - `database/` was the pre-`api/` MySQL/Sequelize schema/migrations half of
   the legacy prototype - already removed (an earlier commit, "Migrate
   Invexa Retail to PostgreSQL and complete Week 1 controls"). `backend/`
@@ -1010,3 +1011,34 @@ tracks how much of it):
   `api/vercel.json`, `DEPLOY_NOW.md` and the unused `isRenderRuntime()`. The
   runbook now says plainly that a self-hosted database has no automatic
   backup. Historical per-week docs still mention the old hosts as history.
+- Post-merge follow-up 9 (`mobile/lib/screens/desktop_web_screen.dart`,
+  `mobile/lib/config/web_surfaces.dart`, no dedicated ADR - see
+  `mobile/README.md`): the Windows app now embeds the full web workspace and
+  the Control Panel through Microsoft Edge WebView2 (`webview_windows`)
+  instead of sending users to the browser. Rights stay the web app's own (role
+  menus in `web/src/lib/permissions.js`, server checks on every request); the
+  Control Panel entry is shown only to `ADMIN` (the web's `adminOnly` rule)
+  and still requires its own platform sign-in. Built for shared counter PCs:
+  every open clears cookies and runs a one-shot storage wipe before the first
+  page script, the workspace fails closed when no handoff code can be fetched
+  (the plain URL would reuse the PC's last web session), only
+  `invexaretail.com` hosts load in-app, and only our pages may get the camera.
+  Not verifiable here (no Windows): the WebView2 build itself - proven by the
+  `windows.yml` CI build.
+- Post-merge follow-up 10 (`mobile/lib/config/role_home.dart`,
+  `mobile/lib/screens/{home_shell,desktop_web_screen,pick_screen,count_screen,scan_screen}.dart`,
+  `mobile/lib/services/pick_session.dart`, no dedicated ADR - see
+  `mobile/README.md`): on Windows the web workspace and the Control Panel are
+  side-menu tabs (`desktopHomeForRole`) instead of toolbar buttons; `ADMIN`
+  lands on the workspace, other roles keep their own landing screen and never
+  see the Control Panel. The Control Panel still needs its own platform
+  sign-in: signing a company `ADMIN` in to it automatically would hand them
+  platform-wide rights, so that needs an explicit, audited account link (not
+  built). Flow audit fixes, each covered by `mobile/test/flow_audit_test.dart`:
+  a pick problem could be reported twice (or scanned/weighed on top of a
+  reported remainder), sending more than the line asked for; a pick saved
+  offline was offered again after a reload, inviting a second pick of the same
+  pieces; a count could be booked with no lot (or a stale one) while the lot
+  picker showed the first lot, and a scan of another lot's label added +1 to
+  the selected lot; the bin walk kept the previous wave's position for a new
+  wave, resent an accepted bin on a second tap, and allowed overlapping scans.

@@ -55,6 +55,13 @@ full-screen (it is a PWA: `web/public/manifest.webmanifest` + service worker).
 ## Windows
 
 `flutter run -d windows` needs Windows 10/11 with Visual Studio 2022 and the
-"Desktop development with C++" workload. CI needs no secrets. Optional code
+"Desktop development with C++" workload. The in-app workspace and Control
+Panel use the Microsoft Edge WebView2 Runtime, preinstalled on Windows 11 and
+current Windows 10; on a PC without it the app shows a message asking to install it. CI needs no secrets. Optional code
 signing (removes the SmartScreen "Unknown publisher" warning): set
 `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`.
+
+A Windows staging build uses the configured staging workspace origin for
+sign-in. Set `INVEXA_CONTROL_PANEL_URL` to the staging Control Panel HTTPS
+origin to enable that surface in the build. It stays unavailable when that
+define is omitted.
