@@ -9,29 +9,32 @@ import { visibleStudioTaskFilter } from '../lib/saas/studio-task-access.js';
 const router = Router();
 
 // P0-SEC-003: comments are company scoped, only known entity types are accepted, and the
-// entity must belong to the caller's company (a foreign entity id is indistinguishable from a
-// missing one). Add a resolver here when a new entity type gets a comment thread.
-const COMMENT_ENTITY_RESOLVERS = new Map<string, (companyId: string, entityId: string, role: string) => Promise<boolean>>([
-  ['item', async (companyId, id) => Boolean(await prisma.item.findFirst({ where: { id, companyId }, select: { id: true } }))],
-  ['lot', async (companyId, id) => Boolean(await prisma.lot.findFirst({ where: { id, item: { companyId } }, select: { id: true } }))],
-  ['location', async (companyId, id) => Boolean(await prisma.location.findFirst({ where: { id, companyId }, select: { id: true } }))],
-  ['transfer', async (companyId, id) => Boolean(await prisma.transfer.findFirst({ where: { id, companyId }, select: { id: true } }))],
-  ['order', async (companyId, id) => Boolean(await prisma.order.findFirst({ where: { id, companyId }, select: { id: true } }))],
-  ['count', async (companyId, id) => Boolean(await prisma.stockCount.findFirst({ where: { id, companyId }, select: { id: true } }))],
-  ['exception', async (companyId, id, role) => Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId, ...visibleStudioTaskFilter(role) }, select: { id: true } }))],
-  ['purchase-order', async (companyId, id) => Boolean(await prisma.purchaseOrder.findFirst({ where: { id, companyId }, select: { id: true } }))],
-]);
+// target must belong to the caller's company.
+async function findCommentTarget(entityType: string, companyId: string, id: string, role: string): Promise<boolean | null> {
+  const select = { id: true };
+  switch (entityType) {
+    case 'item': return Boolean(await prisma.item.findFirst({ where: { id, companyId }, select }));
+    case 'lot': return Boolean(await prisma.lot.findFirst({ where: { id, item: { companyId } }, select }));
+    case 'location': return Boolean(await prisma.location.findFirst({ where: { id, companyId }, select }));
+    case 'transfer': return Boolean(await prisma.transfer.findFirst({ where: { id, companyId }, select }));
+    case 'order': return Boolean(await prisma.order.findFirst({ where: { id, companyId }, select }));
+    case 'count': return Boolean(await prisma.stockCount.findFirst({ where: { id, companyId }, select }));
+    case 'exception': return Boolean(await prisma.exceptionCase.findFirst({ where: { id, companyId, ...visibleStudioTaskFilter(role) }, select }));
+    case 'purchase-order': return Boolean(await prisma.purchaseOrder.findFirst({ where: { id, companyId }, select }));
+    default: return null;
+  }
+}
 
 async function resolveCommentTarget(req: Request, res: Response): Promise<{ companyId: string; entityType: string; entityId: string } | null> {
   const companyId = req.companyId ?? DEFAULT_COMPANY_ID;
   const entityType = String(req.params.entityType);
   const entityId = String(req.params.entityId);
-  const resolver = COMMENT_ENTITY_RESOLVERS.get(entityType);
-  if (!resolver) {
+  const exists = await findCommentTarget(entityType, companyId, entityId, req.user!.role);
+  if (exists === null) {
     res.status(400).json({ message: `Comments are not available for "${entityType}".` });
     return null;
   }
-  if (!(await resolver(companyId, entityId, req.user!.role))) {
+  if (!exists) {
     res.status(404).json({ message: 'Record not found.' });
     return null;
   }
