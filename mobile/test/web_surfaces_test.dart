@@ -8,7 +8,9 @@ import 'package:http/testing.dart';
 import 'package:invexaretail_mobile/config/role_home.dart';
 import 'package:invexaretail_mobile/config/web_surfaces.dart';
 import 'package:invexaretail_mobile/models/models.dart';
+import 'package:invexaretail_mobile/screens/control_panel_tab.dart';
 import 'package:invexaretail_mobile/screens/desktop_web_screen.dart';
+import 'dart:convert';
 import 'package:invexaretail_mobile/screens/home_shell.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
@@ -127,6 +129,74 @@ void main() {
     expect(find.byKey(const ValueKey('open-workspace')), findsOneWidget);
     expect(find.text('Control panel'), findsNothing);
     expect(find.byType(DesktopWebView), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('the linked Control Panel opens with a one-time code in the fragment, or plainly when there is none', () async {
+    final linked = await controlPanelUri(() async => 'code_123');
+    expect(linked.toString(), 'https://admin.invexaretail.com/#link=code_123');
+    expect((await controlPanelUri(() async => throw ApiException('not linked', statusCode: 404))).toString(), controlPanelOrigin,
+        reason: 'not linked: the panel asks for its own sign-in');
+    expect((await controlPanelUri(() async => '')).toString(), controlPanelOrigin);
+  });
+
+    // The web view shows an indeterminate progress bar while loading, so pumpAndSettle never settles.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+testWidgets('Control panel tab: link once with the platform account, then it opens signed in; unlink puts the sign-in back', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    var linked = false;
+    final sent = <String>[];
+    final controller = SessionController(
+      api: InvexaApi(
+        baseUrl: 'http://api.test',
+        httpClient: MockClient((request) async {
+          sent.add('${request.method} ${request.url.path}');
+          if (request.url.path != '/api/v1/auth/control-link') return http.Response('{}', 404);
+          if (request.method == 'GET') return http.Response(jsonEncode({'linked': linked}), 200);
+          if (request.method == 'DELETE') {
+            linked = false;
+            return http.Response(jsonEncode({'removed': true}), 200);
+          }
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          if (body['password'] != 'right') return http.Response(jsonEncode({'error': 'That platform email or password is not right.'}), 400);
+          linked = true;
+          return http.Response(jsonEncode({'linked': true}), 201);
+        }),
+      ),
+      store: MemoryStore(),
+    )
+      ..restoring = false
+      ..user = const AuthUser(id: 'u1', name: 'Admin', email: 'a@retail.local', role: 'ADMIN')
+      ..api.token = 'jwt';
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ControlPanelTab(controller: controller, sessionKey: 'co|u1'))));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('control-link')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('control-link')));
+    await settle(tester);
+    await tester.enterText(find.byKey(const ValueKey('control-link-email')), 'ops@invexa.local');
+    await tester.enterText(find.byKey(const ValueKey('control-link-password')), 'wrong');
+    await tester.tap(find.byKey(const ValueKey('control-link-submit')));
+    await settle(tester);
+    expect(find.text('That platform email or password is not right.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('control-unlink')), findsNothing);
+
+    await tester.enterText(find.byKey(const ValueKey('control-link-password')), 'right');
+    await tester.tap(find.byKey(const ValueKey('control-link-submit')));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('control-unlink')), findsOneWidget, reason: 'linked: the tab now opens signed in');
+
+    await tester.tap(find.byKey(const ValueKey('control-unlink')));
+    await settle(tester);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Unlink')));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('control-link')), findsOneWidget);
+    expect(sent, containsAll(['GET /api/v1/auth/control-link', 'POST /api/v1/auth/control-link', 'DELETE /api/v1/auth/control-link']));
     debugDefaultTargetPlatformOverride = null;
   });
 }

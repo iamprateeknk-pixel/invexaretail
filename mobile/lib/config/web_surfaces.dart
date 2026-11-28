@@ -36,6 +36,21 @@ Future<Uri?> signedInWorkspaceUri(Future<String> Function() fetchHandoffCode) as
   }
 }
 
+/// The Control Panel signed in through a linked account (one-time code in the fragment, which is
+/// never sent to a server), or the plain panel - which asks for the platform sign-in - when this user
+/// is not linked or no code could be fetched. Falling back is safe here: the panel holds no session of
+/// its own, because each open wipes its storage first.
+Future<Uri> controlPanelUri(Future<String> Function() fetchLinkCode) async {
+  final plain = Uri.parse(controlPanelOrigin);
+  try {
+    final code = await fetchLinkCode();
+    if (code.trim().isEmpty) return plain;
+    return plain.replace(fragment: 'link=${Uri.encodeComponent(code)}');
+  } catch (_) {
+    return plain;
+  }
+}
+
 /// Runs once, before any page script, each time an embedded web surface opens: the previous user's
 /// web session (kept in localStorage) is gone before the handoff signs the current user in.
 const clearWebStorageScript =

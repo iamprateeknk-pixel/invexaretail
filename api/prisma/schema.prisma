@@ -2755,3 +2755,16 @@ model PasskeyCredential {
 
   @@index([userId])
 }
+
+// Linked Control Panel sign-in: a platform administrator links their platform account to one app
+// user (proven by both at once: the app user's session plus the platform password). That app user
+// can then open the Control Panel without typing the platform password again. One link per app
+// user; removing the row ends it. See lib/saas/control-app-link.ts.
+model ControlPanelAppLink {
+  appUserId      String   @id
+  platformUserId String
+  companyId      String
+  createdAt      DateTime @default(now())
+
+  @@index([platformUserId])
+}

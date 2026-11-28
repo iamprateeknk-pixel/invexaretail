@@ -91,3 +91,52 @@ test('the dead React implementation stays deleted', () => {
   assert.equal(existsSync(new URL('./login-html.js', import.meta.url)), true);
   assert.equal(existsSync(new URL('./worker.js', import.meta.url)), false, 'the Cloudflare Worker entry is retired; Nginx serves the panel');
 });
+
+/** Runs the page script against a minimal fake DOM: enough to watch the linked sign-in work. */
+async function runPage(hash, fetchImpl) {
+  const { runInNewContext } = await import('node:vm');
+  const html = controlPlaneHtml('https://api.example.test', 'https://invexaretail.com');
+  const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
+  const elements = new Map();
+  const element = (id) => {
+    if (!elements.has(id)) elements.set(id, { id, hidden: false, textContent: '', innerHTML: '', value: '', disabled: false, addEventListener() {} });
+    return elements.get(id);
+  };
+  const storage = new Map();
+  const location = { hash, pathname: '/', search: '', href: '' };
+  const requests = [];
+  const context = {
+    document: { getElementById: element },
+    localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: (k) => storage.delete(k) },
+    history: { replaceState: (_s, _t, url) => { location.hash = ''; location.replaced = url; } },
+    window: { location },
+    fetch: async (url, init) => { requests.push({ url, body: init.body ? JSON.parse(init.body) : undefined }); return fetchImpl(url); },
+    console,
+  };
+  runInNewContext(script, context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return { storage, location, requests, element };
+}
+
+test('a linked sign-in code from the Windows app is cleared from the address bar and traded once for the session', async () => {
+  const code = 'a'.repeat(43);
+  const session = { platformToken: 'platform-token', user: { email: 'ops@example.test' }, companies: [] };
+  const page = await runPage(`#link=${code}`, async () => ({ ok: true, json: async () => ({ success: true, session }) }));
+  assert.equal(page.location.hash, '', 'the code does not stay in the address bar');
+  assert.deepEqual(page.requests.map((r) => r.url), ['https://api.example.test/control/v1/auth/app-link/exchange']);
+  assert.equal(page.requests[0].body.code, code);
+  assert.deepEqual(JSON.parse(page.storage.get('invexa_control_session')), session);
+  assert.equal(page.element('company-view').hidden, false, 'it opens on the company list, signed in');
+  assert.equal(page.element('login-view').hidden, true);
+});
+
+test('an expired link code leaves the panel on its normal sign-in, and other fragments are ignored', async () => {
+  const expired = await runPage(`#link=${'b'.repeat(43)}`, async () => ({ ok: false, status: 401, json: async () => ({ error: 'expired' }) }));
+  assert.equal(expired.storage.size, 0);
+  assert.equal(expired.element('login-view').hidden, false);
+  assert.match(expired.element('login-error').textContent, /expired/);
+
+  const other = await runPage('#link=<script>', async () => { throw new Error('must not call the API'); });
+  assert.equal(other.requests.length, 0);
+  assert.equal(other.element('login-view').hidden, false);
+});

@@ -682,6 +682,35 @@ export class ControlPlane {
     if (!user || user.status !== 'active' || !verifyPassword(password, user.passwordHash)) {
       throw new ControlPlaneError('Invalid credentials', 'INVALID_CREDENTIALS', 401);
     }
+    return this.issuePlatformSession(user, { email: user.email });
+  }
+
+  /** Checks platform credentials without signing in (used to prove them while linking an app user). */
+  verifyPlatformCredentials(email: string, password: string): PlatformUser {
+    const user = [...this.platformUsers.values()].find((entry) => entry.email === email.toLowerCase());
+    if (!user || user.status !== 'active' || !verifyPassword(password, user.passwordHash)) {
+      throw new ControlPlaneError('Invalid credentials', 'INVALID_CREDENTIALS', 401);
+    }
+    return user;
+  }
+
+  /**
+   * A platform sign-in for an app user an administrator linked earlier (lib/saas/control-app-link.ts).
+   * The platform account must still be active; the audit names the app user it came through.
+   */
+  linkedPlatformLogin(platformUserId: string, appUserId: string): { user: Omit<PlatformUser, 'passwordHash'>; token: string; companies: CompanyRecord[] } {
+    const user = this.platformUsers.get(platformUserId);
+    if (!user || user.status !== 'active') {
+      throw new ControlPlaneError('The linked platform account is not active', 'LINK_INACTIVE', 403);
+    }
+    return this.issuePlatformSession(user, { email: user.email, via: 'app_link', appUserId }, 'PLATFORM_LOGIN_LINKED');
+  }
+
+  private issuePlatformSession(
+    user: PlatformUser,
+    auditAfter: Record<string, unknown>,
+    action = 'PLATFORM_LOGIN',
+  ): { user: Omit<PlatformUser, 'passwordHash'>; token: string; companies: CompanyRecord[] } {
     const token = signControlToken({
       platformUserId: user.id,
       userId: user.id,
@@ -697,11 +726,11 @@ export class ControlPlane {
       tenantId: this.tenantId,
       companyId: null,
       sessionId: null,
-      action: 'PLATFORM_LOGIN',
+      action,
       entityType: 'platform_user',
       entityId: user.id,
       before: null,
-      after: { email: user.email },
+      after: auditAfter,
     });
     return {
       user: { id: user.id, email: user.email, name: user.name, status: user.status },

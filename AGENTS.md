@@ -1042,3 +1042,24 @@ tracks how much of it):
   picker showed the first lot, and a scan of another lot's label added +1 to
   the selected lot; the bin walk kept the previous wave's position for a new
   wave, resent an accepted bin on a second tap, and allowed overlapping scans.
+- Post-merge follow-up 11 (`api/src/lib/saas/control-app-link.ts`,
+  `routes/enterprise-auth.ts`, `routes/control-plane.ts`,
+  `prisma/migrations/20270130090000_control_panel_app_link`,
+  `admin-panel/src/login-html.js`, `mobile/lib/screens/control_panel_tab.dart`,
+  no dedicated ADR - see `mobile/README.md`): linked Control Panel sign-in for
+  the Windows app. A company `ADMIN` is never signed in to the platform Control
+  Panel on its role alone; a platform administrator links their account to one
+  app user by proving both in one request (`POST /api/v1/auth/control-link`:
+  the app session plus the platform password, lockout-protected, a wrong
+  password is 400 so clients do not refresh a valid session). The link
+  (`ControlPanelAppLink`, one row per app user, no credential stored) is usable
+  only while that user is an active `ADMIN` of the same company and the platform
+  account is active; `POST /api/v1/auth/control-link/handoff` then mints a
+  one-time `panel`-purpose code the panel trades at
+  `POST /control/v1/auth/app-link/exchange` (`#link=` fragment, cleared from the
+  address bar first). Codes never cross purposes (`web`, `control`, `panel`).
+  Link, unlink and each linked sign-in are audited. Also fixed: the mobile API
+  client could not send `DELETE` at all. Proven by
+  `routes/control-app-link.http.test.ts`, `lib/saas/control-app-link.postgres.test.ts`
+  (run against real Postgres), `admin-panel/src/login.test.js` and
+  `mobile/test/web_surfaces_test.dart`.
