@@ -7203,6 +7203,7 @@
       "get": {
         "operationId": "getStudioInventoryReport",
         "summary": "Run a published stock report at the selected location",
+        "description": "The lot column identifies the stock lot. Value is on-hand quantity times landed unit cost or purchase rate, rounded to two decimal places. Unpriced lots return a blank value.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
         "responses": {

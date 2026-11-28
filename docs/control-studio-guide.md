@@ -89,7 +89,7 @@ Use exact match filters to limit a report. Text filters use the spelling and cas
 
 Stock availability uses on-hand stock less reservations. Quarantined stock stays in its own column. Transfer reports only show location names that the viewer can access.
 
-The Studio stock report keeps the existing placeholder in its **Value** column. Cost-based stock valuation is shown in **Inventory Health**.
+Add **Lot** and **Value** to see stock value by lot. Value is on-hand quantity multiplied by the first positive cost available, using landed unit cost before purchase rate. Values are rounded to two decimal places. A lot without a valid recorded unit cost has a blank value. An empty lot with a recorded cost shows zero. The database-free demo leaves value blank.
 
 Studio validates report settings on save and on publish. If a draft includes an older report with an unsupported column or filter, correct that report before publishing the draft.
 

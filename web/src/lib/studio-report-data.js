@@ -12,8 +12,9 @@ export function studioReportResult(report, definition, { locationId, stockRows =
     case 'inventory':
       rows = stockRows.filter((row) => row.locationId === locationId).map((row) => {
         const item = catalog.get(row.itemId);
-        return { item_code: itemLabel(item) || row.itemName || row.itemId, category: item?.category, company: item?.company,
-          ...stockRowValues(row), available: availableQuantity(row) };
+        const lot = item?.lots?.find(({ id }) => id === row.lotId);
+        return { item_code: itemLabel(item) || row.itemName || row.itemId, lot_no: lot?.lotNo, category: item?.category, company: item?.company,
+          ...stockRowValues(row), available: availableQuantity(row), value: null };
       });
       break;
     case 'counts':

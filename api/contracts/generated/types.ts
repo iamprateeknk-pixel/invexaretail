@@ -318,7 +318,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Run a published stock report at the selected location */
+        /**
+         * Run a published stock report at the selected location
+         * @description The lot column identifies the stock lot. Value is on-hand quantity times landed unit cost or purchase rate, rounded to two decimal places. Unpriced lots return a blank value.
+         */
         get: operations["getStudioInventoryReport"];
         put?: never;
         post?: never;

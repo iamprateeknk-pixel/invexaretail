@@ -134,6 +134,9 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     assert.equal((await saveReport({ ...report, groupBy: undefined })).status, 400);
     const reportDraft = await json(url, '/studio/v1/reports', { method: 'POST', headers: studioAuth, body: JSON.stringify(report) });
     assert.equal(reportDraft.status, 200);
+    const valuationReport = { key: `${reportKey}_valuation`, name: 'Valuation by lot', entity: 'inventory',
+      columns: ['lot_no', 'value'], filters: { value: 8.25 } };
+    assert.equal((await saveReport(valuationReport)).status, 200);
     const workflow = {
       key: 'dispatch.live', name: 'Dispatch review', version: 1, enforce: true, graph: { nodes: [
         { id: 'start', type: 'trigger', config: { event: 'transfer.created' } },
@@ -156,6 +159,7 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
     assert.equal((await requestAutomation(eventAutomation)).status, 200);
     const beforePublish = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${grocery}` } });
     assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === reportKey), false);
+    assert.equal(beforePublish.body.runtime.reports.some((entry: { key: string }) => entry.key === valuationReport.key), false);
     const published = await json(url, '/studio/v1/publish', { method: 'POST', headers: studioAuth });
     assert.equal(published.status, 200);
     assert.deepEqual(published.body.published.workflows.find((entry: { key: string }) => entry.key === workflow.key), workflow);
@@ -170,6 +174,7 @@ test('HTTP: runtime config is authenticated, company-scoped, and follows Studio 
       assert.equal(after.body.runtime.page.actions.some((action: { key: string }) => action.key === 'export'), false);
       assert.deepEqual(after.body.runtime.mobilePolicy.navigation, ['dashboard', 'stock']);
       assert.deepEqual(after.body.runtime.reports.find((entry: { key: string }) => entry.key === reportKey), report);
+      assert.deepEqual(after.body.runtime.reports.find((entry: { key: string }) => entry.key === valuationReport.key), valuationReport);
 
       if (storeUser) {
         const storeRuntime = await json(url, '/api/v1/runtime/config', { headers: { Authorization: `Bearer ${storeToken}` } });

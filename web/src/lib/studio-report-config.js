@@ -4,6 +4,7 @@ export const REPORT_DATASETS = [
         value: 'inventory', label: 'Stock',
         columns: [
             { value: 'item_code', label: 'Item code & name' },
+            { value: 'lot_no', label: 'Lot' },
             { value: 'category', label: 'Category', groupable: true },
             { value: 'company', label: 'Company', groupable: true },
             { value: 'physical', label: 'Total physical', type: 'number' },

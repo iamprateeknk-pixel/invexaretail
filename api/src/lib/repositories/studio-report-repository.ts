@@ -2,11 +2,22 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { canAccessLocation } from '../inventory.js';
 import { seesInactiveItems } from '../item-master.js';
+import { LOT_COST_DECIMAL_PATTERN, LOT_COST_FIELDS, LOT_COST_TEXT_LIMIT, LOT_COST_WHITESPACE, MAX_FINITE_DECIMAL } from '../lot-cost.js';
 import { STUDIO_REPORT_ROW_LIMIT, type StudioReportDataset, type studioReportDefinition } from '../saas/studio-report-config.js';
 import type { TenantContext } from '../tenant-context.js';
 
 type Definition = NonNullable<ReturnType<typeof studioReportDefinition>>;
 type QueryRow = { reportData: Record<string, string | number | null>; total: bigint };
+
+function recordedLotCost(field: typeof LOT_COST_FIELDS[number]) {
+  const text = Prisma.sql`btrim(lot."attributes" ->> ${field}::text, ${LOT_COST_WHITESPACE}::text)`;
+  return Prisma.sql`
+    (SELECT parsed.cost FROM (
+      SELECT CASE WHEN length(${text}) <= ${LOT_COST_TEXT_LIMIT} AND ${text} ~ ${LOT_COST_DECIMAL_PATTERN}
+        THEN (${text})::numeric END AS cost
+    ) AS parsed WHERE parsed.cost > 0 AND parsed.cost <= ${MAX_FINITE_DECIMAL}::numeric)
+  `;
+}
 
 function reportSource(ctx: TenantContext, locationId: string, dataset: StudioReportDataset, fields: Set<string>, assignedLocationIds: string[]) {
   const { companyId } = ctx;
@@ -39,14 +50,26 @@ function reportSource(ctx: TenantContext, locationId: string, dataset: StudioRep
           AND supplier."companyId" = purchase."companyId"
         WHERE purchase."companyId" = ${companyId} AND purchase."locationId" = ${locationId}
       `;
-    case 'inventory':
-      // The current stock snapshot has no lot cost valuation. Keep its value field while using the ledger's available balance.
+    case 'inventory': {
+      const hasValue = fields.has('value');
+      const hasLot = fields.has('lot_no') || hasValue;
+      const lotJoin = hasLot ? Prisma.sql`
+        LEFT JOIN "Lot" AS lot ON lot."id" = ledger."lotId" AND lot."itemId" = item."id"
+      ` : Prisma.empty;
+      const valuation = hasValue ? Prisma.sql`
+        LEFT JOIN LATERAL (
+          SELECT round(ledger."onHand" * coalesce(${Prisma.join(LOT_COST_FIELDS.map(recordedLotCost))}), 2) AS amount
+        ) AS valuation ON TRUE
+      ` : Prisma.empty;
+      const value = hasValue
+        ? Prisma.sql`CASE WHEN abs(valuation.amount) <= ${MAX_FINITE_DECIMAL}::numeric THEN valuation.amount END`
+        : Prisma.sql`NULL`;
       return Prisma.sql`
         SELECT ledger."itemId", ledger."lotId",
           jsonb_build_object(
             'item_code', concat_ws(' · ', nullif(item."code", ''), nullif(item."name", '')),
-            'category', item."category", 'company', item."company",
-            'physical', ledger."onHand", 'book', ledger."onHand", 'variance', 0, 'value', 0,
+            'lot_no', ${hasLot ? Prisma.sql`lot."lotNo"` : Prisma.sql`NULL`}, 'category', item."category", 'company', item."company",
+            'physical', ledger."onHand", 'book', ledger."onHand", 'variance', 0, 'value', ${value},
             'reserved', ledger."reserved", 'quarantine', ledger."quarantine",
             'available', greatest(0, ledger."onHand" - ledger."reserved")
           ) AS "reportData"
@@ -54,9 +77,12 @@ function reportSource(ctx: TenantContext, locationId: string, dataset: StudioRep
           SELECT "itemId", "lotId", "companyId", "locationId", "onHand", "reserved", "quarantine" FROM "StockLedger"
         ) AS ledger
         JOIN "Item" AS item ON item."id" = ledger."itemId" AND item."companyId" = ledger."companyId"
+        ${lotJoin}
+        ${valuation}
         WHERE ledger."companyId" = ${companyId} AND ledger."locationId" = ${locationId}
           AND (${seesInactiveItems(ctx.role)}::boolean OR item."status" = 'ACTIVE')
       `;
+    }
     case 'counts':
       return Prisma.sql`
         SELECT counted."id", counted."createdAt",

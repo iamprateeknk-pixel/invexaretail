@@ -73,3 +73,13 @@ test('inventory displays the supplied ledger availability without subtracting qu
   });
   assert.deepEqual(result.rows, [{ Available: 8 }]);
 });
+
+test('the database-free demo shows the lot label and leaves stock value blank', () => {
+  const report = { entity: 'inventory', columns: ['lot_no', 'value'] };
+  const result = studioReportResult(report, studioReportDefinition(report), {
+    locationId: 'warehouse',
+    items: [{ id: 'one', lots: [{ id: 'lot-id', lotNo: 'Batch A' }] }],
+    stockRows: [{ itemId: 'one', lotId: 'lot-id', locationId: 'warehouse', stockValue: 0 }],
+  });
+  assert.deepEqual(result.rows, [{ Lot: 'Batch A', Value: '' }]);
+});

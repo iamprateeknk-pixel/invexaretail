@@ -213,3 +213,41 @@ integration('inventory, count and transfer reports use scoped database rows and 
   const adminTransfers = await run(owner.admin.token, 'transfers', owner.locationId, 'transfers');
   assert.equal(adminTransfers.body.rows.find((row: Record<string, unknown>) => row['Transfer no.'] === transfer.id).To, owner.secondLocationId);
 });
+
+integration('stock reports value each lot at its recorded cost and leave unpriced lots blank', async (t) => {
+  process.env.CONTROL_PLANE_PERSIST_IN_TESTS = '1';
+  const owner = await fixture();
+  t.after(async () => { await prisma.controlPlaneConfig.deleteMany({ where: { companyId: owner.companyId } }); });
+  const item = await prisma.item.create({ data: { companyId: owner.companyId, code: 'RICE', name: 'Rice' } });
+  const lotInputs = [
+    { lotNo: 'LANDED', onHand: 10, attributes: { landedUnitCost: '12.345', purchaseRate: 1 } },
+    { lotNo: 'PURCHASE', onHand: 3.3, attributes: { landedUnitCost: '1e9999', purchaseRate: ' 2.5e0 ' } },
+    { lotNo: 'UNPRICED', onHand: 9, attributes: { landedUnitCost: true, purchaseValue: 50 } },
+    { lotNo: 'ZERO', onHand: 0, attributes: { purchaseRate: 4 } },
+    { lotNo: 'ROUND', onHand: 0.5, attributes: { purchaseRate: 0.01 } },
+  ];
+  for (const { lotNo, onHand, attributes } of lotInputs) {
+    const lot = await prisma.lot.create({ data: { itemId: item.id, lotNo, attributes } });
+    await prisma.stockLedger.create({ data: {
+      companyId: owner.companyId, locationId: owner.locationId, itemId: item.id, lotId: lot.id,
+      onHand, reserved: Math.min(onHand, 2), quarantine: 3,
+    } });
+  }
+  const reports: ReportDefinition[] = [
+    { key: 'values', name: 'Stock value by lot', entity: 'inventory', columns: ['lot_no', 'value'], filters: {} },
+    { key: 'matching', name: 'Stock value of 8.25', entity: 'inventory', columns: ['lot_no', 'value'], filters: { value: 8.25 } },
+    { key: 'zeros', name: 'Zero value records', entity: 'inventory', columns: ['lot_no', 'value'], filters: { value: 0 } },
+  ];
+  await config(owner.companyId, reports, 2, 'published');
+  const run = await reportApi(t);
+  const request = (key: string) => run(owner.admin.token, key, owner.locationId, 'stock');
+  const list = await request('values');
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  assert.deepEqual(Object.fromEntries(list.body.rows.map((row: Record<string, unknown>) => [row.Lot, row.Value])), {
+    LANDED: 123.45, PURCHASE: 8.25, UNPRICED: '', ZERO: 0, ROUND: 0.01,
+  });
+  assert.deepEqual((await request('matching')).body.rows, [{ Lot: 'PURCHASE', Value: 8.25 }]);
+  assert.deepEqual((await request('zeros')).body.rows, [{ Lot: 'ZERO', Value: 0 }]);
+  const blind = await owner.user('STORE_USER', [owner.locationId]);
+  assert.equal((await run(blind.token, 'values', owner.locationId, 'stock')).status, 403);
+});
