@@ -8,6 +8,7 @@ import '../config/env.dart';
 import '../config/platform_caps.dart';
 import '../config/role_home.dart';
 import '../config/theme.dart';
+import '../config/web_surfaces.dart';
 import '../services/live_events.dart';
 import '../services/label_pdf.dart';
 import '../services/quick_lookup.dart';
@@ -28,6 +29,7 @@ import 'scan_screen.dart';
 import 'stock_screen.dart';
 import 'transfers_screen.dart';
 import 'work_screen.dart';
+import 'desktop_web_screen.dart';
 import 'workspace_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -82,10 +84,18 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
           IconButton(
+            key: const ValueKey('open-workspace'),
             tooltip: 'Full workspace',
             onPressed: () => _openWorkspace(controller),
             icon: const Icon(Icons.open_in_browser_outlined),
           ),
+          if (PlatformCaps.hasDesktopWebView && canOpenControlPanel(controller.user?.role ?? ''))
+            IconButton(
+              key: const ValueKey('open-control-panel'),
+              tooltip: 'Control panel',
+              onPressed: _openControlPanel,
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+            ),
           IconButton(
             tooltip: 'Sign out',
             onPressed: controller.logout,
@@ -169,12 +179,40 @@ class _HomeShellState extends State<HomeShell> {
       );
       return;
     }
+    if (PlatformCaps.hasDesktopWebView) {
+      // Inside the app, signed in as this user (fails closed if no sign-in code can be fetched).
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DesktopWebScreen(
+            title: 'Full workspace',
+            trustedHosts: workspaceHosts,
+            resolveTarget: () => signedInWorkspaceUri(controller.api.webHandoffCode),
+            unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
+          ),
+        ),
+      );
+      return;
+    }
     final opened = await launchUrl(Uri.parse(workspaceOrigin), mode: LaunchMode.externalApplication);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open the browser. Visit invexaretail.com to use the full workspace.')),
       );
     }
+  }
+
+  /// Platform administration, inside the Windows app. It keeps its own platform sign-in; the app
+  /// only decides who sees the entry (canOpenControlPanel).
+  Future<void> _openControlPanel() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DesktopWebScreen(
+          title: 'Control panel',
+          trustedHosts: controlPanelHosts,
+          resolveTarget: () async => Uri.parse(controlPanelOrigin),
+        ),
+      ),
+    );
   }
 
   Future<void> _quickScan(SessionController controller, MobileRoleHome home) async {

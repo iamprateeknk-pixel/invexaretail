@@ -57,6 +57,15 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# webview_windows 0.4.0 (in-app workspace / Control Panel, WebView2) still compiles with MSVC's
+# experimental /await coroutines. Newer MSVC (14.5x, Visual Studio 18) turns that into a hard
+# error (STL1011) unless this is defined. Upstream has not moved to C++20 <coroutine> yet. This
+# only buys time: when a future MSVC removes <experimental/coroutine> entirely, the plugin must be
+# replaced (e.g. flutter_inappwebview_windows, which needs no coroutines).
+if(TARGET webview_windows_plugin)
+  target_compile_definitions(webview_windows_plugin PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
