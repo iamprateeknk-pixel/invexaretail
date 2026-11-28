@@ -30,3 +30,11 @@ test('the web container forwards operational, control, Studio and sync requests 
   assert.match(nginx, /set \$api_upstream api:4000;/);
   assert.match(nginx, /proxy_pass http:\/\/\$api_upstream;/);
 });
+
+test('Compose sends the task rollout flag to the API and the worker with a paused default', () => {
+  const value = 'ENABLE_STUDIO_AUTOMATION_TASKS: ${ENABLE_STUDIO_AUTOMATION_TASKS:-false}';
+  const api = compose.slice(compose.indexOf('\n  api:'), compose.indexOf('\n  worker:'));
+  const worker = compose.slice(compose.indexOf('\n  worker:'), compose.indexOf('\n  web:'));
+  assert.ok(api.includes(value));
+  assert.ok(worker.includes(value));
+});

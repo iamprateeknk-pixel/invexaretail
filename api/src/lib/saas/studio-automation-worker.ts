@@ -7,6 +7,7 @@ import { enabledStudioAutomations, isStudioBusinessEvent, STUDIO_EVENT_MESSAGES 
 import { scheduledStudioOccurrence } from './studio-schedule.js';
 import { nearExpiryNotification } from './near-expiry-notification.js';
 import { lowStockNotification, scanStudioLowStock } from './low-stock-notification.js';
+import { lockStudioConfig } from './control-plane-repository.js';
 
 const MAX_ATTEMPTS = 5;
 const FIRST_RETRY_MS = 60_000;
@@ -14,13 +15,19 @@ let timer: NodeJS.Timeout | undefined;
 
 class NoActiveAdmins extends Error {}
 
+function taskCreationEnabled(): boolean {
+  return process.env.ENABLE_STUDIO_AUTOMATION_TASKS === 'true';
+}
+
 async function runIsEnabled(tx: Prisma.TransactionClient, run: { companyId: string; automationKey: string; expression: string; actionKey: string }): Promise<boolean> {
   const current = await tx.controlPlaneConfig.findFirst({
     where: { companyId: run.companyId, kind: 'published', status: 'published' },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }, { versionId: 'asc' }],
     select: { payload: true },
   });
-  const lifecycle = await tx.controlPlaneCompany.findUnique({ where: { id: run.companyId }, select: { status: true } });
+  const [lifecycle] = await tx.$queryRaw<Array<{ status: string }>>`
+    SELECT status FROM "ControlPlaneCompany" WHERE id = ${run.companyId} FOR SHARE
+  `;
   return lifecycle?.status !== 'suspended' &&
     enabledStudioAutomations(current?.payload).some((item) => item.key === run.automationKey && item.expression === run.expression && item.actionKey === run.actionKey);
 }
@@ -65,7 +72,7 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
   const due = await prisma.studioAutomationRun.findMany({
     where: {
       status: 'PENDING', nextAttemptAt: { lte: now },
-      ...(process.env.ENABLE_STUDIO_AUTOMATION_TASKS === 'true' ? {} : { actionKey: 'SEND_NOTIFICATION' }),
+      ...(taskCreationEnabled() ? {} : { actionKey: 'SEND_NOTIFICATION' }),
     },
     orderBy: [{ nextAttemptAt: 'asc' }, { id: 'asc' }],
     take: 50,
@@ -74,6 +81,7 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
     const claim = { id: run.id, companyId: run.companyId, status: 'PENDING', attempts: run.attempts, nextAttemptAt: run.nextAttemptAt };
     try {
       await prisma.$transaction(async (tx) => {
+        await lockStudioConfig(tx, run.companyId, 'shared');
         // Hold the claim through notification insertion and completion. A crash rolls all three back.
         const claimed = await tx.studioAutomationRun.updateMany({ where: claim, data: { attempts: { increment: 1 } } });
         if (!claimed.count) return;
@@ -128,10 +136,12 @@ export async function drainStudioAutomationRuns(now: Date): Promise<void> {
 
 export async function listStudioAutomationRuns(companyId: string) {
   if (!resolveDatabaseUrl()) return [];
-  return prisma.studioAutomationRun.findMany({
+  const runs = await prisma.studioAutomationRun.findMany({
     where: { companyId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
     select: { id: true, name: true, actionKey: true, expression: true, occurrence: true, createdAt: true, status: true, attempts: true, configVersion: true, failureCode: true, finishedAt: true },
   });
+  const tasksPaused = !taskCreationEnabled();
+  return runs.map((run) => ({ ...run, executionPaused: tasksPaused && run.status === 'PENDING' && run.actionKey === 'CREATE_TASK' }));
 }
 
 export async function retryStudioAutomationRun(scope: ScopeContext, id: string, finishedAt: Date, now = new Date()) {
@@ -139,6 +149,7 @@ export async function retryStudioAutomationRun(scope: ScopeContext, id: string, 
   const companyId = scope.companyId;
   if (!resolveDatabaseUrl()) return 'unavailable' as const;
   return prisma.$transaction(async (tx) => {
+    await lockStudioConfig(tx, companyId, 'shared');
     const run = await tx.studioAutomationRun.findUnique({ where: { id, companyId } });
     if (!run) return 'missing' as const;
     if (run.status !== 'DEAD_LETTER' || run.finishedAt?.getTime() !== finishedAt.getTime()) return 'changed' as const;

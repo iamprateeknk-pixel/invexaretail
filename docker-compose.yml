@@ -29,6 +29,7 @@ services:
       PUBLIC_CONTROL_URL: ${PUBLIC_CONTROL_URL:-https://admin.invexaretail.com}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       REQUIRE_STUDIO_RELEASE_REVIEW: ${REQUIRE_STUDIO_RELEASE_REVIEW:-false}
+      ENABLE_STUDIO_AUTOMATION_TASKS: ${ENABLE_STUDIO_AUTOMATION_TASKS:-false}
       # The image runs with NODE_ENV=production, which refuses placeholder secrets (Phase 7).
       # Export both before `docker compose up`, e.g. JWT_SECRET=$(openssl rand -base64 32).
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
@@ -57,6 +58,7 @@ services:
       REQUIRE_DATABASE: "true"
       GITHUB_SHA: ${GITHUB_SHA:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ENABLE_STUDIO_AUTOMATION_TASKS: ${ENABLE_STUDIO_AUTOMATION_TASKS:-false}
       INVEXA_ENV: ${INVEXA_ENV:-production}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
       SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD to a non-default password}

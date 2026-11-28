@@ -342,9 +342,10 @@ function AutomationRunHistory({ controlToken }) {
                   {LIVE_AUTOMATION_EVENTS.has(run.expression) && <p className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</p>}
                 </div>
                 <div>
-                  <p>{run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry'
+                  <p>{run.executionPaused ? 'Task creation paused' : run.status === 'PENDING' && run.attempts > 0 ? 'Waiting to retry'
                     : run.status === 'DELIVERED' && run.actionKey === 'CREATE_TASK' ? 'Task created' : AUTOMATION_RUN_STATUS[run.status]}</p>
-                  {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins' : 'Notification could not be delivered'}</p>}
+                  {run.failureCode && <p className="text-muted-foreground">{run.failureCode === 'NO_ACTIVE_ADMINS' ? 'No active company admins'
+                    : run.actionKey === 'CREATE_TASK' ? 'Task could not be created' : 'Notification could not be delivered'}</p>}
                   {run.status === 'DEAD_LETTER' && run.finishedAt && (
                     <Button type="button" variant="outline" size="sm" aria-label={`Retry ${run.name}`} disabled={retrying !== null} onClick={() => retryRun(run)}>
                       {retrying === run.id ? 'Queuing…' : 'Retry'}

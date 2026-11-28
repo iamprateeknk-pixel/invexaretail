@@ -171,6 +171,22 @@ test('an event automation can be enabled with a supported action and a fresh opt
   } finally { globalThis.fetch = original; }
 });
 
+test('pending task runs explain that task creation is paused', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ runs: [
+    { id: 'task', name: 'Check stock', occurrence: '2027-02-01', configVersion: 2,
+      actionKey: 'CREATE_TASK', status: 'PENDING', attempts: 1, executionPaused: true },
+    { id: 'notice', name: 'Notify admins', occurrence: '2027-02-01', configVersion: 2,
+      actionKey: 'SEND_NOTIFICATION', status: 'PENDING', attempts: 1, executionPaused: false },
+  ] });
+  try {
+    mount(React.createElement(AutomationsEditor, { controlToken: 't', draft: { automations: [] } }));
+    await screen.findByText('Task creation paused');
+    assert.ok(screen.getByText('Waiting to retry'));
+    assert.ok(screen.getByRole('button', { name: 'Refresh' }));
+  } finally { globalThis.fetch = original; }
+});
+
 test('a failed run can be retried using the failure shown in Studio', async () => {
   const original = globalThis.fetch;
   const requests = [];

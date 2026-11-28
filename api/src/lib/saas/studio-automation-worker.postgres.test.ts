@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { prisma } from '../db.js';
 import { drainStudioAutomationRuns, enqueueStudioSchedules, listStudioAutomationRuns, retryStudioAutomationRun } from './studio-automation-worker.js';
 import type { ScopeContext } from './control-plane.js';
 import { scanStudioLowStock } from './low-stock-notification.js';
+import { lockStudioConfig } from './control-plane-repository.js';
 
 const integration = process.env.TEST_DATABASE_URL ? test : test.skip;
 const now = new Date('2027-02-01T03:31:00Z');
@@ -15,15 +17,85 @@ async function fixture(withAdmin: boolean) {
   if (withAdmin) await prisma.user.create({ data: {
     companyId, name: 'Admin', email: `${companyId}@example.test`, passwordHash: 'x', role: 'ADMIN', assignedLocations: '[]',
   } });
-  const publish = (version: number, enabled: boolean, kind = 'published') => prisma.controlPlaneConfig.create({ data: {
+  const publish = (version: number, enabled: boolean, kind = 'published', actionKey = 'SEND_NOTIFICATION') => prisma.controlPlaneConfig.create({ data: {
     companyId, versionId: randomUUID(), version, kind, status: kind,
     payload: {
       publishedAt: '2027-02-01T01:00:00Z',
-      automations: [{ key: 'reminder', name: 'Check the dashboard', enforce: enabled, trigger: 'schedule', expression: 'daily@09:00', actionKey: 'SEND_NOTIFICATION' }],
+      automations: [{ key: 'reminder', name: 'Check the dashboard', enforce: enabled, trigger: 'schedule', expression: 'daily@09:00', actionKey }],
     },
   } });
   return { companyId, publish };
 }
+
+integration('paused task runs are visible, retain their attempts and resume once', async (t) => {
+  const previous = process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
+  process.env.ENABLE_STUDIO_AUTOMATION_TASKS = 'false';
+  t.after(() => {
+    if (previous === undefined) delete process.env.ENABLE_STUDIO_AUTOMATION_TASKS;
+    else process.env.ENABLE_STUDIO_AUTOMATION_TASKS = previous;
+  });
+  const { companyId, publish } = await fixture(true);
+  await publish(1, true, 'published', 'CREATE_TASK');
+  await enqueueStudioSchedules(now);
+  await drainStudioAutomationRuns(now);
+  const [pending] = await listStudioAutomationRuns(companyId);
+  assert.equal(pending.status, 'PENDING');
+  assert.equal(pending.attempts, 0);
+  assert.equal(pending.executionPaused, true);
+  assert.equal(await prisma.exceptionCase.count({ where: { companyId, sourceDocument: pending.id } }), 0);
+
+  process.env.ENABLE_STUDIO_AUTOMATION_TASKS = 'true';
+  await Promise.all([drainStudioAutomationRuns(now), drainStudioAutomationRuns(now)]);
+  const [finished] = await listStudioAutomationRuns(companyId);
+  assert.equal(finished.status, 'DELIVERED');
+  assert.equal(finished.attempts, 1);
+  assert.equal(finished.executionPaused, false);
+  assert.equal(await prisma.exceptionCase.count({ where: { companyId, sourceDocument: pending.id } }), 1);
+});
+
+integration('delivery waits for a publishing transaction and honours the committed disabled policy', async () => {
+  const { companyId, publish } = await fixture(true);
+  await publish(1, true);
+  await enqueueStudioSchedules(now);
+  const [pending] = await listStudioAutomationRuns(companyId);
+  assert.equal(pending.status, 'PENDING');
+  let releasePublication!: () => void;
+  let notifyStaged!: () => void;
+  const release = new Promise<void>((resolve) => { releasePublication = resolve; });
+  const staged = new Promise<void>((resolve) => { notifyStaged = resolve; });
+  const publication = prisma.$transaction(async (tx) => {
+    await lockStudioConfig(tx, companyId, 'exclusive');
+    await tx.controlPlaneConfig.create({ data: {
+      companyId, versionId: randomUUID(), version: 2, kind: 'published', status: 'published', payload: { automations: [] },
+    } });
+    notifyStaged();
+    await release;
+  });
+  await Promise.race([staged, publication]);
+  const drain = drainStudioAutomationRuns(now);
+  void drain.catch(() => undefined);
+  try {
+    let waiting = false;
+    for (let attempt = 0; attempt < 40 && !waiting; attempt += 1) {
+      const [state] = await prisma.$queryRaw<Array<{ waiting: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+            AND wait_event_type = 'Lock' AND wait_event = 'advisory'
+            AND query LIKE '%pg_advisory_xact_lock_shared%'
+        ) AS waiting
+      `;
+      waiting = state.waiting;
+      if (!waiting) await delay(20);
+    }
+    assert.equal(waiting, true, 'delivery waits for Studio publication');
+  } finally {
+    releasePublication();
+    await publication;
+    await drain;
+  }
+  assert.equal((await listStudioAutomationRuns(companyId))[0].status, 'CANCELLED');
+  assert.equal(await prisma.userNotification.count({ where: { companyId } }), 0);
+});
 
 integration('low-stock notifications cover an observed shortage once, rearm after recovery and respect company scope', async () => {
   const { companyId } = await fixture(true);

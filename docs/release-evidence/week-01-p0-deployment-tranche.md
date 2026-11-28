@@ -42,9 +42,9 @@ This tranche is not an Enterprise 2.0 release approval. Production promotion rem
 
 ## Studio automation task rollout
 
-1. Keep `ENABLE_STUDIO_AUTOMATION_TASKS=false` on the worker while applying the additive migration and starting the task-compatible API and worker images. Save these images as the rollback target before enabling creation.
-2. In isolated staging, set the flag to `true` on the worker. Publish a test company's task automation and verify delivery, claiming, and completion. Record the two image identifiers and the task/run IDs.
-3. Set the flag to `false` on the worker and restart the task-compatible images. Verify a pending task run keeps its attempts and status, existing inbox tasks can still be completed, and notification runs still deliver. Verify the rollback using the saved task-compatible images.
+1. Keep `ENABLE_STUDIO_AUTOMATION_TASKS=false` in Compose while applying the additive migration and starting the task-compatible API and worker images. Save these images as the rollback target before enabling creation.
+2. In isolated staging, set the flag to `true` in Compose and restart both services. Publish a test company's task automation and verify delivery, claiming, and completion. Record the two image identifiers and the task/run IDs.
+3. Set the flag to `false` and restart the task-compatible images. Verify Studio shows a pending task run as paused with its attempts unchanged, existing inbox tasks can still be completed, and notification runs still deliver. Verify the rollback using the saved task-compatible images.
 4. Keep the flag off after the drill until the release is approved. Review pending task runs before activating so the company can account for work queued during the pause.
 
 The previous Prisma client from `8876612` was tested against a local PostgreSQL fixture containing a Studio task. It could not read exception rows with the new enum value. After the first task exists, use a task-compatible image for rollback and preserve all task rows.
