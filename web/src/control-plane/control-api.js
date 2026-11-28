@@ -40,7 +40,7 @@ export function handoffCodeFromHash(hash = globalThis.location?.hash ?? '') {
   return new URLSearchParams(query).get('code') ?? '';
 }
 
-// The Cloudflare admin-panel worker locks a company, then redirects here with a short one-time
+// The admin panel locks a company, then redirects here with a short one-time
 // code in the URL fragment (never the session itself). Scrub the code from the address bar first,
 // then exchange it once with the API for the session. A used, expired or invented code yields null.
 export async function exchangeSessionHandoff(hash = globalThis.location?.hash ?? '') {

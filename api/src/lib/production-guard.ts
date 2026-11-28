@@ -37,7 +37,15 @@ function databaseConfiguredIn(env: Record<string, string | undefined>): boolean 
 
 export function checkProductionSecrets(env: Record<string, string | undefined> = process.env): ProductionGuardResult {
   const result: ProductionGuardResult = { ok: true, errors: [], warnings: [] };
-  if (env.NODE_ENV !== 'production') return result;
+  const staging = env.INVEXA_ENV === 'staging';
+  if (staging) {
+    if (env.NODE_ENV !== 'production') result.errors.push('Staging requires NODE_ENV=production.');
+    if (env.REQUIRE_DATABASE !== 'true') result.errors.push('Staging requires REQUIRE_DATABASE=true.');
+    if (!/^postgres(?:ql)?:\/\//.test(env.DATABASE_URL ?? '')) result.errors.push('Staging requires an explicit PostgreSQL DATABASE_URL.');
+    if (!/^[a-f0-9]{40}$/i.test(env.GITHUB_SHA ?? '')) result.errors.push('Staging requires GITHUB_SHA to identify the release commit.');
+  } else if (env.NODE_ENV !== 'production') {
+    return result;
+  }
 
   const jwt = env.JWT_SECRET?.trim() ?? '';
   if (!jwt) {

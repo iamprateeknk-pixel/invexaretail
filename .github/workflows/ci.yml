@@ -228,10 +228,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
+      INVEXA_ENV: staging
       JWT_SECRET: invexa-compose-ci-only-abcdefghijklmnopqrstuvwxyz
       SEED_PASSWORD: InvexaComposeCiOnly123
       VITE_API_BASE: https://api.example.test
       VITE_WEB_APP_URL: https://workspace.example.test
+      PUBLIC_CONTROL_URL: https://control.example.test
+      ALLOWED_ORIGINS: https://workspace.example.test,https://control.example.test
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -264,6 +267,18 @@ jobs:
             test "$status" = 401
             jq -e 'type == "object"' /tmp/invexa-route.json
           done
+          for origin in "$VITE_WEB_APP_URL" "$PUBLIC_CONTROL_URL"; do
+            curl --fail --silent --dump-header - --output /dev/null -X OPTIONS -H "Origin: $origin" \
+              -H 'Access-Control-Request-Method: POST' http://127.0.0.1:5173/control/v1/auth/login \
+              | tr -d '\r' | grep -Fxi "Access-Control-Allow-Origin: $origin"
+          done
+          curl --silent --show-error --dump-header /tmp/invexa-origin.headers --output /dev/null -X OPTIONS \
+            -H 'Origin: https://invexaretail.com' -H 'Access-Control-Request-Method: POST' http://127.0.0.1:5173/control/v1/auth/login
+          if grep -qi '^Access-Control-Allow-Origin:' /tmp/invexa-origin.headers; then
+            echo 'Staging sent CORS permission to a production origin' >&2
+            exit 1
+          fi
+          node scripts/compose-sign-in-smoke.mjs
           docker compose logs worker | grep -F 'Invexa durable worker is running.'
 
   web:

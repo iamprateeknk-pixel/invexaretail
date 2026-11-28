@@ -10,6 +10,7 @@ import { validateEmail } from '../lib/otp-auth.js';
 import { defaultImportProfile, ImportProfileError, importTemplateCsv, isImportKind, lockedFieldKeys, normalizeImportProfile, profileKey, type ImportKind } from '../lib/import-profile.js';
 import { resolveDatabaseUrl } from '../lib/db.js';
 import { createHandoff, redeemHandoff } from '../lib/saas/session-handoff.js';
+import { isAllowedOrigin, normalizeOrigin } from '../lib/cors-origins.js';
 import { listStudioAutomationRuns, retryStudioAutomationRun } from '../lib/saas/studio-automation-worker.js';
 import { listLocationsForCompany } from '../lib/repositories/location-repository.js';
 import { getIndustryPack } from '../lib/industry-packs.js';
@@ -184,13 +185,23 @@ controlRouter.post('/sessions/select-company', requirePlatform, (req: Request, r
 
 // One-time handoff of a locked-company session from the admin panel to the Control Plane UI
 // (different origins). Only a short code travels in the URL; see lib/saas/session-handoff.ts.
+function requireHandoffOrigin(req: Request, stageOrigin: 'PUBLIC_CONTROL_URL' | 'PUBLIC_WEB_URL'): void {
+  const origin = req.headers.origin;
+  if (!isAllowedOrigin(origin) || (origin && process.env.INVEXA_ENV === 'staging'
+    && normalizeOrigin(origin) !== normalizeOrigin(process.env[stageOrigin] ?? ''))) {
+    throw new ControlPlaneError('Cross-site request rejected', 'CSRF_ORIGIN_MISMATCH', 403);
+  }
+}
+
 controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res: Response) => {
   try {
+    requireHandoffOrigin(req, 'PUBLIC_CONTROL_URL');
     const session = req.body?.session;
     // The caller can only hand off the session it is itself authenticated with.
     if (!session || typeof session !== 'object' || (session as { controlToken?: unknown }).controlToken !== bearer(req)) {
       throw new ControlPlaneError("Handoff must carry the caller's own control session", 'INVALID_HANDOFF', 400);
     }
+    res.setHeader('Cache-Control', 'no-store');
     res.status(201).json({ success: true, ...createHandoff(session) });
   } catch (error) {
     sendError(res, error);
@@ -198,13 +209,15 @@ controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res
 });
 
 controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) => {
-  const session = redeemHandoff(String(req.body?.code ?? ''));
-  if (!session) {
-    res.status(401).json({ error: 'Handoff code is invalid or expired', code: 'HANDOFF_INVALID' });
-    return;
+  try {
+    requireHandoffOrigin(req, 'PUBLIC_WEB_URL');
+    const session = redeemHandoff(String(req.body?.code ?? ''));
+    if (!session) throw new ControlPlaneError('Handoff code is invalid or expired', 'HANDOFF_INVALID', 401);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, session });
+  } catch (error) {
+    sendError(res, error);
   }
-  res.setHeader('Cache-Control', 'no-store');
-  res.json({ success: true, session });
 });
 
 controlRouter.post('/sessions/exit', requireLockedCompany, (req: Request, res: Response) => {

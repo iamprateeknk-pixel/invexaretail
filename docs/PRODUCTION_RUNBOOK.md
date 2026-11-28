@@ -56,6 +56,17 @@ Web uses `VITE_API_BASE` at build time. Native clients use `INVEXA_ENV`
 Staging requires both HTTPS origins explicitly. Production and staging
 reject private hosts. See the [native setup](../mobile/README.md#run-locally).
 
+For staging Compose, set `INVEXA_ENV=staging`, the full `GITHUB_SHA`, and a
+dedicated `DATABASE_URL`. Set `VITE_API_BASE` and `VITE_WEB_APP_URL` to the staging
+API and workspace HTTPS origins, and set `PUBLIC_CONTROL_URL` to the staging
+admin HTTPS origin. Include the workspace and admin origins in `ALLOWED_ORIGINS`.
+The API checks this configuration at boot. The staging admin issues the
+handoff code and the workspace redeems it once. Set
+`REQUIRE_STUDIO_RELEASE_REVIEW=true` to require independent review for publication.
+The worker accepts `ALERT_WEBHOOK_URL` from the environment when alerts are configured.
+CI exercises the Compose routing, sign-in and handoff with a temporary database
+and synthetic accounts.
+
 ## 3. Release
 
 After the approval binding migration, existing approval rows remain available

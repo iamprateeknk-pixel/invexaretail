@@ -62,7 +62,8 @@ assertProductionSecrets();
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const startedAt = Date.now();
-const release = process.env.APP_VERSION || process.env.GITHUB_SHA?.slice(0, 12) || 'unknown';
+const gitRelease = process.env.GITHUB_SHA?.slice(0, 12);
+const release = (process.env.INVEXA_ENV === 'staging' ? gitRelease : process.env.APP_VERSION || gitRelease) || 'unknown';
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
@@ -72,8 +73,7 @@ let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
 // hop only, so a spoofed X-Forwarded-For cannot pose as another client.
 app.set('trust proxy', 1);
 
-// Security: CORS with origin validation. Production website origins are always
-// included so a Hostinger ALLOWED_ORIGINS typo cannot block login.
+// Validate staging origins at startup before serving any browser request.
 const allowedOrigins = resolveAllowedOrigins(process.env.ALLOWED_ORIGINS);
 const corsOptions = {
   origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {

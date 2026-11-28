@@ -23,6 +23,12 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://retail:retail_password@postgres:5432/retail_inventory}
       REQUIRE_DATABASE: "true"
       GITHUB_SHA: ${GITHUB_SHA:-}
+      INVEXA_ENV: ${INVEXA_ENV:-production}
+      PUBLIC_API_URL: ${VITE_API_BASE:-https://invexaretail.com}
+      PUBLIC_WEB_URL: ${VITE_WEB_APP_URL:-https://invexaretail.com}
+      PUBLIC_CONTROL_URL: ${PUBLIC_CONTROL_URL:-https://admin.invexaretail.com}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      REQUIRE_STUDIO_RELEASE_REVIEW: ${REQUIRE_STUDIO_RELEASE_REVIEW:-false}
       # The image runs with NODE_ENV=production, which refuses placeholder secrets (Phase 7).
       # Export both before `docker compose up`, e.g. JWT_SECRET=$(openssl rand -base64 32).
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
@@ -50,6 +56,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://retail:retail_password@postgres:5432/retail_inventory}
       REQUIRE_DATABASE: "true"
       GITHUB_SHA: ${GITHUB_SHA:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      INVEXA_ENV: ${INVEXA_ENV:-production}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string}
       SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD to a non-default password}
       UPLOAD_DIR: /app/uploads
