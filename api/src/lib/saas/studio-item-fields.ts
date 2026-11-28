@@ -6,6 +6,7 @@ import { databaseEnabled } from '../persistence.js';
 import { requireItemById } from '../repositories/item-repository.js';
 import type { TenantContext } from '../tenant-context.js';
 import type { FieldDefinition } from './control-plane.js';
+import { lockStudioConfig } from './control-plane-repository.js';
 
 const TYPES = ['text', 'number', 'date', 'boolean'] as const;
 type FieldType = typeof TYPES[number];
@@ -40,6 +41,60 @@ async function publishedItemFields(ctx: TenantContext, db: Prisma.TransactionCli
   return { config, fields: visible };
 }
 
+function describeField(ctx: TenantContext, field: ItemField, value: unknown = field.defaultValue) {
+  return {
+    key: field.fieldKey, label: field.label, type: field.dataType, required: field.required,
+    editable: allows(field.editableRoles, ctx.role), value: validValue(field.dataType, value) ? value : null,
+  };
+}
+
+export async function getStudioItemCreateFields(ctx: TenantContext) {
+  if (!databaseEnabled) return { versionId: null, configVersion: null, fields: [] };
+  const { config, fields } = await publishedItemFields(ctx, prisma);
+  return {
+    versionId: config?.versionId ?? null, configVersion: config?.version ?? null,
+    fields: fields.filter((field) => allows(field.editableRoles, ctx.role)).map((field) => describeField(ctx, field)),
+  };
+}
+
+type CreateFieldsInput = { versionId: string | null; values: Record<string, unknown> };
+
+export function parseStudioItemCreateFields(input: unknown): CreateFieldsInput | undefined {
+  if (input === undefined) return;
+  if (!input || typeof input !== 'object' || !('versionId' in input) || !('values' in input)
+    || !input.values || typeof input.values !== 'object' || Array.isArray(input.values)) {
+    throw new DomainError('VALIDATION_FAILED', 'Send the published item form version and its field values.');
+  }
+  const { versionId } = input;
+  if (versionId === null || (typeof versionId === 'string' && versionId.length > 0 && versionId.length <= 191)) {
+    return { versionId: typeof versionId === 'string' ? versionId : null, values: input.values as Record<string, unknown> };
+  }
+  throw new DomainError('VALIDATION_FAILED', 'Send the published item form version and its field values.');
+}
+
+export async function saveStudioItemCreateFields(tx: Prisma.TransactionClient, ctx: TenantContext, itemId: string, input?: CreateFieldsInput) {
+  await lockStudioConfig(tx, ctx.companyId, 'shared');
+  const { config, fields } = await publishedItemFields(ctx, tx);
+  if (input && input.versionId !== (config?.versionId ?? null)) {
+    throw new DomainError('CONCURRENT_UPDATE_CONFLICT', 'Studio item fields changed. Reload the item form before saving.');
+  }
+  const editable = fields.filter((field) => allows(field.editableRoles, ctx.role));
+  const values = new Map(Object.entries(input?.values ?? {}));
+  if (Array.from(values.keys()).some((key) => !editable.some((field) => field.fieldKey === key))) {
+    throw new DomainError('FORBIDDEN', 'The item form includes a field you cannot edit.');
+  }
+  const rows = editable.flatMap((field) => {
+    const value = values.has(field.fieldKey) ? values.get(field.fieldKey) : describeField(ctx, field).value;
+    if (value === null && !field.required && !values.has(field.fieldKey)) return [];
+    if (value === null ? field.required : !validValue(field.dataType, value)) {
+      throw new DomainError('VALIDATION_FAILED', `Enter a valid ${field.dataType} value for ${field.label}.`);
+    }
+    return [{ key: valueKey(ctx, itemId, field), value: { value: value as FieldValue } }];
+  });
+  if (rows.length) await tx.controlPlaneFieldValue.createMany({ data: rows });
+  return { versionId: config?.versionId ?? null, configVersion: config?.version ?? null };
+}
+
 export async function getStudioItemFields(ctx: TenantContext, itemId: string) {
   await requireItemById(ctx, itemId);
   if (!databaseEnabled) return { versionId: null, configVersion: null, fields: [] };
@@ -53,11 +108,7 @@ export async function getStudioItemFields(ctx: TenantContext, itemId: string) {
     configVersion: config?.version ?? null,
     fields: fields.map((field) => {
       const stored = storedValues.get(valueKey(ctx, itemId, field));
-      const value = stored === undefined ? field.defaultValue : stored;
-      return {
-        key: field.fieldKey, label: field.label, type: field.dataType, required: field.required,
-        editable: allows(field.editableRoles, ctx.role), value: validValue(field.dataType, value) ? value : null,
-      };
+      return describeField(ctx, field, stored);
     }),
   };
 }
@@ -66,6 +117,7 @@ export async function setStudioItemField(ctx: TenantContext, itemId: string, fie
   await requireItemById(ctx, itemId);
   if (!databaseEnabled) throw new DomainError('NOT_SUPPORTED', 'Studio item fields need the database.');
   return prisma.$transaction(async (tx) => {
+    await lockStudioConfig(tx, ctx.companyId, 'shared');
     const { config, fields } = await publishedItemFields(ctx, tx);
     const field = fields.find((entry) => entry.fieldKey === fieldKey);
     if (!field) throw new DomainError('NOT_FOUND', 'Item field was not found.');

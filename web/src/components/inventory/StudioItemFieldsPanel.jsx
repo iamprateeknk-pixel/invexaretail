@@ -1,10 +1,9 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiRequest } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { ErrorState, LoadingState } from '@/components/ui/feedback-states';
+import { StudioItemFieldInput } from './StudioItemFieldInput';
 
 function display(value) {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -12,7 +11,6 @@ function display(value) {
 }
 
 function FieldEditor({ field, save, reload }) {
-  const inputId = useId();
   const [draft, setDraft] = useState(String(field.value ?? ''));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -39,20 +37,10 @@ function FieldEditor({ field, save, reload }) {
 
   return (
     <form className="grid gap-2" onSubmit={submit}>
-      <Label htmlFor={inputId}>{field.label}</Label>
-      <div className="flex flex-wrap items-center gap-2">
-        {field.type === 'boolean' ? (
-          <select id={inputId} required={field.required} value={draft} onChange={change} disabled={saving}
-            className="h-9 min-w-28 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-ring">
-            <option value="">Choose an answer</option>
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        ) : (
-          <Input id={inputId} className="min-w-28 flex-1" type={field.type} required={field.required}
-            step={field.type === 'number' ? 'any' : undefined} maxLength={field.type === 'text' ? 2000 : undefined}
-            value={draft} onChange={change} disabled={saving} />
-        )}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-28 flex-1">
+          <StudioItemFieldInput field={field} value={draft} onChange={change} disabled={saving} />
+        </div>
         <Button size="sm" variant="outline" type="submit" aria-label={`Save ${field.label}`} disabled={saving || error?.status === 409}>
           {saving ? 'Saving…' : 'Save'}
         </Button>

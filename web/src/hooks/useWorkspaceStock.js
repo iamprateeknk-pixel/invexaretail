@@ -143,7 +143,7 @@ export function useWorkspaceStock({
     setModalOpen('quickAdd');
   }
 
-  async function createQuickItem() {
+  async function createQuickItem(studioFields) {
     if (!quickAddForm.code.trim() || !quickAddForm.name.trim()) {
       showToast('Item code and name are required.', 'error');
       return;
@@ -160,6 +160,7 @@ export function useWorkspaceStock({
           subcategory: quickAddForm.subcategory.trim() || undefined,
           company: quickAddForm.company.trim() || undefined,
           unit: quickAddForm.unit.trim() || undefined,
+          studioFields,
         }),
       });
       setModalOpen(null);
@@ -169,6 +170,7 @@ export function useWorkspaceStock({
       await loadAppData();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to add item.', 'error');
+      return error?.code;
     } finally {
       setSubmitLoading(false);
     }

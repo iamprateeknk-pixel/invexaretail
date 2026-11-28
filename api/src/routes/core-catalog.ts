@@ -4,16 +4,17 @@
 import { saveItemPhoto, listItemPhotos, readItemPhoto, deleteItemPhoto } from '../lib/item-photos.js';
 import { type Request, type Response, Router } from 'express';
 import { evidenceMime } from '../lib/transfer-evidence.js';
-import { DEFAULT_COMPANY_ID, itemsForCompany, registerItemCompany } from '../lib/saas/tenant-scope.js';
+import { DEFAULT_COMPANY_ID, itemsForCompany } from '../lib/saas/tenant-scope.js';
 import { canAccessLocation, sanitizeStockForRole, hidesZeroStockForRole, parseItemOperationalMeta, type ItemOperationalMeta } from '../lib/inventory.js';
-import { createInventoryItem } from '../lib/store.js';
-import { createItemRecord, updateItemRecord, listItems, users } from '../lib/repository.js';
+import { updateItemRecord, listItems, users } from '../lib/repository.js';
 import { recordAudit } from '../lib/audit.js';
 import { findIdentityConflict, isOperationalItem, parseItemMasterFields, parseStatusFilter, seesInactiveItems, visibleItems } from '../lib/item-master.js';
 import { databaseEnabled, persistAudit, persistItem } from '../lib/persistence.js';
 import { listStockForLocation } from '../lib/repositories/stock-repository.js';
 import { prisma } from '../lib/db.js';
 import { listItemsForCompany } from '../lib/repositories/item-repository.js';
+import { createCatalogItem } from '../lib/item-master-service.js';
+import { isDomainError, sendError, statusForErrorCode } from '../lib/errors.js';
 import { accessContext, tenantContext, firstParam, isOperationalAdmin, upload } from './core-shared.js';
 
 const router = Router();
@@ -36,6 +37,9 @@ router.post('/items', async (req: Request, res: Response) => {
   if (!isOperationalAdmin(req.user!.role)) {
     return res.status(403).json({ message: 'Only admins can create items.' });
   }
+  if (req.apiKey && req.body?.studioFields !== undefined) {
+    return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company user to submit Studio item fields.');
+  }
   if (typeof req.body.code !== 'string' || !req.body.code.trim() || typeof req.body.name !== 'string' || !req.body.name.trim()) {
     return res.status(400).json({ message: 'Item Code and Item Name are required.' });
   }
@@ -53,7 +57,7 @@ router.post('/items', async (req: Request, res: Response) => {
   const claimConflict = findIdentityConflict(ownItems, '', { code: req.body.code, barcode: masterFields.barcode, aliases: masterFields.aliases });
   if (claimConflict) return res.status(409).json({ message: claimConflict });
   try {
-    const item = createInventoryItem({
+    const saved = await createCatalogItem(tenantContext(req), {
       code: req.body.code,
       name: req.body.name,
       category: req.body.category,
@@ -61,20 +65,12 @@ router.post('/items', async (req: Request, res: Response) => {
       company: req.body.company,
       unit: req.body.unit,
       ...operationalMeta,
-    });
-    const saved = createItemRecord({ code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalMeta, ...masterFields, createdById: req.user!.id });
-    registerItemCompany(saved.id, req.companyId ?? DEFAULT_COMPANY_ID);
-    await persistItem(saved, req.companyId ?? DEFAULT_COMPANY_ID);
-    await persistAudit(recordAudit({
-      actorId: req.user!.id,
-      actorRole: req.user!.role,
-      action: 'ITEM_CREATED',
-      entityType: 'Item',
-      entityId: saved.id,
-    }));
+      ...masterFields,
+    }, req.body.studioFields);
     return res.status(201).json({ success: true, item: saved });
   } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unable to create item' });
+    if (isDomainError(error)) return sendError(res, statusForErrorCode(error.code), error.code, error.message);
+    throw error;
   }
 });
 

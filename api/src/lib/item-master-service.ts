@@ -1,4 +1,6 @@
-import { recordAudit } from './audit.js';
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
+import { recordAudit, rememberPersistedAudit, type AuditEvent } from './audit.js';
 import { campaignItems } from './campaign-store.js';
 import { prisma } from './db.js';
 import { publishEvent } from './event-bus.js';
@@ -12,7 +14,10 @@ import {
 import { databaseEnabled, persistAudit, persistItem } from './persistence.js';
 import { listMemoryOrders } from './orders.js';
 import { listMemoryQcInspections } from './qc-inspection.js';
-import { countAssignments, counts, dailyMovements, items, stockLedger, stockMovements, transfers } from './repository.js';
+import { buildItemRecord, countAssignments, counts, dailyMovements, items, stockLedger, stockMovements, transfers } from './repository.js';
+import { parseStudioItemCreateFields, saveStudioItemCreateFields } from './saas/studio-item-fields.js';
+import { registerItemCompany } from './saas/tenant-scope.js';
+import { DomainError } from './errors.js';
 import { assertItemOwnedByTenant } from './repositories/item-repository.js';
 import type { TenantContext } from './tenant-context.js';
 
@@ -23,6 +28,36 @@ export class ItemMasterError extends Error {
 }
 
 type Actor = { id: string; role: string };
+
+export async function createCatalogItem(ctx: TenantContext, input: Parameters<typeof buildItemRecord>[0], studioFields: unknown) {
+  const item = buildItemRecord({ ...input, createdById: ctx.userId });
+  const fields = parseStudioItemCreateFields(studioFields);
+  const event: AuditEvent = {
+    id: randomUUID(), actorId: ctx.userId, actorRole: ctx.role, action: 'ITEM_CREATED',
+    entityType: 'Item', entityId: item.id, createdAt: new Date().toISOString(),
+  };
+  if (databaseEnabled) {
+    await prisma.$transaction(async (tx) => {
+      const version = await saveStudioItemCreateFields(tx, ctx, item.id, fields);
+      try {
+        await persistItem(item, ctx.companyId, tx);
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new DomainError('CONFLICT', 'Another item already uses this Item Code.');
+        }
+        throw error;
+      }
+      event.metadata = { companyId: ctx.companyId, ...version };
+      await persistAudit(event, tx);
+    });
+  } else if (fields?.versionId || Object.keys(fields?.values ?? {}).length) {
+    throw new DomainError('NOT_SUPPORTED', 'Studio item fields need the database.');
+  }
+  registerItemCompany(item.id, ctx.companyId);
+  items.push(item);
+  rememberPersistedAudit(event);
+  return item;
+}
 
 /**
  * How much history an item has. In database mode the database is the source

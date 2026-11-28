@@ -521,7 +521,7 @@ export async function loadTransferPickSlips(transferId: string): Promise<AuditEv
   }));
 }
 
-export async function persistItem(item: ItemRecord, companyId = 'default-company'): Promise<void> {
+export async function persistItem(item: ItemRecord, companyId = 'default-company', db: Prisma.TransactionClient = prisma): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
   const operationalFields = {
@@ -550,13 +550,13 @@ export async function persistItem(item: ItemRecord, companyId = 'default-company
     createdById: item.createdById ?? null,
     updatedById: item.updatedById ?? null,
   };
-  await prisma.item.upsert({
+  await db.item.upsert({
     where: { id: item.id },
     update: { code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, unit: item.unit, ...operationalFields, ...masterFields } as any,
     create: { id: item.id, code: item.code, name: item.name, category: item.category, subcategory: item.subcategory, company: item.company, companyId, tenantId: DEFAULT_TENANT_ID, unit: item.unit, ...operationalFields, ...masterFields } as any,
   });
   for (const lot of item.lots) {
-    await prisma.lot.upsert({
+    await db.lot.upsert({
       where: { id: lot.id },
       update: { lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes as Prisma.InputJsonValue },
       create: { id: lot.id, itemId: lot.itemId, lotNo: lot.lotNo, expiryDate: lot.expiryDate ? new Date(lot.expiryDate) : null, attributes: lot.attributes as Prisma.InputJsonValue },
@@ -1490,10 +1490,10 @@ export async function persistUserDelete(userId: string): Promise<void> {
   await prisma.user.delete({ where: { id: userId } });
 }
 
-export async function persistAudit(event: AuditEvent): Promise<void> {
+export async function persistAudit(event: AuditEvent, db: Prisma.TransactionClient = prisma): Promise<void> {
   if (!databaseEnabled) return;
   requireDatabase();
-  await prisma.auditLog.upsert({
+  await db.auditLog.upsert({
     where: { id: event.id },
     update: { action: event.action, metadata: event.metadata as Prisma.InputJsonValue },
     create: {

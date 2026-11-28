@@ -14,6 +14,7 @@ import { generateJWT } from '../lib/otp-auth.js';
 import { createEnhancedUser } from '../lib/enterprise-repository.js';
 import { registerLocationCompany, registerItemCompany } from '../lib/saas/tenant-scope.js';
 import itemsRouter from './items.js';
+import coreRouter from './core.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -25,6 +26,7 @@ async function withServer(run: (call: Api) => Promise<void>): Promise<void> {
   app.use(express.json());
   app.use('/api/v1', extractToken, enforceOperationalCompanyScope);
   app.use('/api/v1', itemsRouter);
+  app.use('/api/v1', coreRouter);
   const server = app.listen(0);
   const address = server.address();
   if (!address || typeof address === 'string') {
@@ -128,6 +130,61 @@ integration('published Studio item fields enforce role, type, required value and
     const republished = await call('GET', path, owner.token);
     assert.equal(republished.body.versionId, nextVersion);
     assert.deepEqual(republished.body.fields.map((entry: { label: string; value: unknown }) => [entry.label, entry.value]), [['Pack size', 12]]);
+  });
+});
+
+integration('manual item creation uses the current published fields and commits their values with the item', async () => {
+  const owner = await makeFixture();
+  const other = await makeFixture();
+  const versionId = randomUUID();
+  const field = { id: randomUUID(), companyId: owner.companyId, entityType: 'item', fieldKey: 'case_size', label: 'Case size',
+    dataType: 'number', required: true, defaultValue: null, visibleRoles: ['ADMIN'], editableRoles: ['ADMIN'], status: 'active' };
+  const hidden = { ...field, id: randomUUID(), fieldKey: 'private', visibleRoles: ['ADMIN_USER'], defaultValue: 5 };
+  const published = { companyId: owner.companyId, versionId, version: 2, payload: { fields: [field, hidden] } };
+  const input = { code: randomUUID(), name: 'New Studio item' };
+  const formPath = '/items/studio-create-fields';
+  await prisma.controlPlaneConfig.create({ data: { ...published, kind: 'draft', status: 'draft' } });
+  await withServer(async (call) => {
+    const draft = await call('GET', formPath, owner.token);
+    assert.equal(draft.status, 200);
+    assert.deepEqual(draft.body.fields, []);
+    await prisma.controlPlaneConfig.create({ data: { ...published, kind: 'published', status: 'published' } });
+    const form = await call('GET', formPath, owner.token);
+    assert.equal(form.body.versionId, versionId);
+    assert.deepEqual(form.body.fields.map((entry: { key: string }) => entry.key), ['case_size']);
+    assert.deepEqual((await call('GET', formPath, other.token)).body.fields, []);
+
+    const submit = (values: Record<string, unknown>, version: string = versionId) => call('POST', '/items', owner.token,
+      { ...input, studioFields: { versionId: version, values } });
+    assert.equal((await call('POST', '/items', owner.token, input)).status, 422);
+    assert.equal((await submit({})).status, 422);
+    assert.equal((await submit({ case_size: '12' })).status, 422);
+    assert.equal((await submit({ case_size: 12, private: 9 })).status, 403);
+    assert.equal((await submit({ case_size: 12 }, 'stale')).status, 409);
+    assert.equal(await prisma.item.count({ where: { companyId: owner.companyId, code: input.code } }), 0);
+    assert.equal((await call('GET', '/items', owner.token)).body.items.some((item: { code: string }) => item.code === input.code), false);
+
+    const existingCode = randomUUID();
+    await prisma.item.create({ data: { companyId: owner.companyId, name: 'Existing item', code: existingCode } });
+    const fieldRows = () => prisma.controlPlaneFieldValue.count({
+      where: { key: { startsWith: JSON.stringify([owner.companyId, 'item']).slice(0, -1) } },
+    });
+    const before = await fieldRows();
+    const duplicate = await call('POST', '/items', owner.token,
+      { ...input, code: existingCode, studioFields: { versionId, values: { case_size: 20 } } });
+    assert.equal(duplicate.status, 409);
+    assert.equal(await fieldRows(), before, 'a failed item insert rolls back the proposed field values');
+
+    const created = await submit({ case_size: 0 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const itemId = created.body.item.id;
+    const details = await call('GET', `/items/${itemId}/studio-fields`, owner.token);
+    assert.equal(details.body.fields[0].value, 0);
+    const foreignDetail = await call('GET', `/items/${itemId}/studio-fields`, other.token);
+    assert.equal(foreignDetail.status, 403);
+    assert.equal(foreignDetail.body.fields, undefined);
+    const audit = await prisma.auditLog.findFirst({ where: { entityId: itemId, action: 'ITEM_CREATED' } });
+    assert.deepEqual(audit?.metadata, { companyId: owner.companyId, configVersion: 2, versionId });
   });
 });
 

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 export type Role = 'ADMIN' | 'ADMIN_USER' | 'BRANCH_MANAGER' | 'STORE_USER' | 'WAREHOUSE_PICKER' | 'AUDITOR';
 export type DailyMovementRecord = { id: string; dedupeKey: string; itemId: string; lotId?: string; locationId: string; movementType: string; qtyDelta: number; transactionAt: string; sourceType: 'SALES' | 'PURCHASE' | 'ADJUSTMENT'; sourceReference: string; importBatchId?: string; createdById: string; metadata?: Record<string, unknown> };
 export type SyncCheckpointRecord = { locationId: string; sourceType: 'SALES' | 'PURCHASE'; syncedThroughAt: string; lastImportBatchId: string };
@@ -293,9 +295,9 @@ export function updateItemRecord(id: string, patch: Partial<Omit<ItemRecord, 'id
   return { ...stored, lots: [...stored.lots] };
 }
 
-export function createItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean; barcode?: string; hsn?: string; gstRate?: number; mrp?: number; leadTimeDays?: number; shelfLifeDays?: number; aliases?: string[]; createdById?: string }): ItemRecord {
-  const itemId = `item-${Math.random().toString(36).slice(2, 8)}`;
-  const lotId = `lot-${Math.random().toString(36).slice(2, 8)}`;
+export function buildItemRecord(input: { code: string; name: string; category?: string; subcategory?: string; company?: string; unit?: string; countMethod?: ItemRecord['countMethod']; pickMethod?: ItemRecord['pickMethod']; allocationStrategy?: ItemRecord['allocationStrategy']; lotRequired?: boolean; expiryRequired?: boolean; decimalQuantity?: boolean; barcode?: string; hsn?: string; gstRate?: number; mrp?: number; leadTimeDays?: number; shelfLifeDays?: number; aliases?: string[]; createdById?: string }): ItemRecord {
+  const itemId = `item-${randomUUID()}`;
+  const lotId = `lot-${randomUUID()}`;
 
   const item: ItemRecord = {
     id: itemId,
@@ -325,6 +327,11 @@ export function createItemRecord(input: { code: string; name: string; category?:
     lots: [{ id: lotId, itemId, lotNo: 'LOT-DEFAULT', expiryDate: null, attributes: { source: 'created' } }],
   };
 
+  return item;
+}
+
+export function createItemRecord(input: Parameters<typeof buildItemRecord>[0]): ItemRecord {
+  const item = buildItemRecord(input);
   items.push(item);
   return { ...item, lots: [...item.lots] };
 }

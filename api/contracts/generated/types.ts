@@ -124,6 +124,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/items/studio-create-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the published fields the company admin can fill on the item creation form */
+        get: operations["getItemStudioCreateFields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{itemId}/studio-fields": {
         parameters: {
             query?: never;
@@ -1395,7 +1412,7 @@ export interface paths {
         /** The caller's company item master with lots. Operational users only see ACTIVE items; admins may ask for ARCHIVED or all. */
         get: operations["getItems"];
         put?: never;
-        /** Create an item. The code, barcode and aliases must be unique within the caller's company; a conflict names the company's own item, never another company's. Admin and Admin user. */
+        /** Create an item and save its published Studio form values in the same transaction. Codes, barcodes and aliases are company-scoped. Admin and Admin user. */
         post: operations["postItems"];
         delete?: never;
         options?: never;
@@ -4098,6 +4115,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        StudioItemFields: {
+            versionId: string | null;
+            configVersion: number | null;
+            fields: {
+                key: string;
+                label: string;
+                /** @enum {string} */
+                type: "text" | "number" | "date" | "boolean";
+                required: boolean;
+                editable: boolean;
+                value: string | number | boolean | null;
+            }[];
+        };
         LotCountReplay: {
             success?: boolean;
             duplicate?: boolean;
@@ -6171,6 +6201,40 @@ export interface operations {
             };
         };
     };
+    getItemStudioCreateFields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Editable fields and defaults for the current role, with the form version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioItemFields"];
+                };
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Company scope or route access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getItemStudioFields: {
         parameters: {
             query?: never;
@@ -6188,19 +6252,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        versionId: string | null;
-                        configVersion: number | null;
-                        fields: {
-                            key: string;
-                            label: string;
-                            /** @enum {string} */
-                            type: "text" | "number" | "date" | "boolean";
-                            required: boolean;
-                            editable: boolean;
-                            value: string | number | boolean | null;
-                        }[];
-                    };
+                    "application/json": components["schemas"]["StudioItemFields"];
                 };
             };
             /** @description Authentication required. */
@@ -10360,6 +10412,12 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    studioFields?: {
+                        versionId: string | null;
+                        values: {
+                            [key: string]: string | number | boolean | null;
+                        };
+                    };
                     code: string;
                     name: string;
                     category?: string;
@@ -10407,22 +10465,31 @@ export interface operations {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
             };
-            /** @description Only admins can create items. */
+            /** @description Only admins can create items or submit fields editable by their role. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["LegacyErrorMessage"] | components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description The code, barcode or alias is already used by another of the company's items. */
+            /** @description The code, barcode or alias already exists, or the item form version changed. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyErrorMessage"];
+                    "application/json": components["schemas"]["LegacyErrorMessage"] | components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The published form has a missing, invalid or malformed field value. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

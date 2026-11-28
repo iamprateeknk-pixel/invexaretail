@@ -72,7 +72,7 @@ the same way as Import columns: edit in place, **Add**, the bin icon to remove, 
 
 | Screen | What you set | Used by the app today? |
 |---|---|---|
-| Extra fields | Field name, what it is for (item, transfer, ...), kind of value, must be filled | Not yet - stored and published only |
+| Extra fields | Field name, record type, value type and whether it must be filled | Published item fields appear in Item Stock Detail. Fields the creator can see and edit also appear in Add item, where required fields must have a value. |
 | Rules | When *this* is more/less than *that* (several conditions = all must be true), then *do this*. **Try your rules** checks a made-up case. | Not yet - only the Try box runs them |
 | Reports | Name, what it is about, which columns | Not yet |
 | Automations | When something happens / on a schedule, then do something | Published, enabled rules can send an in-app notification to company admins. They can also create an Exception Inbox task when task delivery is enabled. |
@@ -82,6 +82,8 @@ the same way as Import columns: edit in place, **Add**, the bin icon to remove, 
 Each of these screens shows a yellow note while the app does not act on it yet, so nobody expects an effect.
 
 For purchase receiving, pick **A purchase receipt is recorded**, choose a notification or task, enable it, then save and publish. Each successful partial or final receipt can trigger the rule once. Retrying a receipt and rejecting a receipt do not trigger another run. Studio shows the configuration version used for each run.
+
+When an admin adds an item, the form loads the current published item fields. If another version goes live while the form is open, reload the item fields before saving. The code and name stay in the form. Recheck the company fields after reloading.
 
 ## 5. Going live and undoing
 

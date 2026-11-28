@@ -18,7 +18,8 @@ import { companyOwnsLocation } from '../lib/saas/tenant-scope.js';
 import { prisma } from '../lib/db.js';
 import { checkApprovalGate, type GateResult } from '../lib/approval-rules.js';
 import { readValueAtRisk } from '../lib/exceptions.js';
-import { getStudioItemFields, setStudioItemField } from '../lib/saas/studio-item-fields.js';
+import { getStudioItemCreateFields, getStudioItemFields, setStudioItemField } from '../lib/saas/studio-item-fields.js';
+import { isOperationalAdmin } from './core-shared.js';
 
 const router = Router();
 router.use(extractToken, requireAuth, enforcePermissionOverrides);
@@ -66,6 +67,12 @@ router.get('/items/:itemId/stock-detail', async (req: Request, res: Response) =>
     if (error instanceof ItemNotFoundError) return res.status(404).json({ message: error.message });
     throw error;
   }
+});
+
+router.get('/items/studio-create-fields', async (req, res) => {
+  if (req.apiKey || !isOperationalAdmin(req.user!.role)) return sendError(res, 403, 'FORBIDDEN', 'Sign in as a company admin to create items.');
+  res.set('Cache-Control', 'no-store');
+  return res.json(await getStudioItemCreateFields(tenantContextFor(req)));
 });
 
 router.get('/items/:itemId/studio-fields', async (req, res) => {

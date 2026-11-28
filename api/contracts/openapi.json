@@ -45,6 +45,22 @@
       }
     },
     "schemas": {
+      "StudioItemFields": {
+        "type": "object", "required": ["versionId", "configVersion", "fields"],
+        "properties": {
+          "versionId": { "type": ["string", "null"] },
+          "configVersion": { "type": ["integer", "null"] },
+          "fields": { "type": "array", "items": { "type": "object",
+            "required": ["key", "label", "type", "required", "editable", "value"],
+            "properties": {
+              "key": { "type": "string" }, "label": { "type": "string" },
+              "type": { "type": "string", "enum": ["text", "number", "date", "boolean"] },
+              "required": { "type": "boolean" }, "editable": { "type": "boolean" },
+              "value": { "type": ["string", "number", "boolean", "null"] }
+            }
+          } }
+        }
+      },
       "LotCountReplay": {
         "type": "object",
         "properties": {
@@ -6558,6 +6574,21 @@
         }
       }
     },
+    "/items/studio-create-fields": {
+      "get": {
+        "operationId": "getItemStudioCreateFields",
+        "summary": "Read the published fields the company admin can fill on the item creation form",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Editable fields and defaults for the current role, with the form version.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioItemFields" } } }
+          },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Company scope or route access denied." }
+        }
+      }
+    },
     "/items/{itemId}/studio-fields": {
       "get": {
         "operationId": "getItemStudioFields",
@@ -6567,22 +6598,7 @@
         "responses": {
           "200": {
             "description": "Fields for the current role and published version.",
-            "content": { "application/json": { "schema": {
-              "type": "object", "required": ["versionId", "configVersion", "fields"],
-              "properties": {
-                "versionId": { "type": ["string", "null"] },
-                "configVersion": { "type": ["integer", "null"] },
-                "fields": { "type": "array", "items": { "type": "object",
-                  "required": ["key", "label", "type", "required", "editable", "value"],
-                  "properties": {
-                    "key": { "type": "string" }, "label": { "type": "string" },
-                    "type": { "type": "string", "enum": ["text", "number", "date", "boolean"] },
-                    "required": { "type": "boolean" }, "editable": { "type": "boolean" },
-                    "value": { "type": ["string", "number", "boolean", "null"] }
-                  }
-                } }
-              }
-            } } }
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioItemFields" } } }
           },
           "401": { "description": "Authentication required." },
           "403": { "description": "Company scope or route access denied." },
@@ -12565,7 +12581,7 @@
       },
       "post": {
         "operationId": "postItems",
-        "summary": "Create an item. The code, barcode and aliases must be unique within the caller's company; a conflict names the company's own item, never another company's. Admin and Admin user.",
+        "summary": "Create an item and save its published Studio form values in the same transaction. Codes, barcodes and aliases are company-scoped. Admin and Admin user.",
         "tags": [
           "Items"
         ],
@@ -12580,6 +12596,14 @@
                   "name"
                 ],
                 "properties": {
+                  "studioFields": {
+                    "type": "object",
+                    "required": ["versionId", "values"],
+                    "properties": {
+                      "versionId": { "type": ["string", "null"] },
+                      "values": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean", "null"] } }
+                    }
+                  },
                   "code": {
                     "type": "string"
                   },
@@ -12687,24 +12711,28 @@
             }
           },
           "403": {
-            "description": "Only admins can create items.",
+            "description": "Only admins can create items or submit fields editable by their role.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "oneOf": [{ "$ref": "#/components/schemas/LegacyErrorMessage" }, { "$ref": "#/components/schemas/ErrorEnvelope" }]
                 }
               }
             }
           },
           "409": {
-            "description": "The code, barcode or alias is already used by another of the company's items.",
+            "description": "The code, barcode or alias already exists, or the item form version changed.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LegacyErrorMessage"
+                  "oneOf": [{ "$ref": "#/components/schemas/LegacyErrorMessage" }, { "$ref": "#/components/schemas/ErrorEnvelope" }]
                 }
               }
             }
+          },
+          "422": {
+            "description": "The published form has a missing, invalid or malformed field value.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
           }
         },
         "security": [
