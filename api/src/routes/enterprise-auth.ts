@@ -597,7 +597,7 @@ function sendControlLinkError(res: Response, error: unknown): Response {
   return res.status(500).json({ error: 'Control Panel link failed' });
 }
 
-router.get('/control-link', extractToken, requireAuth, async (req: Request, res: Response) => {
+router.get('/control-link', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ success: true, ...(await linkStatus(req.user!)) });
@@ -627,7 +627,7 @@ router.post('/control-link', extractToken, requireAuth, loginLimiter, async (req
   }
 });
 
-router.delete('/control-link', extractToken, requireAuth, async (req: Request, res: Response) => {
+router.delete('/control-link', extractToken, requireAuth, loginLimiter, async (req: Request, res: Response) => {
   try {
     const result = await unlinkAppUser(req.user!);
     if (result.removed) {
