@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:invexaretail_mobile/config/role_home.dart';
 import 'package:invexaretail_mobile/config/web_surfaces.dart';
 import 'package:invexaretail_mobile/models/models.dart';
+import 'package:invexaretail_mobile/screens/desktop_web_screen.dart';
 import 'package:invexaretail_mobile/screens/home_shell.dart';
 import 'package:invexaretail_mobile/services/api_client.dart';
 import 'package:invexaretail_mobile/services/local_store.dart';
@@ -58,6 +60,36 @@ void main() {
     expect(clearWebStorageScript, startsWith('try'));
   });
 
+  test('Windows menu: ADMIN lands on the workspace and also gets the Control Panel', () {
+    final admin = desktopHomeForRole('ADMIN');
+    final ids = admin.destinations.map((d) => d.id).toList();
+    expect(ids.first, 'workspace');
+    expect(ids.last, 'control');
+    expect(admin.defaultDestination, 'workspace');
+    for (final native in mobileHomeForRole('ADMIN').destinations) {
+      expect(ids, contains(native.id), reason: 'the native ${native.id} screen stays in the menu');
+    }
+  });
+
+  test('Windows menu: other roles keep their own landing screen, gain the workspace, never the Control Panel', () {
+    for (final role in ['ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR']) {
+      final desktop = desktopHomeForRole(role);
+      final ids = desktop.destinations.map((d) => d.id).toList();
+      expect(desktop.defaultDestination, mobileHomeForRole(role).defaultDestination, reason: role);
+      expect(ids, contains('workspace'), reason: role);
+      expect(ids, isNot(contains('control')), reason: role);
+    }
+  });
+
+  test('cookies are cleared once per signed-in person, so opening a second tab keeps the first signed in', () {
+    DesktopWebView.resetForTest();
+    expect(DesktopWebView.claimCookieReset('co-a|alice'), isTrue, reason: 'first view for Alice clears the previous person');
+    expect(DesktopWebView.claimCookieReset('co-a|alice'), isFalse, reason: 'her second tab must not sign the first out');
+    expect(DesktopWebView.claimCookieReset('co-a|bob'), isTrue, reason: 'a different person clears again');
+    expect(DesktopWebView.claimCookieReset('co-a|alice'), isTrue);
+    DesktopWebView.resetForTest();
+  });
+
   Future<void> pumpShell(WidgetTester tester, String role) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1280, 800);
@@ -66,28 +98,35 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('Windows: an ADMIN gets the Control Panel entry next to the workspace', (tester) async {
+  Finder railLabel(String text) => find.descendant(of: find.byType(NavigationRail), matching: find.text(text));
+
+  testWidgets('Windows: ADMIN gets Workspace and Control panel in the side menu, opened on the workspace', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await pumpShell(tester, 'ADMIN');
-    expect(find.byKey(const ValueKey('open-workspace')), findsOneWidget);
-    expect(find.byKey(const ValueKey('open-control-panel')), findsOneWidget);
+    expect(railLabel('Workspace'), findsOneWidget);
+    expect(railLabel('Control panel'), findsOneWidget);
+    expect(find.byType(DesktopWebView), findsOneWidget, reason: 'the workspace tab is the landing screen');
+    expect(find.byKey(const ValueKey('open-workspace')), findsNothing, reason: 'no separate toolbar door on Windows');
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Windows: every other role gets the workspace (with its own rights) but no Control Panel', (tester) async {
+  testWidgets('Windows: other roles get the Workspace tab but no Control panel, and land on their own screen', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     for (final role in ['ADMIN_USER', 'BRANCH_MANAGER', 'STORE_USER', 'WAREHOUSE_PICKER', 'AUDITOR']) {
       await pumpShell(tester, role);
-      expect(find.byKey(const ValueKey('open-workspace')), findsOneWidget, reason: role);
-      expect(find.byKey(const ValueKey('open-control-panel')), findsNothing, reason: role);
+      expect(railLabel('Workspace'), findsOneWidget, reason: role);
+      expect(railLabel('Control panel'), findsNothing, reason: role);
+      expect(find.byType(DesktopWebView), findsNothing, reason: '$role does not open on the web view');
     }
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('phones are unchanged: no Control Panel entry even for ADMIN', (tester) async {
+  testWidgets('phones are unchanged: workspace button in the toolbar, no web tabs, no Control Panel', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await pumpShell(tester, 'ADMIN');
-    expect(find.byKey(const ValueKey('open-control-panel')), findsNothing);
+    expect(find.byKey(const ValueKey('open-workspace')), findsOneWidget);
+    expect(find.text('Control panel'), findsNothing);
+    expect(find.byType(DesktopWebView), findsNothing);
     debugDefaultTargetPlatformOverride = null;
   });
 }

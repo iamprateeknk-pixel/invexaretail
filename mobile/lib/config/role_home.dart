@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'web_surfaces.dart';
+
 class MobileDestination {
   const MobileDestination({required this.id, required this.label, required this.icon});
 
@@ -80,3 +82,26 @@ MobileRoleHome mobileHomeForRole(String role) {
       );
   }
 }
+
+const _workspace = MobileDestination(id: 'workspace', label: 'Workspace', icon: Icons.language_outlined);
+const _controlPanel = MobileDestination(id: 'control', label: 'Control panel', icon: Icons.admin_panel_settings_outlined);
+
+/// The Windows app's side menu: the role's own screens plus the full web workspace (with the
+/// role's own web rights), and for ADMIN the Control Panel too. ADMIN lands on the workspace -
+/// on a desktop it is the complete control surface; every other role keeps its floor screen first.
+MobileRoleHome desktopHomeForRole(String role) {
+  final base = mobileHomeForRole(role);
+  final admin = canOpenControlPanel(role);
+  return MobileRoleHome(
+    title: base.title,
+    subtitle: base.subtitle,
+    defaultDestination: admin ? _workspace.id : base.defaultDestination,
+    destinations: [
+      if (admin) _workspace,
+      ...base.destinations,
+      if (!admin) _workspace,
+      if (admin) _controlPanel,
+    ],
+  );
+}
+

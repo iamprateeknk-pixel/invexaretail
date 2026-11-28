@@ -1025,4 +1025,20 @@ tracks how much of it):
   `invexaretail.com` hosts load in-app, and only our pages may get the camera.
   Not verifiable here (no Windows): the WebView2 build itself - proven by the
   `windows.yml` CI build.
-
+- Post-merge follow-up 10 (`mobile/lib/config/role_home.dart`,
+  `mobile/lib/screens/{home_shell,desktop_web_screen,pick_screen,count_screen,scan_screen}.dart`,
+  `mobile/lib/services/pick_session.dart`, no dedicated ADR - see
+  `mobile/README.md`): on Windows the web workspace and the Control Panel are
+  side-menu tabs (`desktopHomeForRole`) instead of toolbar buttons; `ADMIN`
+  lands on the workspace, other roles keep their own landing screen and never
+  see the Control Panel. The Control Panel still needs its own platform
+  sign-in: signing a company `ADMIN` in to it automatically would hand them
+  platform-wide rights, so that needs an explicit, audited account link (not
+  built). Flow audit fixes, each covered by `mobile/test/flow_audit_test.dart`:
+  a pick problem could be reported twice (or scanned/weighed on top of a
+  reported remainder), sending more than the line asked for; a pick saved
+  offline was offered again after a reload, inviting a second pick of the same
+  pieces; a count could be booked with no lot (or a stale one) while the lot
+  picker showed the first lot, and a scan of another lot's label added +1 to
+  the selected lot; the bin walk kept the previous wave's position for a new
+  wave, resent an accepted bin on a second tap, and allowed overlapping scans.

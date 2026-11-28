@@ -191,7 +191,7 @@ class _CountScreenState extends State<CountScreen> {
       return;
     }
     final isWeightItem = item != null && item.isWeightCounted;
-    final submittedLotNo = isWeightItem ? null : _lotNo;
+    final submittedLotNo = isWeightItem ? null : effectiveCountLot(item?.lots ?? const [], _lotNo);
     final ok = await widget.controller.submitCount(
       itemId: itemId,
       locationId: locationId,
@@ -277,6 +277,13 @@ class _CountScreenState extends State<CountScreen> {
     final normalized = code.trim().toLowerCase();
     final matchesItem = normalized == item.code.trim().toLowerCase() || normalized == (item.barcode ?? '').trim().toLowerCase();
     final matchesLot = item.lots.any((lot) => lot.lotNo.trim().toLowerCase() == normalized);
+    final selectedLot = effectiveCountLot(item.lots, _lotNo);
+    if (matchesLot && !matchesItem && selectedLot != null && selectedLot.trim().toLowerCase() != normalized) {
+      // Another lot's label: adding it to the selected lot's count would book it against the wrong lot.
+      await ScanFeedback.rejected();
+      widget.controller.setError('That is lot "$code", not lot $selectedLot. Choose that lot first.');
+      return;
+    }
     if (!matchesItem && !matchesLot) {
       await ScanFeedback.rejected();
       widget.controller.setError('Scanned barcode does not match ${item.name}.');
@@ -497,4 +504,12 @@ class _BatchCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The lot a count is booked against: the one chosen, or - when none is chosen or the choice is no
+/// longer one of the item's lots - the first lot, which is exactly what the lot picker shows. Without
+/// this the picker displayed a lot while the count went to the server with no lot at all.
+String? effectiveCountLot(List<LotRecord> lots, String? chosen) {
+  if (lots.isEmpty) return null;
+  return lots.any((lot) => lot.lotNo == chosen) ? chosen : lots.first.lotNo;
 }

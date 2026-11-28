@@ -76,14 +76,18 @@ decided in one place (`lib/config/platform_caps.dart`):
 - **Scanning:** no camera scanner exists on Windows, so every "Scan" opens a
   focused field instead. A USB/Bluetooth barcode scanner types the code plus
   Enter into it, so scanning works hands-free like on a phone.
-- **Full workspace:** opens inside the app (Microsoft Edge WebView2,
-  `lib/screens/desktop_web_screen.dart`), already signed in as the app user via
-  a one-time code. Rights are the web app's own: menus follow the user's role
+- **Side menu:** on Windows every screen sits in one side menu (extended with
+  labels on wide windows). The full web workspace is a menu tab inside the app
+  (Microsoft Edge WebView2, `lib/screens/desktop_web_screen.dart`), already
+  signed in as the app user via a one-time code; switching tabs keeps each one
+  open. Rights are the web app's own: its menus follow the user's role
   (`web/src/lib/permissions.js`) and the API re-checks every request.
-- **Control panel:** an extra toolbar entry for `ADMIN` users only (the same
-  rule as the web app's `adminOnly` sections). It opens
-  `https://admin.invexaretail.com` inside the app and still asks for its own
-  platform sign-in.
+- **ADMIN:** lands on the Workspace tab, keeps every native screen, and gets a
+  Control panel tab (the same rule as the web app's `adminOnly` sections). It
+  opens `https://admin.invexaretail.com` and still asks for its own platform
+  sign-in - a company ADMIN is not automatically a platform administrator.
+  Other roles land on their usual screen and get the Workspace tab, never the
+  Control panel.
 - **Shared PCs:** each open starts with no cookies and no stored web session,
   and the workspace does not open at all if the sign-in code cannot be fetched,
   so one person never lands in another person's session. Only

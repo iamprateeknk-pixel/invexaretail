@@ -52,7 +52,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    final home = mobileHomeForRole(controller.user?.role ?? '');
+    final role = controller.user?.role ?? '';
+    final home = PlatformCaps.hasDesktopWebView ? desktopHomeForRole(role) : mobileHomeForRole(role);
     if (_role != controller.user?.role) {
       _role = controller.user?.role;
       final defaultIndex = home.destinations.indexWhere((row) => row.id == home.defaultDestination);
@@ -83,18 +84,13 @@ class _HomeShellState extends State<HomeShell> {
                 child: const Icon(Icons.sync_problem_outlined),
               ),
             ),
-          IconButton(
-            key: const ValueKey('open-workspace'),
-            tooltip: 'Full workspace',
-            onPressed: () => _openWorkspace(controller),
-            icon: const Icon(Icons.open_in_browser_outlined),
-          ),
-          if (PlatformCaps.hasDesktopWebView && canOpenControlPanel(controller.user?.role ?? ''))
+          // On Windows the workspace and Control Panel are side-menu tabs instead.
+          if (!PlatformCaps.hasDesktopWebView)
             IconButton(
-              key: const ValueKey('open-control-panel'),
-              tooltip: 'Control panel',
-              onPressed: _openControlPanel,
-              icon: const Icon(Icons.admin_panel_settings_outlined),
+              key: const ValueKey('open-workspace'),
+              tooltip: 'Full workspace',
+              onPressed: () => _openWorkspace(controller),
+              icon: const Icon(Icons.open_in_browser_outlined),
             ),
           IconButton(
             tooltip: 'Sign out',
@@ -123,14 +119,17 @@ class _HomeShellState extends State<HomeShell> {
           Expanded(child: IndexedStack(index: safeIndex, children: pages)),
         ],
       );
-        if (constraints.maxWidth < wideLayoutBreakpoint) return content;
+        // Windows always gets the side menu (it carries more destinations than a bottom bar holds).
+        if (constraints.maxWidth < wideLayoutBreakpoint && !PlatformCaps.hasDesktopWebView) return content;
+        final extended = constraints.maxWidth >= 1200;
         // Wide window (Windows, iPad, tablet landscape): destinations move to a side rail so
         // every screen keeps its full height and the main action is one click away.
         return Row(children: [
           NavigationRail(
             selectedIndex: safeIndex,
             onDestinationSelected: (value) => setState(() => _index = value),
-            labelType: NavigationRailLabelType.all,
+            extended: extended,
+            labelType: extended ? NavigationRailLabelType.none : NavigationRailLabelType.all,
             destinations: [
               for (final dest in home.destinations)
                 NavigationRailDestination(
@@ -151,7 +150,7 @@ class _HomeShellState extends State<HomeShell> {
         icon: const Icon(Icons.qr_code_scanner),
         label: const Text('Scan'),
       ),
-      bottomNavigationBar: MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint
+      bottomNavigationBar: MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint || PlatformCaps.hasDesktopWebView
           ? null
           : NavigationBar(
         selectedIndex: safeIndex,
@@ -179,40 +178,12 @@ class _HomeShellState extends State<HomeShell> {
       );
       return;
     }
-    if (PlatformCaps.hasDesktopWebView) {
-      // Inside the app, signed in as this user (fails closed if no sign-in code can be fetched).
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => DesktopWebScreen(
-            title: 'Full workspace',
-            trustedHosts: workspaceHosts,
-            resolveTarget: () => signedInWorkspaceUri(controller.api.webHandoffCode),
-            unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
-          ),
-        ),
-      );
-      return;
-    }
     final opened = await launchUrl(Uri.parse(workspaceOrigin), mode: LaunchMode.externalApplication);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open the browser. Visit invexaretail.com to use the full workspace.')),
       );
     }
-  }
-
-  /// Platform administration, inside the Windows app. It keeps its own platform sign-in; the app
-  /// only decides who sees the entry (canOpenControlPanel).
-  Future<void> _openControlPanel() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DesktopWebScreen(
-          title: 'Control panel',
-          trustedHosts: controlPanelHosts,
-          resolveTarget: () async => Uri.parse(controlPanelOrigin),
-        ),
-      ),
-    );
   }
 
   Future<void> _quickScan(SessionController controller, MobileRoleHome home) async {
@@ -259,7 +230,23 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Widget _pageFor(String id, SessionController controller) {
+    final sessionKey = '${controller.companyId}|${controller.user?.id ?? ''}';
     switch (id) {
+      case 'workspace':
+        return DesktopWebView(
+          key: ValueKey('workspace-$sessionKey'),
+          sessionKey: sessionKey,
+          trustedHosts: workspaceHosts,
+          resolveTarget: () => signedInWorkspaceUri(controller.api.webHandoffCode),
+          unavailableMessage: 'Could not sign you in to the workspace. Check the connection and retry.',
+        );
+      case 'control':
+        return DesktopWebView(
+          key: ValueKey('control-$sessionKey'),
+          sessionKey: sessionKey,
+          trustedHosts: controlPanelHosts,
+          resolveTarget: () async => Uri.parse(controlPanelOrigin),
+        );
       case 'work':
         return WorkScreen(
           controller: controller,
