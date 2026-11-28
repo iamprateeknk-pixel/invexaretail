@@ -134,3 +134,20 @@ test('HTTP: staging rejects production browser handoffs before consuming their c
     assert.equal((await exchange(env.PUBLIC_WEB_URL)).status, 401);
   });
 });
+
+test('HTTP: an issued handoff cannot restore a company session that was closed', async () => {
+  await withServer(async (url) => {
+    const { controlToken, session } = await lockedSession(url);
+    const headers = { Authorization: `Bearer ${controlToken}` };
+    const issued = await json(url, '/control/v1/sessions/handoff', {
+      method: 'POST', headers, body: JSON.stringify({ session }),
+    });
+    assert.equal(issued.status, 201);
+    assert.equal((await json(url, '/control/v1/sessions/exit', { method: 'POST', headers })).status, 200);
+    const exchange = await json(url, '/control/v1/sessions/handoff/exchange', {
+      method: 'POST', body: JSON.stringify({ code: issued.body.code }),
+    });
+    assert.equal(exchange.status, 401);
+    assert.equal(exchange.body.session, undefined);
+  });
+});

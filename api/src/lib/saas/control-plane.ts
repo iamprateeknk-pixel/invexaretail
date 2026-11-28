@@ -4,7 +4,7 @@ import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
 import { profileKey, type ImportKind, type ImportProfile } from '../import-profile.js';
 import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
-import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
+import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY } from './control-plane-defaults.js';
 import { clonePage, ControlPlaneError, nowIso } from './control-plane-values.js';
 import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
 import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
@@ -733,13 +733,11 @@ export class ControlPlane {
     return { session, token };
   }
 
-  exitSession(sessionId: string, actorId: string): void {
+  async exitSession(sessionId: string, actorId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new ControlPlaneError('Session not found', 'SESSION_NOT_FOUND', 404);
     session.status = 'closed';
-    writeSessionRows([session]).catch((error) => {
-      console.warn('Control plane session could not be written through.', error instanceof Error ? error.message : error);
-    });
+    await writeSessionRows([session]);
     this.auditEvent({
       actorUserId: actorId,
       actorType: 'platform',

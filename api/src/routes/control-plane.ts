@@ -1,7 +1,7 @@
 import { type NextFunction, type Request, type Response, Router } from 'express';
 import { COLUMN_ROLES, ControlPlaneError, controlPlane, isTableKey, TABLE_KEYS, type DraftEntryKind, type ScopeContext, type TableKey } from '../lib/saas/control-plane.js';
 import { commitStudioRelease, finishStudioSchedule, flushControlPlanePersist, requestStudioReview, scheduleControlPlanePersist, scheduleStudioRelease, studioCompanyReviewers, studioDraftRevision, studioReviewStatus, syncOperationalCompanies, type StudioReleaseCommand } from '../lib/saas/persistence.js';
-import { refreshControlPlaneFromDb, StudioConfigConflict } from '../lib/saas/control-plane-repository.js';
+import { refreshControlPlaneFromDb, StudioConfigConflict, writeSessionRows } from '../lib/saas/control-plane-repository.js';
 import { provisionOperationalTenant } from '../lib/saas/provision-tenant.js';
 import { applyStripeCheckoutEvent, billingProviderName, confirmLocalStripeCheckout, createBillingCheckout, stripeAdapter, verifyStripeSignature } from '../lib/saas/billing-provider.js';
 import * as enterprise from '../lib/enterprise-repository.js';
@@ -168,10 +168,11 @@ controlRouter.post('/companies', requirePlatform, async (req: Request, res: Resp
   }
 });
 
-controlRouter.post('/sessions/select-company', requirePlatform, (req: Request, res: Response) => {
+controlRouter.post('/sessions/select-company', requirePlatform, async (req: Request, res: Response) => {
   try {
     const companyId = String(req.body?.companyId ?? '');
     const result = controlPlane.selectCompany(requireScope(req).actorId, companyId);
+    await writeSessionRows([result.session]);
     res.json({
       success: true,
       session: result.session,
@@ -193,7 +194,7 @@ function requireHandoffOrigin(req: Request, stageOrigin: 'PUBLIC_CONTROL_URL' | 
   }
 }
 
-controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res: Response) => {
+controlRouter.post('/sessions/handoff', requireLockedCompany, async (req: Request, res: Response) => {
   try {
     requireHandoffOrigin(req, 'PUBLIC_CONTROL_URL');
     const session = req.body?.session;
@@ -202,17 +203,20 @@ controlRouter.post('/sessions/handoff', requireLockedCompany, (req: Request, res
       throw new ControlPlaneError("Handoff must carry the caller's own control session", 'INVALID_HANDOFF', 400);
     }
     res.setHeader('Cache-Control', 'no-store');
-    res.status(201).json({ success: true, ...createHandoff(session) });
+    res.status(201).json({ success: true, ...await createHandoff(session) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) => {
+controlRouter.post('/sessions/handoff/exchange', async (req: Request, res: Response) => {
   try {
     requireHandoffOrigin(req, 'PUBLIC_WEB_URL');
-    const session = redeemHandoff(String(req.body?.code ?? ''));
-    if (!session) throw new ControlPlaneError('Handoff code is invalid or expired', 'HANDOFF_INVALID', 401);
+    const session = await redeemHandoff(String(req.body?.code ?? '')) as { controlToken?: unknown } | null;
+    if (!session || typeof session.controlToken !== 'string') {
+      throw new ControlPlaneError('Handoff code is invalid or expired', 'HANDOFF_INVALID', 401);
+    }
+    await controlPlane.requireControlSessionFresh(session.controlToken);
     res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, session });
   } catch (error) {
@@ -220,11 +224,11 @@ controlRouter.post('/sessions/handoff/exchange', (req: Request, res: Response) =
   }
 });
 
-controlRouter.post('/sessions/exit', requireLockedCompany, (req: Request, res: Response) => {
+controlRouter.post('/sessions/exit', requireLockedCompany, async (req: Request, res: Response) => {
   try {
     const scope = requireScope(req);
     const sessionId = scope.companySessionId!;
-    controlPlane.exitSession(sessionId, scope.actorId);
+    await controlPlane.exitSession(sessionId, scope.actorId);
     res.json({ success: true });
   } catch (error) {
     sendError(res, error);

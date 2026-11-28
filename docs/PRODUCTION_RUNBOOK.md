@@ -66,6 +66,11 @@ handoff code and the workspace redeems it once. Set
 The worker accepts `ALERT_WEBHOOK_URL` from the environment when alerts are configured.
 CI exercises the Compose routing, sign-in and handoff with a temporary database
 and synthetic accounts.
+Apply the handoff migration before rolling out API replicas. The handoff code
+expires after one minute, and any replica can redeem it once. PostgreSQL stores
+the code hash and encrypted payload. A replica from before this migration uses
+its own memory for newly issued codes. During a mixed-version rollout, retry
+sign-in if an in-flight handoff reaches a replica on the other version.
 
 ## 3. Release
 

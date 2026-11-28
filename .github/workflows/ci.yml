@@ -247,7 +247,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trap 'docker compose logs --tail=50; docker compose down' EXIT
+          trap 'docker logs --tail=50 invexa-handoff-replica 2>/dev/null || true; docker stop invexa-handoff-replica >/dev/null 2>&1 || true; docker compose logs --tail=50; docker compose down' EXIT
           docker compose up -d --wait postgres
           docker compose build api worker web admin
           docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'
@@ -278,7 +278,15 @@ jobs:
             echo 'Staging sent CORS permission to a production origin' >&2
             exit 1
           fi
-          node scripts/compose-sign-in-smoke.mjs
+          docker compose run --rm --detach --no-deps --name invexa-handoff-replica --publish 127.0.0.1:4101:4000 api
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4101/ready | jq -e --arg release "${GITHUB_SHA:0:12}" '.ok and .release == $release' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            sleep 2
+          done
+          node scripts/compose-sign-in-smoke.mjs http://127.0.0.1:5173 http://127.0.0.1:4101
           docker compose logs worker | grep -F 'Invexa durable worker is running.'
 
   web:

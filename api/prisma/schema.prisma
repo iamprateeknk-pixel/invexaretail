@@ -2235,6 +2235,15 @@ model ControlPlaneCompanyUser {
   @@index([companyId])
 }
 
+model SessionHandoff {
+  codeHash   String   @id
+  purpose    String
+  payload    Bytes
+  expiresAt  DateTime
+
+  @@index([expiresAt])
+}
+
 model ControlPlaneSession {
   id             String   @id
   platformUserId String
