@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { ControlPlaneError, nowIso } from './control-plane.js';
+import { ControlPlaneError, nowIso } from './control-plane-values.js';
 import type { MutationStatus, SyncMutation } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 

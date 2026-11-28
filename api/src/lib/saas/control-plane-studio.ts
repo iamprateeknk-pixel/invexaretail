@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { FormulaError, validateFormula } from '../formula.js';
 import { ACTION_REGISTRY, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
-import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane.js';
+import { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane-values.js';
 import type { ScopeContext, CompanyRecord, FieldDefinition, ColumnDefinition, PageDefinition, ConfigurationVersion, WorkflowDefinition, RuleDefinition, ReportDefinition, AutomationDefinition, DraftEntryKind, MobilePolicy, TableKey, AuditEvent, ConfigStatus } from './control-plane.js';
 import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';

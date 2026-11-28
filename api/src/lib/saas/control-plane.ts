@@ -4,7 +4,8 @@ import { DEFAULT_TENANT_ID, PLAN_PRICES } from './tenant-scope.js';
 import { profileKey, type ImportKind, type ImportProfile } from '../import-profile.js';
 import { FormulaError, STOCK_FORMULA_FIELDS, validateFormula } from '../formula.js';
 import { parseWebhookEndpoint, parseWebhookEvents, parseWebhookName } from '../webhook-events.js';
-import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, DEFAULT_TABLE_COLUMNS, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
+import { ACTION_REGISTRY, COLUMN_ROLES, DEFAULT_STOCK_PAGE, MODULE_REGISTRY, TABLE_RULES } from './control-plane-defaults.js';
+import { clonePage, ControlPlaneError, nowIso } from './control-plane-values.js';
 import { signControlToken, verifyControlToken } from './control-plane-tokens.js';
 import { createControlPlaneStore, type ControlPlaneStore } from './control-plane-store.js';
 import { ControlPlaneBilling } from './control-plane-billing.js';
@@ -18,6 +19,8 @@ import {
   syncUsageBaseline,
   writeSessionRows,
 } from './control-plane-repository.js';
+
+export { clonePage, ControlPlaneError, normalizeColumnRoles, nowIso, pageTableColumns } from './control-plane-values.js';
 
 export type SessionType = 'platform' | 'control' | 'tenant' | 'sync';
 export type ActorType = 'platform' | 'company' | 'system';
@@ -73,17 +76,6 @@ export type ControlPlaneApiKeyRecord = {
   scopes: string[];
   status: 'active' | 'revoked';
 };
-
-export class ControlPlaneError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly status = 400,
-  ) {
-    super(message);
-    this.name = 'ControlPlaneError';
-  }
-}
 
 export type ScopeContext = {
   tenantId: string;
@@ -320,42 +312,11 @@ export type ControlTokenPayload = {
   tokenType: 'access' | 'refresh';
 };
 
-export function nowIso(): string {
-  return new Date().toISOString();
-}
-
 export type TableKey = 'stock' | 'lots' | 'itemLots';
 export const TABLE_KEYS: readonly TableKey[] = ['stock', 'lots', 'itemLots'];
 
-/**
- * Which roles may see a column. No list (or every role) = everyone. ADMIN is always included so a layout
- * can never hide a column from the people who manage it.
- */
-export function normalizeColumnRoles(input: unknown): string[] | undefined {
-  if (input === null || input === undefined) return undefined;
-  if (!Array.isArray(input)) throw new ControlPlaneError('Roles must be a list', 'INVALID_ROLE', 400);
-  if (input.length === 0) return undefined;
-  const roles = new Set<string>(['ADMIN']);
-  for (const role of input) {
-    if (!(COLUMN_ROLES as readonly string[]).includes(String(role))) throw new ControlPlaneError(`Unknown role "${String(role)}"`, 'INVALID_ROLE', 400);
-    roles.add(String(role));
-  }
-  return roles.size === COLUMN_ROLES.length ? undefined : COLUMN_ROLES.filter((role) => roles.has(role));
-}
-
 export function isTableKey(value: unknown): value is TableKey {
   return typeof value === 'string' && (TABLE_KEYS as readonly string[]).includes(value);
-}
-
-/** Columns of one table on a page; non-stock tables are created from their defaults on first use. */
-export function pageTableColumns(page: PageDefinition, table: TableKey): ColumnDefinition[] {
-  if (table === 'stock') return page.columns;
-  page.tables ??= {};
-  return (page.tables[table] ??= JSON.parse(JSON.stringify(DEFAULT_TABLE_COLUMNS[table])) as ColumnDefinition[]);
-}
-
-export function clonePage(page: PageDefinition): PageDefinition {
-  return JSON.parse(JSON.stringify(page)) as PageDefinition;
 }
 
 function appendControlAudit(store: Pick<ControlPlaneStore, 'audit' | 'outbox'>, input: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEvent {
