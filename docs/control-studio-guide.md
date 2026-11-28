@@ -85,7 +85,7 @@ For purchase receiving, pick **A purchase receipt is recorded**, choose a notifi
 
 When an admin adds an item, the form loads the current published item fields. If another version goes live while the form is open, reload the item fields before saving. The code and name stay in the form. Recheck the company fields after reloading.
 
-Use exact match filters to limit a report. Text filters use the stored spelling and case. Choose **Group results by** to show the number of matching records in each group. The workspace displays and exports up to 500 matching rows or groups. Sales and purchase order reports use up to 200 recent orders at the selected location, so their totals describe that window.
+Use exact match filters to limit a report. Text filters use the stored spelling and case. Choose **Group results by** to show the number of matching records in each group. The workspace displays and exports up to 500 matching rows or groups. With PostgreSQL connected, sales and purchase order reports apply the filters and grouping to the selected location's full order history before limiting results.
 
 Studio validates report settings on save and on publish. If a draft includes an older report with an unsupported column or filter, correct that report before publishing the draft.
 

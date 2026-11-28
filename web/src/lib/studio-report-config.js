@@ -62,6 +62,9 @@ export function datasetOf(entity) {
     return REPORT_DATASETS.find((dataset) => dataset.value === entity);
 }
 export const STUDIO_REPORT_ROW_LIMIT = 500;
+export function canViewStudioReports(role) {
+    return ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
+}
 export function studioReportDefinition(report) {
     const dataset = datasetOf(report?.entity);
     if (!dataset || !Array.isArray(report?.columns) || report.columns.length > dataset.columns.length)

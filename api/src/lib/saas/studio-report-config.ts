@@ -67,6 +67,10 @@ export function datasetOf(entity: unknown) {
 
 export const STUDIO_REPORT_ROW_LIMIT = 500;
 
+export function canViewStudioReports(role: string) {
+  return ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role);
+}
+
 type ReportOptions = { entity?: unknown; columns?: unknown; filters?: unknown; groupBy?: unknown; view?: unknown };
 
 export function studioReportDefinition(report: ReportOptions | null | undefined) {

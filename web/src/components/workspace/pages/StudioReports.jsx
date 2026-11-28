@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
-import { remoteReportPaths, studioReportResult } from '../../../lib/studio-report-data';
+import { remoteReportSources, studioReportResult } from '../../../lib/studio-report-data';
 import { studioReportDefinition } from '../../../lib/studio-report-config';
 import { useWorkspace } from '../WorkspaceContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ErrorState, LoadingState } from '@/components/ui/feedback-states';
 
 export function StudioReports() {
   const workspace = useWorkspace();
@@ -14,30 +15,51 @@ export function StudioReports() {
   const reports = runtimeConfig?.reports ?? [];
   const [selectedKey, setSelectedKey] = useState('');
   const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const report = reports.find(({ key }) => key === selectedKey) ?? reports[0];
-  const definition = report && studioReportDefinition(report);
-  const endpoint = definition && Object.hasOwn(remoteReportPaths, report.entity) ? remoteReportPaths[report.entity] : null;
-  const resource = endpoint && locationId && authToken ? `${endpoint}?locationId=${encodeURIComponent(locationId)}` : null;
+  const configured = report && studioReportDefinition(report);
+  const source = configured && Object.hasOwn(remoteReportSources, report.entity) ? remoteReportSources[report.entity] : null;
+  const resource = source && locationId && authToken
+    ? `/api/v1/reports/studio/${source}?${new URLSearchParams({ reportKey: report.key, locationId })}` : null;
+  const version = runtimeConfig?.version;
 
   useEffect(() => {
     if (!resource) return;
     const controller = new AbortController();
-    apiRequest(resource, { signal: controller.signal, headers: { Authorization: `Bearer ${authToken}` } })
-      .then((data) => {
-        if (!controller.signal.aborted) setResult({ resource, authToken, data });
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setResult({ resource, authToken, error: true });
-      });
+    const options = { signal: controller.signal, headers: { Authorization: `Bearer ${authToken}` } };
+    const context = { resource, authToken, version, attempt };
+    async function load() {
+      try {
+        const data = await apiRequest(resource, options);
+        if (!Array.isArray(data?.rows) || !Array.isArray(data?.columns)) throw new Error('The report response was incomplete.');
+        if (!controller.signal.aborted) setResult({ ...context, data });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        // Database-free demo keeps the existing local report behavior.
+        if (error?.status === 501) {
+          try {
+            const response = await apiRequest(`/api/v1/${source}?${new URLSearchParams({ locationId })}`, options);
+            const remote = response[source === 'orders' ? 'orders' : 'purchaseOrders'];
+            if (!Array.isArray(remote)) throw new Error('The report response was incomplete.');
+            if (!controller.signal.aborted) setResult({ ...context, remote });
+          } catch (fallbackError) {
+            if (!controller.signal.aborted) setResult({ ...context, error: fallbackError.message });
+          }
+          return;
+        }
+        if (!controller.signal.aborted) setResult({ ...context, error: error.message });
+      }
+    }
+    void load();
     return () => controller.abort();
-  }, [resource, authToken]);
+  }, [resource, authToken, version, attempt, source, locationId]);
 
   if (!reports.length) return null;
-  const current = result?.resource === resource && result?.authToken === authToken ? result : null;
-  const remote = current?.data?.[report?.entity === 'purchase_orders' ? 'purchaseOrders' : 'orders'];
-  const remoteReady = Array.isArray(remote);
-  const reportResult = definition && locationId && (!endpoint || remoteReady)
-    ? studioReportResult(report, definition, { ...workspace, remote }) : null;
+  const current = result?.resource === resource && result?.authToken === authToken
+    && result?.version === version && result?.attempt === attempt ? result : null;
+  const definition = current?.data ?? configured;
+  const reportResult = current?.data ?? (configured && locationId && (!source || current?.remote)
+    ? studioReportResult(report, configured, { ...workspace, remote: current?.remote }) : null);
   const rows = reportResult?.rows ?? [];
 
   return (
@@ -53,10 +75,11 @@ export function StudioReports() {
         </div>
         {report && (!definition ? <p role="status">This report has an unsupported configuration. Update it in Studio.</p>
           : !locationId ? <p role="status">Choose a location to run this report.</p>
-          : current?.error || (current?.data && !remoteReady) ? <p role="alert">The report data is unavailable. Refresh to try again.</p>
-          : endpoint && !remoteReady ? <p role="status">Loading report data…</p>
+          : current?.error ? <ErrorState title="Could not run this report" description={current.error}
+            onRetry={() => setAttempt((value) => value + 1)} className="min-h-24" />
+          : source && !reportResult ? <LoadingState label="Loading report data…" className="min-h-24" />
           : <>
-            {endpoint && <p className="text-sm text-muted-foreground">Shows up to 200 recent records for the selected location.</p>}
+            {current?.remote && <p className="text-sm text-muted-foreground">Demo report using up to 200 recent records.</p>}
             {reportResult?.truncated && <p role="status" className="text-sm text-muted-foreground">
               Showing and exporting {rows.length} of {reportResult.total} matching {definition.groupBy ? 'groups' : 'records'}.
             </p>}

@@ -49,3 +49,49 @@ test('a published chart displays exact totals in the table and exports the group
     assert.deepEqual(downloads, [[[ { Status: 'Approved', Records: 2 } ], 'studio-by-status']]);
   } finally { cleanup(); }
 });
+
+test('order reports fetch a published report key and location and use the API result for CSV', async () => {
+  const previous = globalThis.fetch;
+  const downloads = [];
+  const paths = [];
+  globalThis.fetch = async (url, init) => {
+    paths.push(url);
+    assert.equal(init.headers.Authorization, 'Bearer test-token');
+    return Response.json({
+      version: 3, columns: [{ key: 'status', label: 'Status' }, { key: 'records', label: 'Records' }],
+      groupBy: 'status', chart: true, total: 505, truncated: true, rows: [{ Status: 'PACKED', Records: 73 }],
+    });
+  };
+  const workspace = {
+    runtimeConfig: { version: 3, reports: [{ key: 'shipments', name: 'Orders ready', entity: 'orders', columns: ['status'], groupBy: 'status' }] },
+    authToken: 'test-token', locationId: 'store-1', downloadReportCsv: (...args) => downloads.push(args),
+  };
+  try {
+    render(<WorkspaceProvider value={workspace}><StudioReports /></WorkspaceProvider>);
+    const packed = await screen.findByText('PACKED');
+    assert.ok(packed);
+    assert.deepEqual(paths, ['/api/v1/reports/studio/orders?reportKey=shipments&locationId=store-1']);
+    assert.match(screen.getByRole('status').textContent, /1 of 505 matching groups/);
+    fireEvent.click(screen.getByRole('button', { name: 'Export published report' }));
+    assert.deepEqual(downloads, [[[ { Status: 'PACKED', Records: 73 } ], 'studio-shipments']]);
+  } finally { cleanup(); globalThis.fetch = previous; }
+});
+
+test('a denied order report does not fetch the underlying order list', async () => {
+  const previous = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    return Response.json({ error: 'Location access denied.' }, { status: 403 });
+  };
+  const workspace = {
+    runtimeConfig: { version: 3, reports: [{ key: 'orders', name: 'Orders', entity: 'orders', columns: ['status'] }] },
+    authToken: 'test-token', locationId: 'other-location', downloadReportCsv: () => assert.fail('cannot export a denied report'),
+  };
+  try {
+    render(<WorkspaceProvider value={workspace}><StudioReports /></WorkspaceProvider>);
+    await screen.findByText('Location access denied.');
+    assert.equal(screen.getByRole('button', { name: 'Export published report' }).disabled, true);
+    assert.deepEqual(requests, ['/api/v1/reports/studio/orders?reportKey=orders&locationId=other-location']);
+  } finally { cleanup(); globalThis.fetch = previous; }
+});

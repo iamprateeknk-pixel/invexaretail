@@ -311,6 +311,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/studio/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published sales order report at the selected location */
+        get: operations["getStudioSalesOrderReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/studio/purchase-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a published purchase order report at the selected location */
+        get: operations["getStudioPurchaseOrderReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reports/dashboard": {
         parameters: {
             query?: never;
@@ -4115,6 +4149,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        StudioOrderReportResult: {
+            /** @description Published configuration version used for the report. */
+            version: number;
+            columns: {
+                key: string;
+                label: string;
+            }[];
+            groupBy: string | null;
+            chart: boolean;
+            /** @description Number of matching records or groups before the output limit. */
+            total: number;
+            truncated: boolean;
+            rows: {
+                [key: string]: string | number;
+            }[];
+        };
         PublishedStudioReport: {
             key: string;
             name: string;
@@ -5866,6 +5916,8 @@ export interface components {
     };
     responses: never;
     parameters: {
+        StudioReportKey: string;
+        StudioReportLocation: string;
         /** @description Client-supplied idempotency key. Mutating endpoints that accept one return the original result on replay instead of double-posting (ADR-006). Most endpoints in this contract take it as a body field, not a query parameter - see each operation. */
         IdempotencyKey: string;
         /** @description Exactly-once replay key, created once when the person acts and reused on every retry (including after a restart). 8-128 characters of letters, digits and . _ : -. A retry with the same id and the same request returns the original 2xx response with `Idempotent-Replay: true` and does not run again; a concurrent duplicate gets 409 MUTATION_IN_PROGRESS with Retry-After; the same id for a different request is 422 MUTATION_ID_REUSED. */
@@ -6751,6 +6803,136 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegacyErrorMessage"];
                 };
+            };
+        };
+    };
+    getStudioSalesOrderReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioOrderReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The location or published sales order report was not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStudioPurchaseOrderReport: {
+        parameters: {
+            query: {
+                reportKey: components["parameters"]["StudioReportKey"];
+                locationId: components["parameters"]["StudioReportLocation"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped rows or groups from the published definition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioOrderReportResult"];
+                };
+            };
+            /** @description Missing or invalid report key or location. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role, entitlement, purchase permission or location access denied. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The location or published purchase order report was not found in the caller's company. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The published report uses an unsupported definition. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A PostgreSQL connection is required. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

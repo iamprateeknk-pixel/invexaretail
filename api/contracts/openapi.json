@@ -24,6 +24,14 @@
       }
     },
     "parameters": {
+      "StudioReportKey": {
+        "name": "reportKey", "in": "query", "required": true,
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$" }
+      },
+      "StudioReportLocation": {
+        "name": "locationId", "in": "query", "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 191 }
+      },
       "IdempotencyKey": {
         "name": "requestId",
         "in": "query",
@@ -45,6 +53,28 @@
       }
     },
     "schemas": {
+      "StudioOrderReportResult": {
+        "type": "object",
+        "required": ["version", "columns", "groupBy", "chart", "total", "truncated", "rows"],
+        "properties": {
+          "version": { "type": "integer", "description": "Published configuration version used for the report." },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["key", "label"],
+              "properties": { "key": { "type": "string" }, "label": { "type": "string" } }
+            }
+          },
+          "groupBy": { "type": ["string", "null"] },
+          "chart": { "type": "boolean" },
+          "total": { "type": "integer", "minimum": 0, "description": "Number of matching records or groups before the output limit." },
+          "truncated": { "type": "boolean" },
+          "rows": {
+            "type": "array", "maxItems": 500,
+            "items": { "type": "object", "additionalProperties": { "type": ["string", "number"] } }
+          }
+        }
+      },
       "PublishedStudioReport": {
         "type": "object",
         "required": ["key", "name", "entity", "columns"],
@@ -7165,6 +7195,46 @@
               }
             }
           }
+        }
+      }
+    },
+    "/reports/studio/orders": {
+      "get": {
+        "operationId": "getStudioSalesOrderReport",
+        "summary": "Run a published sales order report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioOrderReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement or location access denied." },
+          "404": { "description": "The location or published sales order report was not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
+        }
+      }
+    },
+    "/reports/studio/purchase-orders": {
+      "get": {
+        "operationId": "getStudioPurchaseOrderReport",
+        "summary": "Run a published purchase order report at the selected location",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/StudioReportKey" }, { "$ref": "#/components/parameters/StudioReportLocation" }],
+        "responses": {
+          "200": {
+            "description": "Scoped rows or groups from the published definition.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StudioOrderReportResult" } } }
+          },
+          "400": { "description": "Missing or invalid report key or location." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Role, entitlement, purchase permission or location access denied." },
+          "404": { "description": "The location or published purchase order report was not found in the caller's company." },
+          "422": { "description": "The published report uses an unsupported definition." },
+          "501": { "description": "A PostgreSQL connection is required." }
         }
       }
     },

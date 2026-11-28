@@ -7,7 +7,7 @@ import type { ControlPlaneStore } from './control-plane-store.js';
 import { workflowApprovalPolicy } from './workflow-approval-policy.js';
 import { ruleConditionMatches, validateLiveStudioRule } from './live-studio-rules.js';
 import { validateLiveAutomation } from './studio-automation-config.js';
-import { studioReportDefinition } from './studio-report-config.js';
+import { canViewStudioReports, studioReportDefinition } from './studio-report-config.js';
 
 function validateLiveApproval(workflow: WorkflowDefinition): void {
   try {
@@ -555,7 +555,7 @@ export class ControlPlaneStudio {
       ),
       killSwitches: Object.fromEntries(this.store.safety.entries()),
       mobilePolicy: published.mobilePolicies?.find((policy) => policy.role === role),
-      reports: ['ADMIN', 'ADMIN_USER', 'BRANCH_MANAGER', 'AUDITOR'].includes(role)
+      reports: canViewStudioReports(role)
         ? structuredClone(published.reports ?? [])
         : [],
     };

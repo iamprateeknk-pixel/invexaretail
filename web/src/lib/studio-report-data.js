@@ -1,9 +1,9 @@
 import { STUDIO_REPORT_ROW_LIMIT } from './studio-report-config.js';
 import { availableQuantity, stockRowValues } from './stock-table.js';
 
-export const remoteReportPaths = {
-  orders: '/api/v1/orders',
-  purchase_orders: '/api/v1/purchase-orders',
+export const remoteReportSources = {
+  orders: 'orders',
+  purchase_orders: 'purchase-orders',
 };
 
 export function studioReportResult(report, definition, { locationId, stockRows = [], items = [], counts = [], transfers = [], locations = [], remote = [] }) {
