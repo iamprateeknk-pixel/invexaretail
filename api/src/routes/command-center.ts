@@ -21,6 +21,8 @@ import { databaseEnabled } from '../lib/persistence.js';
 import { buildCommandCenter } from '../lib/command-center.js';
 import { metricsSnapshot } from '../lib/request-metrics.js';
 import { outboxHealthSnapshot } from '../lib/event-bus.js';
+import { runtimeReleaseId } from '../lib/platform.js';
+import { readWorkerHealth } from '../lib/worker-health.js';
 import { stuckTransfers } from '../lib/command-center.js';
 import { auditCsv, countAccuracyReport, filterAudit, transferCycleReport, type AccuracyGroup } from '../lib/report-builders.js';
 import { canReadStudioTaskAudit, visibleStudioTaskFilter } from '../lib/saas/studio-task-access.js';
@@ -204,6 +206,7 @@ router.get('/ops/metrics', ...guard, async (req: Request, res: Response) => {
     warehouse: { stuckTransfers: stuckTransfers(await listTransfersForCompany(tenantContextFor(req)), new Date()).rows.length },
     process: { rssMb: Math.round(memory.rss / 1_048_576), heapUsedMb: Math.round(memory.heapUsed / 1_048_576), node: process.version },
     database: { connected: databaseEnabled, ...database },
+    worker: databaseEnabled ? await readWorkerHealth(runtimeReleaseId()).catch(() => ({ state: 'unavailable' })) : null,
     // Plan P1-PERF-002: how fresh the in-memory snapshot is. `stale` (3 failed refreshes in a row,
     // or no success for 3 intervals) is the signal to alert on.
     reconciliation: activeReconcilerHealth(),

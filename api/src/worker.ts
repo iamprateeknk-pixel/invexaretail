@@ -15,6 +15,8 @@ import { resolveDatabaseUrl } from './lib/db.js';
 import { assertProductionSecrets } from './lib/production-guard.js';
 import { verifySchemaVersion } from './lib/schema-version.js';
 import { assertWorkerSchemaCurrent } from './lib/worker-schema-guard.js';
+import { runtimeReleaseId } from './lib/platform.js';
+import { startWorkerHeartbeat, type WorkerPollProgress } from './lib/worker-health.js';
 
 async function main() {
   if (process.env.REQUIRE_DATABASE === 'true' && !resolveDatabaseUrl()) {
@@ -33,10 +35,11 @@ async function main() {
     await drainOutboxOnce(deliverPersistedEvent);
     await pruneOutboxOnce();
   });
+  const progress: WorkerPollProgress = {};
   startCampaignScheduler();
   startOrderScheduler();
   // Week 11: the durable import-commit worker.
-  startImportWorker();
+  startImportWorker(undefined, () => { progress.imports = new Date(); });
   // lib/outbox-worker.ts's startOutboxWorker (Week 7) is now wired to
   // lib/event-bus.ts's deliverPersistedEvent - a live consumer that
   // broadcasts each delivered event to connected SSE subscribers,
@@ -46,15 +49,16 @@ async function main() {
   // past OUTBOX_RETENTION_DAYS regardless of delivery outcome (including
   // any that end up POISON), so the table still cannot grow unbounded
   // even with a live consumer now attached.
-  startOutboxWorker(deliverPersistedEvent);
+  startOutboxWorker(deliverPersistedEvent, undefined, () => { progress.outbox = new Date(); });
   startOutboxRetention();
   startExpirySweep();
-  startStudioAutomationWorker();
-  startStudioReleaseWorker();
+  startStudioAutomationWorker(undefined, () => { progress.automations = new Date(); });
+  startStudioReleaseWorker(undefined, () => { progress.studioReleases = new Date(); });
   // Plan Area B WP4: nightly journal-vs-balance reconciliation, recorded per company.
   startReconciliationSchedule();
   // Release checklist (Operations): breaches of the ops SLOs are pushed to ALERT_WEBHOOK_URL (a no-op when unset).
   startAlertSweep();
+  startWorkerHeartbeat(runtimeReleaseId(), progress);
   console.log('Invexa durable worker is running.');
 }
 

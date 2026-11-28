@@ -2235,6 +2235,15 @@ model ControlPlaneCompanyUser {
   @@index([companyId])
 }
 
+model WorkerHealth {
+  release           String    @id
+  heartbeatAt       DateTime
+  outboxAt          DateTime?
+  importsAt         DateTime?
+  automationsAt     DateTime?
+  studioReleasesAt  DateTime?
+}
+
 model SessionHandoff {
   codeHash   String   @id
   purpose    String

@@ -170,7 +170,7 @@ export async function retryStudioAutomationRun(scope: ScopeContext, id: string, 
   });
 }
 
-export function startStudioAutomationWorker(intervalMs = 60_000): void {
+export function startStudioAutomationWorker(intervalMs = 60_000, onSuccess?: () => void): void {
   if (timer || !resolveDatabaseUrl()) return;
   let running = false;
   const tick = async () => {
@@ -179,8 +179,12 @@ export function startStudioAutomationWorker(intervalMs = 60_000): void {
     try {
       const now = new Date();
       await enqueueStudioSchedules(now);
-      await scanStudioLowStock(now).catch((error) => console.error('[studio-low-stock] scan unavailable', error));
+      const scanned = await scanStudioLowStock(now).then(() => true, (error) => {
+        console.error('[studio-low-stock] scan unavailable', error);
+        return false;
+      });
       await drainStudioAutomationRuns(now);
+      if (scanned) onSuccess?.();
     } catch (error) {
       console.error('[studio-schedule] worker tick failed', error);
     } finally {

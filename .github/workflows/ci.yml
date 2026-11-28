@@ -252,7 +252,7 @@ jobs:
           docker compose build api worker web admin
           docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'
           DATABASE_URL=postgresql://retail:retail_password@127.0.0.1:5432/retail_inventory npm --prefix api run db:seed
-          docker compose up -d --no-build api worker web admin
+          docker compose up -d --no-build api web admin
           for attempt in {1..20}; do
             if curl --fail --silent --show-error http://127.0.0.1:5173/ready | jq -e '.ok and .persistence == "database"' >/dev/null; then
               break
@@ -262,6 +262,17 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:5173/health | jq -e --arg release "${GITHUB_SHA:0:12}" '.release == $release'
           curl --fail --silent http://127.0.0.1:18181/health | jq -e '.ok and .panel == "control-plane"'
+          status=$(curl --silent --show-error --output /tmp/invexa-worker.json --write-out '%{http_code}' http://127.0.0.1:5173/ready/worker)
+          test "$status" = 503
+          jq -e '.ok == false and .state == "missing"' /tmp/invexa-worker.json
+          docker compose up -d --no-build worker
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5173/ready/worker | jq -e --arg release "${GITHUB_SHA:0:12}" '.ok and .release == $release' >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then exit 1; fi
+            sleep 2
+          done
           for path in /api/v1/items /control/v1/companies /studio/v1/versions /sync/v1/status; do
             status=$(curl --silent --show-error --output /tmp/invexa-route.json --write-out '%{http_code}' "http://127.0.0.1:5173$path")
             test "$status" = 401
@@ -287,7 +298,6 @@ jobs:
             sleep 2
           done
           node scripts/compose-sign-in-smoke.mjs http://127.0.0.1:5173 http://127.0.0.1:4101
-          docker compose logs worker | grep -F 'Invexa durable worker is running.'
 
   web:
     name: Web lint and production build

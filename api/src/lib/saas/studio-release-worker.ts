@@ -38,7 +38,7 @@ export async function activateDueStudioReleases(now = new Date(), plane: Control
   return activated;
 }
 
-export function startStudioReleaseWorker(intervalMs = 30_000) {
+export function startStudioReleaseWorker(intervalMs = 30_000, onSuccess?: () => void) {
   if (!resolveDatabaseUrl()) return;
   let running = false;
   const tick = async () => {
@@ -46,6 +46,7 @@ export function startStudioReleaseWorker(intervalMs = 30_000) {
     running = true;
     try {
       await activateDueStudioReleases();
+      onSuccess?.();
     } catch (error) {
       console.error('[studio-release] worker tick failed', error);
     } finally {

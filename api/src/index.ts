@@ -42,7 +42,8 @@ import evidenceAccessRouter from './routes/evidence-access.js';
 import importControlCenterRouter from './routes/import-control-center.js';
 import { controlRouter, studioRouter, syncRouter } from './routes/control-plane.js';
 import { isAllowedOrigin, resolveAllowedOrigins } from './lib/cors-origins.js';
-import { buildPlatformMeta } from './lib/platform.js';
+import { buildPlatformMeta, runtimeReleaseId } from './lib/platform.js';
+import { readWorkerHealth } from './lib/worker-health.js';
 import { extractToken } from './routes/enterprise-auth.js';
 import { controlPlane } from './lib/saas/control-plane.js';
 import { DEFAULT_TENANT_ID, enforceOperationalCompanyScope } from './lib/saas/tenant-scope.js';
@@ -62,8 +63,7 @@ assertProductionSecrets();
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const startedAt = Date.now();
-const gitRelease = process.env.GITHUB_SHA?.slice(0, 12);
-const release = (process.env.INVEXA_ENV === 'staging' ? gitRelease : process.env.APP_VERSION || gitRelease) || 'unknown';
+const release = runtimeReleaseId();
 let startupHydration: Promise<void> = Promise.resolve();
 let authHydration: Promise<void> = Promise.resolve();
 let repositoryHydrationState: 'starting' | 'ready' | 'failed' = 'starting';
@@ -165,6 +165,13 @@ app.get('/health', async (_req: Request, res: Response) => {
 // the database response or relying on a hard-coded app version.
 app.get('/meta', (_req: Request, res: Response) => {
   res.json(buildPlatformMeta(release));
+});
+
+app.get('/ready/worker', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }), async (_req: Request, res: Response) => {
+  const health = await readWorkerHealth(release).catch(() => ({ state: 'unavailable' as const }));
+  const ok = health.state === 'ready';
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(ok ? 200 : 503).json({ ok, release, state: health.state });
 });
 
 // Reports how many users startup actually loaded. SELECT 1 alone succeeds

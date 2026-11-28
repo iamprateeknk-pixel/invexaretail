@@ -19,7 +19,7 @@ team's own cloud host with Docker Compose behind Nginx.
 The host's public Nginx terminates TLS. On the workspace domain it can forward
 all traffic to the Compose web service, which routes `/api/v1`, `/control/v1`,
 `/studio/v1` and `/sync/v1` to the API container. It also forwards `/health`,
-`/ready` and `/meta`. If the host proxies API traffic directly, configure
+`/ready`, `/ready/worker` and `/meta`. If the host proxies API traffic directly, configure
 these routes there. The admin domain proxies to port 18181. Compose publishes
 service ports on the host's loopback interface. The `worker` service is required: staged import commits,
 outbox delivery and retention, the expiry sweep, stock reconciliation and alerts
@@ -101,7 +101,11 @@ Studio enforcement, since it cannot enforce the published policies or reviewer l
    `docker compose run --rm api sh -ec 'npm run db:migrate && npm run db:verify'`
    before `docker compose up -d`. The API image owns migrations. The worker
    has no migration command and refuses to start on an incomplete schema.
-4. Check `GET /health`, `/ready`, `/meta` report the new release and a ready schema.
+4. Check `GET /health`, `/ready`, and `/meta` report the new release and a ready schema.
+   Require `GET /ready/worker` to return HTTP 200 for the same release before
+   opening the rollout. It returns HTTP 503 until the dedicated worker has
+   reported a recent heartbeat and completed its import, outbox, automation,
+   and Studio release polls. A stopped worker becomes stale after three minutes.
 5. Confirm the web app's `/assets/index-*.js` hash changed and
    `https://admin.invexaretail.com/health` answers `{"ok":true,"panel":"control-plane"}`.
 6. Watch `GET /ops/metrics` for 30 minutes: `outbox.slo.breached`,
@@ -164,6 +168,7 @@ DATABASE_URL=postgresql://.../invexa_restore npx prisma migrate diff --from-conf
 |---|---|---|---|
 | API 5xx / latency | `/ops/metrics` `api`, platform | 5xx > 1 % for 5 min | Check the release in `/meta`; roll back if it started with a deploy. |
 | Outbox lag / poison | `/ops/metrics` `outbox.slo` | oldest pending > 15 min, or any POISON | Is the worker up? Inspect POISON rows; do not delete. |
+| Worker progress | `/ready/worker` and `/ops/metrics` `worker` | HTTP 503, or a critical worker poll has no recent success | Confirm the worker and API report the same release. Check the worker logs for the stalled poll. |
 | Snapshot freshness | `/ops/metrics` `reconciliation` | `stale: true` | Database reachable? Restart the API; the last good snapshot keeps serving. |
 | Stock reconciliation | `GET /ops/reconciliation` | `mismatches > 0` | See 6.1. |
 | Auth | audit log (`TWO_FACTOR_*`, `ACCOUNT_LOCKED` 429s) | spike of locks or refresh-reuse | Treat as credential stuffing; consider tightening the rate limit. |

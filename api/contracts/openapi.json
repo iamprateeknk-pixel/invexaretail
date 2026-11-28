@@ -14622,7 +14622,7 @@
     "/ops/metrics": {
       "get": {
         "operationId": "getOpsMetrics",
-        "summary": "Operational metrics for admins: request RED metrics, live sync clients, stuck transfers, process, database, reconciliation freshness and the outbox SLO.",
+        "summary": "Operational metrics for admins: request metrics, live sync clients, stuck transfers, database, worker progress, reconciliation freshness and the outbox SLO.",
         "tags": [
           "ops"
         ],
@@ -14752,6 +14752,31 @@
                       "type": "object",
                       "additionalProperties": true,
                       "description": "Freshness of the in-memory snapshot; stale = 3 failed refreshes or no success for 3 intervals."
+                    },
+                    "worker": {
+                      "type": ["object", "null"],
+                      "description": "Dedicated worker progress for the API release. Null in memory mode.",
+                      "required": ["state"],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["ready", "degraded", "stale", "missing", "unidentified", "unavailable"]
+                        },
+                        "heartbeatAt": {
+                          "type": ["string", "null"],
+                          "format": "date-time"
+                        },
+                        "lastSuccess": {
+                          "type": "object",
+                          "required": ["outbox", "imports", "automations", "studioReleases"],
+                          "properties": {
+                            "outbox": { "type": ["string", "null"], "format": "date-time" },
+                            "imports": { "type": ["string", "null"], "format": "date-time" },
+                            "automations": { "type": ["string", "null"], "format": "date-time" },
+                            "studioReleases": { "type": ["string", "null"], "format": "date-time" }
+                          }
+                        }
+                      }
                     },
                     "stockReconciliation": {
                       "oneOf": [

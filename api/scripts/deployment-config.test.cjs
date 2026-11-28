@@ -26,7 +26,7 @@ test('the Compose web image passes the explicit API origin to the build', () => 
 
 test('the web container forwards operational, control, Studio and sync requests to the Compose API', () => {
   const nginx = readFileSync(join(apiRoot, '..', 'web', 'nginx.conf'), 'utf8');
-  assert.ok(nginx.includes('location ~ ^/(?:(?:api|control|studio|sync)/v1(?:/|$)|(?:health|ready|meta)$)'));
+  assert.ok(nginx.includes('location ~ ^/(?:(?:api|control|studio|sync)/v1(?:/|$)|(?:health|ready(?:/worker)?|meta)$)'));
   assert.match(nginx, /set \$api_upstream api:4000;/);
   assert.match(nginx, /proxy_pass http:\/\/\$api_upstream;/);
 });

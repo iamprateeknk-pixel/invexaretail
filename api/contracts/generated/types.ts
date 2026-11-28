@@ -1671,7 +1671,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Operational metrics for admins: request RED metrics, live sync clients, stuck transfers, process, database, reconciliation freshness and the outbox SLO. */
+        /** Operational metrics for admins: request metrics, live sync clients, stuck transfers, database, worker progress, reconciliation freshness and the outbox SLO. */
         get: operations["getOpsMetrics"];
         put?: never;
         post?: never;
@@ -11573,6 +11573,23 @@ export interface operations {
                         reconciliation?: {
                             [key: string]: unknown;
                         };
+                        /** @description Dedicated worker progress for the API release. Null in memory mode. */
+                        worker?: {
+                            /** @enum {string} */
+                            state: "ready" | "degraded" | "stale" | "missing" | "unidentified" | "unavailable";
+                            /** Format: date-time */
+                            heartbeatAt?: string | null;
+                            lastSuccess?: {
+                                /** Format: date-time */
+                                outbox: string | null;
+                                /** Format: date-time */
+                                imports: string | null;
+                                /** Format: date-time */
+                                automations: string | null;
+                                /** Format: date-time */
+                                studioReleases: string | null;
+                            };
+                        } | null;
                         stockReconciliation?: null | {
                             [key: string]: unknown;
                         };
