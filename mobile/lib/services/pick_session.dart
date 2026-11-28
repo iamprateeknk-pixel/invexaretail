@@ -125,6 +125,14 @@ class PickSession {
 
   double leftFor(String itemId) => _round3((line(itemId)?.remaining ?? 0) - pendingFor(itemId));
 
+  /// Quantity already reported as a problem on this device, not yet saved.
+  double reportedFor(String itemId) =>
+      _round3(exceptions.where((row) => row['itemId'] == itemId).fold<double>(0, (sum, row) => sum + (row['quantity'] as num).toDouble()));
+
+  /// What is still neither picked nor reported. A second "Report a problem" or a scan after the
+  /// whole remainder was reported would otherwise send more than the line asks for.
+  double unreportedFor(String itemId) => _round3(leftFor(itemId) - reportedFor(itemId));
+
   bool get hasPending => _scanned.isNotEmpty || _weights.isNotEmpty || exceptions.isNotEmpty;
 
   /// One piece scan. The code must be the item's own code or one of its listed lot numbers.
@@ -148,6 +156,9 @@ class PickSession {
       if (matched != null) break;
     }
     if (matched == null) return ScanResult.rejected('Wrong item: "$raw" is not on this pick.');
+    if (unreportedFor(matched.itemId) < 1) {
+      return ScanResult.rejected('${matched.itemName}: the rest is already reported as a problem.');
+    }
     if (matchedLot == null) {
       // An item code alone: take the first lot that still has something to pick and stock on the shelf.
       for (final lot in matched.lots) {
@@ -182,8 +193,9 @@ class PickSession {
       return const ScanResult.ok('Cleared.');
     }
     final rounded = _round3(kg);
-    if (rounded > row.remaining + 0.0005) {
-      return ScanResult.rejected('Only ${row.remaining} ${row.unit} is still to be picked.');
+    final open = _round3(row.remaining - reportedFor(itemId));
+    if (rounded > open + 0.0005) {
+      return ScanResult.rejected('Only $open ${row.unit} is still to be picked.');
     }
     _weights[itemId] = rounded;
     return ScanResult.ok('${row.itemName}: $rounded ${row.unit} to pick');
@@ -202,8 +214,14 @@ class PickSession {
     if (lots.isEmpty) _scanned.remove(itemId);
   }
 
-  void report(String itemId, String reason, double quantity, {String? lotId}) {
+  /// Reports [quantity] of an item as a problem; never more than is still unreported.
+  ScanResult report(String itemId, String reason, double quantity, {String? lotId}) {
+    final open = unreportedFor(itemId);
+    if (!(quantity > 0) || quantity > open + 0.0005) {
+      return ScanResult.rejected(open > 0 ? 'Only $open can still be reported.' : 'Nothing left to report.');
+    }
     exceptions.add({'itemId': itemId, 'reason': reason, 'quantity': quantity, if (lotId != null) 'lotId': lotId});
+    return const ScanResult.ok('Reported.');
   }
 
   void clearPending() {
