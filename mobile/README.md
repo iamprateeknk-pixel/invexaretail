@@ -88,6 +88,11 @@ decided in one place (`lib/config/platform_caps.dart`):
   and the workspace does not open at all if the sign-in code cannot be fetched,
   so one person never lands in another person's session. Only
   `invexaretail.com` hosts load inside the app; other links open in the browser.
+- **Build note:** `webview_windows` 0.4.0 still uses MSVC's experimental
+  coroutines; `windows/CMakeLists.txt` defines
+  `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS` for that plugin so the
+  current Visual Studio builds it. When a future MSVC drops
+  `<experimental/coroutine>`, replace the plugin (e.g. `flutter_inappwebview_windows`).
 
 Wide windows (Windows, iPad, tablets in landscape) use a side navigation rail
 instead of the bottom bar.
